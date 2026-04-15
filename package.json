@@ -1,0 +1,8 @@
+{
+  "name": "cliniflow-backend",
+  "version": "1.0.0",
+  "main": "index.cjs",
+  "scripts": {
+    "start": "node index.cjs"
+  }
+}
