@@ -6510,6 +6510,99 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
   }
 });
 
+// DELETE /api/patient/clinic — leave current clinic (mobile profile: "Klinikten Ayrıl")
+app.delete("/api/patient/clinic", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({
+        ok: false,
+        error: "supabase_required",
+        message: "Klinik ayrılma şu an kullanılamıyor.",
+      });
+    }
+
+    const resolvedUuid = await resolveMessagesPatientDbId(req.patientId);
+    if (!resolvedUuid) {
+      console.warn("[DELETE /api/patient/clinic] patient_not_found token:", String(req.patientId || "").slice(0, 16));
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+
+    let patientRow = null;
+    for (const sel of [
+      "id, patient_id, name, email, phone, status, language",
+      "id, patient_id, name, email, phone, status",
+      "id, name, email, phone, status",
+    ]) {
+      const r = await supabase.from("patients").select(sel).eq("id", resolvedUuid).maybeSingle();
+      if (!r.error && r.data) {
+        patientRow = r.data;
+        break;
+      }
+    }
+    if (!patientRow?.id) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+
+    const { error: upErr } = await supabase
+      .from("patients")
+      .update({
+        clinic_id: null,
+        clinic_code: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", patientRow.id);
+
+    if (upErr) {
+      console.error("[DELETE /api/patient/clinic] update failed:", upErr.message || upErr);
+      return res.status(500).json({ ok: false, error: "update_failed", message: upErr.message || "Güncelleme başarısız." });
+    }
+
+    const patientStatus = String(patientRow.status || "PENDING").toUpperCase();
+    const emailNorm = String(patientRow.email || "").trim().toLowerCase();
+    const foundPhone = String(patientRow.phone || "").trim();
+    const foundLanguage = patientRow.language;
+
+    const tokenPayload = {
+      type: "patient",
+      patientId: patientRow.id,
+      role: "PATIENT",
+      status: patientStatus,
+      email: emailNorm,
+      ...(foundPhone ? { phone: foundPhone } : {}),
+      ...(foundLanguage ? { language: foundLanguage } : {}),
+    };
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: `${TOKEN_EXPIRY_DAYS}d` });
+
+    try {
+      const tokens = readJson(TOK_FILE, {});
+      tokens[token] = {
+        type: "patient",
+        patientId: patientRow.id,
+        role: "PATIENT",
+        createdAt: now(),
+        email: emailNorm,
+        ...(foundPhone ? { phone: foundPhone } : {}),
+        ...(foundLanguage ? { language: foundLanguage } : {}),
+      };
+      writeJson(TOK_FILE, tokens);
+    } catch (tokErr) {
+      console.warn("[DELETE /api/patient/clinic] TOK_FILE write:", tokErr?.message);
+    }
+
+    console.log("[DELETE /api/patient/clinic] ok patient:", String(patientRow.id).slice(0, 8), "left clinic");
+
+    return res.json({
+      ok: true,
+      token,
+      clinic: null,
+    });
+  } catch (e) {
+    console.error("[DELETE /api/patient/clinic]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 // GET /api/patient/price-estimate?treatments=cleaning,whitening&lat=&lng=&country=
 // Server-side only: min/max and per-clinic totals from clinics.prices (jsonb) or settings.prices.
 app.get("/api/patient/price-estimate", requireToken, async (req, res) => {
@@ -37904,7 +37997,7 @@ app.use((req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v45');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v46');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
