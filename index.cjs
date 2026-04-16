@@ -3,6 +3,26 @@
 // ─── Bootstrap: imports & app init ─────────────────────────────────────────
 require("dotenv").config();
 
+// TensorFlow.js / face-landmarks-detection may read `navigator` / `window` at load time.
+// Must run before `./lib/mouthRoiMediaPipeFaceMesh.cjs` (simulation pipeline).
+(function installNodeBrowserGlobalsForTfjs() {
+  const os = require("os");
+  const nav = {
+    userAgent: "Node.js",
+    hardwareConcurrency: Math.max(1, (os.cpus() && os.cpus().length) || 4),
+  };
+  if (typeof globalThis.navigator === "undefined") {
+    globalThis.navigator = nav;
+  }
+  if (typeof global !== "undefined" && typeof global.navigator === "undefined") {
+    global.navigator = globalThis.navigator || nav;
+  }
+  if (typeof globalThis.window === "undefined") {
+    globalThis.window = globalThis;
+  }
+})();
+require("@tensorflow/tfjs-node");
+
 const express = require("express");
 const sharp = require("sharp");
 const { computeMouthCropFromImageBuffer } = require("./lib/mouthRoiMediaPipeFaceMesh.cjs");
@@ -4088,7 +4108,8 @@ async function resolvePatientForOtp({ email, phone }) {
   const phoneTrimmed = phone ? String(phone).trim() : "";
   const phoneNormalized = phoneTrimmed ? normalizePhone(phoneTrimmed) : "";
 
-
+  console.log("LOGIN PHONE:", phone);
+  console.log("SUPABASE URL:", process.env.SUPABASE_URL);
 
   let foundPatient = null;
   let foundPatientId = null;
@@ -4175,6 +4196,8 @@ async function resolvePatientForOtp({ email, phone }) {
     resolvedEmail = String(foundPatient.email || resolvedEmail || "").trim().toLowerCase();
 
   }
+
+  console.log("USER QUERY RESULT:", foundPatient);
 
   const result = {
     patient: foundPatient,
