@@ -223,6 +223,12 @@ const procedures = require("./shared/procedures");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
 const { fillIcdRowFromStatic } = require("./lib/icd10StaticLabels.cjs");
 const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileReferenceSeeds");
+const { resolveClinicCoords } = require("./lib/clinicCoords.cjs");
+const { fetchPatientVisibleClinicRows } = require("./lib/patientClinicListing.cjs");
+const {
+  calculatePrices,
+  parseTreatmentsFromQuery,
+} = require("./lib/clinicPriceEstimate.cjs");
 
 const {
   supabase,
@@ -500,8 +506,20 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 async function resolveMessagesPatientDbId(patientId) {
   const raw = String(patientId || "").trim();
   if (!raw) return null;
-  if (UUID_RE.test(raw)) return raw;
+  if (!isSupabaseEnabled()) {
+    if (UUID_RE.test(raw)) return raw;
+    return null;
+  }
   try {
+    if (UUID_RE.test(raw)) {
+      const { data: byId, error: errId } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("id", raw)
+        .maybeSingle();
+      if (!errId && byId?.id) return String(byId.id);
+    }
+
     const { data: byPid, error: errPid } = await supabase
       .from("patients")
       .select("id")
@@ -512,12 +530,12 @@ async function resolveMessagesPatientDbId(patientId) {
     if (raw.length > 2 && String(raw[0]).toLowerCase() === "p" && raw[1] === "_") {
       const rest = raw.slice(2);
       if (UUID_RE.test(rest)) {
-        const { data: byId, error: errId } = await supabase
+        const { data: byLegacy, error: errLegacy } = await supabase
           .from("patients")
           .select("id")
           .eq("id", rest)
           .maybeSingle();
-        if (!errId && byId?.id) return String(byId.id);
+        if (!errLegacy && byLegacy?.id) return String(byLegacy.id);
       }
     }
 
@@ -1231,7 +1249,7 @@ app.get("/admin-treatment.html", (req, res) => {
   return res.status(404).send("admin-treatment.html not found in cliniflow-admin/public");
 });
 
-app.use(express.static(publicDir));
+// Static files: registered late (see end of file) so all /api/* routes match first.
 
 // ================== STORAGE ==================
 const DATA_DIR = path.join(__dirname, "data");
@@ -1249,6 +1267,7 @@ const OTP_FILE = path.join(DATA_DIR, "otps.json"); // OTP storage with hashed co
 const PUSH_SUBSCRIPTIONS_FILE = path.join(DATA_DIR, "pushSubscriptions.json"); // Push notification subscriptions
 const TREATMENT_PRICES_FILE = path.join(DATA_DIR, "treatmentPrices.json"); // Clinic treatment price list
 const PAYMENTS_FILE = path.join(DATA_DIR, "payments.json"); // Patient payment summaries
+const AI_LEADS_FILE = path.join(DATA_DIR, "ai_leads.json"); // POST /api/leads (offer requests from AI screen)
 const TREATMENT_ITEM_OVERRIDES_DIR = path.join(DATA_DIR, "treatment-item-overrides");
 if (!fs.existsSync(TREATMENT_ITEM_OVERRIDES_DIR)) fs.mkdirSync(TREATMENT_ITEM_OVERRIDES_DIR, { recursive: true });
 
@@ -4002,6 +4021,69 @@ function requireToken(req, res, next) {
   next();
 }
 
+// POST /api/leads — AI ekranından “teklif al” (patient intent → clinics)
+// Body: { userId, treatments, country, imageUrl } — userId must match token patient.
+app.post("/api/leads", requireToken, async (req, res) => {
+  try {
+    const patientId = String(req.patientId || "").trim();
+    const body = req.body || {};
+    const userId = String(body.userId || "").trim();
+    if (userId && userId !== patientId) {
+      return res.status(403).json({ ok: false, error: "user_mismatch", message: "Token ile kullanıcı uyuşmuyor." });
+    }
+    const treatments = Array.isArray(body.treatments) ? body.treatments.map((t) => String(t).trim()).filter(Boolean) : [];
+    const country = String(body.country || "").trim() || null;
+    const imageUrl = String(body.imageUrl || "").trim() || null;
+
+    const lead = {
+      id: crypto.randomUUID(),
+      created_at: new Date().toISOString(),
+      patient_id: patientId,
+      user_id: patientId,
+      treatments,
+      country,
+      image_url: imageUrl,
+      source: "ai_result_offer",
+    };
+
+    const list = readJson(AI_LEADS_FILE, []);
+    list.push(lead);
+    writeJson(AI_LEADS_FILE, list);
+
+    if (isSupabaseEnabled()) {
+      try {
+        const resolvedPid = await resolveMessagesPatientDbId(patientId);
+        if (resolvedPid) {
+          const row = {
+            id: lead.id,
+            patient_id: resolvedPid,
+            treatments,
+            country,
+            image_url: imageUrl,
+            created_at: lead.created_at,
+            source: "ai_result_offer",
+          };
+          const r1 = await supabase.from("ai_leads").insert(row);
+          if (r1.error) {
+            const r2 = await supabase.from("leads").insert(row);
+            if (r2.error) {
+              console.warn("[LEADS] Supabase insert skipped (file OK):", r1.error.message, "|", r2.error.message);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[LEADS] Supabase optional insert failed:", e?.message);
+      }
+    }
+
+    console.log("[LEADS] saved offer request", lead.id, "| patient:", patientId.slice(0, 8), "| nTreat:", treatments.length);
+    return res.json({ ok: true, leadId: lead.id, message: "Talebiniz kliniklere gönderildi" });
+  } catch (e) {
+    console.error("[LEADS]", e?.message);
+    return res.status(500).json({ ok: false, error: "lead_save_failed", message: e?.message || "Kayıt başarısız" });
+  }
+});
+
 // ================== ME ==================
 app.get("/api/me", requireToken, (req, res) => {
   const patients = readJson(PAT_FILE, {});
@@ -6236,57 +6318,26 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
 });
 
 // ================== PATIENT: BROWSE CLINICS ("Find a clinic") ==================
-// Returns clinics for the in-app directory. Avoid PostgREST .or(status...) — it has
-// failed on some Railway/Supabase setups; we filter suspended/inactive in JS instead.
-// GET /api/patient/clinics
+// Priority: (1) Supabase RPC nearby_clinics(lat,lng) — (2) same country — (3) all (cap 20).
+// Avoid PostgREST .or(status...) — filter suspended/inactive in JS instead.
+// GET /api/patient/clinics?lat=&lng=&country=
 app.get("/api/patient/clinics", requireToken, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
       return res.json({ ok: true, clinics: [] });
     }
 
-    let excludeClinicId = null;
-    const pid = req.patientId;
-    if (pid) {
-      let pt = null;
-      const r1 = await supabase.from("patients").select("clinic_id").eq("id", pid).maybeSingle();
-      if (!r1.error && r1.data) pt = r1.data;
-      if (!pt?.clinic_id) {
-        const r2 = await supabase.from("patients").select("clinic_id").eq("patient_id", pid).maybeSingle();
-        if (!r2.error && r2.data) pt = r2.data;
-      }
-      excludeClinicId = pt?.clinic_id || null;
-    }
+    const selFull = "id, name, city, country, clinic_code, latitude, longitude, status";
+    const selLite = "id, name, city, country, clinic_code, status";
 
-    // Do not use .neq("id", excludeClinicId) in SQL — if patients.clinic_id is not
-    // exactly the same type/format as clinics.id, PostgREST can error and the list fails.
-    let q = supabase
-      .from("clinics")
-      .select("id, name, city, country, clinic_code, latitude, longitude, status")
-      .order("name", { ascending: true })
-      .limit(200);
-
-    let { data: raw, error } = await q;
-    if (error) {
-      const q2 = supabase
-        .from("clinics")
-        .select("id, name, city, country, clinic_code, status")
-        .order("name", { ascending: true })
-        .limit(200);
-      const r2 = await q2;
-      raw = r2.data;
-      error = r2.error;
-    }
-    if (error) throw error;
-
-    let rows = (raw || []).filter((c) => {
-      const s = String(c.status ?? "active").toLowerCase();
-      return !["suspended", "reject", "rejected", "inactive", "closed"].includes(s);
+    const { rows } = await fetchPatientVisibleClinicRows(supabase, {
+      patientId: req.patientId,
+      lat: req.query.lat,
+      lng: req.query.lng,
+      country: req.query.country,
+      selectFull: selFull,
+      selectLite: selLite,
     });
-    if (excludeClinicId) {
-      const ex = String(excludeClinicId).trim();
-      rows = rows.filter((c) => String(c.id) !== ex);
-    }
 
     const ids = rows.map((c) => c.id).filter((id) => id != null && String(id).trim() !== "");
     const ratingMap = {};
@@ -6334,6 +6385,223 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
       ok: false,
       error: "db_error",
       message: "Klinik listesi yüklenemedi. Lütfen daha sonra tekrar deneyin.",
+    });
+  }
+});
+
+// PATCH /api/patient/clinic — join / switch clinic by code (mobile: "Kliniğe katıl")
+// Body: { clinic_code, referral_code? } — country is not required; lookup is by clinic_code only.
+app.patch("/api/patient/clinic", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({
+        ok: false,
+        error: "supabase_required",
+        message: "Klinik katılımı şu an kullanılamıyor.",
+      });
+    }
+
+    const body = req.body || {};
+    const clinicCodeRaw = String(body.clinic_code || body.clinicCode || "").trim().toUpperCase();
+    if (!clinicCodeRaw) {
+      return res.status(400).json({ ok: false, error: "clinic_code_required" });
+    }
+
+    const clinic = await getClinicByCode(clinicCodeRaw);
+    if (!clinic?.id) {
+      console.warn("[PATCH /api/patient/clinic] clinic_not_found:", clinicCodeRaw);
+      return res.status(404).json({ ok: false, error: "clinic_not_found" });
+    }
+
+    const st = String(clinic.status ?? "active").toLowerCase();
+    if (["suspended", "reject", "rejected", "inactive", "closed"].includes(st)) {
+      return res.status(400).json({ ok: false, error: "clinic_unavailable", message: "Bu klinik şu an katılıma kapalı." });
+    }
+
+    const resolvedUuid = await resolveMessagesPatientDbId(req.patientId);
+    if (!resolvedUuid) {
+      console.warn("[PATCH /api/patient/clinic] patient_not_found token:", String(req.patientId || "").slice(0, 16));
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+
+    let patientRow = null;
+    for (const sel of [
+      "id, patient_id, name, email, phone, status, language",
+      "id, patient_id, name, email, phone, status",
+      "id, name, email, phone, status",
+    ]) {
+      const r = await supabase.from("patients").select(sel).eq("id", resolvedUuid).maybeSingle();
+      if (!r.error && r.data) {
+        patientRow = r.data;
+        break;
+      }
+    }
+    if (!patientRow?.id) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+
+    const codeStored = String(clinic.clinic_code || clinicCodeRaw).trim().toUpperCase();
+    const { error: upErr } = await supabase
+      .from("patients")
+      .update({
+        clinic_id: clinic.id,
+        clinic_code: codeStored,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", patientRow.id);
+
+    if (upErr) {
+      console.error("[PATCH /api/patient/clinic] update failed:", upErr.message || upErr);
+      return res.status(500).json({ ok: false, error: "update_failed", message: upErr.message || "Güncelleme başarısız." });
+    }
+
+    const patientStatus = String(patientRow.status || "PENDING").toUpperCase();
+    const emailNorm = String(patientRow.email || "").trim().toLowerCase();
+    const foundPhone = String(patientRow.phone || "").trim();
+    const foundLanguage = patientRow.language;
+
+    const tokenPayload = {
+      type: "patient",
+      patientId: patientRow.id,
+      role: "PATIENT",
+      status: patientStatus,
+      email: emailNorm,
+      clinicId: clinic.id,
+      clinicCode: codeStored,
+      ...(foundPhone ? { phone: foundPhone } : {}),
+      ...(foundLanguage ? { language: foundLanguage } : {}),
+    };
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: `${TOKEN_EXPIRY_DAYS}d` });
+
+    try {
+      const tokens = readJson(TOK_FILE, {});
+      tokens[token] = {
+        type: "patient",
+        patientId: patientRow.id,
+        role: "PATIENT",
+        createdAt: now(),
+        email: emailNorm,
+        clinicId: clinic.id,
+        clinicCode: codeStored,
+        ...(foundPhone ? { phone: foundPhone } : {}),
+        ...(foundLanguage ? { language: foundLanguage } : {}),
+      };
+      writeJson(TOK_FILE, tokens);
+    } catch (tokErr) {
+      console.warn("[PATCH /api/patient/clinic] TOK_FILE write:", tokErr?.message);
+    }
+
+    console.log("[PATCH /api/patient/clinic] ok patient:", String(patientRow.id).slice(0, 8), "clinic:", codeStored);
+
+    return res.json({
+      ok: true,
+      token,
+      clinic: {
+        id: clinic.id,
+        name: clinic.name || "Klinik",
+        clinic_code: codeStored,
+      },
+      referral: null,
+    });
+  } catch (e) {
+    console.error("[PATCH /api/patient/clinic]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/patient/price-estimate?treatments=cleaning,whitening&lat=&lng=&country=
+// Server-side only: min/max and per-clinic totals from clinics.prices (jsonb) or settings.prices.
+app.get("/api/patient/price-estimate", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json({
+        ok: true,
+        minPrice: null,
+        maxPrice: null,
+        currency: null,
+        currencyMixed: false,
+        treatments: [],
+        clinics: [],
+        message: "pricing_unavailable",
+      });
+    }
+
+    const treatmentsRaw = parseTreatmentsFromQuery(req.query);
+    const treatments = treatmentsRaw.map((t) => String(t).trim().toLowerCase()).filter(Boolean);
+    if (!treatments.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "treatments_required",
+        message: "Query ?treatments is required (comma-separated), e.g. treatments=cleaning,whitening",
+      });
+    }
+
+    const selFull = "id, name, city, country, clinic_code, latitude, longitude, status";
+    const selLite = "id, name, city, country, clinic_code, status";
+
+    const { rows } = await fetchPatientVisibleClinicRows(supabase, {
+      patientId: req.patientId,
+      lat: req.query.lat,
+      lng: req.query.lng,
+      country: req.query.country,
+      selectFull: selFull,
+      selectLite: selLite,
+    });
+
+    const ids = rows.map((c) => c.id).filter((id) => id != null && String(id).trim() !== "");
+    let enriched = rows;
+    if (ids.length) {
+      let { data: extra, error: enrichErr } = await supabase
+        .from("clinics")
+        .select("id, prices, settings")
+        .in("id", ids);
+      if (enrichErr) {
+        console.warn("[GET /api/patient/price-estimate] enrich select:", enrichErr.message);
+        const r2 = await supabase.from("clinics").select("id, settings").in("id", ids);
+        extra = r2.data;
+        if (r2.error) console.warn("[GET /api/patient/price-estimate] enrich fallback:", r2.error.message);
+      }
+      const map = new Map((extra || []).map((x) => [x.id, x]));
+      enriched = rows.map((r) => ({ ...r, ...(map.get(r.id) || {}) }));
+    }
+
+    const out = calculatePrices(enriched, treatments);
+    const currencies = new Set(out.clinics.map((c) => c.currency));
+    const currencyUniform = currencies.size === 1 ? [...currencies][0] : null;
+
+    const confRaw = req.query.confidence;
+    let confidence = null;
+    if (confRaw != null && String(confRaw).trim() !== "") {
+      const n = parseFloat(String(confRaw));
+      if (Number.isFinite(n)) confidence = Math.max(0, Math.min(1, n));
+    }
+
+    console.log("[GET /api/patient/price-estimate]", {
+      patient: String(req.patientId || "").slice(0, 12),
+      nRows: rows.length,
+      nPriced: out.clinics.length,
+      treatments,
+      minPrice: out.minPrice,
+      maxPrice: out.maxPrice,
+    });
+
+    return res.json({
+      ok: true,
+      minPrice: out.minPrice,
+      maxPrice: out.maxPrice,
+      currency: currencyUniform,
+      currencyMixed: currencies.size > 1,
+      treatments,
+      ...(confidence != null ? { confidence } : {}),
+      clinics: out.clinics,
+    });
+  } catch (e) {
+    console.error("[GET /api/patient/price-estimate]", e?.message, e?.details || e?.hint || "");
+    return res.status(500).json({
+      ok: false,
+      error: "price_estimate_failed",
+      message: "Fiyat tahmini alınamadı. Lütfen daha sonra tekrar deneyin.",
     });
   }
 });
@@ -15322,89 +15590,7 @@ app.post("/api/chat/upload", requireToken, chatUpload.array("files", 5), async (
   }
 });
 
-// ─── Google Maps Coordinate Extraction ───────────────────────────────────────
-
-/**
- * Extracts { latitude, longitude } from a Google Maps URL.
- * Returns null if no coords are found.
- *
- * Supported patterns (in priority order):
- *  1. /@lat,lng  — standard place/directions URLs
- *  2. !3dlat!4dlng — embed/data fragment
- *  3. ?q=lat,lng  — simple query with coords
- *  4. ?ll=lat,lng — legacy ll param
- *  5. ?q=loc:lat,lng — loc: prefix variant
- */
-function parseGoogleMapsCoords(url) {
-  if (!url || typeof url !== 'string') return null;
-  try {
-    // 1. /@lat,lng[,zoom]
-    let m = url.match(/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/);
-    if (m) return { latitude: parseFloat(m[1]), longitude: parseFloat(m[2]) };
-
-    // 2. !3dlat!4dlng  (embed URLs)
-    m = url.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/);
-    if (m) return { latitude: parseFloat(m[1]), longitude: parseFloat(m[2]) };
-
-    // Parse query string for remaining patterns
-    const qs = url.includes('?') ? new URL(url).searchParams : null;
-
-    // 3. ?q=lat,lng  or  ?q=lat,+lng
-    const q = qs?.get('q') || '';
-    m = q.replace(/\s/g, '').match(/^(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)$/);
-    if (m) return { latitude: parseFloat(m[1]), longitude: parseFloat(m[2]) };
-
-    // 4. ?q=loc:lat,lng
-    m = q.match(/loc:(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/i);
-    if (m) return { latitude: parseFloat(m[1]), longitude: parseFloat(m[2]) };
-
-    // 5. ?ll=lat,lng
-    const ll = qs?.get('ll') || '';
-    m = ll.match(/^(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/);
-    if (m) return { latitude: parseFloat(m[1]), longitude: parseFloat(m[2]) };
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Geocodes an address using Google Geocoding API.
- * Returns { latitude, longitude } or null if unavailable / no API key.
- * Only called when parseGoogleMapsCoords() returns null.
- */
-async function geocodeAddressWithGoogle(address, apiKey) {
-  if (!address || !apiKey) return null;
-  try {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`;
-    const res  = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const loc  = data?.results?.[0]?.geometry?.location;
-    if (!loc) return null;
-    return { latitude: loc.lat, longitude: loc.lng };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Master resolver: parse URL first, fall back to geocoding address.
- * Always parse-once-on-save — never call at runtime per request.
- * Returns { latitude, longitude } or null.
- */
-async function resolveClinicCoords(googleMapsUrl, address) {
-  const fromUrl = parseGoogleMapsCoords(googleMapsUrl);
-  if (fromUrl) return fromUrl;
-
-  const geocodeKey = process.env.GOOGLE_GEOCODING_API_KEY;
-  if (geocodeKey && address) {
-    const fromGeocode = await geocodeAddressWithGoogle(address, geocodeKey);
-    if (fromGeocode) return fromGeocode;
-  }
-  return null;
-}
+// ─── Google Maps coords: parseGoogleMapsCoords / resolveClinicCoords → lib/clinicCoords.cjs
 
 // ─── AI Clinic Recommendation Helpers ────────────────────────────────────────
 
@@ -15773,6 +15959,8 @@ STRICT RULES:
 - Be concise and medical-focused. One sentence per insight.
 - Use cautious language: "görünüyor", "olabilir", "gibi görünüyor".
 - NEVER diagnose. NEVER guarantee treatment outcomes.
+- Also set missingTeethLikely: "yes" if a tooth appears missing or there is a clear empty socket/gap where a tooth should be; "no" if all teeth appear present; "unclear" if you cannot judge from this image.
+- Classify the dentalCondition: "missing_tooth" (empty socket / tooth absent), "misalignment" (crowding, overlapping, crooked teeth), "diastema" (small symmetric natural gap between front teeth, midline spacing), or "none" if none of these apply. Use "unclear" only if you cannot classify.
 - Return ONLY valid JSON — no markdown, no extra text.`,
 
     user: `Photo type: ${ctx.label}
@@ -15782,8 +15970,13 @@ Examine the teeth in this image and return ONLY this JSON:
   "insights": ["tooth color observation in Turkish", "alignment observation in Turkish", "visible issue in Turkish"],
   "confidence": "low" | "medium" | "high",
   "summary": "1-sentence overall dental assessment in Turkish",
-  "recommendation": "1 concrete next step for the patient in Turkish"
+  "recommendation": "1 concrete next step for the patient in Turkish",
+  "missingTeethLikely": "yes" | "no" | "unclear",
+  "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
+  "dentalConditionConfidence": "low" | "medium" | "high"
 }
+
+Classify this dental condition: missing tooth (gap from absent tooth), misalignment (overlap/crowding), or natural front gap (diastema). Set dentalConditionConfidence to match how sure you are.
 
 confidence guide: "low" = blurry or teeth barely visible | "medium" = partially visible | "high" = clear, well-lit photo`,
   };
@@ -15804,6 +15997,8 @@ MANDATORY — you MUST return exactly 2–3 observations about:
 
 FORBIDDEN: "analiz edilemedi", "net değil", "tekrar deneyin", empty insights.
 Even a blurry photo has visible tooth shapes, approximate color, and a gum line — describe those.
+Include missingTeethLikely: "yes" | "no" | "unclear" (missing tooth / empty socket vs all teeth present).
+Include dentalCondition: "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear" and dentalConditionConfidence.
 Return ONLY valid JSON — no markdown, no extra text.`,
 
     user: `Photo type: ${ctx.label}
@@ -15815,9 +16010,121 @@ Return ONLY this JSON with 2–3 real dental observations in Turkish:
   "insights": ["renk gözlemi", "dizilim gözlemi", "görünür sorun (varsa)"],
   "confidence": "low",
   "summary": "1-sentence honest summary in Turkish",
-  "recommendation": "1-sentence next step for the patient"
+  "recommendation": "1-sentence next step for the patient",
+  "missingTeethLikely": "yes" | "no" | "unclear",
+  "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
+  "dentalConditionConfidence": "low" | "medium" | "high"
 }`,
   };
+}
+
+/**
+ * Parses vision model field missingTeethLikely → true | false | null (unclear / missing).
+ */
+function parseMissingTeethVisionFlag(raw) {
+  const v = raw?.missingTeethLikely;
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'boolean') return v;
+  const s = String(v).toLowerCase().trim();
+  if (s === 'yes' || s === 'true' || s === 'evet') return true;
+  if (s === 'no' || s === 'false' || s === 'hayır') return false;
+  if (s === 'unclear' || s === 'unknown' || s === 'belirsiz') return null;
+  return null;
+}
+
+/**
+ * Vision JSON: dentalCondition + dentalConditionConfidence → { condition, confidence } or null.
+ */
+function parseDentalConditionFields(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw.dentalCondition ?? raw.gapCondition;
+  let s = String(c || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_');
+  const aliases = {
+    missing_tooth: 'missing_tooth',
+    missingtooth: 'missing_tooth',
+    tooth_loss: 'missing_tooth',
+    misalignment: 'misalignment',
+    crowding: 'misalignment',
+    overlap: 'misalignment',
+    crooked: 'misalignment',
+    diastema: 'diastema',
+    normal_gap: 'diastema',
+    normalgap: 'diastema',
+    spacing_normal: 'diastema',
+    none: 'none',
+    normal: 'none',
+    unclear: 'unclear',
+    unknown: 'unclear',
+  };
+  let norm = aliases[s];
+  if (!norm && ['missing_tooth', 'misalignment', 'diastema', 'none', 'unclear'].includes(s)) norm = s;
+  if (!norm || norm === 'unclear' || norm === 'none') return null;
+
+  let conf = String(raw.dentalConditionConfidence || raw.conditionConfidence || 'medium').toLowerCase();
+  if (!['low', 'medium', 'high'].includes(conf)) conf = 'medium';
+  return { condition: norm, confidence: conf };
+}
+
+function higherDentalConfidence(a, b) {
+  const o = { low: 1, medium: 2, high: 3 };
+  return (o[a] || 0) >= (o[b] || 0) ? a : b;
+}
+
+/**
+ * Merge rule-based + vision classification; vision wins on conflict.
+ */
+function mergeDentalCondition(rule, vision) {
+  const rc = rule?.condition;
+  const vc = vision?.condition;
+  if (rc && vc && rc === vc) {
+    return {
+      condition: rc,
+      confidence: higherDentalConfidence(rule.confidence || 'medium', vision.confidence || 'medium'),
+    };
+  }
+  if (rc && vc && rc !== vc) {
+    return { condition: vc, confidence: vision.confidence || 'medium' };
+  }
+  if (rc) return { condition: rc, confidence: rule.confidence || 'medium' };
+  if (vc) return { condition: vc, confidence: vision.confidence || 'medium' };
+  return null;
+}
+
+/**
+ * Rule-based gap / alignment classification from insight text (not a diagnosis).
+ */
+function inferDentalConditionFromRules(t) {
+  const text = String(t || '').toLowerCase();
+
+  const misalignment =
+    /\boverlap|overlapping|overlapping\s+teeth|crowding|crowded|crooked|rotat|çapraş|çapraz|üst\s*üste|stacked|misalignment|crossbite|malocclusion|çapraşık/i.test(
+      text
+    ) || text.includes('üst üste');
+  if (misalignment) return { condition: 'misalignment', confidence: 'medium' };
+
+  const diastemaHint =
+    /\bdiastema\b|midi\s*line\s*gap|midline\s*gap|simetrik\s*(aralık|boşluk|gap)|symmetric\s*(gap|space|spacing|boşluk)/i.test(
+      text
+    ) ||
+    (/\b(small|slight|narrow|minor|hafif|ince|küçük)\s+(gap|space|spacing|boşluk|aralık)/i.test(text) &&
+      /\b(front|anterior|ön|midline|orta\s*hatt|central)/i.test(text));
+
+  if (diastemaHint) return { condition: 'diastema', confidence: 'medium' };
+
+  const largeGap =
+    /\b(large|wide|significant|major|geniş|büyük)\s+(gap|space|spacing|boşluk|aralık)|empty\s+socket|boş\s+soket/i.test(text);
+  const asymmetry =
+    /\basymmetr|asymmetric|uneven|dengesiz|farklı\s+(taraf|yan)|one\s+side|tek\s+taraf/i.test(text);
+  const explicitMissing =
+    /\bmissing\s+tooth|eksik\s*diş|eksik\s*dişler|diş\s*eksikliği|missing\s+teeth/i.test(text);
+  if ((largeGap && asymmetry) || explicitMissing) {
+    return { condition: 'missing_tooth', confidence: explicitMissing ? 'high' : 'medium' };
+  }
+  return null;
 }
 
 /**
@@ -15871,6 +16178,8 @@ async function callOpenAIVision(system, user, imageDataUrl, { apiKey, timeoutMs 
     confidence:     raw.confidence,
     summary:        String(raw.summary        || '').trim(),
     recommendation: String(raw.recommendation || '').trim(),
+    missingTeethLikely: parseMissingTeethVisionFlag(raw),
+    dentalConditionParsed: parseDentalConditionFields(raw),
   };
 
   return { parsed, usage: data.usage, model: data.model || 'gpt-4o' };
@@ -15898,6 +16207,8 @@ async function processDentalAI(imageDataUrl, photoType = 'general', { apiKey, ti
       confidence:     attempt1.parsed.confidence,
       summary:        attempt1.parsed.summary,
       recommendation: attempt1.parsed.recommendation,
+      missingTeethLikely: attempt1.parsed.missingTeethLikely ?? null,
+      dentalConditionParsed: attempt1.parsed.dentalConditionParsed ?? null,
       _usage:          attempt1.usage,
       _model:          attempt1.model,
       _fallback:       false,
@@ -15927,6 +16238,8 @@ async function processDentalAI(imageDataUrl, photoType = 'general', { apiKey, ti
       confidence:     attempt2.parsed.confidence,
       summary:        attempt2.parsed.summary,
       recommendation: attempt2.parsed.recommendation,
+      missingTeethLikely: attempt2.parsed.missingTeethLikely ?? null,
+      dentalConditionParsed: attempt2.parsed.dentalConditionParsed ?? null,
       _usage:          attempt2.usage,
       _model:          attempt2.model,
       _fallback:       false,
@@ -15945,6 +16258,8 @@ async function processDentalAI(imageDataUrl, photoType = 'general', { apiKey, ti
 
   return {
     ...DENTAL_AI_FALLBACK,
+    missingTeethLikely: null,
+    dentalConditionParsed: null,
     _usage:          attempt2.usage,
     _model:          attempt2.model,
     _fallback:       true,
@@ -17194,6 +17509,204 @@ function neutralizeLabWarmWhite(L, A, B, opts = {}) {
   return [Lw, Aw, Bw];
 }
 
+/** User-selectable tooth shade (CIE L*a*b* deltas). Applied inside teeth mask after mask detect (Stage 2). */
+const COLOR_PRESETS = {
+  natural:   { L: 10, a: -5, b: -8 },
+  bright:    { L: 18, a: -8, b: -12 },
+  hollywood: { L: 28, a: -12, b: -18 },
+  soft:      { L: 14, a: -6, b: -10 },
+};
+
+const SMILE_COLOR_PRESET_KEYS = Object.keys(COLOR_PRESETS);
+
+function resolveSmileColorPreset(key) {
+  const k = String(key || '').toLowerCase().trim();
+  return COLOR_PRESETS[k] ? k : 'natural';
+}
+
+function clampLab(L, A, B) {
+  return [
+    Math.max(0, Math.min(100, L)),
+    Math.max(-128, Math.min(127, A)),
+    Math.max(-128, Math.min(127, B)),
+  ];
+}
+
+function applyColorPresetLab(L, A, B, preset) {
+  let Ln = L + preset.L;
+  let An = A + preset.a;
+  let Bn = B + preset.b;
+  return clampLab(Ln, An, Bn);
+}
+
+/**
+ * One RGB pixel + preset name → whitened RGB (LAB deltas from COLOR_PRESETS).
+ * `pixel` may be `{ r, g, b }` or `[r, g, b]`.
+ */
+function applyColorPreset(pixel, presetKey) {
+  const r = pixel && typeof pixel === 'object' && 'r' in pixel ? pixel.r : pixel[0];
+  const g = pixel && typeof pixel === 'object' && 'g' in pixel ? pixel.g : pixel[1];
+  const b = pixel && typeof pixel === 'object' && 'b' in pixel ? pixel.b : pixel[2];
+  const k = resolveSmileColorPreset(presetKey);
+  const preset = COLOR_PRESETS[k];
+  const [L, A, B] = rgbToLab(r, g, b);
+  const [Lw, Aw, Bw] = applyColorPresetLab(L, A, B, preset);
+  const [ro, go, bo] = labToRgb(Lw, Aw, Bw);
+  return {
+    r: Math.min(ENAMEL_OUTPUT_CAP, Math.max(0, ro)),
+    g: Math.min(ENAMEL_OUTPUT_CAP, Math.max(0, go)),
+    b: Math.min(ENAMEL_OUTPUT_CAP, Math.max(0, bo)),
+  };
+}
+
+/**
+ * Stage-2 color: LAB deltas inside teeth mask only (after mask detection).
+ * Uses full 0–255 RGB cap so presets stay visibly distinct (ENAMEL_OUTPUT_CAP was saturating all to ~236).
+ */
+async function applySmileColorPresetToMaskedCrop(jpegBuf, maskBuf, w, h, presetKey) {
+  const k = resolveSmileColorPreset(presetKey);
+  const selected = COLOR_PRESETS[k];
+  if (!selected) {
+    console.warn('[SIM COLOR] missing COLOR_PRESETS entry for', k);
+    return jpegBuf;
+  }
+  console.log('APPLYING PRESET VALUES:', selected, '| key:', k);
+
+  const hashIn = crypto.createHash('sha256').update(jpegBuf).digest('hex').slice(0, 16);
+  const { data } = await sharp(jpegBuf).resize(w, h).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const maskRaw = await sharp(maskBuf).resize(w, h).greyscale().raw().toBuffer();
+  const out = Buffer.from(data);
+
+  const maskMin = Number.isFinite(Number(process.env.SIM_PRESET_MASK_MIN))
+    ? Math.max(0, Math.min(220, Number(process.env.SIM_PRESET_MASK_MIN)))
+    : 32;
+
+  let toothPx = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (maskRaw[i] <= maskMin) continue;
+    toothPx++;
+    const r = data[i * 3];
+    const g = data[i * 3 + 1];
+    const b = data[i * 3 + 2];
+    let [L, A, B] = rgbToLab(r, g, b);
+    L += selected.L;
+    A += selected.a;
+    B += selected.b;
+    [L, A, B] = clampLab(L, A, B);
+    L = Math.min(L, 92);
+    const [ro, go, bo] = labToRgb(L, A, B);
+    out[i * 3] = Math.min(255, Math.max(0, Math.round(ro)));
+    out[i * 3 + 1] = Math.min(255, Math.max(0, Math.round(go)));
+    out[i * 3 + 2] = Math.min(255, Math.max(0, Math.round(bo)));
+  }
+
+  const jpegOut = await sharp(out, { raw: { width: w, height: h, channels: 3 } })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+  const hashOut = crypto.createHash('sha256').update(jpegOut).digest('hex').slice(0, 16);
+  console.log(
+    `[SIM PRESET] teethPx=${toothPx} maskMin=${maskMin} L*<=92 sha256 in=${hashIn} out=${hashOut} ${hashIn !== hashOut ? 'DIFF' : 'SAME'}`
+  );
+  if (toothPx === 0) {
+    console.warn('[SIM PRESET] zero tooth pixels above maskMin — preset had no effect; try lowering SIM_PRESET_MASK_MIN');
+  }
+  return jpegOut;
+}
+
+/**
+ * Post-preset: natural enamel — upper/lower whitening split, soft mask feather (0.6–0.8),
+ * final = 0.65*mod + 0.35*orig (scaled by feather), L*<=92, subtle L* variation.
+ * Set SIM_ENAMEL_NATURALISM=0 to skip.
+ */
+async function applyEnamelNaturalismAfterPreset(modifiedJpeg, origCropBuf, maskBuf, w, h) {
+  if (String(process.env.SIM_ENAMEL_NATURALISM || '').trim() === '0') {
+    console.log('[SIM ENAMEL] naturalism pass skipped (SIM_ENAMEL_NATURALISM=0)');
+    return modifiedJpeg;
+  }
+
+  const maskMin = Number.isFinite(Number(process.env.SIM_PRESET_MASK_MIN))
+    ? Math.max(0, Math.min(220, Number(process.env.SIM_PRESET_MASK_MIN)))
+    : 32;
+  const MOD_MIX = 0.65;
+  const ORG_MIX = 0.35;
+  const L_CAP = Number.isFinite(Number(process.env.SIM_ENAMEL_L_CAP))
+    ? Math.min(100, Math.max(70, Number(process.env.SIM_ENAMEL_L_CAP)))
+    : 92;
+
+  const modRaw = await sharp(modifiedJpeg).resize(w, h).removeAlpha().raw().toBuffer();
+  const origRaw = await sharp(origCropBuf).resize(w, h).removeAlpha().raw().toBuffer();
+  const maskRaw = await sharp(maskBuf).resize(w, h).greyscale().raw().toBuffer();
+  const out = Buffer.alloc(w * h * 3);
+
+  let n = 0;
+  for (let y = 0; y < h; y++) {
+    const vy = h > 1 ? y / (h - 1) : 0.5;
+    const isUpper = y < h * 0.48;
+    // Upper arch: slightly stronger lift; lower: softer (less plastic / patchy)
+    const lVerticalBase = 6.5 * (1 - vy) + 2.5 * vy;
+    const lVertical = isUpper ? lVerticalBase * 1.12 : lVerticalBase * 0.78;
+
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (maskRaw[i] <= maskMin) {
+        out[i * 3] = modRaw[i * 3];
+        out[i * 3 + 1] = modRaw[i * 3 + 1];
+        out[i * 3 + 2] = modRaw[i * 3 + 2];
+        continue;
+      }
+      n++;
+
+      let r = modRaw[i * 3];
+      let g = modRaw[i * 3 + 1];
+      let b = modRaw[i * 3 + 2];
+      const ro0 = origRaw[i * 3];
+      const go0 = origRaw[i * 3 + 1];
+      const bo0 = origRaw[i * 3 + 2];
+
+      let [L, A, B] = rgbToLab(r, g, b);
+      L += lVertical;
+      L *= isUpper ? 1.04 : 1.02;
+
+      const frac =
+        fract01(Math.sin(i * 0.413 + y * 0.091 + x * 0.037 + 1.7) * 43758.5453123);
+      L += frac * 4 - 2;
+
+      if (L > 68 && L < L_CAP - 2) {
+        L += 1.5 + frac * 1.5;
+      }
+
+      [L, A, B] = clampLab(L, A, B);
+      L = Math.min(L, L_CAP);
+
+      [r, g, b] = labToRgb(L, A, B);
+      r = Math.min(255, Math.max(0, Math.round(r)));
+      g = Math.min(255, Math.max(0, Math.round(g)));
+      b = Math.min(255, Math.max(0, Math.round(b)));
+
+      // Feather alpha in 0.6–0.8; scale so full mask → wMod=0.65, wOrig=0.35
+      const mNorm = maskRaw[i] / 255;
+      const feather = 0.6 + 0.2 * mNorm;
+      const wMod = MOD_MIX * (feather / 0.8);
+      const wOrig = 1 - wMod;
+
+      out[i * 3] = Math.round(ro0 * wOrig + r * wMod);
+      out[i * 3 + 1] = Math.round(go0 * wOrig + g * wMod);
+      out[i * 3 + 2] = Math.round(bo0 * wOrig + b * wMod);
+    }
+  }
+
+  console.log(
+    `[SIM ENAMEL] naturalism: px=${n} | upper/lower split | feather 0.6–0.8 | blend ${MOD_MIX}/${ORG_MIX} | L*<=${L_CAP}`
+  );
+  return sharp(out, { raw: { width: w, height: h, channels: 3 } })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+}
+
+function fract01(x) {
+  return x - Math.floor(x);
+}
+
 // ── Sobel gradient magnitude (brightness array → Float32Array) ────────────────
 function computeGradient(brightness, w, h) {
   const grad = new Float32Array(w * h);
@@ -17220,7 +17733,13 @@ function computeGradient(brightness, w, h) {
 //  Safety:     result ≥ original pixel for every channel
 //
 // boosted = true → wider detection thresholds + stronger lift for the auto-retry pass.
-async function computeEnhancedRaw(origCropBuf, w, h, boosted = false) {
+// opts.skipLabWhitening: default true — tartar/cleaning only; tooth color comes from COLOR_PRESETS Stage 2.
+// SIM_LEGACY_LAB_WHITENING=1 restores old in-pipeline LAB whitening (discouraged with presets).
+async function computeEnhancedRaw(origCropBuf, w, h, boosted = false, opts = {}) {
+  const skipLabWhitening =
+    String(process.env.SIM_LEGACY_LAB_WHITENING || '').trim() === '1'
+      ? false
+      : opts.skipLabWhitening !== false;
   const { data } = await sharp(origCropBuf)
     .resize(w, h).removeAlpha().raw().toBuffer({ resolveWithObject: true });
 
@@ -17310,25 +17829,28 @@ async function computeEnhancedRaw(origCropBuf, w, h, boosted = false) {
     g = Math.max(origG, g);
     b = Math.max(origB, b);
 
-    // Stage 2 — LAB: L* lift + a*/b* neutralize (anti-grey) + slight warm ivory if needed
-    const [L, Alab, Blab] = rgbToLab(r, g, b);
-    const sLab = simLabStrengthMultiplier();
-    const Lscale = (boosted ? 1.16 : 1.12) * sLab;
-    const bScale =
-      isYellowStain || Blab > 8 ? (boosted ? 0.55 : 0.58) : boosted ? 0.58 : 0.6;
-    const [Lw, Aw, Bw] = neutralizeLabWarmWhite(L, Alab, Blab, {
-      Lscale,
-      Lmax: 96,
-      aScale: boosted ? 0.68 : 0.7,
-      bScale,
-    });
-
-    const [ro, go, bo] = labToRgb(Lw, Aw, Bw);
-
-    // Safety: result must be ≥ original on every channel (never darken)
-    out[i*3]   = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origR, ro));
-    out[i*3+1] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origG, go));
-    out[i*3+2] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origB, bo));
+    if (skipLabWhitening) {
+      out[i * 3] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origR, r));
+      out[i * 3 + 1] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origG, g));
+      out[i * 3 + 2] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origB, b));
+    } else {
+      // Legacy: LAB whitening (use SIM_LEGACY_LAB_WHITENING=1 or pass skipLabWhitening: false)
+      const [L, Alab, Blab] = rgbToLab(r, g, b);
+      const sLab = simLabStrengthMultiplier();
+      const Lscale = (boosted ? 1.16 : 1.12) * sLab;
+      const bScale =
+        isYellowStain || Blab > 8 ? (boosted ? 0.55 : 0.58) : boosted ? 0.58 : 0.6;
+      const [Lw, Aw, Bw] = neutralizeLabWarmWhite(L, Alab, Blab, {
+        Lscale,
+        Lmax: 96,
+        aScale: boosted ? 0.68 : 0.7,
+        bScale,
+      });
+      const [ro, go, bo] = labToRgb(Lw, Aw, Bw);
+      out[i * 3] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origR, ro));
+      out[i * 3 + 1] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origG, go));
+      out[i * 3 + 2] = Math.min(ENAMEL_OUTPUT_CAP, Math.max(origB, bo));
+    }
   }
   return out;
 }
@@ -17605,7 +18127,7 @@ function reduceDarkLines(result, maskRaw, w, h) {
 function microTextureClean(result, maskRaw, w, h) {
   const STD_THRESH  = 12;  // std > 12 = rough texture / speckled surface
   const EDGE_THRESH = 20;  // gradient > 20 = tooth boundary — do not touch
-  const MIX         = 0.48;
+  const MIX         = 0.24; // was 0.48 — ~50% less smoothing to avoid flat/matte teeth
 
   const br = new Float32Array(w * h);
   for (let i = 0; i < w*h; i++)
@@ -17614,9 +18136,8 @@ function microTextureClean(result, maskRaw, w, h) {
   const { std }  = computeLocalStats(br, w, h, 2); // 5×5 variance map
   const grad     = computeGradient(br, w, h);       // Sobel magnitude
 
-  // Tight bilateral: small radius + moderate color sigma → smooths speckle,
-  // still preserves sharp tooth edges via the colour-distance weighting.
-  const smoothed = bilateralFilter(result, w, h, 2, 20, 2);
+  // Tight bilateral — ~50% weaker sigmas vs before (less matte / muddy look)
+  const smoothed = bilateralFilter(result, w, h, 2, 10, 1);
 
   const out = Buffer.from(result);
   let count = 0;
@@ -18268,7 +18789,21 @@ function computeTransformationScore({ cfg, stainRemovalRate, stainWarning, struc
 //  Every subsequent pass (dark-floor, reduceDarkLines, microTextureClean,
 //  uniformWhitening) independently gates its writes on maskRaw > 64.
 //
-async function blendCropWithMask(origCropBuf, enhancedRaw, maskBuf, w, h, cfg = SIM_MODES.natural) {
+// blendOpts.skipUniformWhitening: default → skip uniform pass (tooth color from COLOR_PRESETS Stage 2).
+// SIM_LEGACY_LAB_WHITENING=1 forces uniform whitening back on.
+async function blendCropWithMask(
+  origCropBuf,
+  enhancedRaw,
+  maskBuf,
+  w,
+  h,
+  cfg = SIM_MODES.natural,
+  blendOpts = {}
+) {
+  const skipUniformWhitening =
+    String(process.env.SIM_LEGACY_LAB_WHITENING || '').trim() === '1'
+      ? false
+      : blendOpts.skipUniformWhitening !== false;
   const [origRaw, maskRaw] = await Promise.all([
     sharp(origCropBuf).resize(w,h).removeAlpha().raw().toBuffer(),
     sharp(maskBuf).resize(w,h).greyscale().raw().toBuffer(),
@@ -18276,11 +18811,15 @@ async function blendCropWithMask(origCropBuf, enhancedRaw, maskBuf, w, h, cfg = 
 
   // Step 1 — Mask-gated alpha blend (NO filter yet).
   // Outside mask (alpha = 0): result[i] = origRaw[i]  ← exact original pixel.
-  // Inside mask (alpha > 0):  result[i] = blend of original + enhanced.
+  // Inside mask: feather alpha in ~0.6–0.8 (softer edges, less patchy / plastic).
   let result = Buffer.alloc(w * h * 3);
   for (let i = 0; i < w*h; i++) {
-    const m     = maskRaw[i];
-    const alpha = m > 192 ? cfg.blendAlpha.strong : m > 64 ? cfg.blendAlpha.edge : 0.0;
+    const mNorm = maskRaw[i] / 255;
+    let alpha = 0;
+    if (mNorm > 0.1) {
+      alpha = 0.6 + 0.2 * Math.min(1, (mNorm - 0.1) / 0.9);
+      alpha = Math.min(0.8, alpha);
+    }
     for (let c = 0; c < 3; c++)
       result[i*3+c] = Math.min(ENAMEL_OUTPUT_CAP, Math.round(origRaw[i*3+c]*(1-alpha) + enhancedRaw[i*3+c]*alpha));
   }
@@ -18290,8 +18829,8 @@ async function blendCropWithMask(origCropBuf, enhancedRaw, maskBuf, w, h, cfg = 
   // boundaries reads real skin/lip values — zero processed-pixel contamination.
   // Filtered output is written ONLY inside the mask.
   {
-    // Narrower bilateral → less merging of inter-tooth boundaries
-    const filtered = bilateralFilter(result, w, h, 1, 18, 2);
+    // Narrower bilateral — ~50% weaker than before (1,18,2) → (1,9,1) to preserve enamel texture
+    const filtered = bilateralFilter(result, w, h, 1, 9, 1);
     for (let i = 0; i < w*h; i++) {
       if (maskRaw[i] <= 64) continue;  // outside mask: preserve exact original
       for (let c = 0; c < 3; c++)
@@ -18341,8 +18880,10 @@ async function blendCropWithMask(origCropBuf, enhancedRaw, maskBuf, w, h, cfg = 
   // ── Micro-texture cleaning (noisy/speckled tartar surface) ────────────────
   result = microTextureClean(result, maskRaw, w, h);
 
-  // ── Uniform whitening — even tone, shading preserved ─────────────────────
-  result = uniformWhitening(result, maskRaw, w, h, cfg.uniformTargetFactor);
+  // ── Uniform whitening — skipped when using preset-based Stage-2 color
+  if (!skipUniformWhitening) {
+    result = uniformWhitening(result, maskRaw, w, h, cfg.uniformTargetFactor);
+  }
 
   // Validation: result must be at least as bright as original in teeth zone
   let origSum = 0, resSum = 0, cnt = 0;
@@ -18662,10 +19203,12 @@ async function applyFailsafeManualWhiten(origCropBuf, maskBuf, w, h) {
   return sharp(out, { raw: { width: w, height: h, channels: 3 } }).jpeg({ quality: 92 }).toBuffer();
 }
 
-async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full') {
+async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full', colorPresetKey = 'natural') {
+  const resolvedColorPreset = resolveSmileColorPreset(colorPresetKey);
   console.log("SMILE PIPELINE ACTIVE");
   let cfg = { ...resolveSimMode(mode) };
   console.log(`[SIM] Mode: ${cfg.name} (label: ${cfg.label}) strength≈${SIM_TRANSFORM_STRENGTH}`);
+  console.log('[SIM] colorPreset:', resolvedColorPreset);
   console.log('[SIM INTENT]', SIM_VISUAL_INTENT_PROMPT);
   // 1. Fetch original
   let origBuf, origW, origH;
@@ -19324,6 +19867,34 @@ async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full')
     }
   }
 
+  // Stage 2 — user-selected LAB color preset (mask only; structure passes unchanged above)
+  try {
+    blendedCropBuf = await applySmileColorPresetToMaskedCrop(
+      blendedCropBuf,
+      maskBuf,
+      cropWidth,
+      cropHeight,
+      resolvedColorPreset
+    );
+    blendedCropBuf = await applyEnamelNaturalismAfterPreset(
+      blendedCropBuf,
+      origCropBuf,
+      maskBuf,
+      cropWidth,
+      cropHeight
+    );
+    blendedCropBuf = await enforceTeethMaskBoundary(
+      blendedCropBuf,
+      origCropBuf,
+      maskBuf,
+      cropWidth,
+      cropHeight
+    );
+    console.log('[SIM COLOR] Stage-2 preset + enamel naturalism:', resolvedColorPreset);
+  } catch (e) {
+    console.warn('[SIM COLOR] preset failed (non-fatal):', e?.message);
+  }
+
   // 6. Raw-pixel surgery composite ────────────────────────────────────────────
   //
   // CRITICAL DESIGN:  sharp(origBuf).composite(...).jpeg() re-encodes the ENTIRE
@@ -19404,6 +19975,7 @@ async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full')
     return {
       url: finalUrl,
       mode: cfg.name,
+      colorPreset: resolvedColorPreset,
       confidence,
       lowerArchWeak,
       avgPixelChange,
@@ -19631,15 +20203,18 @@ async function runThreeScenarios({ imageUrl, patientId }) {
   return { analysis, scenarios };
 }
 
-async function runSmileSimulation({ imageUrl, patientId, mode = 'full' }) {
+async function runSmileSimulation({ imageUrl, patientId, mode = 'full', preset = 'natural' }) {
   const publicImageUrl = imageUrl
     .replace('/storage/v1/object/sign/', '/storage/v1/object/public/')
     .split('?')[0];
 
-  console.log(`[SIM] mode=${mode} | patientId:`, patientId);
+  console.log('USING PRESET:', preset);
+  const colorPreset = resolveSmileColorPreset(preset);
+
+  console.log(`[SIM] mode=${mode} | preset=${colorPreset} | patientId:`, patientId);
   console.log('[SIM] Public URL:', publicImageUrl.slice(0, 120));
 
-  const r = await cropCompositeSimulation(publicImageUrl, patientId, mode);
+  const r = await cropCompositeSimulation(publicImageUrl, patientId, mode, colorPreset);
 
   if (!r.url) {
     console.log('❌ Simulation failed | reason:', r.failReason);
@@ -19661,6 +20236,7 @@ async function runSmileSimulation({ imageUrl, patientId, mode = 'full' }) {
       status: 'failed',
       debugInfo: [r.failReason],
       photoGuidanceBothRowsTr: SIMULATION_UI_COPY.photoGuidanceBothRowsTr,
+      colorPreset,
     };
   }
 
@@ -19688,6 +20264,7 @@ async function runSmileSimulation({ imageUrl, patientId, mode = 'full' }) {
     debugInfo:      [],
     ...SIMULATION_UI_COPY,
     photoGuidanceBothRowsTr: SIMULATION_UI_COPY.photoGuidanceBothRowsTr,
+    colorPreset:    r.colorPreset ?? colorPreset,
   };
 }
 
@@ -19707,19 +20284,31 @@ setInterval(() => {
 // Client polls GET /api/chat/sim-status/:jobId for the result.
 app.post('/api/chat/smile-simulation', requireToken, async (req, res) => {
   console.log('🎯 SIM ENDPOINT v7 HIT | ASYNC JOB | returning jobId immediately');
-  const { patientId, imageUrl, mode = 'full' } = req.body || {};
+  const body = req.body || {};
+  const { patientId, imageUrl, mode = 'full' } = body;
+  const preset = body.preset || 'natural';
+  console.log('USING PRESET:', preset);
   const simMode = SIM_MODES[mode] ? mode : 'full';
-  console.log('[SIM] patientId:', patientId, '| mode:', simMode, '| imageUrl:', imageUrl?.slice(0, 120));
+  const colorPreset = resolveSmileColorPreset(preset);
+  console.log('[SIM] patientId:', patientId, '| mode:', simMode, '| preset:', colorPreset, '| imageUrl:', imageUrl?.slice(0, 120));
   if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
   if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
   if (!imageUrl)   return res.status(400).json({ ok: false, error: 'imageUrl_required' });
   if (!ENABLE_SMILE_SIMULATION) return res.status(503).json({ ok: false, error: 'simulation_disabled' });
 
   const jobId = crypto.randomUUID();
-  _simJobs.set(jobId, { status: 'pending', url: null, variations: [], failReason: null, mode: simMode, createdAt: Date.now() });
+  _simJobs.set(jobId, {
+    status: 'pending',
+    url: null,
+    variations: [],
+    failReason: null,
+    mode: simMode,
+    preset: colorPreset,
+    createdAt: Date.now(),
+  });
 
   // Fire-and-forget — do NOT await this
-  runSmileSimulation({ imageUrl, patientId, mode: simMode }).then(result => {
+  runSmileSimulation({ imageUrl, patientId, mode: simMode, preset: colorPreset }).then(result => {
     const existing = _simJobs.get(jobId) ?? {};
     const okUrl = result.url || result.simulatedImageUrl;
     _simJobs.set(jobId, {
@@ -19745,6 +20334,8 @@ app.post('/api/chat/smile-simulation', requireToken, async (req, res) => {
       confidenceLabelTr: result.confidenceLabelTr ?? SIMULATION_UI_COPY.confidenceLabelTr,
       photoGuidanceTr:   result.photoGuidanceTr ?? SIMULATION_UI_COPY.photoGuidanceTr,
       photoGuidanceBothRowsTr: result.photoGuidanceBothRowsTr ?? SIMULATION_UI_COPY.photoGuidanceBothRowsTr,
+      preset:                  result.colorPreset ?? colorPreset,
+      colorPreset:             result.colorPreset ?? colorPreset,
     });
     console.log(`[SIM JOB ${jobId.slice(0,8)}] ${okUrl ? 'succeeded ✅' : 'failed ❌'} level=${result.level ?? '-'} | failReason: ${result.error ?? '-'}`);
   }).catch(err => {
@@ -19760,7 +20351,14 @@ app.post('/api/chat/smile-simulation', requireToken, async (req, res) => {
   });
 
   // Respond immediately — client will poll /api/chat/sim-status/:jobId
-  return res.json({ ok: true, jobId, status: 'pending' });
+  return res.json({
+    ok: true,
+    jobId,
+    status: 'pending',
+    preset: colorPreset,
+    colorPreset,
+    availablePresets: SMILE_COLOR_PRESET_KEYS,
+  });
 });
 
 // GET /api/chat/sim-status/:jobId
@@ -19774,6 +20372,7 @@ app.get('/api/chat/sim-status/:jobId', requireToken, (req, res) => {
     return res.json({
       ok: true,
       status: 'pending',
+      availablePresets: SMILE_COLOR_PRESET_KEYS,
       ...SIMULATION_UI_COPY,
     });
   }
@@ -19786,6 +20385,9 @@ app.get('/api/chat/sim-status/:jobId', requireToken, (req, res) => {
       simulationProvider:'programmatic',
       variations:        job.variations ?? [],
       mode:              job.mode ?? 'natural',
+      preset:            job.preset ?? job.colorPreset ?? 'natural',
+      colorPreset:       job.colorPreset ?? job.preset ?? 'natural',
+      availablePresets:  SMILE_COLOR_PRESET_KEYS,
       confidence:        job.confidence ?? null,
       lowerArchWeak:     job.lowerArchWeak ?? false,
       avgPixelChange:    job.avgPixelChange ?? null,
@@ -20280,6 +20882,246 @@ app.post('/api/chat/merge-teeth-strips', requireToken, async (req, res) => {
   }
 });
 
+const DENTAL_CONDITION_UI_TR = {
+  missing_tooth: 'Eksik diş olabilir',
+  misalignment: 'Dişlerde çapraşıklık görülüyor',
+  diastema: 'Doğal diş aralığı bulunuyor',
+};
+
+function formatConditionHeadlineTr(condition, confidence) {
+  const base = DENTAL_CONDITION_UI_TR[condition];
+  if (!base) return '';
+  const confTr = { low: 'Düşük güven', medium: 'Orta güven', high: 'Yüksek güven' };
+  const c = confTr[confidence] || '';
+  return c ? `${base} (${c})` : base;
+}
+
+function dentalConditionToPayload(dc) {
+  if (!dc || !dc.condition) return null;
+  return {
+    condition: dc.condition,
+    confidence: dc.confidence,
+    labelTr: formatConditionHeadlineTr(dc.condition, dc.confidence),
+  };
+}
+
+/**
+ * MVP + hybrid: insight keywords (missing tooth / gap / space), large-gap heuristic,
+ * optional vision flag from JSON (missingTeethLikely). Combined with OR. Not a diagnosis.
+ * @param {string} fullText  insights + summary (lowercased caller joins)
+ * @param {boolean|null} visionLikely  true / false / null (unclear)
+ */
+function analyzeMissingToothHybrid(fullText, visionLikely) {
+  const t = String(fullText || '').toLowerCase();
+
+  const explicitMissing =
+    /\bmissing\s+tooth\b|\bmissing\s+teeth\b|eksik\s*diş|eksik\s*dişler|diş\s*eksikliği/.test(t);
+  const gapOrSpace = /\bgap\b|\bspace\b|\bspacing\b|boşluk|aralık/i.test(t);
+  const insightStrong =
+    /çekilmiş\s*diş|edentulous|boş\s*luk|arada\s*boş|implant\s*alanı\s*yok|konserve\s*eksik|extraction|avuls|tooth\s*loss|teeth\s*lost|gap\s*(?:between|in|teeth)/i.test(
+      t
+    );
+  const insightPath = explicitMissing || gapOrSpace || insightStrong;
+
+  const ruleLargeGap =
+    /\b(large|wide|significant)\s+(gap|spacing|space)\b|diastema|geniş\s*boşluk|büyük\s*aralık|wide\s+space/i.test(t);
+
+  const visionPath = visionLikely === true;
+  const detected = visionPath || insightPath || ruleLargeGap;
+
+  const multipleHints =
+    /çoklu|birden\s*fazla|multiple|several|birkaç|iki\s+diş|üç\s+diş|dört\s+diş|\d+\s*diş.*eksik|eksik.*dişler|çok\s*sayıda|üst\s*ve\s*alt|hem\s*üst|multiple\s*missing/i.test(
+      t
+    );
+  const singleMissing = detected ? !multipleHints : true;
+
+  let score = 0;
+  if (visionPath) score += 3;
+  if (explicitMissing || insightStrong) score += 3;
+  if (ruleLargeGap) score += 3;
+  if (gapOrSpace && !explicitMissing && !insightStrong) score += 1;
+
+  let confidence = 'low';
+  if (score >= 5) confidence = 'high';
+  else if (score >= 3) confidence = 'medium';
+
+  return {
+    detected,
+    singleMissing,
+    confidence,
+    sources: {
+      insight: insightPath,
+      ruleGap: ruleLargeGap,
+      vision: visionPath,
+    },
+  };
+}
+
+/**
+ * Heuristic treatment + indicative price ranges from AI insight text (not a diagnosis).
+ * Feeds patient UX only; clinicians set real quotes.
+ * @param {boolean|null} visionLikely  from vision JSON missingTeethLikely
+ * @param {{ condition: string, confidence: string } | null} visionDentalCondition  from vision JSON dentalCondition
+ */
+function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = null, visionDentalCondition = null) {
+  const parts = Array.isArray(insights) ? insights : [];
+  const text = [...parts, String(summary || '')].join(' ').toLowerCase();
+
+  const issues = [];
+  const treatments = [];
+  const priceEstimate = {};
+  const seenTreat = new Set();
+
+  const add = (issueTr, treatTr, priceKey, range) => {
+    if (issueTr && !issues.includes(issueTr)) issues.push(issueTr);
+    if (treatTr && !seenTreat.has(treatTr)) {
+      seenTreat.add(treatTr);
+      treatments.push(treatTr);
+    }
+    if (priceKey && range && priceEstimate[priceKey] === undefined) {
+      priceEstimate[priceKey] = range;
+    }
+  };
+
+  const miss = analyzeMissingToothHybrid(text, visionLikely);
+  const ruleDc = inferDentalConditionFromRules(text);
+  let dc = mergeDentalCondition(ruleDc, visionDentalCondition);
+  if (!dc && miss.detected) {
+    dc = { condition: 'missing_tooth', confidence: miss.confidence };
+  }
+
+  const dentalCondition = dentalConditionToPayload(dc);
+
+  let missingTooth = null;
+  if (dc && dc.condition === 'missing_tooth') {
+    const headline = formatConditionHeadlineTr('missing_tooth', dc.confidence);
+    if (!issues.some((line) => String(line).startsWith('Eksik diş olabilir'))) issues.unshift(headline);
+    priceEstimate.implant = '500-1500$';
+    priceEstimate.bridge = '300-1000$';
+    if (miss.singleMissing) {
+      if (!seenTreat.has('İmplant')) {
+        seenTreat.add('İmplant');
+        treatments.push('İmplant');
+      }
+      if (!seenTreat.has('Köprü (bridge)')) {
+        seenTreat.add('Köprü (bridge)');
+        treatments.push('Köprü (bridge)');
+      }
+      missingTooth = {
+        headline,
+        confidence: dc.confidence,
+        sources: miss.sources,
+        singleMissing: true,
+        options: [
+          {
+            title: 'İmplant',
+            explanation: 'Komşu dişlere zarar vermeden uygulanır',
+            price: '500-1500$',
+          },
+          {
+            title: 'Köprü (bridge)',
+            explanation: 'Komşu dişler destek olarak kullanılır',
+            price: '300-1000$',
+          },
+        ],
+        disclaimer: 'Kesin tedavi planı için klinik muayenesi gereklidir',
+      };
+    } else {
+      if (!seenTreat.has('İmplant üstü protez')) {
+        seenTreat.add('İmplant üstü protez');
+        treatments.push('İmplant üstü protez');
+      }
+      if (!seenTreat.has('Köprü (bridge)')) {
+        seenTreat.add('Köprü (bridge)');
+        treatments.push('Köprü (bridge)');
+      }
+      missingTooth = {
+        headline,
+        confidence: dc.confidence,
+        sources: miss.sources,
+        singleMissing: false,
+        options: [
+          {
+            title: 'İmplant üstü protez',
+            explanation: 'İmplantlarla desteklenen sabit protez; komşu dişlere zarar vermeden planlanabilir',
+            price: '500-1500$',
+          },
+          {
+            title: 'Köprü (bridge)',
+            explanation: 'Komşu dişler destek olarak kullanılır',
+            price: '300-1000$',
+          },
+        ],
+        disclaimer: 'Kesin tedavi planı için klinik muayenesi gereklidir',
+      };
+    }
+  } else if (dc && dc.condition === 'misalignment') {
+    const headline = formatConditionHeadlineTr('misalignment', dc.confidence);
+    if (!issues.some((line) => String(line).includes('çapraşık'))) issues.unshift(headline);
+  } else if (dc && dc.condition === 'diastema') {
+    const headline = formatConditionHeadlineTr('diastema', dc.confidence);
+    if (!issues.some((line) => String(line).includes('Doğal diş aralığı'))) issues.unshift(headline);
+  }
+
+  if (/sarı|discolor|renk|yellow|stain|lek|beyazlat|whiten|renk tonu|color|surface stain/i.test(text)) {
+    add(
+      'Diş yüzeyinde renk / leke farkı',
+      'Diş beyazlatma (ofis veya ev tipi)',
+      'whitening',
+      '150-400$'
+    );
+  }
+  if (/tartar|plak|calculus|temizlik|cleaning|scaling|polish|birikim|taş/i.test(text)) {
+    add(
+      'Yüzey birikimi / tartar riski',
+      'Profesyonel diş temizliği (scaling & polishing)',
+      'cleaning',
+      '50-150$'
+    );
+  }
+  if (/çapra|crowding|düzensiz|misalignment|alignment|ortodont|braces|invisalign|şeffaf plak|tel/i.test(text)) {
+    add(
+      'Hafif dizilim / çapraşıklık',
+      'Ortodontik değerlendirme (plak / tel)',
+      'orthodontics',
+      '1.500-4.000$'
+    );
+  }
+  if (/çürük|cavity|caries|dolgu|filling|mine/i.test(text)) {
+    add('Çürük / mine kaybı riski', 'Kompozit dolgu / restorasyon', 'filling', '80-250$');
+  }
+  if (/veneer|kaplama|porselen|zirkon|laminate|estetik gülüş/i.test(text)) {
+    add(
+      'Estetik görünüm beklentisi',
+      'Lamina / veneer veya zirkonyum planlaması',
+      'veneer',
+      '2.500-6.000$'
+    );
+  }
+  if (/eti|gingiv|kanama|inflam|periodont|diş eti/i.test(text)) {
+    add('Diş eti hassasiyeti / inflamasyon riski', 'Diş eti bakımı ve kontrol', 'gum', '80-200$');
+  }
+  if (dc?.condition !== 'missing_tooth' && !miss.detected && /implant/i.test(text)) {
+    add('Eksik diş alanı (varsa)', 'İmplant değerlendirmesi', 'implant', '800-2.500$');
+  }
+
+  if (issues.length === 0) {
+    issues.push('Klinik muayenesi ile netleştirilmesi gereken bulgular');
+  }
+  if (treatments.length === 0) {
+    treatments.push('Detaylı ağız içi muayene ve gerekiyorsa röntgen');
+    priceEstimate.consultation = 'Ücretsiz–75$';
+  }
+
+  return {
+    issues: issues.slice(0, 8),
+    treatments: treatments.slice(0, 10),
+    priceEstimate,
+    missingTooth,
+    dentalCondition,
+  };
+}
+
 // POST /api/chat/ai-analyze
 // Accepts: { patientId, imageUrl, photoType? }
 // Feature flags: ENABLE_AI_ANALYSIS, ENABLE_SMILE_SIMULATION
@@ -20463,13 +21305,14 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       return res.status(502).json({ ok: false, error: 'openai_error', message: openaiErr.message || 'OpenAI request failed' });
     }
 
-    const { insights, confidence, summary, recommendation, _usage, _model } = aiAnalysis;
+    const { insights, confidence, summary, recommendation, missingTeethLikely, dentalConditionParsed, _usage, _model } = aiAnalysis;
 
     logAI('info', 'openai_response', {
       patientId,
       photoType,
       insightCount:      insights.length,
       confidence,
+      missingTeethLikely,
       hasSummary:        !!summary,
       hasRecommendation: !!recommendation,
       fallback:          aiAnalysis._fallback,
@@ -20491,6 +21334,16 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
 
     const disclaimer = 'Bu sonuçlar AI tarafından oluşturulmuştur ve tıbbi teşhis değildir.';
 
+    const treatmentPlan = buildDentalTreatmentPlan(
+      insights,
+      summary,
+      missingTeethLikely ?? null,
+      dentalConditionParsed ?? null
+    );
+
+    const missingToothDetected = Boolean(treatmentPlan.missingTooth);
+    const missingToothConfidence = treatmentPlan.missingTooth?.confidence ?? null;
+
     // ── Clinic recommendations (non-blocking — runs concurrently with save) ──
     const recommendedClinics = await getRecommendedClinics({ insights, patientId, userLocation, preferredCountry });
 
@@ -20507,6 +21360,13 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
           recommendation,
           disclaimer,
           originalImageUrl: imageUrl,
+          issues: treatmentPlan.issues,
+          treatments: treatmentPlan.treatments,
+          priceEstimate: treatmentPlan.priceEstimate,
+          missingToothDetected,
+          missingToothConfidence,
+          ...(treatmentPlan.dentalCondition ? { dentalCondition: treatmentPlan.dentalCondition } : {}),
+          ...(treatmentPlan.missingTooth ? { missingTooth: treatmentPlan.missingTooth } : {}),
           ...(simulatedImageUrl ? { simulatedImageUrl } : {}),
           ...(recommendedClinics.length > 0 ? { clinics: recommendedClinics } : {}),
         },
@@ -20528,7 +21388,24 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       await aiCostRecord(patientId);
     }
 
-    return res.json({ ok: true, insights, confidence, summary, recommendation, simulatedImageUrl, simulationProvider, disclaimer, clinics: recommendedClinics });
+    return res.json({
+      ok: true,
+      insights,
+      confidence,
+      summary,
+      recommendation,
+      simulatedImageUrl,
+      simulationProvider,
+      disclaimer,
+      clinics: recommendedClinics,
+      issues: treatmentPlan.issues,
+      treatments: treatmentPlan.treatments,
+      priceEstimate: treatmentPlan.priceEstimate,
+      missingToothDetected,
+      missingToothConfidence,
+      ...(treatmentPlan.dentalCondition ? { dentalCondition: treatmentPlan.dentalCondition } : {}),
+      ...(treatmentPlan.missingTooth ? { missingTooth: treatmentPlan.missingTooth } : {}),
+    });
 
   } catch (err) {
     const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -21714,6 +22591,21 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
             // URL was provided but no coords extractable — warn but don't block save
             console.warn(`[clinic update] could not extract coords from maps URL: ${incomingMapsUrl}`);
           }
+        }
+
+        // Explicit map pin (mobile admin UI) — overrides URL-resolved coords when both are finite
+        const rawPinLat = body.latitude ?? body.lat;
+        const rawPinLng = body.longitude ?? body.lng;
+        const pinLat = rawPinLat != null && rawPinLat !== "" ? parseFloat(String(rawPinLat)) : NaN;
+        const pinLng = rawPinLng != null && rawPinLng !== "" ? parseFloat(String(rawPinLng)) : NaN;
+        if (Number.isFinite(pinLat) && Number.isFinite(pinLng)) {
+          supabaseUpdate.latitude = pinLat;
+          supabaseUpdate.longitude = pinLng;
+          console.log(`[clinic update] coords from map pin: ${pinLat}, ${pinLng}`);
+        }
+
+        if (body.country != null && String(body.country).trim()) {
+          supabaseUpdate.country = String(body.country).trim().toUpperCase();
         }
         
         const { data, error } = await supabase
@@ -26331,6 +27223,75 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
   } catch (error) {
 
     res.status(500).json({ ok: false, error: "internal_error", message: error?.message || "Internal server error" });
+  }
+});
+
+// POST /api/super-admin/clinics — Supabase insert (name + geo + country/city)
+// Body: { name, lat, lng, country?, city?, clinic_code?, email? }
+// DB columns: latitude/longitude (not lat/lng). Requires super-admin JWT.
+app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+
+    const body = req.body || {};
+    const { name, lat, lng, country, city } = body;
+
+    const nameTrim = name != null ? String(name).trim() : "";
+    if (!nameTrim) {
+      return res.status(400).json({ ok: false, error: "name_required" });
+    }
+
+    const latN = lat != null && lat !== "" ? parseFloat(String(lat)) : NaN;
+    const lngN = lng != null && lng !== "" ? parseFloat(String(lng)) : NaN;
+    if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
+      return res.status(400).json({ ok: false, error: "lat_lng_required" });
+    }
+
+    const cityStr = city != null ? String(city).trim() : "";
+    const countryStr = country != null ? String(country).trim().toUpperCase() : "";
+
+    let clinicCode =
+      body.clinic_code != null ? String(body.clinic_code).trim().toUpperCase() : "";
+    if (!clinicCode) {
+      clinicCode = `M${Date.now().toString(36).toUpperCase()}${randomUUID().replace(/-/g, "").slice(0, 4)}`.slice(0, 32);
+    }
+
+    let email = body.email != null ? String(body.email).trim().toLowerCase() : "";
+    if (!email) {
+      email = `pending-${randomUUID().slice(0, 8)}@placeholder.cliniflow.local`;
+    }
+
+    const passwordHash = await bcrypt.hash(randomUUID() + randomUUID(), 10);
+
+    const row = {
+      clinic_code: clinicCode,
+      email,
+      password_hash: passwordHash,
+      name: nameTrim,
+      phone: "",
+      address: "",
+      city: cityStr || null,
+      country: countryStr || null,
+      latitude: latN,
+      longitude: lngN,
+      plan: "FREE",
+      max_patients: 3,
+      status: "PENDING",
+    };
+
+    const { data, error } = await supabase.from("clinics").insert([row]).select().single();
+
+    if (error) {
+      console.error("[POST /api/super-admin/clinics]", error);
+      return res.status(500).json({ ok: false, error: error.message || "insert_failed", details: error });
+    }
+
+    return res.status(200).json(data);
+  } catch (e) {
+    console.error("[POST /api/super-admin/clinics]", e?.message || e);
+    return res.status(500).json({ ok: false, error: e?.message || "internal_error" });
   }
 });
 
@@ -36930,6 +37891,9 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
+// ── Static assets (after all API routes; avoids shadowing POST/PATCH /api/* on some hosts) ──
+app.use(express.static(publicDir));
+
 // ── Global JSON 404 — API routes never return HTML ────────────────────────────
 // Any request that didn't match a route above returns a JSON 404 so the
 // mobile app can always parse the response (no "json parse error" on unknown paths).
@@ -36940,7 +37904,7 @@ app.use((req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v44');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v45');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');

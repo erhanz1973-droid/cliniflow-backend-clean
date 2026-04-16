@@ -5,7 +5,9 @@
   "main": "index.cjs",
   "scripts": {
     "start": "node index.cjs",
-    "dev": "node index.cjs"
+    "dev": "node index.cjs",
+    "migrate:clinic-coords": "node scripts/migrate-clinic-coordinates.cjs",
+    "migrate:clinic-coords:dry": "node scripts/migrate-clinic-coordinates.cjs --dry-run"
   },
   "engines": {
     "node": ">=18"
