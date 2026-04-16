@@ -6258,12 +6258,13 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
       excludeClinicId = pt?.clinic_id || null;
     }
 
+    // Do not use .neq("id", excludeClinicId) in SQL — if patients.clinic_id is not
+    // exactly the same type/format as clinics.id, PostgREST can error and the list fails.
     let q = supabase
       .from("clinics")
       .select("id, name, city, country, clinic_code, latitude, longitude, status")
       .order("name", { ascending: true })
       .limit(200);
-    if (excludeClinicId) q = q.neq("id", excludeClinicId);
 
     let { data: raw, error } = await q;
     if (error) {
@@ -6272,35 +6273,46 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
         .select("id, name, city, country, clinic_code, status")
         .order("name", { ascending: true })
         .limit(200);
-      const q2b = excludeClinicId ? q2.neq("id", excludeClinicId) : q2;
-      const r2 = await q2b;
+      const r2 = await q2;
       raw = r2.data;
       error = r2.error;
     }
     if (error) throw error;
 
-    const rows = (raw || []).filter((c) => {
+    let rows = (raw || []).filter((c) => {
       const s = String(c.status ?? "active").toLowerCase();
       return !["suspended", "reject", "rejected", "inactive", "closed"].includes(s);
     });
+    if (excludeClinicId) {
+      const ex = String(excludeClinicId).trim();
+      rows = rows.filter((c) => String(c.id) !== ex);
+    }
 
-    const ids = rows.map((c) => c.id);
+    const ids = rows.map((c) => c.id).filter((id) => id != null && String(id).trim() !== "");
     const ratingMap = {};
     if (ids.length) {
-      const { data: ratingRows } = await supabase
-        .from("ratings")
-        .select("clinic_id, overall")
-        .in("clinic_id", ids);
-      if (ratingRows?.length) {
-        const grouped = {};
-        for (const r of ratingRows) {
-          if (!grouped[r.clinic_id]) grouped[r.clinic_id] = [];
-          grouped[r.clinic_id].push(r.overall);
+      try {
+        const { data: ratingRows, error: ratingErr } = await supabase
+          .from("ratings")
+          .select("clinic_id, overall")
+          .in("clinic_id", ids);
+        if (ratingErr) {
+          console.warn("[GET /api/patient/clinics] ratings query skipped:", ratingErr.message);
+        } else if (ratingRows?.length) {
+          const grouped = {};
+          for (const r of ratingRows) {
+            if (!grouped[r.clinic_id]) grouped[r.clinic_id] = [];
+            const v = r.overall;
+            if (typeof v === "number" && Number.isFinite(v)) grouped[r.clinic_id].push(v);
+          }
+          for (const [id, scores] of Object.entries(grouped)) {
+            if (scores.length)
+              ratingMap[id] =
+                Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
+          }
         }
-        for (const [id, scores] of Object.entries(grouped)) {
-          ratingMap[id] =
-            Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
-        }
+      } catch (re) {
+        console.warn("[GET /api/patient/clinics] ratings exception:", re?.message);
       }
     }
 
@@ -15954,7 +15966,7 @@ async function processDentalAI(imageDataUrl, photoType = 'general', { apiKey, ti
 //
 // Canonical “prompt” line for logging / product parity (no external img2img here):
 const SIM_VISUAL_INTENT_PROMPT =
-  'realistic dental smile improvement, natural alignment, both arches, same face and lighting';
+  'perfect white teeth, straight aligned teeth, remove stains, close gaps, cosmetic dental improvement, clearly visible enhancement, ideal smile design, natural but noticeable difference';
 //
 // SIM_TRANSFORM_STRENGTH: programmatic LAB/blend (0.35 … 0.98). Default 0.5 — natural, not over-edited.
 //
@@ -15973,7 +15985,7 @@ const SIM_VISUAL_INTENT_PROMPT =
 //  4. computeEnhancedRaw → tartar removal + LAB whitening (strong visible lift)
 //  5. bilateralFilter    → edge-preserving smooth (r=3, σ_color=25, σ_space=3)
 //  6. blendCropWithMask  → alpha blend + dark-floor + line-reduce + micro-tex
-//                          + uniform whitening (avg×1.12 max)
+//                          + uniform whitening (higher target factor; visible-first)
 //  7. [optional] microAlignment — disabled; enable via MICRO_ALIGN_ENABLED
 //  8. sharpen + composite onto full original + upload Supabase
 
@@ -16024,7 +16036,7 @@ function applySimTransformStrength(cfg) {
       strong: Math.min(0.98, cfg.blendAlpha.strong * kBlend),
       edge: Math.min(0.72, cfg.blendAlpha.edge * kBlend),
     },
-    uniformTargetFactor: Math.min(1.52, cfg.uniformTargetFactor * uniBoost),
+    uniformTargetFactor: Math.min(1.62, cfg.uniformTargetFactor * uniBoost),
   };
 }
 
@@ -16286,9 +16298,13 @@ async function normalizeTeethPreEnhance(cropBuf, maskBuf, w, h) {
     const r0 = raw[i * 3], g0 = raw[i * 3 + 1], b0 = raw[i * 3 + 2];
     const [L, A, B] = rgbToLab(r0, g0, b0);
     const Ln = L + (targetL - meanL) * 0.38;
-    const An = A * 0.96;
-    const Bn = B * 0.88;
-    let [r, g, b] = labToRgb(Math.min(94, Ln), An, Bn);
+    const [Lw, Aw, Bw] = neutralizeLabWarmWhite(Ln, A, B, {
+      lockL: true,
+      aScale: 0.85,
+      bScale: 0.78,
+      Lmax: 94,
+    });
+    let [r, g, b] = labToRgb(Math.min(94, Lw), Aw, Bw);
     const k = 0.62;
     r = Math.min(ENAMEL_OUTPUT_CAP, Math.round(r0 * (1 - k) + r * k));
     g = Math.min(ENAMEL_OUTPUT_CAP, Math.round(g0 * (1 - k) + g * k));
@@ -16305,18 +16321,7 @@ async function normalizeTeethPreEnhance(cropBuf, maskBuf, w, h) {
 // Teeth-aware img2img — set REPLICATE_IMG2IMG_VERSION to stability-ai/stable-diffusion-img2img (version hash on replicate.com).
 // Single-pass + dual-pass default (STEP 4 — same prompt for upper and lower Replicate calls).
 const SIM_REPLICATE_PROMPT_DEFAULT =
-  'realistic dental smile improvement, treat lower teeth as equally important as upper teeth, ' +
-  'strongly enforce equal alignment and correction on lower teeth, do not leave lower teeth unchanged, ' +
-  'apply equal correction to both upper and lower teeth, ensure both rows are clearly visible and equally enhanced, ' +
-  'match color tone and brightness between upper and lower teeth, ' +
-  'lower teeth brightness must match surrounding inner mouth and gums — not brighter or harsher than the oral cavity, ' +
-  'add subtle shadow and depth to lower teeth to match realism of upper teeth, slight natural interdental shading for depth, ' +
-  'add subtle shadow between lower teeth and inner mouth for realistic depth and separation, distinct soft shadow band under upper teeth at the gum line, ' +
-  'depth between upper and lower tooth layers, avoid flat lighting on lower arch, ' +
-  'lower teeth slightly darker and softer than a glossy overlay — natural diffuse light, not oversharpened, ' +
-  'slightly whiten teeth naturally without over-whitening, perform subtle alignment correction on all visible teeth, ' +
-  'preserve natural tooth shapes and small imperfections, avoid artificial veneers or perfect uniform teeth, ' +
-  'keep lips, skin, and face completely unchanged, high realism, medical-grade natural result';
+  'perfect white teeth, straight aligned teeth, remove stains, close gaps, cosmetic dental improvement, clearly visible enhancement, ideal smile design, natural but noticeable difference';
 
 // Dual-region: upper strip + lower strip use the SAME prompt (split controls focus, not wording).
 // Override: REPLICATE_DUAL_PROMPT or REPLICATE_TEETH_PROMPT.
@@ -16333,7 +16338,7 @@ const SIM_REPLICATE_NEGATIVE_DEFAULT =
   'watermark, text, extra teeth, wrong tooth count';
 
 /**
- * Img2img denoise (Replicate prompt_strength). Target ~0.45–0.55 for subtle realism.
+ * Img2img denoise (Replicate prompt_strength). Values below 0.8 are raised to 0.85 for visible change.
  */
 const REPLICATE_PROMPT_STRENGTH_DEFAULT = 0.5;
 
@@ -16377,6 +16382,9 @@ async function replicateTeethImg2ImgOptional(cropJpegBuf, w, h, opts = {}) {
   );
   if (typeof opts.strengthOverride === 'number' && Number.isFinite(opts.strengthOverride)) {
     strength = Math.min(0.98, Math.max(0.35, opts.strengthOverride));
+  }
+  if (strength < 0.8) {
+    strength = 0.85;
   }
   const envPrompt = process.env.REPLICATE_TEETH_PROMPT;
   const basePrompt = envPrompt || SIM_REPLICATE_PROMPT_DEFAULT;
@@ -16717,12 +16725,12 @@ async function boostLowerArchMerge(origCropBuf, blendedCropBuf, maskBuf, w, h, c
 //
 const SIM_MODES = {
   // ── Mode 1: Whitening only ─────────────────────────────────────────────────
-  // Tuned for clearly visible improvement (target ≥15% mean tooth brightness lift).
+  // Tuned for clearly visible improvement (stronger mean lift vs legacy ~12% cap).
   whitening: {
     name:                'whitening',
     label:               'Beyazlatma',
     blendAlpha:          { strong: 0.72, edge: 0.34 },
-    uniformTargetFactor: 1.20,
+    uniformTargetFactor: 1.32,
     alignment:           false,
     smileArc:            false,
     edgeSoftening:       false,
@@ -16737,7 +16745,7 @@ const SIM_MODES = {
     name:                'alignment',
     label:               'Düzeltme & Dizilim',
     blendAlpha:          { strong: 0.62, edge: 0.28 },
-    uniformTargetFactor: 1.16,
+    uniformTargetFactor: 1.28,
     alignment:           true,
     smileArc:            true,
     edgeSoftening:       true,
@@ -16758,7 +16766,7 @@ const SIM_MODES = {
     name:                'full',
     label:               'Tam Smile Design',
     blendAlpha:          { strong: 0.82, edge: 0.42 },
-    uniformTargetFactor: 1.24,
+    uniformTargetFactor: 1.38,
     alignment:           true,
     smileArc:            true,
     edgeSoftening:       true,
@@ -16781,7 +16789,7 @@ const SIM_MODES = {
     name:                'premium',
     label:               'Premium Estetik Gülüş',
     blendAlpha:          { strong: 0.78, edge: 0.40 },
-    uniformTargetFactor: 1.20,
+    uniformTargetFactor: 1.34,
     alignment:           true,
     smileArc:            true,
     edgeSoftening:       true,
@@ -16806,7 +16814,7 @@ SIM_MODES.basic = {
   name:                'basic',
   label:               'Temel Temizleme & Beyazlatma',
   blendAlpha:          { strong: 0.52, edge: 0.24 },
-  uniformTargetFactor: 1.14,
+  uniformTargetFactor: 1.26,
   alignment:           false,
   smileArc:            false,
   edgeSoftening:       false,
@@ -16819,13 +16827,13 @@ SIM_MODES.basic = {
 
 // ── Scenario C: Perfect ───────────────────────────────────────────────────────
 // Veneer / zirconium look. Full smile design, maximum whitening within realism
-// bounds (L* capped at 90 by uniformWhitening — never mirror-white), full arc and
+// bounds (L* cap in uniformWhitening — full arc and
 // highlights. Represents E-max porcelain veneer outcome.
 SIM_MODES.perfect = {
   name:                'perfect',
   label:               'Mükemmel Gülüş Tasarımı',
   blendAlpha:          { strong: 0.82, edge: 0.42 },
-  uniformTargetFactor: 1.22,
+  uniformTargetFactor: 1.36,
   alignment:           true,
   smileArc:            true,
   edgeSoftening:       true,
@@ -17165,6 +17173,27 @@ function labToRgb(L, A, B) {
   return [Math.min(245,Math.round(gam(r)*255)), Math.min(245,Math.round(gam(gn)*255)), Math.min(245,Math.round(gam(bn)*255))];
 }
 
+/**
+ * Whitening in LAB: boost L and partially neutralize a-star / b-star (not to zero; avoids grey enamel).
+ * If chroma collapses, add slight +b (warm ivory).
+ */
+function neutralizeLabWarmWhite(L, A, B, opts = {}) {
+  const {
+    Lscale = 1.0,
+    Lmax = 96,
+    aScale = 0.7,
+    bScale = 0.6,
+    lockL = false,
+  } = opts;
+  let Lw = lockL ? L : Math.min(Lmax, L * Lscale);
+  let Aw = A * aScale;
+  let Bw = B * bScale;
+  if (Math.abs(Aw) < 2 && Math.abs(Bw) < 2) {
+    Bw += 3;
+  }
+  return [Lw, Aw, Bw];
+}
+
 // ── Sobel gradient magnitude (brightness array → Float32Array) ────────────────
 function computeGradient(brightness, w, h) {
   const grad = new Float32Array(w * h);
@@ -17186,10 +17215,8 @@ function computeGradient(brightness, w, h) {
 // ── Main enhancement: tartar removal + LAB color neutralization + whitening ───
 //
 //  Tartar:     adaptive removal in two tiers (contrast 0.15–0.35 / ≥ 0.35)
-//  Color:      LAB neutralization targets yellow (B>8) and brown/red (A>5)
-//              new_A = mix(A, 0, 0.60)   new_B = mix(B, 0, 0.70)
-//              L unchanged — brightness is not affected
-//  Whitening:  L × 1.08 (≈ +8% lightness) applied on top
+//  Color:      L* scaled + a*/b* damped (×0.7 / ×0.6) + warm b* bump if chroma collapses
+//  Whitening:  L* boosted (×~1.1–1.2 with sim strength), not L-only
 //  Safety:     result ≥ original pixel for every channel
 //
 // boosted = true → wider detection thresholds + stronger lift for the auto-retry pass.
@@ -17283,22 +17310,18 @@ async function computeEnhancedRaw(origCropBuf, w, h, boosted = false) {
     g = Math.max(origG, g);
     b = Math.max(origB, b);
 
-    // Stage 2 — LAB colour neutralization + lightness boost
+    // Stage 2 — LAB: L* lift + a*/b* neutralize (anti-grey) + slight warm ivory if needed
     const [L, Alab, Blab] = rgbToLab(r, g, b);
-
-    // Lightness boost — conservative to avoid flat painted enamel.
     const sLab = simLabStrengthMultiplier();
-    const Lmult = (boosted ? 1.1 : 1.06) * sLab;
-    const Lw    = Math.min(96, L * Lmult);
-
-    // A axis (green-red): brown/red stains — pull harder toward neutral
-    const Aw = Alab > 5  ? Alab + (0 - Alab) * (boosted ? 0.78 : 0.72) : Alab * 0.92;
-
-    // B axis (blue-yellow): aggressive yellow reduction while keeping texture
-    const Bw = isYellowStain ? Blab + (0 - Blab) * (boosted ? 0.97 : 0.93)
-             : Blab > 8      ? Blab + (0 - Blab) * (boosted ? 0.92 : 0.88)
-             : Blab > 0      ? Blab * (boosted ? 0.62 : 0.72)
-                             : Blab;
+    const Lscale = (boosted ? 1.16 : 1.12) * sLab;
+    const bScale =
+      isYellowStain || Blab > 8 ? (boosted ? 0.55 : 0.58) : boosted ? 0.58 : 0.6;
+    const [Lw, Aw, Bw] = neutralizeLabWarmWhite(L, Alab, Blab, {
+      Lscale,
+      Lmax: 96,
+      aScale: boosted ? 0.68 : 0.7,
+      bScale,
+    });
 
     const [ro, go, bo] = labToRgb(Lw, Aw, Bw);
 
@@ -17619,7 +17642,7 @@ function microTextureClean(result, maskRaw, w, h) {
 // Each region independently computes: avg, p95 → target = min(p95×0.96, avg×factor)
 // Yellow tint kill and highlight guard apply to all regions.
 //
-function uniformWhitening(result, maskRaw, w, h, targetFactor = 1.12) {
+function uniformWhitening(result, maskRaw, w, h, targetFactor = 1.28) {
   const snap = Buffer.from(result);
 
   const br = new Float32Array(w * h);
@@ -17650,7 +17673,7 @@ function uniformWhitening(result, maskRaw, w, h, targetFactor = 1.12) {
   const out = Buffer.from(snap);
   for (let i = 0; i < w*h; i++) {
     if (maskRaw[i] <= 64) continue;
-    if (br[i] > 202)      continue; // highlight guard (slightly wider lift zone)
+    if (br[i] > 208)      continue; // highlight guard (allow a bit more headroom vs 202)
 
     const y    = Math.floor(i / w);
     const reg  = y < h * 0.45 ? upper : lower;
@@ -17659,27 +17682,31 @@ function uniformWhitening(result, maskRaw, w, h, targetFactor = 1.12) {
 
     const pixBr = br[i];
     const delta  = target - pixBr;
-    const lift   = Math.min(0.62, Math.max(0.12, delta / 255));
+    const lift   = Math.min(0.78, Math.max(0.12, delta / 255));
 
     let r = snap[i*3], g = snap[i*3+1], b = snap[i*3+2];
     const rn = r + delta * lift, gn = g + delta * lift, bn = b + delta * lift;
-    let ro = r * 0.32 + rn * 0.68;
-    let go = g * 0.32 + gn * 0.68;
-    let bo = b * 0.32 + bn * 0.68;
+    let ro = r * 0.28 + rn * 0.72;
+    let go = g * 0.28 + gn * 0.72;
+    let bo = b * 0.28 + bn * 0.72;
 
     // Yellow reduction — gentle (harsh kills read as flat paint)
     if (r > g && g > b) bo += (r - b) * 0.28;
 
-    // ── LAB lightness cap (realism) ─────────────────────────────────────
-    // Allow slightly higher L* than before so whitening reads at first glance
-    // (clinical A1–B1 band), without mirror-white.
-    const LAB_L_CAP = 86;
-    const [capL, capA, capB] = rgbToLab(Math.round(ro), Math.round(go), Math.round(bo));
-    if (capL > LAB_L_CAP) {
-      const scale = LAB_L_CAP / capL;
-      const [cr, cg, cb] = labToRgb(capL * scale, capA, capB);
-      ro = cr; go = cg; bo = cb;
-    }
+    // ── LAB: cap L* + neutralize a*/b* (prevents grey from L-only lifts)
+    const LAB_L_CAP = 91;
+    let [Ll, Al, Bl] = rgbToLab(Math.round(ro), Math.round(go), Math.round(bo));
+    if (Ll > LAB_L_CAP) Ll = LAB_L_CAP;
+    const [Ll2, Al2, Bl2] = neutralizeLabWarmWhite(Ll, Al, Bl, {
+      lockL: true,
+      aScale: 0.82,
+      bScale: 0.75,
+      Lmax: LAB_L_CAP,
+    });
+    const [cr, cg, cb] = labToRgb(Ll2, Al2, Bl2);
+    ro = cr;
+    go = cg;
+    bo = cb;
 
     // ── Subtle natural variation (anti-plastic) ───────────────────────────
     const noise = ((i * 1664525 + 1013904223) & 0x7fffffff) % 3 - 1;  // −1 … +1
@@ -18469,9 +18496,11 @@ function levelCfg(requestedCfg, level) {
 }
 
 // ── Visible-improvement helpers (multi-variation + minimum lift guarantee) ───
-const MIN_VISIBLE_TOOTH_LIFT_PCT_STRICT   = 22;
-const MIN_VISIBLE_TOOTH_LIFT_PCT_RELAXED  = 18;
-const MIN_VISIBLE_TOOTH_LIFT_PCT_MINIMAL  = 14;
+// Strict threshold lowered from 22 → 10: accept mid lifts without extra forced passes;
+// only re-boost when mean lift is still below 10%.
+const MIN_VISIBLE_TOOTH_LIFT_PCT_STRICT   = 10;
+const MIN_VISIBLE_TOOTH_LIFT_PCT_RELAXED  = 8;
+const MIN_VISIBLE_TOOTH_LIFT_PCT_MINIMAL  = 6;
 
 /** Scale blend strength & uniform whitening target for internal A/B/C candidates. */
 function scaleSimStrength(baseCfg, mult) {
@@ -18482,7 +18511,7 @@ function scaleSimStrength(baseCfg, mult) {
       strong: Math.min(0.94, baseCfg.blendAlpha.strong * mult),
       edge:   Math.min(0.62, baseCfg.blendAlpha.edge * mult),
     },
-    uniformTargetFactor: Math.min(1.42, baseCfg.uniformTargetFactor * (1 + (mult - 1) * 0.32)),
+    uniformTargetFactor: Math.min(1.58, baseCfg.uniformTargetFactor * (1 + (mult - 1) * 0.32)),
   };
 }
 
@@ -18558,15 +18587,15 @@ async function assessPostGenerationChange(origCropBuf, resultBuf, maskBuf, w, h)
 /** Returns true if output is still too close to input (pixel + histogram sense). */
 function shouldPostGenRegenerate(metrics, simLevel) {
   const { meanAbs, lumaLiftPct, histBC } = metrics;
+  // Relaxed vs earlier gates — prefer visible whitening over re-running toward “subtle realism”
   const absMin =
-    simLevel === 'minimal' ? 4.5 : simLevel === 'relaxed' ? 5.2 : 6.2;
+    simLevel === 'minimal' ? 3.2 : simLevel === 'relaxed' ? 3.8 : 4.5;
   const liftMin =
-    simLevel === 'minimal' ? 7.0 : simLevel === 'relaxed' ? 9.0 : 11.0;
-  // Regenerate if EITHER dimension is weak (AND was too easy to pass with whitening-only).
+    simLevel === 'minimal' ? 4.0 : simLevel === 'relaxed' ? 5.0 : 6.0;
   const tooFlatPixels = meanAbs < absMin;
   const tooFlatBright = lumaLiftPct < liftMin;
   const histTooClose =
-    histBC > (simLevel === 'minimal' ? 0.988 : 0.982) && meanAbs < absMin + 1.1;
+    histBC > (simLevel === 'minimal' ? 0.994 : 0.991) && meanAbs < absMin + 0.8;
   return tooFlatPixels || tooFlatBright || histTooClose;
 }
 
@@ -18665,8 +18694,14 @@ async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full')
         .from('patient-files')
         .upload(storagePath, blackBuf, { contentType: 'image/jpeg', upsert: false });
       if (upErr) return { url: null, failReason: 'debug_black_upload: ' + upErr.message };
-      const { data: urlData } = supabase.storage.from('patient-files').getPublicUrl(storagePath);
-      const finalUrl = urlData?.publicUrl;
+      const { data: dbgSigned, error: dbgSignErr } = await supabase.storage
+        .from('patient-files')
+        .createSignedUrl(storagePath, 365 * 24 * 3600);
+      let finalUrl = dbgSigned?.signedUrl;
+      if (dbgSignErr || !finalUrl) {
+        const { data: urlData } = supabase.storage.from('patient-files').getPublicUrl(storagePath);
+        finalUrl = urlData?.publicUrl;
+      }
       if (!finalUrl) return { url: null, failReason: 'debug_black_no_url' };
       return {
         url: finalUrl,
@@ -19172,49 +19207,8 @@ async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full')
     console.warn('[SIM POST-GEN] moderate pass non-fatal:', e?.message);
   }
 
-  // Artifact guard: chalky flat patches → regenerate with gentle natural blend
-  try {
-    const art = await detectWhiteningArtifacts(
-      origCropBuf, blendedCropBuf, maskBuf, cropWidth, cropHeight
-    );
-    if (art.bad) {
-      console.warn('[SIM ARTIFACT] Regenerating with gentle natural blend');
-      const gentleCfg = scaleSimStrength(cfg, 0.55);
-      const encG = await computeEnhancedRaw(origCropBuf, cropWidth, cropHeight, false);
-      blendedCropBuf = await blendCropWithMask(
-        origCropBuf, encG, maskBuf, cropWidth, cropHeight, gentleCfg
-      );
-      blendedCropBuf = await sharp(blendedCropBuf)
-        .sharpen({ sigma: cfg.sharpenSigma * 0.95, m1: cfg.sharpenM1, m2: cfg.sharpenM2 })
-        .jpeg({ quality: 92 })
-        .toBuffer();
-      blendedCropBuf = await enforceTeethMaskBoundary(
-        blendedCropBuf, origCropBuf, maskBuf, cropWidth, cropHeight
-      );
-    }
-  } catch (e) {
-    console.warn('[SIM ARTIFACT] handler non-fatal:', e?.message);
-  }
-
-  // Mandatory visible change: if still identical to input, manual LAB whitening on mask only.
-  try {
-    const pmFs = await assessPostGenerationChange(
-      origCropBuf, blendedCropBuf, maskBuf, cropWidth, cropHeight
-    );
-    if (shouldPostGenRegenerate(pmFs, simLevel)) {
-      console.warn(
-        `[SIM FAILSAFE] Still flat (meanAbs=${pmFs.meanAbs.toFixed(2)} lift=${pmFs.lumaLiftPct.toFixed(1)}%) — manual whitening`
-      );
-      blendedCropBuf = await applyFailsafeManualWhiten(
-        origCropBuf, maskBuf, cropWidth, cropHeight
-      );
-      blendedCropBuf = await enforceTeethMaskBoundary(
-        blendedCropBuf, origCropBuf, maskBuf, cropWidth, cropHeight
-      );
-    }
-  } catch (e) {
-    console.warn('[SIM FAILSAFE] non-fatal:', e?.message);
-  }
+  // Intentionally no “gentle artifact” re-blend or manual LAB failsafe here — those
+  // tended to cancel visible whitening for the sake of ultra-safe realism.
 
   try {
     const confPost = await computeConfidence(origCropBuf, blendedCropBuf, maskBuf, cropWidth, cropHeight);
@@ -19395,10 +19389,18 @@ async function cropCompositeSimulation(publicImageUrl, patientId, mode = 'full')
       .from('patient-files')
       .upload(storagePath, compositedBuf, { contentType: 'image/jpeg', upsert: false });
     if (upErr) throw new Error(upErr.message);
-    const { data: urlData } = supabase.storage.from('patient-files').getPublicUrl(storagePath);
-    const finalUrl = urlData?.publicUrl;
-    if (!finalUrl) throw new Error('getPublicUrl returned nothing');
-    console.log('[SIM CROP] Public URL:', finalUrl.slice(0, 100));
+    // Same as /api/chat/ai-upload: signed URL so the slider “after” image loads like the
+    // “before” signed upload URL (works if the bucket is not public).
+    const { data: signed, error: signErr } = await supabase.storage
+      .from('patient-files')
+      .createSignedUrl(storagePath, 365 * 24 * 3600);
+    let finalUrl = signed?.signedUrl;
+    if (signErr || !finalUrl) {
+      const { data: urlData } = supabase.storage.from('patient-files').getPublicUrl(storagePath);
+      finalUrl = urlData?.publicUrl;
+    }
+    if (!finalUrl) throw new Error('signed and public URL both unavailable');
+    console.log('[SIM CROP] Result URL:', finalUrl.slice(0, 100));
     return {
       url: finalUrl,
       mode: cfg.name,
