@@ -6,8 +6,8 @@ Set these in Railway (or `.env` locally). Names only — **no secrets in git**.
 
 | Variable | Notes |
 |----------|--------|
-| `SUPABASE_URL` | Project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server uses service role (not anon) |
+| `SUPABASE_URL` | Project URL only (no `/rest/v1` suffix) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Backend `lib/supabase.js` only — bypasses RLS (never ship to mobile) |
 | `JWT_SECRET` | **≥8 chars** in production (patient/doctor/admin JWT) |
 
 ## AI + smile simulation
@@ -39,7 +39,9 @@ Many `SIM_*`, `SIM_MERGE_*`, `SIM_SMILE_*`, `SMILE_CROP_*`, `REPLICATE_*` — op
 
 ## Supabase (extra)
 
-`SUPABASE_ANON_KEY` (referenced in `index.cjs` for some paths), `SUPABASE_DEBUG`, `CLINIC_BY_CODE_CACHE_TTL_MS`
+`SUPABASE_DEBUG`, `CLINIC_BY_CODE_CACHE_TTL_MS`
+
+Mobile / Expo may use `EXPO_PUBLIC_SUPABASE_ANON_KEY` (or similar) in the app only — not in this Node server.
 
 ## Runtime
 
