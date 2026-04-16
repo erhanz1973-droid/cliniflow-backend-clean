@@ -1,4 +1,6 @@
-
+require("@tensorflow/tfjs-node");
+const tf = require("@tensorflow/tfjs-node");
+console.log("TF BACKEND:", tf.getBackend());
 
 // ─── Bootstrap: imports & app init ─────────────────────────────────────────
 require("dotenv").config();
@@ -21,7 +23,6 @@ require("dotenv").config();
     globalThis.window = globalThis;
   }
 })();
-require("@tensorflow/tfjs-node");
 
 const express = require("express");
 const sharp = require("sharp");
