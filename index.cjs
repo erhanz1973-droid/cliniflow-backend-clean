@@ -6236,8 +6236,8 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
 });
 
 // ================== PATIENT: BROWSE CLINICS ("Find a clinic") ==================
-// Returns active clinics for the in-app directory.  Uses the same status rule
-// as getRecommendedClinics: NULL or ilike 'active' (fixes ACTIVE vs active mismatch).
+// Returns clinics for the in-app directory. Avoid PostgREST .or(status...) — it has
+// failed on some Railway/Supabase setups; we filter suspended/inactive in JS instead.
 // GET /api/patient/clinics
 app.get("/api/patient/clinics", requireToken, async (req, res) => {
   try {
@@ -6261,12 +6261,22 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
     let q = supabase
       .from("clinics")
       .select("id, name, city, country, clinic_code, latitude, longitude, status")
-      .or("status.is.null,status.ilike.active")
       .order("name", { ascending: true })
-      .limit(120);
+      .limit(200);
     if (excludeClinicId) q = q.neq("id", excludeClinicId);
 
-    const { data: raw, error } = await q;
+    let { data: raw, error } = await q;
+    if (error) {
+      const q2 = supabase
+        .from("clinics")
+        .select("id, name, city, country, clinic_code, status")
+        .order("name", { ascending: true })
+        .limit(200);
+      const q2b = excludeClinicId ? q2.neq("id", excludeClinicId) : q2;
+      const r2 = await q2b;
+      raw = r2.data;
+      error = r2.error;
+    }
     if (error) throw error;
 
     const rows = (raw || []).filter((c) => {
@@ -6307,8 +6317,12 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
 
     return res.json({ ok: true, clinics });
   } catch (e) {
-    console.error("[GET /api/patient/clinics]", e?.message);
-    return res.status(500).json({ ok: false, error: "db_error" });
+    console.error("[GET /api/patient/clinics]", e?.message, e?.details || e?.hint || "");
+    return res.status(500).json({
+      ok: false,
+      error: "db_error",
+      message: "Klinik listesi yüklenemedi. Lütfen daha sonra tekrar deneyin.",
+    });
   }
 });
 
