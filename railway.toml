@@ -1,0 +1,3 @@
+# Railway: always run the repo-root clean backend (never server_OLD or legacy copies).
+[deploy]
+startCommand = "node index.cjs"

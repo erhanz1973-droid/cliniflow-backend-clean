@@ -1,11 +1,12 @@
 {
   "name": "cliniflow-backend",
   "version": "1.0.0",
+  "description": "Cliniflow API — entry is ./index.cjs at repo root (clean backend). Do not use server_OLD or legacy index files.",
   "type": "commonjs",
   "main": "index.cjs",
   "scripts": {
-    "start": "node index.cjs",
-    "dev": "node index.cjs",
+    "start": "node ./index.cjs",
+    "dev": "node ./index.cjs",
     "migrate:clinic-coords": "node scripts/migrate-clinic-coordinates.cjs",
     "migrate:clinic-coords:dry": "node scripts/migrate-clinic-coordinates.cjs --dry-run"
   },
