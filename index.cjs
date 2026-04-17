@@ -267,6 +267,8 @@ const {
 } = require("./lib/supabase");
 
 const app = express();
+// Avoid 304 Not Modified on JSON APIs — clients that always JSON.parse() break on empty 304 bodies
+app.set("etag", false);
 console.log("SERVER ENTRY:", __filename);
 const server = http.createServer(app);
 const _portEnv = process.env.PORT;
@@ -503,17 +505,64 @@ function mapPatientMessagesRowToLegacy(row) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** All routes with :patientId must receive a patient row UUID — never a doctor code (e.g. SZ45). */
+/**
+ * :patientId accepts:
+ * - patients.id UUID
+ * - `p_<uuid>` (mobile/admin legacy) → normalized to bare UUID
+ * - legacy `patients.patient_id` strings (e.g. TD43) → resolved to UUID when Supabase is on
+ */
 app.param("patientId", (req, res, next, value) => {
-  const id = String(value ?? "").trim();
-  if (!UUID_RE.test(id)) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
     return res.status(400).json({
       ok: false,
-      error: "invalid_patient_id",
-      message: "patientId must be a UUID. Doctor or legacy codes are not valid in /api/patient/... paths.",
+      error: "Invalid patient id",
+      code: "invalid_patient_id",
+      message: "patientId is required.",
     });
   }
-  next();
+
+  let id = raw;
+  const prefixedUuid = /^p_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(raw);
+  if (prefixedUuid) id = prefixedUuid[1];
+
+  if (UUID_RE.test(id)) {
+    req.params.patientId = id;
+    return next();
+  }
+
+  if (!isSupabaseEnabled()) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid patient id",
+      code: "invalid_patient_id",
+      message:
+        "patientId must be a UUID or p_<uuid>. Enable Supabase to resolve legacy patients.patient_id codes.",
+    });
+  }
+
+  resolveMessagesPatientDbId(raw)
+    .then((resolved) => {
+      if (resolved) {
+        req.params.patientId = resolved;
+        return next();
+      }
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid patient id",
+        code: "invalid_patient_id",
+        message:
+          "Unknown patient id. Use patients.id (UUID), p_<uuid>, or a valid patients.patient_id.",
+      });
+    })
+    .catch((err) => {
+      console.warn("[param patientId] resolve failed:", err?.message || err);
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid patient id",
+        code: "invalid_patient_id",
+      });
+    });
 });
 
 /** messages.patient_id FK → patients.id (UUID). Token may carry legacy patients.patient_id (e.g. p_…). */
@@ -1052,6 +1101,29 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
 
+app.use((req, res, next) => {
+  console.log("REQ FROM APP:", req.headers.host, req.path);
+  next();
+});
+
+// Debug: trace every request (helps match TestFlight / API logs to handlers)
+app.use((req, res, next) => {
+  console.log("REQ:", req.method, req.path);
+  next();
+});
+
+// All /api/* handlers must return JSON — enforce Content-Type for res.json()
+app.use("/api", (req, res, next) => {
+  const _json = res.json.bind(res);
+  res.json = function jsonApi(body) {
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+    }
+    return _json(body);
+  };
+  next();
+});
+
 // ── UUID param sanitization ──────────────────────────────────────────────────
 const _paramUuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function _assertUuidParam(paramName) {
@@ -1085,6 +1157,7 @@ app.use((req, res, next) => {
     res.on("finish", () => {
       const ms = Date.now() - t0;
       const lvl = res.statusCode >= 500 ? "[API][ERROR]" : res.statusCode >= 400 ? "[API][WARN]" : "[API]";
+      console.log("RESPONSE TYPE:", req.path);
       console.log(`${lvl} ${req.method} ${req.path} → ${res.statusCode} (${ms}ms)`);
     });
   }
@@ -2405,7 +2478,7 @@ async function requireAdminToken(req, res, next) {
 // ================== HEALTH ==================
 // Ultra simple - no DB, no async - for Render health check
 app.get("/health", (req, res) => {
-  res.status(200).send("OK");
+  res.status(200).json({ ok: true, status: "ok" });
 });
 
 // Diagnostic entrypoint check - verifies this file is the running entry
@@ -3998,8 +4071,7 @@ function requireToken(req, res, next) {
   const finalToken = token || altToken;
   
   if (!finalToken) {
-
-    return res.status(401).json({ ok: false, error: "missing_token", message: "Token bulunamadı" });
+    return res.status(401).json({ ok: false, error: "Unauthorized", code: "missing_token" });
   }
 
   const tokens = readJson(TOK_FILE, {});
@@ -4025,8 +4097,8 @@ function requireToken(req, res, next) {
 
     return res.status(401).json({
       ok: false,
-      error: "bad_token",
-      message: "Geçersiz token. Lütfen tekrar giriş yapın."
+      error: "Unauthorized",
+      code: "bad_token",
     });
   }
 
@@ -11971,8 +12043,7 @@ async function requirePatientTreatmentsAuth(req, res, next) {
   }
   
   // No valid token found
-
-  return res.status(401).json({ ok: false, error: "unauthorized", message: "Token bulunamadı veya geçersiz." });
+  return res.status(401).json({ ok: false, error: "Unauthorized", code: "unauthorized" });
 }
 
 // GET /api/patient/:patientId/treatments
@@ -14230,6 +14301,9 @@ app.post("/api/patient/me/messages", requireToken, async (req, res) => {
 // GET /api/patient/:patientId/messages
 app.get("/api/patient/:patientId/messages", (req, res) => {
   try {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.setHeader("Pragma", "no-cache");
+
     const patientId = String(req.params.patientId || "").trim();
     const origin = req.headers.origin || "unknown";
     const userAgent = req.headers["user-agent"] || "unknown";
@@ -30046,7 +30120,7 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
 async function requireDoctorAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ ok: false, error: 'token_required' });
+    return res.status(401).json({ ok: false, error: "Unauthorized", code: "token_required" });
   }
 
   const token = authHeader.substring(7);
@@ -30057,7 +30131,7 @@ async function requireDoctorAuth(req, res, next) {
     const roleNorm = String(decoded.role || "").toUpperCase();
     if (roleNorm !== "DOCTOR") {
       console.warn("[DOCTOR AUTH] non-doctor access attempt, role:", decoded.role);
-      return res.status(403).json({ ok: false, error: "invalid_role" });
+      return res.status(403).json({ ok: false, error: "Forbidden", code: "invalid_role" });
     }
 
     const doctorIdFromToken = String(decoded.doctorId || '').trim();
@@ -30088,12 +30162,12 @@ async function requireDoctorAuth(req, res, next) {
       if (lastError) {
         console.error('[DOCTOR AUTH] lookup error:', lastError);
       }
-      return res.status(401).json({ ok: false, error: 'doctor_not_found' });
+      return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_not_found" });
     }
 
     if (String(doctor.status || "").toUpperCase() !== "APPROVED") {
       console.warn("[DOCTOR AUTH] doctor not approved, status:", doctor.status, "doctorId:", req.doctorId);
-      return res.status(403).json({ ok: false, error: "doctor_not_approved" });
+      return res.status(403).json({ ok: false, error: "Forbidden", code: "doctor_not_approved" });
     }
 
     req.doctor = doctor;
@@ -30103,7 +30177,7 @@ async function requireDoctorAuth(req, res, next) {
   } catch (error) {
     const code = error?.name === "TokenExpiredError" ? "token_expired" : "invalid_token";
     console.warn("[DOCTOR AUTH] token error:", code, error?.message);
-    return res.status(401).json({ ok: false, error: code });
+    return res.status(401).json({ ok: false, error: "Unauthorized", code });
   }
 }
 
@@ -35256,15 +35330,15 @@ app.post("/api/patient/treatment-plans/:id/reject", requireToken, async (req, re
 
 // GET /api/patient/treatment-requests
 // Returns all requests by the authenticated patient, each with its doctor offers.
+// Uses plain selects + batch name lookups — avoids PostgREST embed failures when FKs are missing in API cache.
 app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
   try {
     const patientId = String(req.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
 
-    // Fetch requests (with the target clinic name)
     const { data: requests, error: reqErr } = await supabase
       .from('treatment_requests')
-      .select('*, clinics(id, name)')
+      .select('*')
       .eq('patient_id', patientId)
       .order('created_at', { ascending: false });
 
@@ -35277,46 +35351,83 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       return res.json({ ok: true, requests: [] });
     }
 
-    const requestIds = requests.map(r => r.id);
+    const requestIds = requests.map((r) => r.id);
+    const reqClinicIds = [...new Set(requests.map((r) => r.clinic_id).filter(Boolean))];
 
-    // Fetch all offers for these requests (with doctor + clinic names)
+    const clinicNameById = {};
+    if (reqClinicIds.length > 0) {
+      const { data: clinicRows } = await supabase.from('clinics').select('id, name').in('id', reqClinicIds);
+      for (const c of clinicRows || []) {
+        if (c?.id) clinicNameById[String(c.id)] = c.name || null;
+      }
+    }
+
     const { data: offers, error: offErr } = await supabase
       .from('treatment_offers')
-      .select('*, doctors(id, full_name, name), clinics(id, name)')
+      .select('*')
       .in('request_id', requestIds)
       .order('created_at', { ascending: true });
 
     if (offErr) console.warn('[TREATMENT-REQUESTS OFFERS]', offErr.message);
 
+    const offerDoctorIds = [...new Set((offers || []).map((o) => o.doctor_id).filter(Boolean))];
+    const offerClinicIds = [...new Set((offers || []).map((o) => o.clinic_id).filter(Boolean))];
+    const doctorNameById = {};
+    if (offerDoctorIds.length > 0) {
+      const { data: docRows } = await supabase
+        .from('doctors')
+        .select('id, full_name, name')
+        .in('id', offerDoctorIds);
+      for (const d of docRows || []) {
+        if (d?.id) {
+          doctorNameById[String(d.id)] = String(d.full_name || d.name || '').trim() || null;
+        }
+      }
+    }
+    const extraClinicIds = offerClinicIds.filter((cid) => cid && clinicNameById[String(cid)] == null);
+    if (extraClinicIds.length > 0) {
+      const { data: moreClinics } = await supabase.from('clinics').select('id, name').in('id', extraClinicIds);
+      for (const c of moreClinics || []) {
+        if (c?.id) clinicNameById[String(c.id)] = c.name || null;
+      }
+    }
+
     const offersByRequest = {};
     for (const offer of offers || []) {
       const rId = offer.request_id;
       if (!offersByRequest[rId]) offersByRequest[rId] = [];
+      const docId = offer.doctor_id ? String(offer.doctor_id) : '';
+      const cid = offer.clinic_id ? String(offer.clinic_id) : '';
       offersByRequest[rId].push({
-        id:             offer.id,
-        clinic_id:      offer.clinic_id || null,
-        clinic_name:    offer.clinics?.name || null,
-        doctor_name:    offer.doctors?.full_name || offer.doctors?.name || null,
+        id: offer.id,
+        clinic_id: offer.clinic_id || null,
+        clinic_name: cid ? clinicNameById[cid] ?? null : null,
+        doctor_name: docId ? doctorNameById[docId] ?? null : null,
         treatment_type: offer.treatment_type,
-        price_range:    offer.price_range || null,
-        duration:       offer.duration    || null,
-        note:           offer.note        || null,
-        disclaimer:     offer.disclaimer  || 'This is a preliminary estimate. Final diagnosis requires clinical examination.',
-        created_at:     offer.created_at,
+        price_range: offer.price_range || null,
+        duration: offer.duration || null,
+        note: offer.note || null,
+        disclaimer:
+          offer.disclaimer ||
+          'This is a preliminary estimate. Final diagnosis requires clinical examination.',
+        created_at: offer.created_at,
       });
     }
 
-    const result = requests.map(r => ({
-      id:                   r.id,
-      clinic_id:            r.clinic_id   || null,
-      clinic_name:          r.clinics?.name || null,
-      description:          r.description,
-      budget:               r.budget               || null,
-      preferred_treatment:  r.preferred_treatment  || null,
-      status:               r.status,
-      created_at:           r.created_at,
-      offers:               offersByRequest[r.id]  || [],
-    }));
+    const result = requests.map((r) => {
+      const cid = r.clinic_id ? String(r.clinic_id) : '';
+      return {
+        id: r.id,
+        clinic_id: r.clinic_id || null,
+        clinic_name: cid ? clinicNameById[cid] ?? null : null,
+        description: r.description,
+        budget: r.budget || null,
+        preferred_treatment: r.preferred_treatment || null,
+        status: r.status,
+        created_at: r.created_at,
+        offers: offersByRequest[r.id] || [],
+      };
+    });
 
     return res.json({ ok: true, requests: result });
   } catch (e) {
@@ -35445,7 +35556,7 @@ app.get("/api/doctor/inbox-summary", requireDoctorAuth, async (req, res) => {
     const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
     const doctorKey = doctorKeys[0] || rawDoctor;
     if (!doctorKey) {
-      return res.status(401).json({ ok: false, error: "unauthorized" });
+      return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
     let pending_requests = 0;
@@ -35500,7 +35611,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
     const doctorKey = doctorKeys[0] || rawDoctor;
     if (!doctorKey) {
-      return res.status(401).json({ ok: false, error: "unauthorized" });
+      return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
     let trQuery = supabase
@@ -35608,7 +35719,7 @@ app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, a
     const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
     const doctorKey = doctorKeys[0] || rawDoctor;
     if (!doctorKey) {
-      return res.status(401).json({ ok: false, error: "unauthorized" });
+      return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
     const body = req.body || {};
@@ -38191,11 +38302,15 @@ app.get(
 
 // ── Final global error handler (catches anything not caught per-route) ────────
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  const status = err.status || err.statusCode || 500;
-  console.error(`[API][ERROR] ${req.method} ${req.path} → ${status}:`, err.message || err);
-  if (!res.headersSent) {
-    res.status(status).json({ ok: false, error: err.message || "internal_server_error" });
+  console.error("ERROR:", err);
+  if (res.headersSent) return;
+  const raw = Number(err.status || err.statusCode);
+  const status = Number.isFinite(raw) && raw >= 400 && raw < 600 ? raw : 500;
+  if (status >= 500) {
+    return res.status(500).json({ ok: false, error: "Internal Server Error" });
   }
+  const msg = String(err.message || "Bad Request").trim() || "Bad Request";
+  return res.status(status).json({ ok: false, error: msg });
 });
 
 // ================== GLOBAL ERROR HANDLING ==================
@@ -38219,11 +38334,9 @@ server.on("error", (err) => {
 // ── Static assets (after all API routes; avoids shadowing POST/PATCH /api/* on some hosts) ──
 app.use(express.static(publicDir));
 
-// ── Global JSON 404 — API routes never return HTML ────────────────────────────
-// Any request that didn't match a route above returns a JSON 404 so the
-// mobile app can always parse the response (no "json parse error" on unknown paths).
+// ── Global JSON 404 — unknown paths (never HTML/plain text for unhandled routes) ─
 app.use((req, res) => {
-  res.status(404).json({ ok: false, error: 'not_found', path: req.path });
+  res.status(404).json({ ok: false, error: "Not found", path: req.path });
 });
 
 server.listen(PORT, "0.0.0.0", () => {
@@ -38234,7 +38347,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v46');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v48');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
