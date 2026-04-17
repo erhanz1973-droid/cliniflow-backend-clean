@@ -503,6 +503,19 @@ function mapPatientMessagesRowToLegacy(row) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** All routes with :patientId must receive a patient row UUID — never a doctor code (e.g. SZ45). */
+app.param("patientId", (req, res, next, value) => {
+  const id = String(value ?? "").trim();
+  if (!UUID_RE.test(id)) {
+    return res.status(400).json({
+      ok: false,
+      error: "invalid_patient_id",
+      message: "patientId must be a UUID. Doctor or legacy codes are not valid in /api/patient/... paths.",
+    });
+  }
+  next();
+});
+
 /** messages.patient_id FK → patients.id (UUID). Token may carry legacy patients.patient_id (e.g. p_…). */
 async function resolveMessagesPatientDbId(patientId) {
   const raw = String(patientId || "").trim();
@@ -35416,6 +35429,223 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
   } catch (e) {
     console.error('[INBOX-SUMMARY]', e);
     return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+// ── Doctor marketplace (mobile: doctor/index.tsx, doctor/requests.tsx) ───────
+// GET /api/doctor/inbox-summary — badge counts (Authorization: Bearer doctor JWT)
+app.get("/api/doctor/inbox-summary", requireDoctorAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, patient_messages: 0, pending_requests: 0 });
+    }
+    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    if (!doctorKey) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+    let pending_requests = 0;
+    if (clinicId && UUID_RE.test(clinicId)) {
+      const { count, error: cErr } = await supabase
+        .from("treatment_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("clinic_id", clinicId)
+        .eq("status", "pending");
+      if (!cErr) pending_requests = count || 0;
+    }
+
+    let patient_messages = 0;
+    try {
+      const { data: myOffers, error: oErr } = await supabase
+        .from("treatment_offers")
+        .select("id")
+        .eq("doctor_id", doctorKey);
+      const offerIds = (myOffers || []).map((o) => o.id).filter(Boolean);
+      if (!oErr && offerIds.length > 0) {
+        const { count: msgCount } = await supabase
+          .from("offer_messages")
+          .select("id", { count: "exact", head: true })
+          .in("offer_id", offerIds)
+          .eq("sender_role", "patient")
+          .is("read_at", null);
+        patient_messages = msgCount || 0;
+      }
+    } catch (e2) {
+      console.warn("[DOCTOR inbox-summary] messages", e2?.message);
+    }
+
+    return res.json({
+      ok: true,
+      patient_messages,
+      pending_requests,
+    });
+  } catch (e) {
+    console.error("[DOCTOR inbox-summary]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/doctor/treatment-requests — incoming requests for this clinic + offer metadata
+app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, requests: [] });
+    }
+    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    if (!doctorKey) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+    let trQuery = supabase
+      .from("treatment_requests")
+      .select("id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id")
+      .order("created_at", { ascending: false })
+      .limit(400);
+
+    if (clinicId && UUID_RE.test(clinicId)) {
+      trQuery = trQuery.eq("clinic_id", clinicId);
+    }
+
+    const { data: trRows, error: trErr } = await trQuery;
+    if (trErr) {
+      console.warn("[DOCTOR treatment-requests]", trErr.message);
+      return res.json({ ok: true, requests: [] });
+    }
+
+    const list = Array.isArray(trRows) ? trRows : [];
+    const pids = [
+      ...new Set(
+        list
+          .map((r) => String(r.patient_id || "").trim())
+          .filter((id) => UUID_RE.test(id))
+      ),
+    ];
+    const nameById = {};
+    if (pids.length > 0) {
+      const { data: prow, error: pErr } = await supabase
+        .from("patients")
+        .select("id, name, full_name")
+        .in("id", pids.slice(0, 500));
+      if (!pErr && Array.isArray(prow)) {
+        for (const p of prow) {
+          const nid = String(p.id || "").trim();
+          nameById[nid] = String(p.name || p.full_name || "Patient");
+        }
+      }
+    }
+
+    const requestIds = list.map((r) => r.id).filter(Boolean);
+    if (!requestIds.length) {
+      return res.json({ ok: true, requests: [] });
+    }
+
+    const { data: allOffers } = await supabase
+      .from("treatment_offers")
+      .select("id, request_id, doctor_id")
+      .in("request_id", requestIds);
+
+    const offersByReq = {};
+    for (const o of allOffers || []) {
+      const rid = o.request_id;
+      if (!offersByReq[rid]) offersByReq[rid] = [];
+      offersByReq[rid].push(o);
+    }
+
+    const mapReqStatus = (s) => {
+      const x = String(s || "").toLowerCase();
+      if (x === "answered") return "answered";
+      if (x === "closed") return "closed";
+      return "pending";
+    };
+
+    const requests = list.map((r) => {
+      const offs = offersByReq[r.id] || [];
+      const mine = offs.find((o) => String(o.doctor_id) === String(doctorKey));
+      const pid = String(r.patient_id || "").trim();
+      const patientName = (pid && nameById[pid]) || "Patient";
+      return {
+        id: String(r.id),
+        patient_name: patientName,
+        description: r.description != null ? String(r.description) : "",
+        budget: r.budget != null ? String(r.budget) : null,
+        preferred_treatment: r.preferred_treatment != null ? String(r.preferred_treatment) : null,
+        status: mapReqStatus(r.status),
+        created_at: r.created_at || new Date().toISOString(),
+        offer_count: offs.length,
+        my_offer_id: mine ? String(mine.id) : null,
+        unread_count: 0,
+        is_assigned_to_me: Boolean(mine),
+        photos: null,
+      };
+    });
+
+    return res.json({ ok: true, requests });
+  } catch (e) {
+    console.error("[DOCTOR treatment-requests GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/doctor/treatment-requests/:requestId/offer — submit offer on a request
+app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, async (req, res) => {
+  try {
+    const requestId = String(req.params.requestId || "").trim();
+    if (!UUID_RE.test(requestId)) {
+      return res.status(400).json({ ok: false, error: "invalid_request_id" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    if (!doctorKey) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+    const body = req.body || {};
+    const insert = {
+      request_id: requestId,
+      doctor_id: doctorKey,
+      clinic_id: clinicId && UUID_RE.test(clinicId) ? clinicId : null,
+      treatment_type: body.treatment_type != null ? String(body.treatment_type) : null,
+      price_range: body.price_range != null ? String(body.price_range) : null,
+      duration: body.duration != null ? String(body.duration) : null,
+      note: body.note != null ? String(body.note) : null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { data: inserted, error: insErr } = await supabase
+      .from("treatment_offers")
+      .insert(insert)
+      .select("id")
+      .maybeSingle();
+
+    if (insErr) {
+      console.error("[DOCTOR treatment-requests offer]", insErr);
+      return res.status(500).json({
+        ok: false,
+        error: "insert_failed",
+        message: insErr.message || String(insErr),
+      });
+    }
+
+    await supabase
+      .from("treatment_requests")
+      .update({ status: "answered", updated_at: new Date().toISOString() })
+      .eq("id", requestId);
+
+    return res.json({ ok: true, offer_id: inserted?.id ? String(inserted.id) : null });
+  } catch (e) {
+    console.error("[DOCTOR treatment-requests offer]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
