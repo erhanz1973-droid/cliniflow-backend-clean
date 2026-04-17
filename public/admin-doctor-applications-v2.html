@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Doktorlar - Clinifly Admin</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <link rel="stylesheet" href="/admin-layout.css"/>
+  <script src="/admin-i18n.js"></script>
+  <style>
+    :root {
+      --bg:#111827;
+      --card:#1f2937;
+      --b:#374151;
+      --p:#2563eb;
+      --g:#16a34a;
+      --r:#dc2626;
+      --y:#f59e0b;
+      --muted:#a7b2c8;
+    }
+    body { font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:#e6eaf2; }
+    body.al-ready { background: var(--bg); color: #e6eaf2; }
+    body.al-ready .al-topbar { background: #1f2937; border-bottom-color: #374151; }
+    body.al-ready .al-topbar .al-page-title { color: #e5e7eb; }
+    body.al-ready .al-lang { background: #111827; border-color: #374151; }
+    body.al-ready .al-lang span { color: #94A3B8; }
+
+    .wrap { padding: 24px; }
+
+    /* Stats */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--b);
+      border-radius: 12px;
+      padding: 18px 20px;
+      text-align: center;
+    }
+    .stat-number { font-size: 30px; font-weight: 800; color: #fff; margin-bottom: 4px; }
+    .stat-label { font-size: 13px; color: var(--muted); }
+
+    /* Search */
+    .search-filter {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .search-input {
+      flex: 1;
+      min-width: 200px;
+      background: var(--card);
+      border: 1px solid var(--b);
+      color: #e6eaf2;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--p); }
+    .search-input::placeholder { color: var(--muted); }
+    .filter-select {
+      background: var(--card);
+      border: 1px solid var(--b);
+      color: #e6eaf2;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      outline: none;
+    }
+    .refresh-btn {
+      background: var(--p);
+      border: none;
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .refresh-btn:hover { background: #1d4ed8; }
+
+    /* Doctor Grid */
+    .doctor-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .doctor-card {
+      background: var(--card);
+      border: 1px solid var(--b);
+      border-radius: 14px;
+      padding: 20px;
+      transition: border-color 0.2s;
+    }
+    .doctor-card:hover { border-color: #4b5563; }
+
+    .doctor-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    /* Avatar / Photo */
+    .doctor-avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid var(--b);
+      flex-shrink: 0;
+      background: #374151;
+    }
+    .doctor-avatar-placeholder {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+      border: 2px solid var(--b);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: -1px;
+    }
+
+    .doctor-info { flex: 1; min-width: 0; }
+    .doctor-info h3 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .doctor-title-dept {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .doctor-status {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .status-PENDING { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
+    .status-APPROVED { background: rgba(22,163,74,0.15); color: #4ade80; border: 1px solid rgba(22,163,74,0.3); }
+    .status-ACTIVE   { background: rgba(22,163,74,0.15); color: #4ade80; border: 1px solid rgba(22,163,74,0.3); }
+    .status-REJECTED { background: rgba(220,38,38,0.15); color: #f87171; border: 1px solid rgba(220,38,38,0.3); }
+
+    .doctor-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    .doctor-meta span { display: flex; align-items: center; gap: 6px; }
+
+    .profile-sections {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .profile-section {
+      background: var(--bg);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .profile-section-title {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 7px;
+    }
+    .profile-row {
+      font-size: 12px;
+      color: #e6eaf2;
+      margin-bottom: 3px;
+      display: flex;
+      gap: 6px;
+    }
+    .profile-row .lbl { color: var(--muted); min-width: 70px; flex-shrink: 0; }
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+    .tag { background: #374151; border-radius: 5px; padding: 2px 8px; font-size: 11px; color: #e6eaf2; }
+    .tag-empty { font-size: 11px; color: var(--muted); font-style: italic; }
+    .doctor-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-approve { background: var(--g); color: #fff; }
+    .btn-reject  { background: transparent; color: #9ca3af; border: 1px solid #374151; }
+    .btn-detail  { background: var(--b); color: #e6eaf2; }
+
+    .loading, .empty {
+      text-align: center;
+      padding: 60px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .error-box {
+      background: rgba(220,38,38,0.1);
+      border: 1px solid var(--r);
+      border-radius: 8px;
+      padding: 14px 18px;
+      color: #f87171;
+      margin-bottom: 16px;
+    }
+    .page-title {
+      font-size: 22px;
+      font-weight: 800;
+      margin: 0 0 24px;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2 class="page-title">👨‍⚕️ Doktorlar</h2>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number" id="pending-count">—</div>
+        <div class="stat-label">Bekleyen</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="approved-count">—</div>
+        <div class="stat-label">Onaylı</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="rejected-count">—</div>
+        <div class="stat-label">Reddedilen</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="total-count">—</div>
+        <div class="stat-label">Toplam</div>
+      </div>
+    </div>
+
+    <div class="search-filter">
+      <input type="text" class="search-input" id="search-input" placeholder="Ad, email veya telefon ara...">
+      <select class="filter-select" id="status-filter">
+        <option value="">Tüm Durumlar</option>
+        <option value="PENDING">Bekleyen</option>
+        <option value="APPROVED">Onaylanan</option>
+        <option value="ACTIVE">Aktif</option>
+        <option value="REJECTED">Reddedilen</option>
+      </select>
+      <button class="refresh-btn" onclick="loadDoctors()">↺ Yenile</button>
+    </div>
+
+    <div id="error-container"></div>
+    <div id="loading-container" class="loading" style="display:none;">Yükleniyor...</div>
+    <div id="doctors-container" class="doctor-grid"></div>
+    <div id="empty-container" class="empty" style="display:none;">Henüz doktor kaydı bulunmuyor.</div>
+  </div>
+
+  <script>
+    (function() {
+      const token = localStorage.getItem("adminToken");
+      if (!token) window.location.href = "/admin-login.html";
+    })();
+
+    let allDoctors = [];
+    let filteredDoctors = [];
+
+    function getInitials(name) {
+      if (!name) return '?';
+      return name.trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    }
+
+    function avatarHtml(doctor) {
+      if (doctor.profile_photo_url) {
+        return `<img class="doctor-avatar" src="${doctor.profile_photo_url}" alt="${doctor.name || ''}" onerror="this.outerHTML=fallbackAvatar('${getInitials(doctor.name)}')">`;
+      }
+      return `<div class="doctor-avatar-placeholder">${getInitials(doctor.name)}</div>`;
+    }
+
+    function fallbackAvatar(initials) {
+      return `<div class="doctor-avatar-placeholder">${initials}</div>`;
+    }
+
+    async function loadDoctors() {
+      const loadingEl  = document.getElementById("loading-container");
+      const errorEl    = document.getElementById("error-container");
+      const doctorsEl  = document.getElementById("doctors-container");
+      const emptyEl    = document.getElementById("empty-container");
+
+      loadingEl.style.display = "block";
+      errorEl.innerHTML = "";
+      doctorsEl.innerHTML = "";
+      emptyEl.style.display = "none";
+
+      try {
+        const token = localStorage.getItem("adminToken");
+        const res = await fetch((typeof apiUrl === 'function' ? apiUrl('/admin/doctor-list') : '/admin/doctor-list'), {
+          headers: { "Authorization": "Bearer " + token }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Yüklenemedi');
+
+        allDoctors = data.doctors || [];
+        filteredDoctors = [...allDoctors];
+        updateStats();
+        renderDoctors();
+      } catch (err) {
+        errorEl.innerHTML = `<div class="error-box">❌ ${err.message}</div>`;
+      } finally {
+        loadingEl.style.display = "none";
+      }
+    }
+
+    function updateStats() {
+      document.getElementById('pending-count').textContent  = filteredDoctors.filter(d => d.status === 'PENDING').length;
+      document.getElementById('approved-count').textContent = filteredDoctors.filter(d => d.status === 'APPROVED' || d.status === 'ACTIVE').length;
+      document.getElementById('rejected-count').textContent = filteredDoctors.filter(d => d.status === 'REJECTED').length;
+      document.getElementById('total-count').textContent    = filteredDoctors.length;
+    }
+
+    function renderDoctors() {
+      const doctorsEl = document.getElementById("doctors-container");
+      const emptyEl   = document.getElementById("empty-container");
+
+      if (filteredDoctors.length === 0) {
+        doctorsEl.innerHTML = "";
+        emptyEl.style.display = "block";
+        return;
+      }
+      emptyEl.style.display = "none";
+
+      doctorsEl.innerHTML = filteredDoctors.map(d => {
+        const statusLabel = { PENDING:'Bekleyen', APPROVED:'Onaylı', ACTIVE:'Aktif', REJECTED:'Reddedildi' }[d.status] || d.status;
+        const rowKey = (d.id || d.doctor_id || '').replace(/'/g, "\\'");
+        const approveBtn = (d.status !== 'APPROVED' && d.status !== 'ACTIVE') ? `<button class="btn btn-approve" onclick="approveDoctor('${rowKey}')">✅ Onayla</button>` : '';
+        const rejectBtn  = (d.status !== 'REJECTED') ? `<button class="btn btn-reject" onclick="rejectDoctor('${rowKey}')">❌ Reddet</button>` : '';
+
+        const specs  = d.specialities_list || [];
+        const langs  = d.languages_list    || [];
+        const procs  = d.procedures_list   || [];
+
+        const tagsHtml = arr => arr.length
+          ? arr.map(t => `<span class="tag">${t}</span>`).join('')
+          : `<span class="tag-empty">Belirtilmedi</span>`;
+
+        return `
+        <div class="doctor-card">
+          <div class="doctor-header">
+            ${avatarHtml(d)}
+            <div class="doctor-info">
+              <h3>${d.name || '—'}</h3>
+              <div class="doctor-title-dept">${[d.role || d.title, d.department].filter(Boolean).join(' · ') || ''}</div>
+              <span class="doctor-status status-${d.status}">${statusLabel}</span>
+            </div>
+          </div>
+
+          <div class="doctor-meta">
+            ${d.email  ? `<span>✉️ ${d.email}</span>` : ''}
+            ${d.phone  ? `<span>📱 ${d.phone}</span>` : ''}
+            ${d.clinic_code ? `<span>🏥 ${d.clinic_code}</span>` : ''}
+            ${d.license_number ? `<span>📜 ${d.license_number}</span>` : ''}
+            <span>📅 ${new Date(d.created_at).toLocaleDateString('tr-TR')}</span>
+          </div>
+
+          <div class="profile-sections">
+            <div class="profile-section">
+              <div class="profile-section-title">Mesleki</div>
+              <div class="profile-row"><span class="lbl">Deneyim</span>${d.years_of_experience ? d.years_of_experience + ' yıl' : '—'}</div>
+              <div class="profile-row"><span class="lbl">Üniversite</span>${d.university || '—'}</div>
+              <div class="profile-row"><span class="lbl">Mezuniyet</span>${d.graduation_year || '—'}</div>
+              <div class="profile-row"><span class="lbl">Profil</span>${d.public_profile ? '🌐 Açık' : '🔒 Gizli'}</div>
+              ${d.bio ? `<div class="profile-row" style="flex-direction:column;gap:2px"><span class="lbl">Bio</span><span style="color:var(--muted);font-size:11px">${d.bio}</span></div>` : ''}
+            </div>
+            <div class="profile-section">
+              <div class="profile-section-title">Uzmanlık</div>
+              <div class="tags">${tagsHtml(specs)}</div>
+            </div>
+            <div class="profile-section">
+              <div class="profile-section-title">Diller</div>
+              <div class="tags">${tagsHtml(langs)}</div>
+            </div>
+            <div class="profile-section" style="grid-column:1/-1">
+              <div class="profile-section-title">Prosedürler</div>
+              <div class="tags">${tagsHtml(procs)}</div>
+            </div>
+          </div>
+
+          <div class="doctor-actions">
+            ${approveBtn}${rejectBtn}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function approveDoctor(doctorId) {
+      if (!confirm("Bu doktoru onaylamak istediğinizden emin misiniz?")) return;
+      try {
+        const token = localStorage.getItem("adminToken");
+        const res = await fetch((typeof apiUrl === 'function' ? apiUrl('/admin/approve-doctor-v2') : '/admin/approve-doctor-v2'), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ doctorId })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Hata');
+        alert('✅ Doktor onaylandı!');
+        loadDoctors();
+      } catch (err) {
+        alert('❌ ' + err.message);
+      }
+    }
+
+    async function rejectDoctor(doctorId) {
+      if (!confirm("Bu başvuruyu reddetmek istediğinizden emin misiniz?")) return;
+      try {
+        const token = localStorage.getItem("adminToken");
+        const res = await fetch((typeof apiUrl === 'function' ? apiUrl('/admin/reject-doctor-v2') : '/admin/reject-doctor-v2'), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ doctorId })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Hata');
+        alert('Başvuru reddedildi.');
+        loadDoctors();
+      } catch (err) {
+        alert('❌ ' + err.message);
+      }
+    }
+
+    function viewDetails(doctorId) {
+      const d = allDoctors.find(
+        (x) => String(x.id || "") === String(doctorId) || String(x.doctor_id || "") === String(doctorId)
+      );
+      if (!d) return;
+      alert([
+        `👨‍⚕️ ${d.name || '—'}`,
+        `Email: ${d.email || '—'}`,
+        `Telefon: ${d.phone || '—'}`,
+        `Klinik: ${d.clinic_code || '—'}`,
+        `Departman: ${d.department || '—'}`,
+        `Ünvan: ${d.title || '—'}`,
+        `Lisans: ${d.license_number || '—'}`,
+        `Uzmanlık: ${d.specialties || '—'}`,
+        `Durum: ${d.status}`,
+        `Fotoğraf: ${d.profile_photo_url ? 'Var ✅' : 'Yok ❌'}`,
+        `Kayıt: ${new Date(d.created_at).toLocaleString('tr-TR')}`,
+        `ID: ${d.id || d.doctor_id}`
+      ].join('\n'));
+    }
+
+    document.getElementById('search-input').addEventListener('input', filterDoctors);
+    document.getElementById('status-filter').addEventListener('change', filterDoctors);
+
+    function filterDoctors() {
+      const term = document.getElementById('search-input').value.toLowerCase();
+      const status = document.getElementById('status-filter').value;
+      filteredDoctors = allDoctors.filter(d => {
+        const matchSearch = !term ||
+          (d.name  && d.name.toLowerCase().includes(term)) ||
+          (d.email && d.email.toLowerCase().includes(term)) ||
+          (d.phone && d.phone.includes(term));
+        const matchStatus = !status || d.status === status;
+        return matchSearch && matchStatus;
+      });
+      updateStats();
+      renderDoctors();
+    }
+
+    document.addEventListener("DOMContentLoaded", loadDoctors);
+  </script>
+  <script src="/admin-layout.js?v=202603301"></script>
+</body>
+</html>

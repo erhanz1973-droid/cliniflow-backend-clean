@@ -1229,6 +1229,7 @@ async function calculateClinicOralHealthAverage(clinicId) {
 
 // ================== SUPER ADMIN GUARD ==================
 const publicDir = path.join(__dirname, "public");
+console.log("STATIC DIR:", publicDir);
 
 // Canonical admin HTML routes (cliniflow-admin/public only — no repo-root public/)
 app.get("/admin-patients.html", (req, res) => {
@@ -38227,6 +38228,11 @@ app.use((req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
+  console.log(
+    "STATIC files:",
+    "admin-login.html=" + fs.existsSync(path.join(publicDir, "admin-login.html")),
+    "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
+  );
   console.log('🚀 ============================================');
   console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v46');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');

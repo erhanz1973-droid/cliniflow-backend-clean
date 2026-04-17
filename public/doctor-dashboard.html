@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Doktor Paneli - Clinifly</title>
+  <script>
+    (function() {
+      const token = localStorage.getItem("doctor_token");
+      if (!token) window.location.href = "/doctor-login.html";
+    })();
+  </script>
+  <style>
+    :root {
+      --bg:#111827; --card:#1f2937; --b:#374151;
+      --p:#2563eb; --g:#16a34a; --r:#dc2626; --y:#f59e0b;
+      --muted:#a7b2c8;
+    }
+    * { box-sizing: border-box; }
+    body { font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:#e6eaf2; }
+    .wrap { max-width:900px; margin:0 auto; padding:20px; }
+    header { display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--b); padding-bottom:16px; margin-bottom:24px; flex-wrap:wrap; gap:12px; }
+    .header-left h1 { margin:0; font-size:22px; font-weight:700; }
+    .header-left p { margin:4px 0 0; color:var(--muted); font-size:14px; }
+    .btn { padding:9px 16px; border-radius:6px; border:none; font-weight:600; cursor:pointer; font-size:14px; transition:all .2s; }
+    .btn:hover { opacity:.85; }
+    .btn-secondary { background:var(--b); color:#fff; }
+    .btn-danger { background:var(--r); color:#fff; }
+    .loading { text-align:center; padding:60px; color:var(--muted); font-size:16px; }
+    .error-msg { background:rgba(220,38,38,0.1); border:1px solid var(--r); color:#fca5a5; padding:14px; border-radius:8px; margin-bottom:16px; }
+    .empty-msg { text-align:center; padding:60px; color:var(--muted); font-size:16px; }
+
+    /* Patient card */
+    .patient-card { background:var(--card); border:1px solid var(--b); border-radius:12px; padding:20px; margin-bottom:16px; }
+    .patient-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; }
+    .patient-name { font-size:17px; font-weight:700; color:#fff; margin:0 0 4px; }
+    .patient-meta { font-size:13px; color:var(--muted); }
+    .status-badge { font-size:12px; font-weight:600; padding:4px 10px; border-radius:20px; }
+    .status-ACTIVE { background:rgba(22,163,74,0.15); color:#86efac; border:1px solid rgba(22,163,74,0.3); }
+    .status-INACTIVE { background:rgba(107,114,128,0.15); color:#9ca3af; border:1px solid rgba(107,114,128,0.3); }
+    .status-PENDING { background:rgba(245,158,11,0.15); color:#fcd34d; border:1px solid rgba(245,158,11,0.3); }
+
+    /* Action buttons */
+    .patient-actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .action-btn { padding:9px 16px; border-radius:8px; border:none; cursor:pointer; font-size:13px; font-weight:600; transition:all .2s; display:flex; align-items:center; gap:6px; }
+    .action-btn:hover { opacity:.85; transform:translateY(-1px); }
+    .action-btn-diagnosis { background:#1d4ed8; color:#fff; }
+    .action-btn-treatment { background:#065f46; color:#d1fae5; }
+    .action-btn-history { background:#374151; color:#e5e7eb; border:1px solid #4b5563; }
+    .action-btn-history.active { background:#312e81; color:#c7d2fe; border-color:#4f46e5; }
+
+    /* Medical History panel */
+    .med-history-panel { display:none; margin-top:16px; background:var(--bg); border:1px solid var(--b); border-radius:10px; padding:18px; }
+    .med-history-panel.visible { display:block; }
+    .med-loading { color:var(--muted); font-size:14px; }
+    .med-section { margin-bottom:14px; }
+    .med-section:last-child { margin-bottom:0; }
+    .med-section-title { font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px; }
+    .med-value { font-size:14px; color:#e5e7eb; background:var(--card); padding:10px 14px; border-radius:8px; border:1px solid var(--b); }
+    .med-empty { font-size:14px; color:var(--muted); font-style:italic; }
+    .risk-banner { display:flex; align-items:center; gap:8px; background:rgba(220,38,38,0.1); border:1px solid rgba(220,38,38,0.3); color:#fca5a5; padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:14px; font-weight:600; }
+    .tag-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .tag { background:rgba(37,99,235,0.15); color:#93c5fd; border:1px solid rgba(37,99,235,0.3); border-radius:20px; padding:3px 10px; font-size:13px; }
+    .tag-red { background:rgba(220,38,38,0.1); color:#fca5a5; border-color:rgba(220,38,38,0.3); }
+    .no-form-msg { text-align:center; color:var(--muted); font-size:14px; padding:16px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="header-left">
+        <h1>🦷 Doktor Paneli</h1>
+        <p id="doctor-name-label">Yükleniyor...</p>
+      </div>
+      <button class="btn btn-danger" onclick="logout()">Çıkış</button>
+    </header>
+
+    <div id="loading" class="loading">⏳ Hastalar yükleniyor...</div>
+    <div id="error" class="error-msg" style="display:none;"></div>
+    <div id="empty" class="empty-msg" style="display:none;">Atanmış hasta bulunamadı.</div>
+    <div id="patient-list"></div>
+  </div>
+
+  <script>
+    const API = "";
+    const token = localStorage.getItem("doctor_token");
+    const medHistCache = {};
+
+    async function apiFetch(url, opts = {}) {
+      return fetch(API + url, {
+        ...opts,
+        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) }
+      });
+    }
+
+    function logout() {
+      localStorage.removeItem("doctor_token");
+      localStorage.removeItem("doctor_id");
+      localStorage.removeItem("clinic_id");
+      window.location.href = "/doctor-login.html";
+    }
+
+    async function loadDoctorInfo() {
+      try {
+        const r = await apiFetch("/api/doctor/me");
+        const j = await r.json();
+        if (j.ok && j.doctor) {
+          document.getElementById("doctor-name-label").textContent =
+            (j.doctor.full_name || j.doctor.name || "") + " — Atanmış Hastalar";
+        }
+      } catch (e) {}
+    }
+
+    async function loadPatients() {
+      try {
+        const r = await apiFetch("/api/doctor/patients");
+        const j = await r.json();
+
+        document.getElementById("loading").style.display = "none";
+
+        if (!j.ok) {
+          document.getElementById("error").textContent = "Hastalar yüklenemedi: " + (j.error || "bilinmeyen hata");
+          document.getElementById("error").style.display = "block";
+          return;
+        }
+
+        const patients = j.patients || [];
+        if (patients.length === 0) {
+          document.getElementById("empty").style.display = "block";
+          return;
+        }
+
+        const list = document.getElementById("patient-list");
+        list.innerHTML = patients.map((p, i) => buildPatientCard(p, i)).join("");
+      } catch (e) {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("error").textContent = "Bağlantı hatası: " + e.message;
+        document.getElementById("error").style.display = "block";
+      }
+    }
+
+    function buildPatientCard(p, idx) {
+      const statusClass = "status-" + (p.status || "ACTIVE");
+      const statusLabel = p.status === "INACTIVE" ? "Pasif" : p.status === "PENDING" ? "Bekliyor" : "Aktif";
+      const encodedId = encodeURIComponent(p.id);
+      return `
+        <div class="patient-card">
+          <div class="patient-header">
+            <div>
+              <div class="patient-name">${escHtml(p.name)}</div>
+              <div class="patient-meta">${escHtml(p.phone || "—")}</div>
+            </div>
+            <span class="status-badge ${statusClass}">${statusLabel}</span>
+          </div>
+          <div class="patient-actions">
+            <button class="action-btn action-btn-diagnosis"
+              onclick="window.location.href='/doctor-initial-examination.html?patient_id=${encodedId}'">
+              🦷 Tanı Başlat
+            </button>
+            <button class="action-btn action-btn-treatment"
+              onclick="window.location.href='/doctor-initial-examination.html?patient_id=${encodedId}&mode=treatment'">
+              💊 Tedavi Başlat
+            </button>
+            <button class="action-btn action-btn-history" id="hist-btn-${idx}"
+              onclick="toggleMedicalHistory(${idx}, '${p.id}')">
+              📋 Sağlık Geçmişi
+            </button>
+          </div>
+          <div class="med-history-panel" id="med-panel-${idx}">
+            <div class="med-loading">Yükleniyor...</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function toggleMedicalHistory(idx, patientId) {
+      const panel = document.getElementById("med-panel-" + idx);
+      const btn = document.getElementById("hist-btn-" + idx);
+
+      if (panel.classList.contains("visible")) {
+        panel.classList.remove("visible");
+        btn.classList.remove("active");
+        return;
+      }
+
+      panel.classList.add("visible");
+      btn.classList.add("active");
+
+      if (medHistCache[patientId] !== undefined) {
+        renderMedHistory(medHistCache[patientId], panel);
+        return;
+      }
+
+      panel.innerHTML = '<div class="med-loading">⏳ Sağlık formu yükleniyor...</div>';
+
+      try {
+        const r = await apiFetch("/api/patient/" + patientId + "/medical-form");
+        const j = await r.json();
+        const form = (j.ok && j.isComplete) ? j.form : null;
+        medHistCache[patientId] = form;
+        renderMedHistory(form, panel);
+      } catch (e) {
+        panel.innerHTML = '<div class="med-loading" style="color:#fca5a5;">Yüklenemedi: ' + escHtml(e.message) + '</div>';
+      }
+    }
+
+    function renderMedHistory(form, el) {
+      if (!form) {
+        el.innerHTML = '<div class="no-form-msg">Hasta henüz sağlık formunu doldurmamış.</div>';
+        return;
+      }
+
+      const yesNo = (v) => v === true || v === "true" || v === "yes" || v === "evet";
+
+      // Risk flags
+      const hasAllergy = yesNo(form.hasAllergy || form.has_allergy);
+      const hasChronicDisease = yesNo(form.hasChronicDisease || form.has_chronic_disease || form.chronicDisease);
+      const isSmoker = yesNo(form.isSmoker || form.is_smoker || form.smoker);
+      const isPregnant = yesNo(form.isPregnant || form.is_pregnant || form.pregnant);
+      const takingMedication = yesNo(form.takingMedication || form.taking_medication || form.medication);
+
+      const risks = [];
+      if (hasAllergy) risks.push("⚠️ Alerji");
+      if (hasChronicDisease) risks.push("🫀 Kronik Hastalık");
+      if (isSmoker) risks.push("🚬 Sigara Kullanıyor");
+      if (isPregnant) risks.push("🤰 Hamile");
+      if (takingMedication) risks.push("💊 İlaç Kullanıyor");
+
+      let html = "";
+
+      if (risks.length > 0) {
+        html += `<div class="risk-banner">⚠️ Risk Faktörleri: ${risks.join(" &nbsp;|&nbsp; ")}</div>`;
+      }
+
+      // Allergies
+      const allergyDetail = form.allergyDetail || form.allergy_detail || form.allergies || "";
+      if (allergyDetail) {
+        html += `<div class="med-section"><div class="med-section-title">Alerji Detayı</div><div class="med-value">${escHtml(allergyDetail)}</div></div>`;
+      }
+
+      // Medications
+      const medications = form.medications || form.medicationList || form.medication_list || "";
+      if (medications) {
+        html += `<div class="med-section"><div class="med-section-title">Kullandığı İlaçlar</div><div class="med-value">${escHtml(medications)}</div></div>`;
+      }
+
+      // Chronic diseases
+      const chronicDetail = form.chronicDiseaseDetail || form.chronic_disease_detail || form.chronicDetail || "";
+      if (chronicDetail) {
+        html += `<div class="med-section"><div class="med-section-title">Kronik Hastalık Detayı</div><div class="med-value">${escHtml(chronicDetail)}</div></div>`;
+      }
+
+      // Medical conditions (checkboxes / tags)
+      const conditions = form.medicalConditions || form.medical_conditions || form.conditions || [];
+      if (Array.isArray(conditions) && conditions.length > 0) {
+        const tags = conditions.map(c => `<span class="tag tag-red">${escHtml(String(c))}</span>`).join("");
+        html += `<div class="med-section"><div class="med-section-title">Tıbbi Durumlar</div><div class="tag-list">${tags}</div></div>`;
+      }
+
+      // Additional notes
+      const notes = form.additionalNotes || form.additional_notes || form.notes || "";
+      if (notes) {
+        html += `<div class="med-section"><div class="med-section-title">Ek Notlar</div><div class="med-value">${escHtml(notes)}</div></div>`;
+      }
+
+      if (!html) {
+        // Form exists but no notable data
+        html = '<div class="no-form-msg" style="padding:8px 0;">Form doldurulmuş ancak belirtilecek özel bir durum yok.</div>';
+      }
+
+      el.innerHTML = html;
+    }
+
+    function escHtml(s) {
+      return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+
+    loadDoctorInfo();
+    loadPatients();
+  </script>
+</body>
+</html>

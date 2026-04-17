@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Takvim - Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css"/>
+  <style>
+    /* Calendar-specific overrides */
+    .cal-page { padding: 24px; }
+
+    label { display:block; font-size:12px; color:#475569; margin-bottom:4px; font-weight:600; }
+    select {
+      padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--card); font-size: 13px; color: var(--text);
+      cursor: pointer; outline: none;
+    }
+    select:focus { border-color: var(--blue); }
+    button {
+      padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--card); font-size: 13px; font-weight: 600; cursor: pointer;
+      color: var(--text-2); transition: all .15s;
+    }
+    button:hover { background: var(--page-bg); }
+    .muted { color: var(--text-m); font-size: 13px; }
+
+    #calendar-container {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); min-height: 400px; overflow: auto;
+      box-shadow: var(--shadow);
+    }
+    .calendar-grid { min-width:1160px; }
+    .grid-head, .grid-row { display:grid; border-bottom:1px solid #f1f5f9; }
+    .grid-head { position:sticky; top:0; background:#f8fafc; z-index:2; }
+    .cell { padding:8px; min-height:36px; border-right:1px solid #f1f5f9; }
+    .cell:last-child { border-right:none; }
+    .head-cell { font-size:12px; color:#64748b; font-weight:700; text-transform:uppercase; }
+    .head-day { display:flex; flex-direction:column; gap:3px; }
+    .head-day strong { font-size:12px; color:#334155; }
+    .head-day span { font-size:11px; color:#64748b; font-weight:600; }
+    .time-cell { font-size:12px; color:#475569; background:#fcfdff; font-weight:600; }
+    .slot-cell { padding:4px; }
+
+    .appt-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px;
+      margin-bottom: 4px; background: var(--card); font-size: 12px;
+      transition: box-shadow .15s;
+    }
+    .appt-card:hover { box-shadow: var(--shadow-md); }
+    .appt-card:last-child { margin-bottom:0; }
+    .appt-patient { font-weight:700; color:#0f172a; }
+    .appt-meta { color:#64748b; margin-top:2px; }
+    .status-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; margin-top:4px; }
+    .status-proposed  { background:#fef3c7; color:#92400e; }
+    .status-confirmed { background:#dcfce7; color:#166534; }
+    .status-other     { background:#e2e8f0; color:#334155; }
+  </style>
+</head>
+<body>
+
+  <div class="cal-page">
+
+    <!-- Page Header -->
+    <div class="page-hdr">
+      <div class="page-hdr-left">
+        <h1 class="pg-title">Randevu Takvimi</h1>
+        <p class="pg-sub" id="weekRange">—</p>
+      </div>
+      <div class="page-hdr-actions">
+        <button id="prevWeekBtn">← Önceki</button>
+        <button id="todayBtn">Bugün</button>
+        <button id="nextWeekBtn">Sonraki →</button>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-body" style="padding:12px 18px;">
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <label for="doctorSelect" style="margin:0;white-space:nowrap;">Doktor</label>
+            <select id="doctorSelect" style="min-width:180px;">
+              <option value="">Tüm Doktorlar</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <label for="chairSelect" style="margin:0;white-space:nowrap;">Koltuk</label>
+            <select id="chairSelect" style="min-width:140px;">
+              <option value="">Tüm Koltuklar</option>
+            </select>
+          </div>
+          <span class="muted" id="summaryText" style="margin-left:auto;"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="calendar-container">
+      <div id="calendarGrid" class="calendar-grid"></div>
+    </div>
+  </div>
+
+    <div class="controls">
+      <div>
+        <label>&nbsp;</label>
+        <button id="prevWeekBtn">◀ Önceki</button>
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button id="todayBtn">Bugün</button>
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button id="nextWeekBtn">Sonraki ▶</button>
+      </div>
+      <div>
+        <label for="doctorSelect">Doktor</label>
+        <select id="doctorSelect">
+          <option value="">Tüm Doktorlar</option>
+        </select>
+      </div>
+      <div>
+        <label for="chairSelect">Chair</label>
+        <select id="chairSelect">
+          <option value="">Tüm Chair'lar</option>
+        </select>
+      </div>
+      <div>
+        <label>Hafta</label>
+        <div id="weekRange" class="muted" style="padding:10px 0;"></div>
+      </div>
+    </div>
+
+    <div class="muted" id="summaryText" style="margin-bottom:10px;"></div>
+
+    <div id="calendar-container">
+      <div id="calendarGrid" class="calendar-grid"></div>
+    </div>
+  </div>
+
+  <script>
+    const prevWeekBtn = document.getElementById('prevWeekBtn');
+    const nextWeekBtn = document.getElementById('nextWeekBtn');
+    const todayBtn = document.getElementById('todayBtn');
+    const doctorSelect = document.getElementById('doctorSelect');
+    const chairSelect = document.getElementById('chairSelect');
+    const weekRangeEl = document.getElementById('weekRange');
+    const summaryText = document.getElementById('summaryText');
+    const gridEl = document.getElementById('calendarGrid');
+
+    const DAY_NAMES = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+    const SLOT_MINUTES = 10;
+    const START_HOUR = 8;
+    const END_HOUR = 20;
+    const SLOT_START_MINUTES = START_HOUR * 60;
+    const SLOT_LAST_MINUTES = END_HOUR * 60;
+
+    const PROCEDURE_RECOMMENDED_MINUTES = {
+      TREATMENT: 30,
+      CONSULT: 30,
+      FOLLOWUP: 20,
+      LAB: 30,
+      CROWN: 60,
+      CROWN_ZIRCONIA: 60,
+      CROWN_EMAX: 60,
+      CROWN_PFM: 60,
+      CROWN_METAL: 60,
+      CROWN_TEMPORARY: 45,
+      TEMP_CROWN: 45,
+      BRIDGE_UNIT: 75,
+      TEMP_BRIDGE_UNIT: 60,
+      INLAY: 60,
+      ONLAY: 60,
+      OVERLAY: 60,
+      POST_AND_CORE: 60,
+      ROOT_CANAL_TREATMENT: 90,
+      ROOT_CANAL_RETREATMENT: 100,
+      CANAL_OPENING: 40,
+      CANAL_FILLING: 40,
+      IMPLANT: 90,
+      IMPLANT_CROWN: 60,
+      EXTRACTION: 30,
+      SURGICAL_EXTRACTION: 60,
+      FILLING: 30,
+      TEMP_FILLING: 20,
+    };
+
+    let weekStart = getStartOfWeek(new Date());
+    let allAppointments = [];
+    let treatmentTimingMap = {};
+    let configuredChairCount = 3;
+    let activeLoadRequestId = 0;
+
+    function getToken() {
+      const direct = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || localStorage.getItem('token') || '';
+      const cleanedDirect = String(direct || '').trim();
+      if (cleanedDirect && cleanedDirect !== 'undefined' && cleanedDirect !== 'null') return cleanedDirect;
+
+      try {
+        const rawUser = localStorage.getItem('user');
+        if (!rawUser) return '';
+        const parsed = JSON.parse(rawUser);
+        const candidate = String(parsed?.token || parsed?.adminToken || parsed?.accessToken || '').trim();
+        if (!candidate || candidate === 'undefined' || candidate === 'null') return '';
+        return candidate;
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function toDateOnly(value) {
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return '';
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function addDays(dateObj, days) {
+      const d = new Date(dateObj);
+      d.setDate(d.getDate() + days);
+      return d;
+    }
+
+    function getStartOfWeek(value) {
+      const d = new Date(value);
+      d.setHours(0, 0, 0, 0);
+      const day = d.getDay();
+      const diff = day === 0 ? -6 : (1 - day);
+      d.setDate(d.getDate() + diff);
+      return d;
+    }
+
+    function buildWeekDays(startDate) {
+      return Array.from({ length: 7 }, (_, idx) => addDays(startDate, idx));
+    }
+
+    function formatDateLabel(dateObj) {
+      return `${String(dateObj.getDate()).padStart(2, '0')}.${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function formatWeekRange(startDate) {
+      const end = addDays(startDate, 6);
+      return `${formatDateLabel(startDate)} - ${formatDateLabel(end)}`;
+    }
+
+    function fmtTime(startAt, endAt) {
+      const s = startAt ? new Date(startAt) : null;
+      const e = endAt ? new Date(endAt) : null;
+      if (!s || Number.isNaN(s.getTime())) return '-';
+      const sText = s.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      if (!e || Number.isNaN(e.getTime())) return sText;
+      const eText = e.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      return `${sText} - ${eText}`;
+    }
+
+    function statusClass(status) {
+      const s = String(status || '').toUpperCase();
+      if (s === 'PROPOSED') return 'status-proposed';
+      if (s === 'CONFIRMED') return 'status-confirmed';
+      return 'status-other';
+    }
+
+    function makeSlots() {
+      const out = [];
+      for (let hour = START_HOUR; hour <= END_HOUR; hour += 1) {
+        for (let min = 0; min < 60; min += SLOT_MINUTES) {
+          if (hour === END_HOUR && min > 0) continue;
+          out.push(`${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`);
+        }
+      }
+      return out;
+    }
+
+    const CACHED_SLOTS = makeSlots();
+
+    function minuteOfDay(dateObj) {
+      return dateObj.getHours() * 60 + dateObj.getMinutes();
+    }
+
+    function slotIndexFromDate(dateObj, slots) {
+      const minutes = minuteOfDay(dateObj);
+      if (minutes < SLOT_START_MINUTES || minutes > SLOT_LAST_MINUTES) return -1;
+      if ((minutes - SLOT_START_MINUTES) % SLOT_MINUTES !== 0) return -1;
+      const idx = Math.floor((minutes - SLOT_START_MINUTES) / SLOT_MINUTES);
+      return idx >= 0 && idx < slots.length ? idx : -1;
+    }
+
+    function slotIndexFromDateFloor(dateObj, slots) {
+      const minutes = minuteOfDay(dateObj);
+      if (minutes < SLOT_START_MINUTES) return -1;
+      if (minutes >= SLOT_LAST_MINUTES) return slots.length - 1;
+      const idx = Math.floor((minutes - SLOT_START_MINUTES) / SLOT_MINUTES);
+      return idx >= 0 && idx < slots.length ? idx : -1;
+    }
+
+    function parseMinuteValue(value, fallback = 0) {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(0, Math.min(720, parsed));
+    }
+
+    function normalizeTreatmentKey(value) {
+      const raw = String(value || '').trim().toUpperCase();
+      if (!raw) return '';
+      return raw.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    }
+
+    function getTimingFromMap(treatment) {
+      const normalized = normalizeTreatmentKey(treatment);
+      const direct = treatmentTimingMap[normalized] || treatmentTimingMap[String(treatment || '').trim().toUpperCase()];
+      if (direct) {
+        const d = parseMinuteValue(direct?.duration_minutes, 0);
+        const b = parseMinuteValue(direct?.break_minutes, 0);
+        if (d > 0 || b > 0) return direct;
+      }
+
+      const prefixedKey = Object.keys(treatmentTimingMap).find((key) => {
+        if (!(key === normalized || key.startsWith(`${normalized}_`) || normalized.startsWith(`${key}_`))) return false;
+        const candidate = treatmentTimingMap[key];
+        return parseMinuteValue(candidate?.duration_minutes, 0) > 0 || parseMinuteValue(candidate?.break_minutes, 0) > 0;
+      });
+      if (prefixedKey) return treatmentTimingMap[prefixedKey];
+
+      const recommendedKey = Object.keys(PROCEDURE_RECOMMENDED_MINUTES).find((key) => {
+        if (!(key === normalized || key.startsWith(`${normalized}_`) || normalized.startsWith(`${key}_`))) return false;
+        return Number.isFinite(PROCEDURE_RECOMMENDED_MINUTES[key]) && PROCEDURE_RECOMMENDED_MINUTES[key] > 0;
+      });
+      if (recommendedKey) {
+        return {
+          duration_minutes: PROCEDURE_RECOMMENDED_MINUTES[recommendedKey],
+          break_minutes: 0,
+        };
+      }
+
+      return direct || { duration_minutes: 10, break_minutes: 0 };
+    }
+
+    function getItemOccupiedMinutes(item) {
+      const fromItemDuration = parseMinuteValue(
+        item?.duration_minutes ?? item?.durationMinutes ?? item?.duration ?? item?.estimated_duration_minutes ?? item?.estimatedDurationMinutes,
+        0
+      );
+      const fromItemBreak = parseMinuteValue(
+        item?.break_minutes ?? item?.breakMinutes ?? item?.rest_minutes ?? item?.break_duration,
+        0
+      );
+      if (fromItemDuration > 0 || fromItemBreak > 0) {
+        return Math.max(SLOT_MINUTES, fromItemDuration + fromItemBreak);
+      }
+
+      const treatmentKey = normalizeTreatmentKey(item?.treatment || item?.type || item?.eventType || item?.procedure_code || '');
+      if (treatmentKey) {
+        const mapped = getTimingFromMap(treatmentKey);
+        const mappedTotal = parseMinuteValue(mapped?.duration_minutes, 0) + parseMinuteValue(mapped?.break_minutes, 0);
+        if (mappedTotal > 0) return Math.max(SLOT_MINUTES, mappedTotal);
+      }
+
+      const start = item?.startAt ? new Date(item.startAt) : null;
+      const end = item?.endAt ? new Date(item.endAt) : null;
+      if (start && end && Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start) {
+        const diffMin = Math.ceil((end.getTime() - start.getTime()) / (60 * 1000));
+        return Math.max(SLOT_MINUTES, diffMin);
+      }
+
+      return 10;
+    }
+
+    function renderDoctors(items) {
+      const doctors = [...new Set(items.map((i) => i.doctor).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'tr'));
+      const current = doctorSelect.value;
+      doctorSelect.innerHTML = '<option value="">Tüm Doktorlar</option>';
+      doctors.forEach((doctorName) => {
+        const opt = document.createElement('option');
+        opt.value = String(doctorName);
+        opt.textContent = String(doctorName);
+        doctorSelect.appendChild(opt);
+      });
+      if (doctors.includes(current)) doctorSelect.value = current;
+    }
+
+    function normalizeChairText(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const prefixed = raw.match(/^chair\s*(\d+)$/i);
+      if (prefixed) return String(Number(prefixed[1]));
+      if (/^\d+$/.test(raw)) return String(Number(raw));
+      return raw.toUpperCase();
+    }
+
+    function renderChairs(items) {
+      const fromData = [...new Set((items || []).map((i) => normalizeChairText(i?.chair)).filter(Boolean))];
+      const fromConfig = Array.from({ length: Math.max(1, Math.min(50, Number(configuredChairCount) || 3)) }, (_, idx) => String(idx + 1));
+      const chairs = [...new Set([...fromConfig, ...fromData])]
+        .sort((a, b) => String(a).localeCompare(String(b), 'tr'));
+      const current = String(chairSelect?.value || '');
+      if (!chairSelect) return;
+
+      chairSelect.innerHTML = '<option value="">Tüm Chair\'lar</option>';
+      chairs.forEach((chairName) => {
+        const opt = document.createElement('option');
+        opt.value = String(chairName);
+        opt.textContent = /^\d+$/.test(String(chairName)) ? `Chair ${chairName}` : String(chairName);
+        chairSelect.appendChild(opt);
+      });
+
+      if (chairs.includes(current)) chairSelect.value = current;
+    }
+
+    async function loadChairCountFromClinic() {
+      const token = getToken();
+      if (!token) return;
+
+      try {
+        const response = await fetch((typeof apiUrl === 'function' ? apiUrl('/api/admin/clinic') : '/api/admin/clinic'), {
+          headers: {
+            Accept: 'application/json',
+            Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+          },
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.ok) return;
+
+        const raw =
+          data?.chairCount ??
+          data?.chair_count ??
+          data?.clinic?.chairCount ??
+          data?.clinic?.chair_count ??
+          data?.settings?.chairCount ??
+          data?.settings?.chair_count ??
+          data?.clinic?.settings?.chairCount ??
+          data?.clinic?.settings?.chair_count;
+
+        const parsed = Number.parseInt(String(raw ?? ''), 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          configuredChairCount = Math.max(1, Math.min(50, parsed));
+        }
+      } catch (e) {
+      }
+    }
+
+    function normalizeDoctorName(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      return raw
+        .toLocaleLowerCase('tr')
+        .replace(/\b(dr|dr\.)\b/g, '')
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    /** API'deki "Burhan" ile randevuda yazılan "Burhan abi" gibi takma adlı kayıtları aynı doktora bağla. */
+    function doctorNormMatches(filterNorm, itemNorm) {
+      const f = String(filterNorm || '').trim();
+      const n = String(itemNorm || '').trim();
+      if (!f || !n) return false;
+      if (f === n) return true;
+      if (n.startsWith(f + ' ')) return true;
+      if (f.startsWith(n + ' ')) return true;
+      const tf = f.split(/\s+/).filter(Boolean)[0] || '';
+      const tn = n.split(/\s+/).filter(Boolean)[0] || '';
+      if (tf && tn && tf === tn) return true;
+      return false;
+    }
+
+    function normalizeToothLabel(rawItem) {
+      if (!rawItem || typeof rawItem !== 'object') return '';
+      const v =
+        rawItem.tooth_number ??
+        rawItem.toothNumber ??
+        rawItem.tooth_fdi_code ??
+        rawItem.fdiTooth ??
+        rawItem.fdi_tooth ??
+        rawItem.tooth ??
+        rawItem.toothId ??
+        rawItem.tooth_id ??
+        rawItem.toothID;
+      if (v == null || v === '') return '';
+      const s = String(v).trim();
+      const digits = s.replace(/\D/g, '');
+      const n = digits.length >= 2 ? Number.parseInt(digits.slice(0, 2), 10) : NaN;
+      if (Number.isFinite(n) && n >= 11 && n <= 48) return String(n);
+      return s;
+    }
+
+    function normalizeIncomingAppointment(rawItem) {
+      const startRaw = rawItem?.startAt || rawItem?.start_at || (rawItem?.date ? `${rawItem.date}T${String(rawItem.time || '00:00')}:00` : null);
+      const endRaw = rawItem?.endAt || rawItem?.end_at || null;
+      const startTs = startRaw ? Date.parse(String(startRaw)) : NaN;
+      const endTs = endRaw ? Date.parse(String(endRaw)) : NaN;
+
+      const doctor = String(rawItem?.doctor || rawItem?.doctor_name || rawItem?.doctorName || rawItem?.doctor_id || rawItem?.doctorId || '').trim();
+      const patient = String(rawItem?.patient || rawItem?.patient_name || rawItem?.patientName || rawItem?.patient_id || rawItem?.patientId || '').trim();
+      const chair = String(rawItem?.chair || rawItem?.chair_name || rawItem?.chairName || rawItem?.chair_no || rawItem?.chairNo || rawItem?.chair_id || rawItem?.chairId || '').trim();
+      const treatment = String(rawItem?.treatment || rawItem?.procedure || rawItem?.procedure_code || rawItem?.procedure_name || rawItem?.eventType || rawItem?.type || '').trim();
+      const type = String(rawItem?.type || rawItem?.eventType || rawItem?.procedure_code || '').trim();
+      const eventType = String(rawItem?.eventType || rawItem?.type || '').trim();
+      const tooth = normalizeToothLabel(rawItem);
+
+      return {
+        doctor,
+        patient,
+        chair,
+        tooth,
+        startAt: Number.isFinite(startTs) ? new Date(startTs).toISOString() : null,
+        endAt: Number.isFinite(endTs) ? new Date(endTs).toISOString() : null,
+        status: String(rawItem?.status || 'PROPOSED').toUpperCase(),
+        treatment,
+        type,
+        eventType,
+        duration_minutes: parseMinuteValue(rawItem?.duration_minutes ?? rawItem?.durationMinutes ?? rawItem?.duration ?? rawItem?.estimated_duration_minutes ?? rawItem?.estimatedDurationMinutes, 0),
+        break_minutes: parseMinuteValue(rawItem?.break_minutes ?? rawItem?.breakMinutes ?? rawItem?.rest_minutes ?? rawItem?.break_duration, 0),
+        _doctorNorm: normalizeDoctorName(doctor),
+        _chairNorm: normalizeChairText(chair),
+      };
+    }
+
+    async function loadDoctorsFromApi() {
+      const token = getToken();
+      if (!token) return;
+
+      try {
+        const response = await fetch((typeof apiUrl === 'function' ? apiUrl('/api/admin/doctors') : '/api/admin/doctors'), {
+          headers: {
+            Accept: 'application/json',
+            Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+          },
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return;
+
+        const apiDoctors =
+          Array.isArray(data)
+            ? data
+            : Array.isArray(data?.doctors)
+              ? data.doctors
+              : Array.isArray(data?.items)
+                ? data.items
+                : Array.isArray(data?.data)
+                  ? data.data
+                  : [];
+
+        const names = apiDoctors
+          .map((doc) => doc?.name || doc?.full_name || doc?.email || '')
+          .filter(Boolean)
+          .map((v) => String(v));
+
+        const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b, 'tr'));
+        const current = doctorSelect.value;
+        doctorSelect.innerHTML = '<option value="">Tüm Doktorlar</option>';
+        unique.forEach((name) => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          doctorSelect.appendChild(opt);
+        });
+        if (unique.includes(current)) doctorSelect.value = current;
+      } catch (e) {
+      }
+    }
+
+    async function loadTreatmentTimings() {
+      const token = getToken();
+      if (!token) return;
+
+      try {
+        const response = await fetch((typeof apiUrl === 'function' ? apiUrl('/api/admin/treatment-prices') : '/api/admin/treatment-prices'), {
+          headers: {
+            Accept: 'application/json',
+            Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+          },
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.ok) return;
+
+        const rows = Array.isArray(data?.prices) ? data.prices : [];
+        const nextMap = {};
+        rows.forEach((row) => {
+          const value = {
+            duration_minutes: parseMinuteValue(row?.duration_minutes, 0),
+            break_minutes: parseMinuteValue(row?.break_minutes, 0),
+          };
+
+          const rawKeys = [
+            row?.treatment_name,
+            row?.procedure_code,
+            row?.procedure,
+            row?.code,
+            row?.name,
+          ];
+
+          rawKeys.forEach((rawKey) => {
+            const normalizedKey = normalizeTreatmentKey(rawKey);
+            if (normalizedKey) nextMap[normalizedKey] = value;
+
+            const plainUpper = String(rawKey || '').trim().toUpperCase();
+            if (plainUpper) nextMap[plainUpper] = value;
+          });
+        });
+
+        treatmentTimingMap = nextMap;
+      } catch (e) {
+      }
+    }
+
+    function renderGrid(items) {
+      const weekDays = buildWeekDays(weekStart);
+      const slots = CACHED_SLOTS;
+      const weekDayKeys = weekDays.map((d) => toDateOnly(d));
+      const dayIndexByDate = {};
+      weekDayKeys.forEach((key, idx) => {
+        dayIndexByDate[key] = idx;
+      });
+      const doctorFilter = doctorSelect.value;
+      const chairFilter = chairSelect ? String(chairSelect.value || '') : '';
+      const normalizedDoctorFilter = normalizeDoctorName(doctorFilter);
+      const normalizedChairFilter = normalizeChairText(chairFilter);
+
+      const byDoctor = normalizedDoctorFilter
+        ? items.filter((i) => {
+            const itemNorm = i?._doctorNorm || normalizeDoctorName(i?.doctor);
+            return doctorNormMatches(normalizedDoctorFilter, itemNorm);
+          })
+        : items;
+      const filtered = normalizedChairFilter
+        ? byDoctor.filter((i) => (i?._chairNorm || normalizeChairText(i?.chair)) === normalizedChairFilter)
+        : byDoctor;
+
+      const columnsStyle = '130px repeat(7, minmax(150px, 1fr))';
+      const map = {};
+
+      filtered.forEach((item) => {
+        const start = item.startAt ? new Date(item.startAt) : null;
+        if (!start || Number.isNaN(start.getTime())) return;
+        const exactIdx = slotIndexFromDate(start, slots);
+        const slotIdx = exactIdx >= 0 ? exactIdx : slotIndexFromDateFloor(start, slots);
+        if (slotIdx < 0) return;
+        const dayKey = toDateOnly(start);
+        const dayIdx = dayIndexByDate[dayKey];
+        if (dayIdx === undefined) return;
+
+        const occupiedMinutes = getItemOccupiedMinutes(item);
+        const spanSlots = Math.max(1, Math.ceil(occupiedMinutes / SLOT_MINUTES));
+
+        for (let offset = 0; offset < spanSlots; offset += 1) {
+          const rowIdx = slotIdx + offset;
+          if (rowIdx >= slots.length) break;
+          const key = `${rowIdx}|${dayIdx}`;
+          if (!map[key]) map[key] = [];
+          map[key].push({ item, isStart: offset === 0 });
+        }
+      });
+
+      const headHtml = `<div class="grid-head" style="grid-template-columns:${columnsStyle}"><div class="cell head-cell">Saat</div>${weekDays.map((day, idx) => `<div class="cell head-cell"><div class="head-day"><strong>${DAY_NAMES[idx]}</strong><span>${formatDateLabel(day)}</span></div></div>`).join('')}</div>`;
+      let rowsHtml = '';
+
+      slots.forEach((slotLabel, slotIdx) => {
+        let html = `<div class="grid-row" style="grid-template-columns:${columnsStyle}"><div class="cell time-cell">${slotLabel}</div>`;
+        for (let dayIdx = 0; dayIdx < 7; dayIdx += 1) {
+          const key = `${slotIdx}|${dayIdx}`;
+          const cards = (map[key] || []).map((entry) => {
+            const item = entry.item;
+            if (!entry.isStart) {
+              return `<div class="appt-card" style="opacity:0.35;border-style:dashed;">&nbsp;</div>`;
+            }
+            return `
+            <div class="appt-card">
+              <div class="appt-patient">${item.patient || '-'}</div>
+              <div class="appt-meta">${doctorFilter ? '' : `${item.doctor || '-'} • `}${item.tooth ? `🦷 ${item.tooth} • ` : ''}${normalizeChairText(item.chair) || '-'} • ${fmtTime(item.startAt, item.endAt)}${item.treatment ? ` • ${item.treatment}` : ''}</div>
+              <div><span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span></div>
+            </div>
+          `;
+          }).join('');
+          html += `<div class="cell slot-cell">${cards}</div>`;
+        }
+        html += '</div>';
+        rowsHtml += html;
+      });
+
+      const emptyHtml = !filtered.length
+        ? '<div class="muted" style="padding:10px;">Seçili hafta için randevu bulunamadı.</div>'
+        : '';
+      gridEl.innerHTML = headHtml + rowsHtml + emptyHtml;
+
+      const doctorCount = [...new Set(filtered.map((i) => String(i.doctor || '')).filter(Boolean))].length;
+      const chairCount = [...new Set(filtered.map((i) => i?._chairNorm || normalizeChairText(i.chair)).filter(Boolean))].length;
+      summaryText.textContent = `${filtered.length} randevu • ${doctorCount} doktor • ${chairCount} chair`;
+    }
+
+    async function fetchDayAppointments(date) {
+      const token = getToken();
+      const response = await fetch((typeof apiUrl === 'function' ? apiUrl(`/api/admin/appointments?date=${encodeURIComponent(date)}`) : `/api/admin/appointments?date=${encodeURIComponent(date)}`), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+        },
+      });
+      if (response.status === 404) return [];
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        return [];
+      }
+      return Array.isArray(data.appointments) ? data.appointments : [];
+    }
+
+    async function fetchRangeAppointments(startDate, endDate) {
+      const token = getToken();
+      const response = await fetch((typeof apiUrl === 'function' ? apiUrl(`/api/admin/appointments?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`) : `/api/admin/appointments?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+        },
+      });
+      if (response.status === 404) return [];
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error('range_fetch_failed');
+      }
+      return Array.isArray(data.appointments) ? data.appointments : [];
+    }
+
+    async function fetchWeekTimelineEvents(weekDays) {
+      const token = getToken();
+      const startDate = toDateOnly(weekDays[0]);
+      const endDate = toDateOnly(weekDays[6]);
+      const response = await fetch((typeof apiUrl === 'function' ? apiUrl(`/api/admin/events?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`) : `/api/admin/events?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+        },
+      });
+
+      if (response.status === 401) {
+        throw new Error('unauthorized');
+      }
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) return [];
+
+      const all = [];
+      if (Array.isArray(data.overdue)) all.push(...data.overdue);
+      if (Array.isArray(data.today)) all.push(...data.today);
+      if (Array.isArray(data.upcoming)) all.push(...data.upcoming);
+
+      const daySet = new Set(weekDays.map((d) => toDateOnly(d)));
+
+      const toAppointmentLike = (evt) => {
+        const startRaw = evt?.timelineAt || (evt?.date ? `${evt.date}T${String(evt.time || '00:00')}:00` : null);
+        const startTs = startRaw ? Date.parse(String(startRaw)) : NaN;
+        if (!Number.isFinite(startTs)) return null;
+        const startAt = new Date(startTs).toISOString();
+        const dateKey = toDateOnly(startAt);
+        if (!daySet.has(dateKey)) return null;
+
+        return {
+          doctor: String(evt?.doctor || evt?.doctorName || ''),
+          patient: String(evt?.patientName || evt?.patient || evt?.patientId || ''),
+          chair: String(evt?.chair || evt?.chairName || ''),
+          tooth: normalizeToothLabel(evt),
+          startAt,
+          endAt: evt?.endAt || evt?.end_at || null,
+          status: String(evt?.status || 'PROPOSED').toUpperCase(),
+          treatment: String(evt?.eventType || evt?.treatment || evt?.procedure || evt?.type || ''),
+          duration_minutes: Number.parseInt(evt?.duration_minutes ?? evt?.duration ?? 0, 10) || 0,
+          break_minutes: Number.parseInt(evt?.break_minutes ?? evt?.rest_minutes ?? 0, 10) || 0,
+          _source: 'timeline',
+        };
+      };
+
+      return all.map(toAppointmentLike).filter(Boolean);
+    }
+
+    async function fetchWeekAppointments(weekDays) {
+      const startDate = toDateOnly(weekDays[0]);
+      const endDate = toDateOnly(weekDays[6]);
+      return fetchRangeAppointments(startDate, endDate);
+    }
+
+    function mergeUniqueAppointments(base, extras) {
+      const keyOf = (item) => `${item?.startAt || ''}|${item?.patient || ''}|${item?.doctor || ''}|${item?.chair || ''}`;
+      const map = new Map();
+      (base || []).forEach((item) => map.set(keyOf(item), item));
+      (extras || []).forEach((item) => {
+        const key = keyOf(item);
+        if (!map.has(key)) {
+          map.set(key, item);
+          return;
+        }
+
+        const current = map.get(key) || {};
+        const merged = { ...current, ...item };
+
+        const currentDuration = parseMinuteValue(current?.duration_minutes, 0);
+        const itemDuration = parseMinuteValue(item?.duration_minutes, 0);
+        const currentBreak = parseMinuteValue(current?.break_minutes, 0);
+        const itemBreak = parseMinuteValue(item?.break_minutes, 0);
+
+        if (itemDuration <= 0 && currentDuration > 0) merged.duration_minutes = currentDuration;
+        if (itemBreak <= 0 && currentBreak > 0) merged.break_minutes = currentBreak;
+        if (!item?.treatment && current?.treatment) merged.treatment = current.treatment;
+        if (!item?.endAt && current?.endAt) merged.endAt = current.endAt;
+        if (!merged.tooth && (current?.tooth || item?.tooth)) merged.tooth = current?.tooth || item?.tooth;
+
+        map.set(key, merged);
+      });
+      return Array.from(map.values());
+    }
+
+    async function loadAppointments() {
+      const requestId = ++activeLoadRequestId;
+      const token = getToken();
+      if (!token) {
+        gridEl.innerHTML = '<div class="muted" style="padding:10px;">Admin token bulunamadı. Tekrar giriş yapın.</div>';
+        return;
+      }
+
+      const weekDays = buildWeekDays(weekStart);
+      weekRangeEl.textContent = formatWeekRange(weekStart);
+      gridEl.innerHTML = '<div class="muted" style="padding:10px;">Yükleniyor...</div>';
+
+      try {
+        let weeklyAppointments = [];
+        try {
+          weeklyAppointments = await fetchWeekAppointments(weekDays);
+        } catch {
+          weeklyAppointments = [];
+        }
+
+        allAppointments = (weeklyAppointments || [])
+          .map(normalizeIncomingAppointment)
+          .filter((item) => !!item.startAt);
+
+        if (requestId !== activeLoadRequestId) return;
+
+        const hasDoctorsFromApi = doctorSelect.options.length > 1;
+        if (!hasDoctorsFromApi) renderDoctors(allAppointments);
+        if (doctorSelect.options.length <= 1) {
+          const fallback = document.createElement('option');
+          fallback.value = '';
+          fallback.textContent = 'Doktor bulunamadı';
+          doctorSelect.appendChild(fallback);
+          doctorSelect.value = '';
+        }
+        renderChairs(allAppointments);
+        renderGrid(allAppointments);
+
+        fetchWeekTimelineEvents(weekDays)
+          .then((weeklyTimelineEvents) => {
+            if (requestId !== activeLoadRequestId) return;
+            const merged = mergeUniqueAppointments(allAppointments, weeklyTimelineEvents)
+              .map(normalizeIncomingAppointment)
+              .filter((item) => !!item.startAt);
+            allAppointments = merged;
+            const hasDoctorsAfterMerge = doctorSelect.options.length > 1;
+            if (!hasDoctorsAfterMerge) renderDoctors(allAppointments);
+            renderChairs(allAppointments);
+            renderGrid(allAppointments);
+          })
+          .catch(() => {});
+      } catch (error) {
+        if (requestId !== activeLoadRequestId) return;
+        if (String(error?.message || '') === 'unauthorized') {
+          localStorage.removeItem('adminToken');
+          localStorage.removeItem('admin_token');
+          localStorage.removeItem('token');
+          gridEl.innerHTML = '<div class="muted" style="padding:10px;">Oturum süresi doldu. Giriş sayfasına yönlendiriliyorsunuz...</div>';
+          setTimeout(() => {
+            window.location.href = '/admin-login.html';
+          }, 700);
+          return;
+        }
+        gridEl.innerHTML = `<div class="muted" style="padding:10px;">Randevular alınamadı: ${String(error?.message || error)}</div>`;
+      }
+    }
+
+    doctorSelect.addEventListener('change', () => renderGrid(allAppointments));
+    if (chairSelect) {
+      chairSelect.addEventListener('change', () => renderGrid(allAppointments));
+    }
+    prevWeekBtn.addEventListener('click', () => {
+      weekStart = addDays(weekStart, -7);
+      loadAppointments();
+    });
+    nextWeekBtn.addEventListener('click', () => {
+      weekStart = addDays(weekStart, 7);
+      loadAppointments();
+    });
+    todayBtn.addEventListener('click', () => {
+      weekStart = getStartOfWeek(new Date());
+      loadAppointments();
+    });
+
+    async function bootstrapSchedule() {
+      await Promise.all([
+        loadDoctorsFromApi().catch(() => {}),
+        loadChairCountFromClinic().catch(() => {}),
+        loadTreatmentTimings().catch(() => {}),
+      ]);
+      loadAppointments();
+    }
+
+    bootstrapSchedule();
+  </script>
+  <script src="/admin-layout.js?v=202603301"></script>
+</body>
+</html>

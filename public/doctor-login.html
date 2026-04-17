@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
+  <title id="pageTitle">Clinifly Doctor – Login</title>
+  <script src="/admin-i18n.js?v=202502011445"></script>
+  <style>
+    :root { 
+      --bg:#0f172a; 
+      --card:#020617; 
+      --b:#1f2937; 
+      --p:#2563eb; 
+      --g:#16a34a; 
+      --r:#dc2626;
+      --warn:#f59e0b;
+      --muted:#a7b2c8;
+    }
+    body{ 
+      font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; 
+      margin:0; 
+      background:var(--bg); 
+      color:#e6eaf2; 
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      min-height:100vh;
+      padding:20px;
+    }
+    .container{
+      max-width:500px;
+      width:100%;
+    }
+    .header{
+      text-align:center;
+      margin-bottom:32px;
+    }
+    .logo-container{
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .logo{
+      width: 200px;
+      height: 67px;
+      max-width: 100%;
+    }
+    .title{
+      font-size:24px;
+      font-weight:600;
+      color:#fff;
+      margin:0;
+    }
+    .subtitle{
+      color:var(--muted);
+      font-size:16px;
+      margin-top:8px;
+    }
+    .form-container{
+      background:var(--card);
+      border:1px solid var(--b);
+      border-radius:16px;
+      padding:32px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.2);
+    }
+    .form-group{
+      margin-bottom:20px;
+    }
+    label{
+      display:block;
+      font-weight:500;
+      margin-bottom:8px;
+      color:#e6eaf2;
+    }
+    input{
+      width:100%;
+      padding:12px 16px;
+      border:1px solid var(--b);
+      border-radius:8px;
+      background:var(--bg);
+      color:#e6eaf2;
+      font-size:16px;
+      margin:0;
+    }
+    input:focus{
+      outline:none;
+      border-color:var(--p);
+      box-shadow:0 0 0 0 3px rgba(37,99,235,0.1);
+    }
+    .required{
+      color:var(--r);
+      margin-left:4px;
+    }
+    .help-text{
+      font-size:14px;
+      color:var(--muted);
+      margin-top:4px;
+    }
+    .btn{
+      width:100%;
+      padding:12px 24px;
+      border:none;
+      border-radius:8px;
+      font-size:16px;
+      font-weight:600;
+      cursor:pointer;
+      transition:all 0.2s;
+      margin:0;
+    }
+    .btn-primary{
+      background:var(--p);
+      color:white;
+    }
+    .btn-primary:hover{
+      background:#1d4ed8;
+    }
+    .btn-primary:disabled{
+      background:var(--muted);
+      cursor:not-allowed;
+    }
+    .btn-secondary{
+      background:transparent;
+      color:var(--muted);
+      border:1px solid var(--b);
+    }
+    .btn-secondary:hover{
+      background:var(--b);
+    }
+    .alert{
+      padding:12px 16px;
+      border-radius:8px;
+      margin-bottom:16px;
+      font-size:14px;
+    }
+    .alert-success{
+      background:rgba(22,163,74,0.1);
+      border:1px solid var(--g);
+      color:var(--g);
+    }
+    .alert-error{
+      background:rgba(220,38,38,0.1);
+      border:1px solid var(--r);
+      color:var(--r);
+    }
+    .nav{
+      text-align:center;
+      margin-top:24px;
+    }
+    .nav a{
+      color:var(--p);
+      text-decoration:none;
+      font-weight:500;
+    }
+    .nav a:hover{
+      text-decoration:underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-container">
+        <img src="/logo-full-colorful.svg" alt="Clinifly" class="logo">
+      </div>
+      <h1 class="title" data-i18n="login.doctorTitle">Doctor Login</h1>
+      <p class="subtitle" data-i18n="login.doctorSubtitle">Clinifly Doctor Panel</p>
+    </div>
+
+    <div id="alert-container"></div>
+
+    <div id="form-container" class="form-container">
+      <form id="login-form">
+        <div class="form-group">
+          <label>
+            <span data-i18n="login.email">Email</span> <span class="required" data-i18n="login.emailRequired">*</span>
+          </label>
+          <input 
+            type="email" 
+            id="email" 
+            name="email" 
+            data-i18n-placeholder="login.emailPlaceholder"
+            placeholder="doctor@clinifly.com" 
+            required
+          />
+          <div class="help-text" data-i18n="login.emailHelp">Doctor email adresinizi giriniz</div>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span data-i18n="login.clinicCode">Clinic Code</span> <span class="required" data-i18n="login.clinicCodeRequired">*</span>
+          </label>
+          <input 
+            type="text" 
+            id="clinicCode" 
+            name="clinicCode" 
+            data-i18n-placeholder="login.clinicCodePlaceholder"
+            placeholder="ERHANCAN" 
+            style="text-transform: uppercase;"
+            required
+          />
+          <div class="help-text" data-i18n="login.clinicCodeHelp">Klinik kodunuzu giriniz</div>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span data-i18n="login.password">Password</span> <span class="required" data-i18n="login.passwordRequired">*</span>
+          </label>
+          <input 
+            type="password" 
+            id="password" 
+            name="password" 
+            data-i18n-placeholder="login.passwordPlaceholder"
+            placeholder="••••••••" 
+            required
+          />
+        </div>
+
+          <a href="/patient-login.html" class="alt-btn" style="margin-right:10px;">Hasta Girişi</a>
+          <a href="/patient-register.html" class="alt-btn">Hasta Kaydı</a>
+      </form>
+    </div>
+
+    <div class="nav">
+      <a href="/admin-login.html" data-i18n="login.adminLogin">Admin Login</a>
+      <br />
+      <a href="/patient-login.html" style="margin-top:8px;display:inline-block;" data-i18n="login.patientLogin">Hasta Girişi</a>
+    </div>
+  </div>
+
+  <script>
+    const API =
+      window.location.hostname === "localhost"
+        ? "http://localhost:10000"
+        : "https://cliniflow-backend-dg8a.onrender.com";
+    
+    // Show alert message
+    function showAlert(message, type = 'error') {
+      const alertContainer = document.getElementById('alert-container');
+      const alertDiv = document.createElement('div');
+      alertDiv.className = `alert alert-${type}`;
+      alertDiv.textContent = message;
+      alertContainer.appendChild(alertDiv);
+      
+      setTimeout(() => {
+        alertDiv.remove();
+      }, 5000);
+    }
+
+    // Set OTP message
+    function setOTPMsg(message, type = 'info') {
+      const otpMsg = document.getElementById('otp-message');
+      if (otpMsg) {
+        otpMsg.textContent = message;
+        otpMsg.className = type;
+      }
+    }
+
+    // Update UI with i18n
+    function updateUI() {
+      document.documentElement.lang = i18n.currentLang;
+      document.getElementById('pageTitle').textContent = i18n.t('login.doctorTitle');
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        el.textContent = i18n.t(key);
+      });
+      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        el.placeholder = i18n.t(key);
+      });
+    }
+
+    // Initialize i18n
+    if (typeof i18n !== 'undefined') {
+      i18n.init().then(updateUI);
+      window.onI18nUpdated = updateUI;
+    } else {
+      updateUI();
+    }
+
+    // Handle login form submission
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      
+      // Clear any existing doctor token before login
+      localStorage.removeItem("doctor_token");
+      localStorage.removeItem("doctor_id");
+      localStorage.removeItem("clinic_id");
+      
+      const email = document.getElementById("email").value.trim();
+      const clinicCode = document.getElementById("clinicCode").value.trim().toUpperCase();
+      const password = document.getElementById("password").value;
+      const submitBtn = document.getElementById("login-btn");
+      
+      if (!email || !clinicCode || !password) {
+        showAlert(i18n.t("login.errors.allFieldsRequired"));
+        return;
+      }
+      
+      submitBtn.disabled = true;
+      submitBtn.textContent = i18n.t("login.loggingIn") + "...";
+      
+      try {
+        const res = await fetch(`${API}/api/doctor/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, clinicCode, password }),
+        });
+        
+        const json = await res.json();
+        
+        if (!res.ok) {
+          let errorMsg = json.message || json.error || i18n.t("login.errors.loginFailed");
+          if (json.error === "invalid_credentials") {
+            errorMsg = i18n.t("login.errors.invalidCredentials");
+          } else if (json.error === "doctor_not_found") {
+            errorMsg = i18n.t("login.errors.doctorNotFound");
+          } else if (json.error === "clinic_not_found") {
+            errorMsg = i18n.t("login.errors.clinicNotFound");
+          }
+          showAlert(errorMsg);
+          submitBtn.disabled = false;
+          submitBtn.textContent = i18n.t("login.login");
+          return;
+        }
+        
+        if (json.ok && json.requiresOTP) {
+          // OTP required - show OTP input form
+          showOTPForm(json.clinicCode, json.email);
+          return;
+        }
+        
+        // Store doctor token
+        localStorage.setItem("doctor_token", json.token);
+        localStorage.setItem("doctor_id", json.doctorId);
+        localStorage.setItem("clinic_id", json.clinicId);
+        
+        showAlert(i18n.t("login.success"), "success");
+        
+        // Redirect to doctor dashboard
+        setTimeout(() => {
+          window.location.href = "/doctor-initial-examination.html";
+        }, 1000);
+        
+      } catch (error) {
+        console.error("Login error:", error);
+        showAlert(i18n.t("login.errors.networkError"));
+        submitBtn.disabled = false;
+        submitBtn.textContent = i18n.t("login.login");
+      }
+    });
+
+    // Show OTP verification form
+    function showOTPForm(clinicCode, email) {
+      const formContainer = document.querySelector('.form-container');
+      
+      // Hide login form and show OTP form
+      formContainer.innerHTML = `
+        <div class="header">
+          <h1 data-i18n="login.otpTitle">OTP Verification</h1>
+          <p class="subtitle" data-i18n="login.otpSubtitle">Enter the verification code sent to your email</p>
+        </div>
+        
+        <form id="otp-form">
+          <div class="form-group">
+            <label>
+              <span data-i18n="login.clinicCode">Clinic Code</span>
+            </label>
+            <input 
+              type="text" 
+              value="${clinicCode}" 
+              readonly 
+              style="background: var(--b);"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>
+              <span data-i18n="login.email">Email</span>
+            </label>
+            <input 
+              type="email" 
+              value="${email}" 
+              readonly 
+              style="background: var(--b);"
+            />
+            <div class="help-text" data-i18n="login.otpEmailHelp">Enter the email address where you received the OTP</div>
+          </div>
+
+          <div class="form-group">
+            <label>
+              <span data-i18n="login.otpCode">Verification Code</span> <span class="required" data-i18n="login.otpCodeRequired">*</span>
+            </label>
+            <input 
+              type="text" 
+              id="otp-code" 
+              name="otp" 
+              maxlength="6" 
+              pattern="[0-9]{6}" 
+              data-i18n-placeholder="login.otpCodePlaceholder"
+              placeholder="123456" 
+              required
+            />
+            <div class="help-text" data-i18n="login.otpHelp">Enter the 6-digit code sent to your email</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary" id="otp-submit-btn" data-i18n="login.verifyOTP">Verify OTP</button>
+          <button type="button" class="btn btn-secondary" onclick="location.reload()" data-i18n="login.backToLogin">Back to Login</button>
+        </form>
+        
+        <div id="otp-message" style="margin-top: 16px;"></div>
+      `;
+      
+      i18n.updateUI();
+      
+      // Handle OTP form submission
+      document.getElementById('otp-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const submitBtn = document.getElementById('otp-submit-btn');
+        const otpCode = document.getElementById('otp-code').value.trim();
+        
+        if (!otpCode || otpCode.length !== 6) {
+          setOTPMsg(i18n.t("login.errors.otpRequired"), "err");
+          return;
+        }
+        
+        submitBtn.disabled = true;
+        submitBtn.textContent = i18n.t("login.verifying") + "...";
+        
+        try {
+          const payload = { 
+            clinicCode: clinicCode,
+            email: email,
+            otp: otpCode,
+            type: "doctor"
+          };
+          
+          console.log("OTP VERIFY PAYLOAD:", payload);
+          
+          const res = await fetch(`${API}/auth/verify-otp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          
+          const json = await res.json();
+          
+          if (!res.ok) {
+            let errorMsg = json.message || json.error || i18n.t("login.errors.otpFailed");
+            if (json.error === "invalid_otp") {
+              errorMsg = i18n.t("login.errors.invalidOTP");
+            } else if (json.error === "otp_not_found") {
+              errorMsg = i18n.t("login.errors.otpNotFound");
+            }
+            setOTPMsg(errorMsg, "err");
+            submitBtn.disabled = false;
+            submitBtn.textContent = i18n.t("login.verifyOTP");
+            return;
+          }
+          
+          // Store doctor token
+          localStorage.setItem("doctor_token", json.token);
+          localStorage.setItem("doctor_id", json.doctorId);
+          localStorage.setItem("clinic_id", json.clinicId);
+          localStorage.setItem("doctor_status", json.status);
+          
+          setOTPMsg(i18n.t("login.success"), "success");
+          
+          // Redirect based on doctor status
+          setTimeout(() => {
+            if (json.status === "PENDING") {
+              window.location.href = "/doctor/pending";
+            } else if (json.status === "APPROVED") {
+              window.location.href = "/doctor/dashboard";
+            } else {
+              // Fallback to initial examination for other statuses
+              window.location.href = "/doctor-initial-examination.html";
+            }
+          }, 1000);
+          
+        } catch (error) {
+          console.error("OTP verification error:", error);
+          setOTPMsg(i18n.t("login.errors.networkError"), "err");
+          submitBtn.disabled = false;
+          submitBtn.textContent = i18n.t("login.verifyOTP");
+        }
+      });
+    }
+  </script>
+</body>
+</html>

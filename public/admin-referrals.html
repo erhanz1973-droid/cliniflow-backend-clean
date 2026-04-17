@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Clinifly Admin – Referrals</title>
+  <script>
+    (function() {
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      if (!token) window.location.href = "/admin-login.html";
+    })();
+  </script>
+  <script src="/admin-i18n.js"></script>
+  <link rel="stylesheet" href="/admin-layout.css" />
+  <script src="/admin-layout.js?v=202603301" defer></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: #111827; color: #e6eaf2; }
+    body.al-ready { background: #111827; color: #e6eaf2; }
+    body.al-ready .al-topbar { background: #1f2937; border-bottom-color: #374151; }
+    body.al-ready .al-topbar .al-page-title { color: #e5e7eb; }
+
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+    .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    .page-title { font-size: 22px; font-weight: 800; color: #f1f5f9; margin: 0; }
+
+    /* Stats row */
+    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 28px; }
+    .stat-card { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 18px 20px; }
+    .stat-label { font-size: 12px; color: #94a3b8; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+    .stat-value { font-size: 28px; font-weight: 800; color: #f1f5f9; }
+
+    /* Table */
+    .card { background: #1f2937; border: 1px solid #374151; border-radius: 14px; overflow: hidden; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #374151; flex-wrap: wrap; gap: 10px; }
+    .card-title { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+    .refresh-btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .refresh-btn:hover { background: #1d4ed8; }
+
+    table { width: 100%; border-collapse: collapse; }
+    thead th { padding: 12px 16px; text-align: left; font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .5px; background: #111827; }
+    tbody tr { border-top: 1px solid #374151; transition: background .15s; }
+    tbody tr:hover { background: #0f172a; }
+    tbody td { padding: 14px 16px; font-size: 14px; color: #e2e8f0; }
+
+    .referrer-name { font-weight: 700; color: #f1f5f9; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .badge-invited    { background: #312e81; color: #a5b4fc; }
+    .badge-registered { background: #1e3a5f; color: #93c5fd; }
+    .badge-treated    { background: #14532d; color: #86efac; }
+    .badge-rewarded   { background: #713f12; color: #fcd34d; }
+
+    .count-cell { font-size: 18px; font-weight: 800; text-align: center; }
+    .count-invited    { color: #818cf8; }
+    .count-registered { color: #60a5fa; }
+    .count-treated    { color: #4ade80; }
+
+    .empty { text-align: center; padding: 48px 20px; color: #64748b; }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; }
+    .loading-row td { text-align: center; padding: 32px; color: #64748b; }
+
+    /* Status filter */
+    .filter-row { display: flex; gap: 8px; align-items: center; }
+    select { background: #111827; border: 1px solid #374151; color: #e2e8f0; border-radius: 8px; padding: 7px 12px; font-size: 13px; }
+
+    .progress-bar { width: 100%; background: #374151; border-radius: 4px; height: 6px; margin-top: 4px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #2563eb; border-radius: 4px; transition: width .3s; }
+
+    .actions-cell { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .btn-approve { background: #16a34a; color: #fff; border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .btn-approve:hover:not(:disabled) { background: #15803d; }
+    .btn-reject { background: transparent; color: #f87171; border: 1px solid #991b1b; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .btn-reject:hover:not(:disabled) { background: rgba(153, 27, 27, 0.15); }
+    .btn-approve:disabled, .btn-reject:disabled { opacity: 0.45; cursor: not-allowed; }
+    .pending-code { font-family: ui-monospace, monospace; font-size: 12px; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="page-header">
+      <h1 class="page-title">🎁 Referral Activity</h1>
+      <button class="refresh-btn" onclick="load()">↻ Refresh</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row" id="statsRow">
+      <div class="stat-card"><div class="stat-label">Total Referrers</div><div class="stat-value" id="statReferrers">—</div></div>
+      <div class="stat-card"><div class="stat-label">Total Invited</div><div class="stat-value" id="statInvited">—</div></div>
+      <div class="stat-card"><div class="stat-label">Registered</div><div class="stat-value" id="statRegistered">—</div></div>
+      <div class="stat-card"><div class="stat-label">Treated</div><div class="stat-value" id="statTreated">—</div></div>
+      <div class="stat-card"><div class="stat-label">Bekleyen onay</div><div class="stat-value" id="statPending">—</div></div>
+    </div>
+
+    <!-- Pending admin approval -->
+    <div class="card" id="pendingApprovalCard" style="margin-bottom: 24px;">
+      <div class="card-header">
+        <span class="card-title">Onay bekleyen referral'lar</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Davet eden</th>
+            <th>Davet edilen</th>
+            <th>Durum</th>
+            <th>Kod</th>
+            <th>Tarih</th>
+            <th style="min-width: 160px;">İşlem</th>
+          </tr>
+        </thead>
+        <tbody id="pendingBody">
+          <tr class="loading-row"><td colspan="6">Yükleniyor…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Table -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Referrer Summary</span>
+        <div class="filter-row">
+          <select id="statusFilter" onchange="load()">
+            <option value="">All statuses</option>
+            <option value="registered">Registered</option>
+            <option value="treated">Treated</option>
+            <option value="rewarded">Rewarded</option>
+          </select>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Referrer</th>
+            <th style="text-align:center;">Invited</th>
+            <th style="text-align:center;">Registered</th>
+            <th style="text-align:center;">Treated</th>
+            <th>Invited Patients</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr class="loading-row"><td colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+  const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+
+  function token() {
+    return (localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "").trim();
+  }
+
+  function headers() {
+    const t = token();
+    return { Authorization: t.startsWith("Bearer ") ? t : `Bearer ${t}`, "Content-Type": "application/json" };
+  }
+
+  function statusClass(s) {
+    const v = String(s || "").toLowerCase();
+    if (v === "treated")    return "badge-treated";
+    if (v === "registered") return "badge-registered";
+    if (v === "rewarded")   return "badge-rewarded";
+    return "badge-invited";
+  }
+
+  function statusLabel(s) {
+    const v = String(s || "").toLowerCase();
+    if (v === "treated")    return "Treated";
+    if (v === "registered") return "Registered";
+    if (v === "rewarded")   return "Rewarded";
+    if (v === "approved")   return "Registered";
+    return "Invited";
+  }
+
+  function normalizeStatus(s) {
+    const v = String(s || "").toLowerCase();
+    if (["treated", "completed"].includes(v)) return "treated";
+    if (["registered", "approved", "pending", "created"].includes(v)) return "registered";
+    if (v === "rewarded") return "rewarded";
+    return "invited";
+  }
+
+  /** Backend PENDING / INVITED / REGISTERED map to legacy "PENDING" — admin can still approve/reject. */
+  function needsAdminApproval(item) {
+    const s = String(item.status || "").toUpperCase();
+    return s === "PENDING";
+  }
+
+  function formatReferralDate(createdAt) {
+    if (createdAt == null || createdAt === "") return "—";
+    const n = typeof createdAt === "number" ? createdAt : Date.parse(createdAt);
+    if (Number.isNaN(n)) return "—";
+    return new Date(n).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" });
+  }
+
+  async function patchReferralAction(id, action) {
+    const path = action === "approve" ? "approve" : "reject";
+    const r = await fetch(`${API}/api/admin/referrals/${encodeURIComponent(id)}/${path}`, {
+      method: "PATCH",
+      headers: headers(),
+      body: "{}",
+    });
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const rawErr = json.error;
+      const msg =
+        json.message ||
+        (rawErr === "Default discount percentages must be entered in Clinic Settings page"
+          ? "Klinik ayarlarında referral indirim yüzdeleri tanımlanmalı (Clinic Settings)."
+          : rawErr) ||
+        r.statusText;
+      throw new Error(String(msg || "İstek başarısız"));
+    }
+    return json;
+  }
+
+  function renderPendingRows(items, pendingBody, sessionExpired) {
+    if (sessionExpired) {
+      pendingBody.innerHTML =
+        '<tr class="loading-row"><td colspan="6" style="color:#f87171;">Oturum süresi doldu. Lütfen tekrar giriş yapın.</td></tr>';
+      return;
+    }
+    const pending = items.filter(needsAdminApproval).filter((r) => r.id);
+    document.getElementById("statPending").textContent = String(pending.length);
+    if (pending.length === 0) {
+      pendingBody.innerHTML =
+        '<tr><td colspan="6"><div class="empty" style="padding:24px;"><div>Bekleyen onay yok.</div></div></td></tr>';
+      return;
+    }
+    pending.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+    pendingBody.innerHTML = pending
+      .map((ref) => {
+        const id = String(ref.id);
+        const inviter = escHtml(ref.inviterPatientName || ref.inviterPatientId || "—");
+        const invited = escHtml(ref.invitedPatientName || ref.invitedPatientId || "—");
+        const code = ref.referralCode ? `<span class="pending-code">${escHtml(String(ref.referralCode))}</span>` : "—";
+        return `<tr data-pending-row="${escHtml(id)}">
+        <td>${inviter}</td>
+        <td>${invited}</td>
+        <td><span class="badge badge-registered">Onay bekliyor</span></td>
+        <td>${code}</td>
+        <td>${escHtml(formatReferralDate(ref.createdAt))}</td>
+        <td class="actions-cell">
+          <button type="button" class="btn-approve" data-ref-action="approve" data-ref-id="${escHtml(id)}">Onayla</button>
+          <button type="button" class="btn-reject" data-ref-action="reject" data-ref-id="${escHtml(id)}">Reddet</button>
+        </td>
+      </tr>`;
+      })
+      .join("");
+  }
+
+  document.getElementById("pendingApprovalCard").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-ref-action]");
+    if (!btn || btn.disabled) return;
+    const id = btn.getAttribute("data-ref-id");
+    const action = btn.getAttribute("data-ref-action");
+    if (!id || !action) return;
+    const row = btn.closest("tr[data-pending-row]");
+    const rowButtons = row ? row.querySelectorAll("button[data-ref-action]") : [];
+    rowButtons.forEach((b) => {
+      b.disabled = true;
+    });
+    try {
+      await patchReferralAction(id, action);
+      await load();
+    } catch (err) {
+      alert(String(err.message || err));
+      rowButtons.forEach((b) => {
+        b.disabled = false;
+      });
+    }
+  });
+
+  async function load() {
+    const tbody = document.getElementById("tableBody");
+    const pendingBody = document.getElementById("pendingBody");
+    tbody.innerHTML = '<tr class="loading-row"><td colspan="5">Loading…</td></tr>';
+    pendingBody.innerHTML = '<tr class="loading-row"><td colspan="6">Yükleniyor…</td></tr>';
+
+    const statusFilter = document.getElementById("statusFilter").value.toLowerCase();
+
+    let items = [];
+    let sessionExpired = false;
+    try {
+      const r = await fetch(`${API}/api/admin/referrals`, { headers: headers(), cache: "no-store" });
+      if (r.status === 401) {
+        sessionExpired = true;
+        tbody.innerHTML = '<tr class="loading-row"><td colspan="5" style="color:#f87171;">Session expired. Please log in again.</td></tr>';
+        renderPendingRows([], pendingBody, true);
+        document.getElementById("statPending").textContent = "—";
+        return;
+      }
+      const json = await r.json();
+      items = json.items || [];
+    } catch (e) {
+      tbody.innerHTML = `<tr class="loading-row"><td colspan="5" style="color:#f87171;">Error: ${e.message}</td></tr>`;
+      pendingBody.innerHTML = `<tr class="loading-row"><td colspan="6" style="color:#f87171;">Hata: ${escHtml(e.message)}</td></tr>`;
+      document.getElementById("statPending").textContent = "—";
+      return;
+    }
+
+    // Normalize statuses
+    items = items.map(r => ({ ...r, _status: normalizeStatus(r.status) }));
+    renderPendingRows(items, pendingBody, false);
+
+    // Filter by status if selected
+    const filtered = statusFilter ? items.filter(r => r._status === statusFilter) : items;
+
+    // Group by referrer name
+    const referrerMap = {};
+    for (const ref of filtered) {
+      const key = ref.inviterPatientName || ref.inviterPatientId || "Unknown";
+      if (!referrerMap[key]) referrerMap[key] = { name: key, items: [] };
+      referrerMap[key].items.push(ref);
+    }
+
+    // Update stats (always from full items, not filtered)
+    const allReferrers = new Set(items.map(r => r.inviterPatientName || r.inviterPatientId || "Unknown"));
+    document.getElementById("statReferrers").textContent  = allReferrers.size;
+    document.getElementById("statInvited").textContent    = items.length;
+    document.getElementById("statRegistered").textContent = items.filter(r => ["registered", "treated", "rewarded"].includes(r._status)).length;
+    document.getElementById("statTreated").textContent    = items.filter(r => r._status === "treated").length;
+
+    const rows = Object.values(referrerMap);
+    if (rows.length === 0) {
+      tbody.innerHTML = `
+        <tr><td colspan="5">
+          <div class="empty">
+            <div class="empty-icon">📭</div>
+            <div>No referral activity found.</div>
+          </div>
+        </td></tr>`;
+      return;
+    }
+
+    // Sort by total invited descending
+    rows.sort((a, b) => b.items.length - a.items.length);
+
+    tbody.innerHTML = rows.map(row => {
+      const total      = row.items.length;
+      const registered = row.items.filter(r => ["registered", "treated", "rewarded"].includes(r._status)).length;
+      const treated    = row.items.filter(r => r._status === "treated").length;
+
+      const registrationRate = total > 0 ? Math.round((registered / total) * 100) : 0;
+
+      const invitedHtml = row.items.slice(0, 5).map(ref => {
+        const name = ref.invitedPatientName || "—";
+        return `<span class="badge ${statusClass(ref._status)}" title="${name}">
+          ${escHtml(name.length > 14 ? name.slice(0, 13) + "…" : name)}
+          <span style="opacity:.7;font-size:10px;">${statusLabel(ref._status)}</span>
+        </span>`;
+      }).join(" ");
+      const moreCount = row.items.length > 5 ? `<span style="color:#64748b;font-size:12px;">+${row.items.length - 5} more</span>` : "";
+
+      return `<tr>
+        <td>
+          <div class="referrer-name">${escHtml(row.name)}</div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${registrationRate}%"></div></div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">${registrationRate}% registration rate</div>
+        </td>
+        <td class="count-cell count-invited">${total}</td>
+        <td class="count-cell count-registered">${registered}</td>
+        <td class="count-cell count-treated">${treated}</td>
+        <td style="max-width:280px;">
+          <div style="display:flex;flex-wrap:wrap;gap:5px;">${invitedHtml}${moreCount}</div>
+        </td>
+      </tr>`;
+    }).join("");
+  }
+
+  function escHtml(str) {
+    const d = document.createElement("div");
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  load();
+</script>
+</body>
+</html>

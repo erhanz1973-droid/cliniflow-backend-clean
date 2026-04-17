@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Clinifly Admin – Clinic Settings</title>
+  <link rel="stylesheet" href="/admin-layout.css"/>
+  <script>
+    // Token check - redirect to login if not authenticated
+    (function() {
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      if (!token) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    :root { 
+      --bg:#111827; 
+      --card:#1f2937; 
+      --b:#1f2937; 
+      --p:#2563eb; 
+      --g:#16a34a; 
+      --r:#dc2626;
+      --muted:#a7b2c8;
+      --link:#6aa6ff;
+    }
+    body{ 
+      font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; 
+      margin:0; 
+      background:var(--bg); 
+      color:#e6eaf2;
+      user-select: text;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+    }
+    * {
+      user-select: text;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+    }
+    button, input, select, textarea {
+      user-select: text;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+    }
+    .wrap{ max-width:1200px; margin:0 auto; padding:20px; }
+    h1{ font-size:24px; margin:0 0 20px; font-weight:700; }
+    h2{ font-size:18px; margin:20px 0 12px; font-weight:600; }
+    .card{ 
+      background:var(--card); 
+      border:0.5px solid rgba(55, 65, 81, 0.5); 
+      border-radius:16px; 
+      padding:24px; 
+      box-shadow:inset 0 1px 0 rgba(255,255,255,0.05); 
+      margin-bottom:16px;
+    }
+    label{ 
+      display:block; 
+      font-size:14px; 
+      font-weight:600; 
+      margin-bottom:6px; 
+      color:#e6eaf2;
+    }
+    input, textarea, button, select{
+      width:100%;
+      padding:10px 12px;
+      border:1px solid var(--b);
+      border-radius:8px;
+      font-size:14px;
+      margin-bottom:12px;
+    }
+    input, textarea, select{
+      background:#1f2937;
+      color:#e6eaf2;
+    }
+    textarea{
+      min-height:80px;
+      resize:vertical;
+    }
+    button{ 
+      cursor:pointer; 
+      border:none; 
+      background:var(--p); 
+      color:#fff; 
+      font-weight:600; 
+      transition:background 0.2s;
+    }
+    button:hover{ background:#1d4ed8; }
+    .muted{ color:var(--muted); font-size:13px; margin-top:4px; }
+    .status{ 
+      padding:8px 12px;
+      border-radius:8px;
+      margin-top:12px;
+      font-size:14px;
+    }
+    .status.success{
+      background:#064e3b;
+      color:#6ee7b7;
+      border:1px solid #059669;
+    }
+    .status.error { background: #dc2626; }
+  
+  /* Color Palette Styles */
+  .color-palette-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(40px, 1fr));
+    gap: 8px;
+    padding: 12px;
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  
+  .color-option {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.2s ease;
+    position: relative;
+  }
+  
+  .color-option:hover {
+    transform: scale(1.1);
+    border-color: #8b5cf6;
+    z-index: 10;
+  }
+  
+  .color-option.selected {
+    border-color: #10b981;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+  }
+  
+  .color-tooltip {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #111827;
+    color: #e5e7eb;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    margin-bottom: 4px;
+    z-index: 1000;
+  }
+  
+  .color-option:hover .color-tooltip {
+    opacity: 1;
+  }
+  
+  .color-category {
+    margin-bottom: 16px;
+  }
+  
+  .color-category-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #9ca3af;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* admin-layout.css: body.al-ready → color: var(--text) koyu zeminde siyah başlık veriyor */
+  body.al-ready .al-main {
+    background: var(--bg);
+  }
+  body.al-ready .al-main .wrap,
+  body.al-ready .al-main .wrap .card,
+  body.al-ready .al-main #priceListContainer {
+    color: #e6eaf2;
+  }
+  body.al-ready .al-main .wrap h1,
+  body.al-ready .al-main .wrap h2,
+  body.al-ready .al-main .wrap h3 {
+    color: #f1f5f9 !important;
+  }
+  body.al-ready .al-main .wrap label {
+    color: #e6eaf2 !important;
+  }
+  body.al-ready .al-main .wrap .muted {
+    color: var(--muted) !important;
+  }
+  body.al-ready .al-main .wrap table th,
+  body.al-ready .al-main .wrap table td {
+    color: #e6eaf2;
+  }
+  body.al-ready .al-main .wrap .loading {
+    color: var(--muted);
+  }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="card">
+      <h2 data-i18n="settings.clinicInformation">Clinic Information</h2>
+      <div id="brandingNotice" class="muted" style="margin-bottom:10px; display:none;" data-i18n="settings.brandingNotice">
+        Branding ayarları yalnızca PRO plan için kullanılabilir.
+      </div>
+      <form id="clinicForm">
+        <label data-i18n="settings.subscriptionPlan">Abonelik Paketi</label>
+        <select id="plan">
+          <option value="FREE">FREE</option>
+          <option value="BASIC">BASIC</option>
+          <option value="PRO">PRO</option>
+        </select>
+        <div class="muted" data-i18n="settings.subscriptionPlanHelp">FREE / BASIC / PRO paketini buradan değiştirebilirsiniz.</div>
+
+        <!-- ── City (all plans) ── -->
+        <div style="margin-top:24px; padding:16px 18px; background:linear-gradient(135deg,#eff6ff,#f0fdf4); border:1.5px solid #3b82f6; border-radius:12px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+            <span style="font-size:18px;">📍</span>
+            <span style="font-size:14px;font-weight:700;color:#1d4ed8;">Clinic City</span>
+            <span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;">TÜM PLANLAR</span>
+          </div>
+          <input
+            type="text"
+            id="clinicCity"
+            placeholder="Antalya, Istanbul, London, Tbilisi..."
+            style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #3b82f6;border-radius:8px;font-size:15px;font-weight:600;color:#1e3a5f;background:#fff;outline:none;"
+          />
+          <div style="margin-top:6px;font-size:12px;color:#6b7280;">Hastalar klinik keşif ekranında şehre göre arama yapabilir. Tüm planlar için zorunludur.</div>
+        </div>
+
+        <h2 style="margin-top: 32px; display: flex; align-items: center; gap: 8px;" data-i18n="settings.referralDiscounts">
+          🎁 Referral Discounts
+          <span style="background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;">BETA</span>
+        </h2>
+        <div class="muted" style="margin-bottom: 20px; padding: 16px; background: rgba(139, 92, 246, 0.1); border-left: 4px solid #8b5cf6; border-radius: 8px;" data-i18n="settings.referralDiscountsHelp">
+          Configure discount percentages for successful referrals. Both the referrer and the referred patient receive these discounts.
+        </div>
+        
+        <!-- Referral Discount Input with Enhanced UI -->
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px;">
+              🎁
+            </div>
+            <div style="flex: 1;">
+              <label style="display: block; font-weight: 600; margin-bottom: 4px; color: #e5e7eb;" data-i18n="settings.referralDiscount">
+                Referral Discount (%)
+              </label>
+              <div style="font-size: 14px; color: #9ca3af;" data-i18n="settings.referralDiscountHelp">
+                Discount applied to both referrer and referred patient
+              </div>
+            </div>
+          </div>
+          
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <input 
+              type="number" 
+              id="referralDiscountPercent" 
+              placeholder="10" 
+              min="0" 
+              max="50" 
+              step="1"
+              style="flex: 1; padding: 12px 16px; background: #111827; border: 1px solid #374151; border-radius: 8px; color: #e5e7eb; font-size: 16px; font-weight: 500;"
+              oninput="updateReferralPreview(this.value)"
+            />
+            <div style="padding: 8px 16px; background: rgba(139, 92, 246, 0.1); border: 1px solid #8b5cf6; border-radius: 8px; color: #a78bfa; font-size: 14px; font-weight: 600;">
+              %
+            </div>
+          </div>
+          
+          <!-- Preview Section -->
+          <div id="referralPreview" style="margin-top: 16px; padding: 16px; background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">
+            <div id="referralPreviewLabel" style="font-size: 14px; font-weight: 600; color: #a78bfa; margin-bottom: 8px;" data-i18n="settings.referralPreviewLabel">💡 Preview:</div>
+            <div id="referralPreviewText" style="font-size: 13px; color: #9ca3af; line-height: 1.5;">
+              Set a discount to see how it works
+            </div>
+          </div>
+        </div>
+
+        <label data-i18n="settings.clinicName">Klinik Adı</label>
+        <input type="text" id="clinicName" placeholder="My Clinic" />
+        
+        <label data-i18n="settings.clinicLogoUrl">Clinic Logo URL</label>
+        <input type="url" id="clinicLogoUrl" placeholder="https://example.com/logo.png" />
+        <div class="muted" data-i18n="settings.clinicLogoUrlHelp">Pro plan için logo görüntülenir</div>
+        
+        <label data-i18n="settings.address">Clinic Address</label>
+        <input type="text" id="clinicAddress" placeholder="Güzeloba, Havaalanı Cd. No:104 A, 07230 Muratpaşa/Antalya" />
+        <div class="muted" data-i18n="settings.addressHelp">Pro plan için hasta ekranında görüntülenir</div>
+
+        <label>Chair Count</label>
+        <input type="number" id="chairCount" min="1" max="50" step="1" placeholder="3" />
+        <div class="muted">Randevu ekranında gösterilecek chair sayısı (örn: 1, 2, 3).</div>
+        
+        <label data-i18n="settings.googleMapLink">Google Maps Link</label>
+        <input type="url" id="googleMapLink" placeholder="https://maps.google.com/?q=..." />
+        <div class="muted" data-i18n="settings.googleMapLinkHelp">Pro plan için hasta ekranında görüntülenir</div>
+        
+        <label data-i18n="settings.primaryColor">Primary Color</label>
+        <div id="primaryColorPalette" class="color-palette-container">
+          <!-- Renk paleti JavaScript ile doldurulacak -->
+        </div>
+        
+        <label data-i18n="settings.secondaryColor">Secondary Color</label>
+        <div id="secondaryColorPalette" class="color-palette-container">
+          <!-- Renk paleti JavaScript ile doldurulacak -->
+        </div>
+        
+        <label data-i18n="settings.welcomeMessage">Welcome Message</label>
+        <textarea id="welcomeMessage" placeholder="Welcome to our clinic..."></textarea>
+        
+        <button type="submit" style="margin-top: 16px;" data-i18n="settings.save">💾 Save Settings</button>
+      </form>
+      <div id="status"></div>
+    </div>
+
+    <!-- Treatment Price List -->
+    <div class="card">
+      <h2 data-i18n="settings.treatmentPriceList">💰 Treatment Price List</h2>
+      <div class="muted" style="margin-bottom: 16px;" data-i18n="settings.treatmentPriceListHelp">
+        Define your clinic's treatment prices. These prices will be used when creating patient treatment plans.
+      </div>
+      
+      <label style="margin-bottom: 8px;" data-i18n="settings.currency">Currency</label>
+      <select id="defaultCurrency" style="width: 200px; margin-bottom: 16px;">
+        <option value="EUR">EUR (€)</option>
+        <option value="USD">USD ($)</option>
+        <option value="TRY">TRY (₺)</option>
+      </select>
+
+      <div id="priceListContainer" style="margin-top: 20px;">
+        <div class="loading" data-i18n="settings.loadingPrices">Loading prices...</div>
+      </div>
+
+      <div style="margin-top: 20px;">
+        <button id="saveAllPricesBtn" style="background: var(--g); width: auto; padding: 12px 24px;" data-i18n="settings.saveAllPrices">💾 Save All Prices</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/admin-i18n.js"></script>
+<script src="/admin-layout.js?v=202603301"></script>
+<script>
+  // Nav: if a patient is selected, make top-nav Travel link carry patientId.
+  (function bindNavTravelLink() {
+    try {
+      const pid = String(localStorage.getItem("selected_patient_id") || "").trim();
+      if (!pid) return;
+      const a = document.querySelector('.nav a[href="/admin-travel.html"]');
+      if (a) a.href = `/admin-travel.html?patientId=${encodeURIComponent(pid)}`;
+    } catch {}
+  })();
+
+  const API_BASE = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+  const $ = (id) => document.getElementById(id);
+
+  let clinicPlan = "";
+  function applyBrandingLock(plan) {
+    clinicPlan = String(plan || "").toUpperCase();
+    const brandingLocked = clinicPlan !== "PRO";
+    const brandingNotice = $("brandingNotice");
+    if (brandingNotice) brandingNotice.style.display = brandingLocked ? "block" : "none";
+    const brandingInputs = ["clinicName", "clinicLogoUrl", "clinicAddress", "googleMapLink", "primaryColor", "secondaryColor", "welcomeMessage"];
+    brandingInputs.forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.disabled = brandingLocked;
+      el.style.opacity = brandingLocked ? "0.6" : "1";
+      el.style.cursor = brandingLocked ? "not-allowed" : "text";
+    });
+  }
+  function normalizePlanValue(planValue) {
+    const raw = String(planValue || "").trim().toUpperCase();
+    if (raw === "PROFESSIONAL") return "PRO";
+    if (raw === "PREMIUM") return "PRO";
+    if (raw === "FREE" || raw === "BASIC" || raw === "PRO") return raw;
+    return "FREE";
+  }
+  function logout() {
+    try {
+      localStorage.removeItem("adminToken");
+      localStorage.removeItem("admin_token");
+      console.log("[LOGOUT] Admin token cleared");
+    } catch (e) {
+      console.error("[LOGOUT] Error clearing token:", e);
+    }
+    window.location.href = "/admin-login.html";
+  }
+
+  function handle401(status) {
+    if (status === 401) {
+      console.warn("[AUTH] 401 — token geçersiz veya süresi dolmuş. Login sayfasına yönlendiriliyor.");
+      localStorage.removeItem("adminToken");
+      localStorage.removeItem("admin_token");
+      window.location.href = "/admin-login.html?reason=session_expired";
+      return true;
+    }
+    return false;
+  }
+  function getStoredReferralDiscount() {
+    try {
+      const raw = localStorage.getItem("clinic_referral_discount");
+      if (!raw) return null;
+      const parsed = parseFloat(raw);
+      return isNaN(parsed) ? null : parsed;
+    } catch (e) {
+      console.warn("[REFERRAL] Failed to read stored discount:", e);
+      return null;
+    }
+  }
+
+  function storeReferralDiscount(discount) {
+    try {
+      localStorage.setItem("clinic_referral_discount", String(discount || ""));
+    } catch (e) {
+      console.warn("[REFERRAL] Failed to store discount:", e);
+    }
+  }
+
+  function applyReferralDiscount(discount, options = {}) {
+    const discountInput = $("referralDiscountPercent");
+    const onlyEmpty = options.onlyEmpty === true;
+
+    if (discountInput && (!onlyEmpty || !discountInput.value) && discount !== null && discount !== undefined) {
+      discountInput.value = String(discount);
+    }
+  }
+
+  async function loadClinicSettings() {
+    try {
+      // Get admin token from localStorage
+      const token = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      
+      if (!token) {
+        const msg = 'Admin token bulunamadı. Lütfen admin olarak giriş yapın.';
+        const statusEl = $("status");
+        if (statusEl) {
+          statusEl.innerHTML = '<div class="status error">' + msg + '</div>';
+        }
+        return;
+      }
+
+      // Apply stored discount early to avoid empty overwrites
+      const storedDiscount = getStoredReferralDiscount();
+      if (storedDiscount !== null) {
+        applyReferralDiscount(storedDiscount, { onlyEmpty: true });
+      }
+
+      // Load clinic settings from API (uses token to identify clinic)
+      const res = await fetch(`${API_BASE}/api/admin/clinic`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!res.ok) {
+        if (handle401(res.status)) return;
+        const errorText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errorText}`);
+      }
+      
+      const clinic = await res.json();
+      
+      console.log("Complete clinic object from backend:", clinic);
+      console.log("Clinic plan fields:", {
+        plan: clinic.plan,
+        subscriptionPlan: clinic.subscriptionPlan,
+        'settings.plan': clinic.settings?.plan,
+        'settings.subscriptionPlan': clinic.settings?.subscriptionPlan
+      });
+      console.log("Clinic discount fields:", {
+        'settings.referralLevel1Percent': clinic.settings?.referralLevel1Percent,
+        'settings.referralLevels.level1': clinic.settings?.referralLevels?.level1,
+        'referralLevels.level1': clinic.referralLevels?.level1,
+        'default_inviter_discount_percent': clinic.default_inviter_discount_percent,
+        'referral_discount_percent': clinic.referral_discount_percent,
+        'inviter_discount_percent': clinic.inviter_discount_percent,
+        'discount_percent': clinic.discount_percent
+      });
+      
+      // Backend returns clinic object directly, not wrapped in { ok: true, clinic: {...} }
+      const branding = clinic.branding || {};
+      // IMPORTANT:
+      // - subscriptionStatus is NOT a plan (can be TRIAL/ACTIVE) and would break the dropdown.
+      // - Only use plan fields for plan UI.
+      const loadedPlan = normalizePlanValue(
+        clinic.plan ??
+          clinic.subscriptionPlan ??
+          clinic.settings?.subscriptionPlan ??
+          clinic.settings?.plan ??
+          clinic.clinicPlan ??
+          clinic.subscription_plan ??
+          "FREE"
+      );
+      
+      console.log("Plan loading - checking all fields:", {
+        'clinic.plan': clinic.plan,
+        'clinic.subscriptionPlan': clinic.subscriptionPlan,
+        'clinic.settings?.subscriptionPlan': clinic.settings?.subscriptionPlan,
+        'clinic.settings?.plan': clinic.settings?.plan,
+        'clinic.clinicPlan': clinic.clinicPlan,
+        'clinic.subscription_plan': clinic.subscription_plan,
+        'final loadedPlan': loadedPlan
+      });
+      
+      // Update both the dropdown and the global variable
+      clinicPlan = loadedPlan;
+      if ($("plan")) {
+        $("plan").value = loadedPlan;
+        console.log("Loaded and set plan:", loadedPlan);
+      }
+      applyBrandingLock(clinicPlan);
+
+      // Populate form
+      if ($("clinicName")) $("clinicName").value = branding.clinicName || clinic.name || "";
+      if ($("clinicLogoUrl")) $("clinicLogoUrl").value = branding.clinicLogoUrl || clinic.logoUrl || "";
+      if ($("clinicAddress")) $("clinicAddress").value = branding.address || clinic.address || "";
+      if ($("clinicCity")) $("clinicCity").value = clinic.city || "";
+      if ($("chairCount")) {
+        const loadedChairCount =
+          clinic.settings?.chairCount ??
+          clinic.settings?.chair_count ??
+          clinic.chairCount ??
+          clinic.chair_count ??
+          "";
+        $("chairCount").value = loadedChairCount === null || loadedChairCount === undefined ? "" : String(loadedChairCount);
+      }
+      if ($("googleMapLink")) $("googleMapLink").value = branding.googleMapLink || clinic.googleMapsUrl || "";
+      if ($("primaryColor")) $("primaryColor").value = branding.primaryColor || "#2563EB";
+      if ($("secondaryColor")) $("secondaryColor").value = branding.secondaryColor || "#10B981";
+      if ($("welcomeMessage")) $("welcomeMessage").value = branding.welcomeMessage || "";
+      
+      // Set referral discount value (prioritize current user setting over backend)
+      const currentStoredDiscount = getStoredReferralDiscount();
+      console.log("Current stored discount from localStorage:", currentStoredDiscount);
+      
+      // If backend has updated values, prioritize backend over stale localStorage
+      const backendDiscount =
+        clinic.referralDiscountPercent ??
+        clinic.referral_discount_percent ??
+        clinic.settings?.referral_discount_percent ??
+        clinic.defaultInviterDiscountPercent ??
+        clinic.inviter_discount_percent ??
+        clinic.settings?.inviter_discount_percent ??
+        clinic.discount_percent ??
+        clinic.settings?.discount_percent ??
+        clinic.settings?.referralLevel1Percent ??
+        clinic.settings?.referralLevels?.level1 ??
+        clinic.referralLevels?.level1 ??
+        clinic.default_inviter_discount_percent ??
+        clinic.referralLevel1Percent ??
+        null;
+      
+      console.log("Backend discount value:", backendDiscount);
+      
+      // Use backend discount if it's different from localStorage (backend was updated)
+      const discount = (backendDiscount !== null && backendDiscount !== currentStoredDiscount) ? backendDiscount : currentStoredDiscount;
+      
+      // Use the stored discount if available, otherwise use calculated discount
+      const finalDiscount = discount !== null ? discount : (backendDiscount !== null ? backendDiscount : 10);
+      
+      // Apply to UI and store to localStorage
+      applyReferralDiscount(finalDiscount);
+      storeReferralDiscount(finalDiscount);
+
+      console.log("Final calculated discount:", finalDiscount);
+      console.log("Stored discount to localStorage:", finalDiscount);
+
+      // Yeni referral sistem field'larını yükle
+      if ($("referralPerInvitePercent")) {
+        $("referralPerInvitePercent").value = clinic.referral_per_invite_percent || 10;
+      }
+      if ($("referralMaxTotalPercent")) {
+        $("referralMaxTotalPercent").value = clinic.referral_max_total_percent || 10;
+      }
+
+      // 🎨 Renk paletini yükle
+      setSelectedColors(branding.primaryColor, branding.secondaryColor);
+
+    } catch (error) {
+      console.error("Load clinic settings error:", error);
+      const msg = 'Ayarlar yüklenemedi: ' + error.message;
+      const statusEl = $("status");
+      if (statusEl) {
+        statusEl.innerHTML = '<div class="status error">' + msg + '</div>';
+      }
+    }
+  }
+
+  $("plan") && $("plan").addEventListener("change", (e) => applyBrandingLock(e.target.value));
+
+  $("clinicForm").addEventListener("submit", async (e) => {
+    console.log("🚀 SAVE CLICKED - Form submit triggered!");
+    e.preventDefault();
+    
+    try {
+      // Get admin token from localStorage
+      const token = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      
+      if (!token) {
+        const msg = 'Admin token bulunamadı. Lütfen admin olarak giriş yapın.';
+        $("#status").innerHTML = '<div class="status error">' + msg + '</div>';
+        return;
+      }
+
+      const cityVal = ($("clinicCity")?.value || "").trim();
+      if (!cityVal) {
+        alert("Şehir alanı zorunludur. Lütfen şehir girin.");
+        $("clinicCity")?.focus();
+        return;
+      }
+
+      const payload = {
+        plan: normalizePlanValue(($("plan") ? $("plan").value : "") || clinicPlan || "FREE"),
+        referral_discount_percent: $("referralDiscountPercent").value.trim(),
+        city: cityVal,
+        address: $("clinicAddress")?.value.trim() || undefined,
+        // 🎯 Eski referral sistemi için settings
+        settings: {
+          chairCount: Math.max(1, Math.min(50, parseInt($("chairCount")?.value || "3", 10) || 3)),
+          referralLevels: {
+            level1: parseInt($("referralDiscountPercent").value) || 10
+          }
+        }
+      };
+      
+      // NEVER send clinic_code in UPDATE requests
+      delete payload.clinic_code;
+      delete payload.id;
+      delete payload.created_at;
+      delete payload.clinicId;
+      
+      console.log("Submitting payload with plan:", payload.plan);
+      console.log("Dropdown value:", $("plan")?.value);
+      console.log("clinicPlan variable:", clinicPlan);
+      console.log("Complete payload being sent:", JSON.stringify(payload, null, 2));
+      console.log("Referral discount from input:", $("referralDiscountPercent").value.trim());
+      const brandingLocked = String(payload.plan || "").toUpperCase() !== "PRO";
+      if (!brandingLocked) {
+        const colors = getSelectedColors();
+        payload.branding = {
+          clinicName: $("clinicName").value.trim(),
+          clinicLogoUrl: $("clinicLogoUrl").value.trim(),
+          address: $("clinicAddress").value.trim(),
+          googleMapLink: $("googleMapLink").value.trim(),
+          primaryColor: colors.primaryColor,
+          secondaryColor: colors.secondaryColor,
+          welcomeMessage: $("welcomeMessage").value.trim(),
+          showPoweredBy: $("showPoweredBy")?.checked !== false,
+        };
+      }
+
+      const loadingMsg = 'Kaydediliyor...';
+      const loadingStatusEl = $("#status");
+      if (loadingStatusEl) {
+        loadingStatusEl.innerHTML = '<div class="status">' + loadingMsg + '</div>';
+      }
+        
+      console.log("🚀 SENDING PUT /api/admin/clinic", payload);
+        
+      const res = await fetch(API_BASE + '/api/admin/clinic', {
+        method: "PUT",
+        headers: { 
+          "Content-Type": "application/json",
+          'Authorization': 'Bearer ' + token,
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+        
+      console.log("Backend response:", data);
+      console.log("Submitted plan was:", payload.plan);
+      
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'HTTP ' + res.status);
+      }
+
+      const successMsg = '✅ Ayarlar kaydedildi!';
+      const successStatusEl = $("#status");
+      if (successStatusEl) {
+        successStatusEl.innerHTML = '<div class="status success">' + successMsg + '</div>';
+      }
+      
+      // Update the local clinicPlan variable to reflect the saved plan
+      clinicPlan = payload.plan;
+      console.log("Updated local clinicPlan to:", clinicPlan);
+    
+    } catch (error) {
+      console.error("Save clinic settings error:", error);
+      const errorMsg = 'Kaydetme hatası: ' + error.message;
+      const statusErrorEl = $("#status");
+      if (statusErrorEl) {
+        statusErrorEl.innerHTML = '<div class="status error">' + errorMsg + '</div>';
+      }
+    }
+  });
+
+  // Load settings on page load
+  loadClinicSettings();
+
+  // ================== TREATMENT PRICE LIST ==================
+
+  // Procedure types loaded from API (localized)
+  const PROCEDURE_TYPES_FALLBACK = [
+    { type: "TREATMENT",   label: "Treatment Event",   category: "EVENTS" },
+    { type: "CONSULT",     label: "Consultation",      category: "EVENTS" },
+    { type: "FOLLOWUP",    label: "Follow-up",         category: "EVENTS" },
+    { type: "LAB",         label: "Lab / Scan",        category: "EVENTS" },
+    { type: "CROWN",                    label: "Crown",                    category: "PROSTHETIC" },
+    { type: "TEMP_CROWN",               label: "Temporary Crown",          category: "PROSTHETIC" },
+    { type: "BRIDGE_UNIT",              label: "Bridge – tooth unit",      category: "PROSTHETIC" },
+    { type: "TEMP_BRIDGE_UNIT",         label: "Temporary Bridge",         category: "PROSTHETIC" },
+    { type: "CROWN_REPLACEMENT",        label: "Crown Replacement",        category: "PROSTHETIC" },
+    { type: "BRIDGE_REPLACEMENT_OR_REMOVAL", label: "Bridge Replacement / Removal", category: "PROSTHETIC" },
+    { type: "INLAY",   label: "Inlay",   category: "PROSTHETIC" },
+    { type: "ONLAY",   label: "Onlay",   category: "PROSTHETIC" },
+    { type: "OVERLAY", label: "Overlay", category: "PROSTHETIC" },
+    { type: "POST_AND_CORE", label: "Post & Core", category: "PROSTHETIC" },
+    { type: "FILLING",                      label: "Filling",              category: "RESTORATIVE" },
+    { type: "TEMP_FILLING",                 label: "Temporary Filling",    category: "RESTORATIVE" },
+    { type: "FILLING_REPLACEMENT_OR_REMOVAL", label: "Filling Replacement / Removal", category: "RESTORATIVE" },
+    { type: "ROOT_CANAL_TREATMENT",   label: "Root Canal Treatment",  category: "ENDODONTIC" },
+    { type: "ROOT_CANAL_RETREATMENT", label: "Root Canal Retreatment", category: "ENDODONTIC" },
+    { type: "CANAL_OPENING",          label: "Canal Opening",          category: "ENDODONTIC" },
+    { type: "CANAL_FILLING",          label: "Canal Filling",          category: "ENDODONTIC" },
+    { type: "EXTRACTION",          label: "Extraction",           category: "SURGICAL" },
+    { type: "SURGICAL_EXTRACTION", label: "Surgical Extraction",   category: "SURGICAL" },
+    { type: "APICAL_RESECTION",    label: "Apical Resection",      category: "SURGICAL" },
+    { type: "IMPLANT",          label: "Implant",         category: "IMPLANT" },
+    { type: "HEALING_ABUTMENT", label: "Healing Abutment", category: "IMPLANT" },
+    { type: "IMPLANT_CROWN",    label: "Implant Crown",    category: "IMPLANT" },
+  ];
+  let PROCEDURE_TYPES = [...PROCEDURE_TYPES_FALLBACK]; // Başlangıçta fallback, API gelince güncellenir
+  let CATEGORY_LABELS_LOCALIZED = {
+    "EVENTS": "Events",
+    "PROSTHETIC": "Prosthetic",
+    "RESTORATIVE": "Restorative",
+    "ENDODONTIC": "Endodontic",
+    "SURGICAL": "Surgical",
+    "IMPLANT": "Implant"
+  };
+
+  function fetchWithTimeout(url, options, ms = 6000) {
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(id));
+  }
+
+  async function loadProcedureDefs() {
+    try {
+      const lang = (window.i18n && window.i18n.getLang && window.i18n.getLang()) || 'en';
+      const res = await fetchWithTimeout(`${API_BASE}/api/procedures?lang=${lang}`, {}, 5000);
+      if (!res.ok) throw new Error('Procedure API error');
+      const data = await res.json();
+      const types = Array.isArray(data.types) ? data.types : [];
+      if (types.length > 0) {
+        PROCEDURE_TYPES = types.map(p => ({ type: p.type, label: p.label, category: p.category }));
+      }
+      if (data.categoryLabels && typeof data.categoryLabels === 'object') {
+        CATEGORY_LABELS_LOCALIZED = { ...CATEGORY_LABELS_LOCALIZED, ...data.categoryLabels };
+      }
+    } catch (e) {
+      console.warn('Could not load procedure defs from API, using fallback:', e.message);
+      // PROCEDURE_TYPES zaten PROCEDURE_TYPES_FALLBACK ile başlatıldı
+    }
+  }
+
+  const PROCEDURE_RECOMMENDED_MINUTES = {
+    TREATMENT: 30,
+    CONSULT: 30,
+    FOLLOWUP: 20,
+    LAB: 30,
+    XRAY: 15,
+    PANORAMIC_XRAY: 20,
+    CROWN: 60,
+    TEMP_CROWN: 45,
+    BRIDGE_UNIT: 75,
+    TEMP_BRIDGE_UNIT: 60,
+    CROWN_REPLACEMENT: 60,
+    BRIDGE_REPLACEMENT_OR_REMOVAL: 60,
+    INLAY: 60,
+    ONLAY: 60,
+    OVERLAY: 60,
+    POST_AND_CORE: 60,
+    FILLING: 30,
+    TEMP_FILLING: 20,
+    FILLING_REPLACEMENT_OR_REMOVAL: 30,
+    ROOT_CANAL_TREATMENT: 90,
+    ROOT_CANAL_RETREATMENT: 100,
+    CANAL_OPENING: 40,
+    CANAL_FILLING: 40,
+    EXTRACTION: 30,
+    SURGICAL_EXTRACTION: 60,
+    APICAL_RESECTION: 90,
+    IMPLANT: 90,
+    HEALING_ABUTMENT: 30,
+    IMPLANT_CROWN: 60,
+  };
+
+  let prices = {};
+  let defaultCurrency = "EUR";
+
+  async function loadPrices() {
+    console.log("🔄 loadPrices() started");
+    try {
+      const token = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      if (!token) {
+        console.log("❌ No token found");
+        const msg = 'Admin token bulunamadı.';
+        $("priceListContainer").innerHTML = `<div class="status error">${msg}</div>`;
+        return;
+      }
+
+      console.log("📡 Fetching treatment prices...");
+      let res;
+      try {
+        res = await fetchWithTimeout(`${API_BASE}/api/admin/treatment-prices`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json'
+          }
+        }, 8000);
+      } catch (fetchErr) {
+        console.warn("⚠️ Treatment prices fetch error (timeout veya ağ hatası):", fetchErr.message);
+        renderPrices(); // Boş fiyatlarla tabloyu göster
+        return;
+      }
+
+      console.log("📡 Response status:", res.status);
+      if (!res.ok) {
+        if (handle401(res.status)) return;
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      console.log("📊 Received data:", data);
+      const priceList = data.prices || [];
+      console.log("📊 Price list length:", priceList.length);
+      
+      // Convert array to object keyed by treatment_name
+      prices = {};
+      priceList.forEach(price => {
+        prices[price.treatment_name] = price;
+        if (price.currency) defaultCurrency = price.currency;
+      });
+
+      console.log("💰 Prices object:", prices);
+      console.log("💰 Default currency:", defaultCurrency);
+
+      if ($("defaultCurrency")) {
+        $("defaultCurrency").value = defaultCurrency;
+      }
+
+      console.log("🎨 Calling renderPrices()...");
+      renderPrices();
+      console.log("✅ loadPrices() completed");
+    } catch (error) {
+      console.error("❌ Load prices error:", error);
+      const msg = 'Fiyatlar yüklenemedi: ' + error.message;
+      $("priceListContainer").innerHTML = `<div class="status error">${msg}</div>`;
+    }
+  }
+
+  function renderPrices() {
+    const container = $("priceListContainer");
+    if (!container) return;
+
+    // Group by category
+    const byCategory = {};
+    PROCEDURE_TYPES.forEach(proc => {
+      if (!byCategory[proc.category]) {
+        byCategory[proc.category] = [];
+      }
+      byCategory[proc.category].push(proc);
+    });
+
+    const categories = ["EVENTS", "PROSTHETIC", "RESTORATIVE", "ENDODONTIC", "SURGICAL", "IMPLANT"];
+
+    let html = '';
+    categories.forEach(category => {
+      if (!byCategory[category] || byCategory[category].length === 0) return;
+
+      html += `<div style="margin-bottom: 24px;">`;
+      html += `<h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--p);">${escapeHtml(CATEGORY_LABELS_LOCALIZED[category] || category)}</h3>`;
+      html += `<table style="width: 100%; border-collapse: collapse;">`;
+      const _t = (k) => (window.i18n && window.i18n.t) ? window.i18n.t(k) : k.split('.').pop();
+      html += `<thead><tr style="border-bottom: 1px solid var(--b);">`;
+      html += `<th style="text-align: left; padding: 12px; font-size: 14px; font-weight: 600;">${_t('settings.tableHeaders.treatment')}</th>`;
+      html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 150px;">${_t('settings.tableHeaders.price')}</th>`;
+      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 120px;">${_t('settings.tableHeaders.recommended')}</th>`;
+      html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 130px;">${_t('settings.tableHeaders.duration')}</th>`;
+      html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 120px;">${_t('settings.tableHeaders.breakMin')}</th>`;
+      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 100px;">${_t('settings.tableHeaders.active')}</th>`;
+      html += `</tr></thead><tbody>`;
+      
+      byCategory[category].forEach(proc => {
+        const priceData = prices[proc.type] || {};
+        const price = priceData.default_price || '';
+        const isActive = priceData.is_active !== false;
+        const currency = priceData.currency || defaultCurrency;
+        const recommendedDuration = Number(PROCEDURE_RECOMMENDED_MINUTES[proc.type] || 30);
+        const duration = Number.parseInt(priceData.duration_minutes, 10);
+        const breakMinutes = Number.parseInt(priceData.break_minutes, 10);
+        const finalDuration = Number.isFinite(duration) && duration > 0 ? duration : recommendedDuration;
+        const finalBreak = Number.isFinite(breakMinutes) && breakMinutes >= 0 ? breakMinutes : 0;
+        
+        html += `<tr style="border-bottom: 1px solid rgba(55, 65, 81, 0.3);">`;
+        html += `<td style="padding: 12px; font-size: 14px;">${escapeHtml(proc.name || proc.label)}</td>`;
+        html += `<td style="padding: 12px; text-align: right;">`;
+        html += `<input type="number" id="price_${proc.type}" value="${price}" placeholder="0.00" step="0.01" min="0" style="width: 100%; padding: 6px 8px; text-align: right; background: #1f2937; border: 1px solid var(--b); border-radius: 4px; color: #e6eaf2; font-size: 14px;" />`;
+        html += `</td>`;
+        html += `<td style="padding: 12px; text-align: center; color: #94a3b8; font-weight: 600;">~${recommendedDuration} dk</td>`;
+        html += `<td style="padding: 12px; text-align: right;">`;
+        html += `<input type="number" id="duration_${proc.type}" value="${finalDuration}" placeholder="${recommendedDuration}" step="5" min="5" max="720" style="width: 100%; padding: 6px 8px; text-align: right; background: #1f2937; border: 1px solid var(--b); border-radius: 4px; color: #e6eaf2; font-size: 14px;" />`;
+        html += `</td>`;
+        html += `<td style="padding: 12px; text-align: right;">`;
+        html += `<input type="number" id="break_${proc.type}" value="${finalBreak}" placeholder="0" step="5" min="0" max="240" style="width: 100%; padding: 6px 8px; text-align: right; background: #1f2937; border: 1px solid var(--b); border-radius: 4px; color: #e6eaf2; font-size: 14px;" />`;
+        html += `</td>`;
+        html += `<td style="padding: 12px; text-align: center;">`;
+        html += `<input type="checkbox" id="active_${proc.type}" ${isActive ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;" />`;
+        html += `</td>`;
+        html += `</tr>`;
+      });
+      
+      html += `</tbody></table>`;
+      html += `</div>`;
+    });
+
+    if (!html) {
+      container.innerHTML = '<div style="color:var(--muted,#888);padding:16px;">Fiyat listesi bulunamadı. Henüz kayıt edilmemiş olabilir.</div>';
+    } else {
+      container.innerHTML = html;
+    }
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  async function saveAllPrices() {
+    try {
+      const token = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      if (!token) {
+        alert('Admin token bulunamadı');
+        return;
+      }
+
+      const currency = $("defaultCurrency") ? $("defaultCurrency").value : "EUR";
+      const saveBtn = $("saveAllPricesBtn");
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        const savingText = '💾 Saving...';
+        saveBtn.textContent = savingText;
+      }
+
+      // Save each price that has a value
+      const promises = [];
+      PROCEDURE_TYPES.forEach(proc => {
+        const priceInput = $(`price_${proc.type}`);
+        const durationInput = $(`duration_${proc.type}`);
+        const breakInput = $(`break_${proc.type}`);
+        const activeInput = $(`active_${proc.type}`);
+        
+        if (!priceInput || !durationInput || !breakInput || !activeInput) return;
+        
+        const priceValue = parseFloat(priceInput.value);
+        const recommendedDuration = Number(PROCEDURE_RECOMMENDED_MINUTES[proc.type] || 30);
+        const durationRaw = Number.parseInt(durationInput.value, 10);
+        const breakRaw = Number.parseInt(breakInput.value, 10);
+        const durationValue = Number.isFinite(durationRaw) ? Math.max(5, Math.min(720, durationRaw)) : recommendedDuration;
+        const breakValue = Number.isFinite(breakRaw) ? Math.max(0, Math.min(240, breakRaw)) : 0;
+        const isActive = activeInput.checked;
+        const existingRow = prices[proc.type];
+        const hasPrice = Number.isFinite(priceValue) && priceValue > 0;
+        const isTimingCustomized = durationValue !== recommendedDuration || breakValue > 0;
+        
+        // Save row when there is an explicit price, existing row, timing customizations, or inactive toggle
+        if (hasPrice || existingRow || isTimingCustomized || !isActive) {
+          const payload = {
+            id: prices[proc.type]?.id, // Keep existing ID if updating
+            treatment_name: proc.type,
+            default_price: hasPrice ? priceValue : (existingRow?.default_price || 0),
+            currency: currency,
+            is_active: isActive,
+            duration_minutes: durationValue,
+            break_minutes: breakValue,
+          };
+
+          promises.push(
+            fetch(`${API_BASE}/api/admin/treatment-prices`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              },
+              body: JSON.stringify(payload)
+            }).then(res => res.json())
+          );
+        }
+      });
+
+      const results = await Promise.all(promises);
+      const errors = results.filter(r => !r.ok);
+      
+      if (errors.length > 0) {
+        throw new Error(`Some prices failed to save: ${errors.length} errors`);
+      }
+
+      // Show success message
+      const successMsg = document.createElement('div');
+      successMsg.className = 'status success';
+      successMsg.style.marginTop = '16px';
+      const successText = '✅ Tüm fiyatlar başarıyla kaydedildi!';
+      successMsg.textContent = successText;
+      const container = $("priceListContainer").parentElement;
+      const existingMsg = container.querySelector('.status.success');
+      if (existingMsg) existingMsg.remove();
+      container.appendChild(successMsg);
+      setTimeout(() => {
+        if (successMsg.parentElement) successMsg.remove();
+      }, 5000);
+      
+      // Reload prices to show saved values
+      await loadPrices();
+    } catch (error) {
+      console.error("Save all prices error:", error);
+      const errorMsg = 'Fiyatlar kaydedilemedi: ' + error.message;
+      alert(errorMsg);
+    } finally {
+      const saveBtn = $("saveAllPricesBtn");
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        const saveText = '💾 Save All Prices';
+        saveBtn.textContent = saveText;
+      }
+    }
+  }
+
+  // Save all prices button
+  $("saveAllPricesBtn") && $("saveAllPricesBtn").addEventListener('click', saveAllPrices);
+
+  // Load prices on page load (fetch localized procedure defs first)
+  loadProcedureDefs().then(() => loadPrices());
+
+  // Update UI when language changes — chain previous handler (admin-layout.js sidebar labels)
+  (function() {
+    const _prev = window.onI18nUpdated;
+    window.onI18nUpdated = function(lang) {
+      if (typeof _prev === 'function') _prev(lang);
+      if (window.i18n) window.i18n.updatePage();
+      loadProcedureDefs().then(() => renderPrices());
+      const input = document.getElementById('referralDiscountPercent');
+      if (input) updateReferralPreview(input.value);
+    };
+  })();
+
+  // Enhanced Referral Discount Functions
+  function setReferralDiscount(value) {
+    const input = document.getElementById('referralDiscountPercent');
+    if (input) {
+      input.value = value;
+      updateReferralPreview(value);
+    }
+  }
+
+  function updateReferralPreview(value) {
+    const previewText = document.getElementById('referralPreviewText');
+    if (!previewText) return;
+
+    const discount = parseInt(value) || 0;
+    const t = (key) => (window.i18n && window.i18n.t) ? window.i18n.t(key, { discount }) : key;
+
+    if (discount === 0) {
+      previewText.innerHTML = '<span style="color:#ef4444;">' + t('settings.referralPreviewNone') + '</span>';
+    } else if (discount <= 10) {
+      previewText.innerHTML = t('settings.referralPreviewLow');
+    } else if (discount <= 20) {
+      previewText.innerHTML = t('settings.referralPreviewMid');
+    } else {
+      previewText.innerHTML = t('settings.referralPreviewHigh');
+    }
+  }
+
+  // Initialize preview on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    const input = document.getElementById('referralDiscountPercent');
+    if (input) {
+      updateReferralPreview(input.value);
+    }
+    
+    // Initialize color palettes
+    initializeColorPalettes();
+  });
+
+  // Color Palette System
+  const COLOR_PALETTE = {
+    blue: {
+      name: "Blue / Trust",
+      colors: {
+        sky: "#0EA5E9",
+        blue: "#3B82F6", 
+        indigo: "#6366F1",
+        navy: "#1E3A8A",
+        cyan: "#06B6D4"
+      }
+    },
+    green: {
+      name: "Green / Health",
+      colors: {
+        emerald: "#10B981",
+        green: "#22C55E",
+        lime: "#84CC16",
+        teal: "#14B8A6",
+        mint: "#10B981"
+      }
+    },
+    purple: {
+      name: "Purple / Premium",
+      colors: {
+        purple: "#A855F7",
+        violet: "#8B5CF6",
+        fuchsia: "#D946EF",
+        pink: "#EC4899",
+        rose: "#F43F5E"
+      }
+    },
+    orange: {
+      name: "Orange / Action",
+      colors: {
+        orange: "#F97316",
+        amber: "#F59E0B",
+        yellow: "#EAB308",
+        warm: "#FB923C",
+        bright: "#FCD34D"
+      }
+    },
+    red: {
+      name: "Red / Campaign",
+      colors: {
+        red: "#EF4444",
+        rose: "#F43F5E",
+        pink: "#EC4899",
+        crimson: "#DC2626",
+        scarlet: "#E11D48"
+      }
+    },
+    neutral: {
+      name: "Neutral / Corporate",
+      colors: {
+        gray: "#6B7280",
+        slate: "#475569",
+        zinc: "#71717A",
+        stone: "#78716C",
+        neutral: "#737373"
+      }
+    }
+  };
+
+  let selectedPrimaryColor = "";
+  let selectedSecondaryColor = "";
+
+  function initializeColorPalettes() {
+    renderColorPalette('primaryColorPalette', 'primary');
+    renderColorPalette('secondaryColorPalette', 'secondary');
+  }
+
+  function renderColorPalette(containerId, type) {
+    const container = $(containerId);
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // Plan bazlı kısıtlama
+    const currentPlan = clinicPlan || "FREE";
+    const isBasicPlan = currentPlan === "BASIC";
+    
+    Object.entries(COLOR_PALETTE).forEach(([categoryKey, category]) => {
+      // BASIC plan için sınırlı renkler
+      if (isBasicPlan && categoryKey !== 'blue' && categoryKey !== 'green') {
+        return; // Sadece Blue ve Green kategorileri
+      }
+
+      const categoryDiv = document.createElement('div');
+      categoryDiv.className = 'color-category';
+
+      const titleDiv = document.createElement('div');
+      titleDiv.className = 'color-category-title';
+      titleDiv.textContent = category.name;
+      categoryDiv.appendChild(titleDiv);
+
+      const colorsDiv = document.createElement('div');
+      colorsDiv.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fit, minmax(40px, 1fr)); gap: 8px;';
+
+      Object.entries(category.colors).forEach(([colorKey, hex]) => {
+        const colorOption = document.createElement('div');
+        colorOption.className = 'color-option';
+        colorOption.style.backgroundColor = hex;
+        colorOption.dataset.colorKey = colorKey;
+        colorOption.dataset.hex = hex;
+        colorOption.dataset.type = type;
+
+        // Tooltip
+        const tooltip = document.createElement('div');
+        tooltip.className = 'color-tooltip';
+        tooltip.textContent = `${colorKey} (${hex})`;
+        colorOption.appendChild(tooltip);
+
+        // Seçili renk kontrolü
+        const currentColor = type === 'primary' ? selectedPrimaryColor : selectedSecondaryColor;
+        if (currentColor === colorKey) {
+          colorOption.classList.add('selected');
+        }
+
+        // Click event
+        colorOption.addEventListener('click', () => selectColor(colorKey, hex, type));
+
+        colorsDiv.appendChild(colorOption);
+      });
+
+      categoryDiv.appendChild(colorsDiv);
+      container.appendChild(categoryDiv);
+    });
+  }
+
+  function selectColor(colorKey, hex, type) {
+    // Seçili rengi güncelle
+    if (type === 'primary') {
+      selectedPrimaryColor = colorKey;
+    } else {
+      selectedSecondaryColor = colorKey;
+    }
+
+    // UI'ı güncelle
+    const container = $(`${type}ColorPalette`);
+    if (container) {
+      container.querySelectorAll('.color-option').forEach(option => {
+        option.classList.remove('selected');
+        if (option.dataset.type === type && option.dataset.colorKey === colorKey) {
+          option.classList.add('selected');
+        }
+      });
+    }
+
+    console.log(`Selected ${type} color: ${colorKey} (${hex})`);
+  }
+
+  function getSelectedColors() {
+    return {
+      primaryColor: selectedPrimaryColor,
+      secondaryColor: selectedSecondaryColor
+    };
+  }
+
+  function setSelectedColors(primary, secondary) {
+    selectedPrimaryColor = primary || "";
+    selectedSecondaryColor = secondary || "";
+    initializeColorPalettes();
+  }
+
+</script>
+</body>
+</html>

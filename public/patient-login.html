@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hasta Girişi - Cliniflow</title>
+  <style>
+    :root { 
+      --bg:#0f172a; 
+      --card:#020617; 
+      --b:#1f2937; 
+      --p:#2563eb; 
+      --g:#16a34a; 
+      --r:#dc2626;
+      --warn:#f59e0b;
+      --muted:#a7b2c8;
+    }
+    
+    body{ 
+      font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; 
+      margin:0; 
+      background:var(--bg); 
+      color:#e6eaf2; 
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      min-height:100vh;
+      padding:20px;
+    }
+    
+    .container{
+      max-width:500px;
+      width:100%;
+    }
+    
+    .header{
+      text-align:center;
+      margin-bottom:32px;
+    }
+    
+    .logo{
+      width: 200px;
+      height: 67px;
+      max-width: 100%;
+      margin-bottom: 16px;
+    }
+    
+    .header h1{
+      font-size:32px;
+      margin:0 0 8px;
+      font-weight:900;
+      color:#e6eaf2;
+    }
+    
+    .subtitle{
+      color:var(--muted);
+      font-size:16px;
+      margin:0;
+    }
+    
+    .form-container{
+      background:var(--card);
+      border:1px solid var(--b);
+      border-radius:16px;
+      padding:32px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.2);
+      margin-bottom:16px;
+    }
+    
+    .form-group{
+      margin-bottom:20px;
+    }
+    
+    label{
+      display:block;
+      font-size:14px;
+      font-weight:600;
+      color:#e6eaf2;
+      margin-bottom:8px;
+    }
+    
+    .required{
+      color:var(--r);
+    }
+    
+    input{
+      width:100%;
+      padding:12px 16px;
+      border:1px solid var(--b);
+      border-radius:8px;
+      background:#1f2937;
+      color:#e6eaf2;
+      font-size:15px;
+      box-sizing:border-box;
+      transition:border-color 0.2s;
+    }
+    
+    input:focus{
+      outline:none;
+      border-color:var(--p);
+    }
+    
+    input::placeholder{
+      color:#6b7280;
+    }
+    
+    .btn{
+      padding:12px 24px;
+      border-radius:8px;
+      border:none;
+      cursor:pointer;
+      font-size:15px;
+      font-weight:600;
+      transition:all 0.2s;
+      text-align:center;
+      display:inline-block;
+      text-decoration:none;
+      width:100%;
+      margin-bottom:12px;
+    }
+    
+    .btn-primary{
+      background:var(--p);
+      color:white;
+    }
+    
+    .btn-primary:hover{
+      background:#1d4ed8;
+    }
+    
+    .btn-secondary{
+      background:transparent;
+      color:var(--muted);
+      border:1px solid var(--b);
+    }
+    
+    .btn-secondary:hover{
+      background:var(--b);
+      color:#e6eaf2;
+    }
+    
+    .btn:disabled{
+      opacity:0.5;
+      cursor:not-allowed;
+    }
+    
+    .alert{
+      padding:12px 16px;
+      border-radius:8px;
+      margin-bottom:20px;
+      font-size:14px;
+    }
+    
+    .alert-error{
+      background:rgba(220,38,38,0.1);
+      border:1px solid var(--r);
+      color:#f87171;
+    }
+    
+    .alert-success{
+      background:rgba(22,163,74,0.1);
+      border:1px solid var(--g);
+      color:#4ade80;
+    }
+    
+    .tab-container{
+      display:flex;
+      margin-bottom:24px;
+      background:var(--card);
+      border:1px solid var(--b);
+      border-radius:12px;
+      overflow:hidden;
+    }
+    
+    .tab{
+      flex:1;
+      padding:12px;
+      background:transparent;
+      border:none;
+      color:var(--muted);
+      cursor:pointer;
+      font-size:14px;
+      font-weight:600;
+      transition:all 0.2s;
+    }
+    
+    .tab.active{
+      background:var(--p);
+      color:white;
+    }
+    
+    .tab-content{
+      display:none;
+    }
+    
+    .tab-content.active{
+      display:block;
+    }
+    
+    .help-text{
+      font-size:12px;
+      color:var(--muted);
+      margin-top:4px;
+    }
+    
+    .nav{
+      text-align:center;
+      margin-top:16px;
+    }
+    
+    .nav a{
+      color:var(--muted);
+      text-decoration:none;
+      font-size:14px;
+      transition:color 0.2s;
+    }
+    
+    .nav a:hover{
+      color:var(--p);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjY3IiB2aWV3Qm94PSIwIDAgMjAwIDY3IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjY3IiByeD0iOCIgZmlsbD0iIzI1NjNiZCIvPgo8dGV4dCB4PSIxMDAiIHk9IjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSJ3aGl0ZSIgZm9udC1zaXplPSIyNCIgZm9udC13ZWlnaHQ9ImJvbGQiPkNsaW5pZmxvdzwvdGV4dD4KPC9zdmc+" alt="Cliniflow" class="logo">
+      <h1 id="pageHeading">Hasta Girişi</h1>
+      <p class="subtitle" id="pageSubtitle">Kliniğinize güvenli şekilde bağlanın</p>
+    </div>
+
+    <div class="tab-container">
+      <button class="tab active" onclick="switchTab('login')">Giriş Yap</button>
+      <button class="tab" onclick="switchTab('register')">Kayıt Ol</button>
+    </div>
+
+    <div id="alert-container"></div>
+
+    <!-- Login Form -->
+    <div id="login-tab" class="tab-content active">
+      <div class="form-container">
+        <form id="login-form">
+          <div class="form-group">
+            <label for="phone">
+              Telefon Numarası <span class="required">*</span>
+            </label>
+            <input
+              type="tel"
+              id="phone"
+              name="phone"
+              placeholder="+90 555 123 4567"
+              required
+            />
+            <div class="help-text">Klinikte kayıtlı telefon numaranızı girin</div>
+          </div>
+
+          <div class="form-group">
+            <label for="clinicCode">
+              Klinik Kodu <span class="required">*</span>
+            </label>
+            <input
+              type="text"
+              id="clinicCode"
+              name="clinicCode"
+              placeholder="Örn: MOON, CLINIC01"
+              pattern="[A-Z0-9]+"
+              style="text-transform: uppercase;"
+              required
+            />
+            <div class="help-text">Klinik kodunuzu girin</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary" id="login-submit-btn">
+            Giriş Yap
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Register Form -->
+    <div id="register-tab" class="tab-content">
+      <div class="form-container">
+        <form id="register-form">
+          <div class="form-group">
+            <label for="fullName">
+              Ad Soyad <span class="required">*</span>
+            </label>
+            <input
+              type="text"
+              id="fullName"
+              name="fullName"
+              placeholder="Ahmet Yılmaz"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="reg-phone">
+              Telefon Numarası <span class="required">*</span>
+            </label>
+            <input
+              type="tel"
+              id="reg-phone"
+              name="phone"
+              placeholder="+90 555 123 4567"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="reg-email">
+              E-posta
+            </label>
+            <input
+              type="email"
+              id="reg-email"
+              name="email"
+              placeholder="ornek@email.com"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="reg-clinicCode">
+              Klinik Kodu <span class="required">*</span>
+            </label>
+            <input
+              type="text"
+              id="reg-clinicCode"
+              name="clinicCode"
+              placeholder="Örn: MOON, CLINIC01"
+              pattern="[A-Z0-9]+"
+              style="text-transform: uppercase;"
+              required
+            />
+            <div class="help-text">Klinik kodunuzu girin</div>
+          </div>
+
+          <div class="form-group">
+            <label for="referralCode">
+              Referans Kodu (İsteğe Bağlı)
+            </label>
+            <input
+              type="text"
+              id="referralCode"
+              name="referralCode"
+              placeholder="Referans kodunuz varsa buraya girin"
+            />
+          </div>
+
+          <button type="submit" class="btn btn-primary" id="register-submit-btn">
+            Kayıt Ol
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="nav">
+      <a href="/admin-login.html">Admin Girişi</a>
+    </div>
+  </div>
+
+  <script>
+    const API =
+      window.location.hostname === "localhost"
+        ? "http://localhost:10000"
+        : "https://cliniflow-backend-dg8a.onrender.com";
+    
+    function showAlert(message, type = "error") {
+      const container = document.getElementById("alert-container");
+      container.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+      setTimeout(() => {
+        container.innerHTML = "";
+      }, type === "error" ? 5000 : 3000);
+    }
+
+    function switchTab(tab) {
+      // Update tab buttons
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      if (tab === 'login') {
+        document.querySelector('.tab:first-child').classList.add('active');
+      } else {
+        document.querySelector('.tab:last-child').classList.add('active');
+      }
+      
+      // Update tab content
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById(`${tab}-tab`).classList.add('active');
+      
+      // Update page title
+      const heading = document.getElementById('pageHeading');
+      const subtitle = document.getElementById('pageSubtitle');
+      if (tab === 'login') {
+        heading.textContent = 'Hasta Girişi';
+        subtitle.textContent = 'Kliniğinize güvenli şekilde bağlanın';
+      } else {
+        heading.textContent = 'Hasta Kaydı';
+        subtitle.textContent = 'Kliniğinize kayıt olun';
+      }
+    }
+
+    // Login form submission
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      
+      const submitBtn = document.getElementById("login-submit-btn");
+      const phone = document.getElementById("phone").value.trim();
+      const clinicCode = document.getElementById("clinicCode").value.trim().toUpperCase();
+      
+      if (!phone) {
+        showAlert("Telefon numarası gereklidir");
+        return;
+      }
+      
+      if (!clinicCode) {
+        showAlert("Klinik kodu gereklidir");
+        return;
+      }
+      
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Giriş yapılıyor...";
+      
+      try {
+        const res = await fetch(`${API}/api/patient/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone, clinicCode }),
+        });
+        
+        const json = await res.json();
+        
+        if (!res.ok) {
+          let errorMsg = json.message || json.error || "Giriş başarısız";
+          if (json.error === "patient_not_found") {
+            errorMsg = "Bu telefon numarasıyla hasta bulunamadı. Lütfen önce kayıt olun.";
+          }
+          showAlert(errorMsg);
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Giriş Yap";
+          return;
+        }
+        
+        // Store patient token
+        localStorage.setItem("patient_token", json.token);
+        localStorage.setItem("patient_id", json.patientId);
+        localStorage.setItem("clinic_id", json.clinicId);
+        
+        showAlert("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
+        
+        // Redirect to chat or patient dashboard
+        setTimeout(() => {
+          window.location.href = "/chat.html";
+        }, 1500);
+        
+      } catch (error) {
+        console.error("[LOGIN] Error:", error);
+        showAlert("Giriş sırasında hata oluştu: " + error.message);
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Giriş Yap";
+      }
+    });
+
+    // Register form submission
+    document.getElementById("register-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      
+      const submitBtn = document.getElementById("register-submit-btn");
+      const fullName = document.getElementById("fullName").value.trim();
+      const phone = document.getElementById("reg-phone").value.trim();
+      const email = document.getElementById("reg-email").value.trim();
+      const clinicCode = document.getElementById("reg-clinicCode").value.trim().toUpperCase();
+      const referralCode = document.getElementById("referralCode").value.trim();
+      
+      // Debug: Log form values
+      console.log("[WEB REG] Form values:", {
+        fullName,
+        phone,
+        email,
+        clinicCode,
+        referralCode
+      });
+      
+      if (!fullName) {
+        showAlert("Ad soyad gereklidir");
+        return;
+      }
+      
+      if (!phone) {
+        showAlert("Telefon numarası gereklidir");
+        return;
+      }
+      
+      if (!clinicCode) {
+        showAlert("Klinik kodu gereklidir");
+        return;
+      }
+      
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Kayıt yapılıyor...";
+      
+      const requestData = { 
+        patientName: fullName, // Backend expects patientName, not fullName
+        phone, 
+        email,
+        clinicCode, 
+        inviterReferralCode: referralCode, // Backend expects inviterReferralCode, not referralCode
+        userType: "PATIENT"
+      };
+      
+      // Debug: Log request data
+      console.log("[WEB REG] Sending to API:", requestData);
+      
+      try {
+        const res = await fetch(`${API}/api/register/patient`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestData),
+        });
+        
+        const json = await res.json();
+        
+        if (!res.ok) {
+          let errorMsg = json.message || json.error || "Kayıt başarısız";
+          if (json.error === "missing_required_fields") {
+            errorMsg = "Zorunlu alanlar eksik: " + Object.keys(json.details || {}).filter(key => !json.details[key]).join(", ");
+          }
+          showAlert(errorMsg);
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Kayıt Ol";
+          return;
+        }
+        
+        // Store patient token
+        localStorage.setItem("patient_token", json.token);
+        localStorage.setItem("patient_id", json.patientId);
+        localStorage.setItem("clinic_id", json.clinicId);
+        
+        showAlert("Kayıt başarılı! Yönlendiriliyorsunuz...", "success");
+        
+        // Redirect to chat or patient dashboard
+        setTimeout(() => {
+          window.location.href = "/chat.html";
+        }, 1500);
+        
+      } catch (error) {
+        console.error("[REGISTER] Error:", error);
+        showAlert("Kayıt sırasında hata oluştu: " + error.message);
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Kayıt Ol";
+      }
+    });
+
+    // Auto-uppercase clinic codes
+    document.getElementById('clinicCode').addEventListener('input', function() {
+      this.value = this.value.toUpperCase();
+    });
+    
+    document.getElementById('reg-clinicCode').addEventListener('input', function() {
+      this.value = this.value.toUpperCase();
+    });
+  </script>
+</body>
+</html>

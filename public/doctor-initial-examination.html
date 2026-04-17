@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>İlk Muayene - Clinifly Doktor</title>
+  <script>
+    // Token check - redirect to login if not authenticated
+    (function() {
+      const token = localStorage.getItem("doctor_token");
+      if (!token) {
+        window.location.href = "/doctor-login.html";
+      }
+    })();
+
+    // AbortSignal.timeout polyfill
+    if (!AbortSignal.timeout) {
+      AbortSignal.timeout = function(ms) {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), ms);
+        return controller.signal;
+      };
+    }
+  </script>
+  <style>
+    :root {
+      --bg:#111827;
+      --card:#1f2937;
+      --b:#374151;
+      --p:#2563eb;
+      --g:#16a34a;
+      --r:#dc2626;
+      --y:#f59e0b;
+      --muted:#a7b2c8;
+      --link:#6aa6ff;
+    }
+    body{ font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:#e6eaf2; }
+    .wrap{ max-width:1200px; margin:0 auto; padding:20px; }
+    header{ margin-bottom:20px; border-bottom:1px solid var(--b); padding-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
+    h1{ font-size:24px; margin:0 0 20px; font-weight:700; }
+    .btn{ padding:10px 16px; border-radius:6px; border:none; font-weight:600; cursor:pointer; font-size:14px; transition:all .2s; }
+    .btn:hover{ opacity:.85; transform:translateY(-1px); }
+    .btn-primary{ background:var(--p); color:#fff; }
+    .btn-secondary{ background:var(--b); color:#fff; }
+    .btn-success{ background:var(--g); color:#fff; }
+    .btn-danger{ background:var(--r); color:#fff; }
+    .btn:disabled{ opacity:.5; cursor:not-allowed; transform:none !important; }
+    .card{ background:var(--card); border-radius:12px; padding:24px; margin-bottom:20px; border:1px solid var(--b); }
+    .form-group{ margin-bottom:20px; }
+    .form-label{ display:block; margin-bottom:8px; font-weight:600; color:#fff; }
+    .form-input{ width:100%; padding:12px; border-radius:8px; border:1px solid var(--b); background:var(--bg); color:#fff; font-size:16px; box-sizing:border-box; }
+    .form-input:focus{ outline:none; border-color:var(--p); box-shadow:0 0 0 3px rgba(37,99,235,0.1); }
+    .form-textarea{ min-height:100px; resize:vertical; }
+    .dental-chart{ background:var(--bg); border-radius:12px; padding:20px; margin-bottom:20px; border:1px solid var(--b); }
+    .teeth-grid{ display:grid; grid-template-columns:repeat(8, 1fr); gap:8px; margin-bottom:20px; }
+    .tooth{ aspect-ratio:1; border:2px solid var(--b); border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:all .2s; font-weight:600; font-size:14px; background:var(--card); }
+    .tooth:hover{ border-color:var(--p); transform:scale(1.05); }
+    .tooth.selected{ background:var(--p); border-color:var(--p); color:#fff; }
+    .tooth.has-diagnosis{ background:var(--g); border-color:var(--g); color:#fff; }
+    .quadrant{ margin-bottom:24px; }
+    .quadrant-title{ font-weight:600; margin-bottom:12px; color:#fff; }
+    .selected-teeth{ margin-top:16px; }
+    .selected-tooth-item{ background:var(--bg); border:1px solid var(--b); border-radius:8px; padding:12px; margin-bottom:8px; }
+    .tooth-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    .tooth-number{ font-weight:600; color:var(--p); }
+    .remove-tooth{ background:var(--r); color:#fff; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px; }
+    .icd10-select{ width:100%; padding:8px; border-radius:6px; border:1px solid var(--b); background:var(--bg); color:#fff; margin-bottom:8px; }
+    .diagnosis-note{ width:100%; padding:8px; border-radius:6px; border:1px solid var(--b); background:var(--bg); color:#fff; min-height:60px; resize:vertical; }
+    .loading{ text-align:center; padding:40px; color:var(--muted); }
+    .error{ background:rgba(220,38,38,0.1); border:1px solid var(--r); color:#fca5a5; padding:12px; border-radius:8px; margin-bottom:16px; }
+    .success{ background:rgba(22,163,74,0.1); border:1px solid var(--g); color:#86efac; padding:12px; border-radius:8px; margin-bottom:16px; }
+    .patient-info{ background:rgba(37,99,235,0.1); border:1px solid var(--p); color:#93c5fd; padding:12px; border-radius:8px; margin-bottom:20px; }
+    .patient-info strong{ color:#fff; }
+    .actions{ display:flex; gap:12px; margin-top:24px; }
+    .actions .btn{ flex:1; }
+    .quadrants-container{ display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+    .upper-teeth{ border-bottom:2px solid var(--b); padding-bottom:20px; }
+    .lower-teeth{ padding-top:20px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🦷 İlk Muayene</h1>
+      <button class="btn btn-secondary" onclick="window.location.href='/doctor-dashboard.html'">
+        ← Panele Geri Dön
+      </button>
+    </header>
+
+    <main>
+      <div id="loading" class="loading">
+        <div>⏳ Yükleniyor...</div>
+      </div>
+
+      <div id="error" class="error" style="display:none;"></div>
+      <div id="success" class="success" style="display:none;"></div>
+
+      <div id="form-container" style="display:none;">
+        <div class="patient-info">
+          <strong>Hasta ID:</strong> <span id="patient-id"></span> | 
+          <strong>Tedavi Grubu:</strong> <span id="treatment-group-id"></span>
+        </div>
+
+        <form id="initial-examination-form">
+          <div class="dental-chart">
+            <h2 style="margin-bottom:20px; color:#fff;">🦷 Diş Şeması (FDI)</h2>
+            
+            <div class="quadrants-container">
+              <div class="upper-teeth">
+                <div class="quadrant">
+                  <div class="quadrant-title">Sağ Üst Çene (1. Quadrant)</div>
+                  <div class="teeth-grid">
+                    <div class="tooth" data-tooth="18">18</div>
+                    <div class="tooth" data-tooth="17">17</div>
+                    <div class="tooth" data-tooth="16">16</div>
+                    <div class="tooth" data-tooth="15">15</div>
+                    <div class="tooth" data-tooth="14">14</div>
+                    <div class="tooth" data-tooth="13">13</div>
+                    <div class="tooth" data-tooth="12">12</div>
+                    <div class="tooth" data-tooth="11">11</div>
+                  </div>
+                </div>
+
+                <div class="quadrant">
+                  <div class="quadrant-title">Sol Üst Çene (2. Quadrant)</div>
+                  <div class="teeth-grid">
+                    <div class="tooth" data-tooth="21">21</div>
+                    <div class="tooth" data-tooth="22">22</div>
+                    <div class="tooth" data-tooth="23">23</div>
+                    <div class="tooth" data-tooth="24">24</div>
+                    <div class="tooth" data-tooth="25">25</div>
+                    <div class="tooth" data-tooth="26">26</div>
+                    <div class="tooth" data-tooth="27">27</div>
+                    <div class="tooth" data-tooth="28">28</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="lower-teeth">
+                <div class="quadrant">
+                  <div class="quadrant-title">Sol Alt Çene (3. Quadrant)</div>
+                  <div class="teeth-grid">
+                    <div class="tooth" data-tooth="38">38</div>
+                    <div class="tooth" data-tooth="37">37</div>
+                    <div class="tooth" data-tooth="36">36</div>
+                    <div class="tooth" data-tooth="35">35</div>
+                    <div class="tooth" data-tooth="34">34</div>
+                    <div class="tooth" data-tooth="33">33</div>
+                    <div class="tooth" data-tooth="32">32</div>
+                    <div class="tooth" data-tooth="31">31</div>
+                  </div>
+                </div>
+
+                <div class="quadrant">
+                  <div class="quadrant-title">Sağ Alt Çene (4. Quadrant)</div>
+                  <div class="teeth-grid">
+                    <div class="tooth" data-tooth="48">48</div>
+                    <div class="tooth" data-tooth="47">47</div>
+                    <div class="tooth" data-tooth="46">46</div>
+                    <div class="tooth" data-tooth="45">45</div>
+                    <div class="tooth" data-tooth="44">44</div>
+                    <div class="tooth" data-tooth="43">43</div>
+                    <div class="tooth" data-tooth="42">42</div>
+                    <div class="tooth" data-tooth="41">41</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="selected-teeth" id="selected-teeth">
+            <h3 style="margin-bottom:16px; color:#fff;">📋 Seçili Dişler ve Tanılar</h3>
+            <div id="teeth-list"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="general-notes">Genel Muayene Notları</label>
+            <textarea 
+              id="general-notes" 
+              class="form-input form-textarea" 
+              placeholder="Genel muayene bulgularını buraya yazın..."
+            ></textarea>
+          </div>
+
+          <div class="actions">
+            <button type="button" class="btn btn-secondary" onclick="window.location.href='/doctor-dashboard.html'">
+              İptal
+            </button>
+            <button type="submit" class="btn btn-primary" id="submit-btn">
+              Muayeneyi Kaydet
+            </button>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let treatmentGroupId = null;
+    let patientId = null;
+    let selectedTeeth = new Map(); // toothNumber -> {icd10_code, diagnosis_note}
+    let icd10Codes = [];
+
+    // Get URL parameters
+    function getUrlParameter(name) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(name);
+    }
+
+    // Get doctor token
+    function getDoctorToken() {
+      return localStorage.getItem("doctor_token");
+    }
+
+    // Show error message
+    function showError(message) {
+      const errorEl = document.getElementById("error");
+      errorEl.textContent = message;
+      errorEl.style.display = "block";
+      document.getElementById("success").style.display = "none";
+    }
+
+    // Show success message
+    function showSuccess(message) {
+      const successEl = document.getElementById("success");
+      successEl.textContent = message;
+      successEl.style.display = "block";
+      document.getElementById("error").style.display = "none";
+    }
+
+    // Hide messages
+    function hideMessages() {
+      document.getElementById("error").style.display = "none";
+      document.getElementById("success").style.display = "none";
+    }
+
+    // Load ICD-10 codes
+    async function loadIcd10Codes() {
+      try {
+        const response = await fetch("/api/icd10/dental");
+        
+        if (!response.ok) {
+          throw new Error("ICD-10 kodları yüklenemedi");
+        }
+
+        const data = await response.json();
+        if (data.ok) {
+          icd10Codes = data.codes || [];
+        } else {
+          throw new Error(data.error || "ICD-10 kodları yüklenemedi");
+        }
+      } catch (error) {
+        console.error("Load ICD-10 codes error:", error);
+        showError("ICD-10 kodları yüklenemedi: " + error.message);
+      }
+    }
+
+    // Setup tooth chart
+    function setupToothChart() {
+      const teeth = document.querySelectorAll('.tooth');
+      
+      teeth.forEach(tooth => {
+        tooth.addEventListener('click', function() {
+          const toothNumber = this.dataset.tooth;
+          toggleToothSelection(toothNumber);
+        });
+      });
+    }
+
+    // Toggle tooth selection
+    function toggleToothSelection(toothNumber) {
+      const toothEl = document.querySelector(`[data-tooth="${toothNumber}"]`);
+      
+      if (selectedTeeth.has(toothNumber)) {
+        selectedTeeth.delete(toothNumber);
+        toothEl.classList.remove('selected', 'has-diagnosis');
+      } else {
+        selectedTeeth.set(toothNumber, {
+          icd10_code: '',
+          diagnosis_note: ''
+        });
+        toothEl.classList.add('selected');
+      }
+      
+      updateSelectedTeethList();
+    }
+
+    // Update selected teeth list
+    function updateSelectedTeethList() {
+      const teethList = document.getElementById('teeth-list');
+      
+      if (selectedTeeth.size === 0) {
+        teethList.innerHTML = '<div style="text-align:center; color:var(--muted); padding:20px;">Henüz diş seçilmedi</div>';
+        return;
+      }
+
+      teethList.innerHTML = Array.from(selectedTeeth.entries()).map(([toothNumber, data]) => `
+        <div class="selected-tooth-item">
+          <div class="tooth-header">
+            <span class="tooth-number">Diş ${toothNumber}</span>
+            <button type="button" class="remove-tooth" onclick="removeTooth('${toothNumber}')">
+              Kaldır
+            </button>
+          </div>
+          
+          <select class="icd10-select" 
+                  onchange="updateToothIcd10('${toothNumber}', this.value)"
+                  ${data.icd10_code ? `value="${data.icd10_code}"` : ''}>
+            <option value="">ICD-10 Kodu Seçin</option>
+            ${icd10Codes.map(code => `
+              <option value="${code.code}" ${code.code === data.icd10_code ? 'selected' : ''}>
+                ${code.code} - ${code.description}
+              </option>
+            `).join('')}
+          </select>
+          
+          <textarea class="diagnosis-note" 
+                    placeholder="Dişe özel notlar..."
+                    onchange="updateToothNote('${toothNumber}', this.value)">${data.diagnosis_note}</textarea>
+        </div>
+      `).join('');
+    }
+
+    // Remove tooth from selection
+    function removeTooth(toothNumber) {
+      selectedTeeth.delete(toothNumber);
+      const toothEl = document.querySelector(`[data-tooth="${toothNumber}"]`);
+      toothEl.classList.remove('selected', 'has-diagnosis');
+      updateSelectedTeethList();
+    }
+
+    // Update tooth ICD-10 code
+    function updateToothIcd10(toothNumber, icd10Code) {
+      const data = selectedTeeth.get(toothNumber);
+      if (data) {
+        data.icd10_code = icd10Code;
+        
+        // Update tooth appearance
+        const toothEl = document.querySelector(`[data-tooth="${toothNumber}"]`);
+        if (icd10Code) {
+          toothEl.classList.remove('selected');
+          toothEl.classList.add('has-diagnosis');
+        } else {
+          toothEl.classList.remove('has-diagnosis');
+          toothEl.classList.add('selected');
+        }
+      }
+    }
+
+    // Update tooth note
+    function updateToothNote(toothNumber, note) {
+      const data = selectedTeeth.get(toothNumber);
+      if (data) {
+        data.diagnosis_note = note;
+      }
+    }
+
+    // Initialize page
+    async function initializePage() {
+      try {
+        // Get parameters from URL
+        treatmentGroupId = getUrlParameter("treatment_group_id");
+        patientId = getUrlParameter("patient_id");
+        
+        if (!treatmentGroupId || !patientId) {
+          throw new Error("Gerekli parametreler bulunamadı");
+        }
+
+        // Set patient info
+        document.getElementById("patient-id").textContent = patientId;
+        document.getElementById("treatment-group-id").textContent = treatmentGroupId;
+
+        // Load ICD-10 codes
+        await loadIcd10Codes();
+
+        // Setup tooth chart
+        setupToothChart();
+
+        // Show form
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("form-container").style.display = "block";
+
+        // Setup form submission
+        document.getElementById("initial-examination-form").addEventListener("submit", handleSubmit);
+
+      } catch (error) {
+        console.error("Initialize error:", error);
+        showError("Sayfa yüklenemedi: " + error.message);
+        document.getElementById("loading").style.display = "none";
+      }
+    }
+
+    // Handle form submission
+    async function handleSubmit(event) {
+      event.preventDefault();
+      
+      try {
+        hideMessages();
+
+        // Validation
+        const generalNotes = document.getElementById("general-notes").value.trim();
+
+        // At least one tooth must be selected (but diagnosis is optional)
+        if (selectedTeeth.size === 0) {
+          showError("En az bir diş seçmelisiniz");
+          return;
+        }
+
+        // Prepare teeth data — include all selected teeth regardless of diagnosis
+        const teethArray = Array.from(selectedTeeth.entries()).map(([toothNumber, data]) => ({
+          tooth: toothNumber,
+          tooth_number: toothNumber,
+          diagnosis: data.icd10_code || null,
+          icd10_code: data.icd10_code || null,
+          diagnosis_note: data.diagnosis_note || null,
+        }));
+
+        // Disable submit button
+        const submitBtn = document.getElementById("submit-btn");
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Kaydediliyor...";
+
+        // Create initial examination
+        const token = getDoctorToken();
+        const response = await fetch("/api/doctor/initial-examination", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+          },
+          body: JSON.stringify({
+            treatment_group_id: treatmentGroupId,
+            patient_id: patientId,
+            general_notes: generalNotes,
+            teeth: teethArray,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (data.ok) {
+          showSuccess("İlk muayene başarıyla kaydedildi! Yönlendiriliyorsunuz...");
+          setTimeout(() => {
+            window.location.href = "/doctor-dashboard.html";
+          }, 2000);
+        } else {
+          throw new Error(data.error || "Muayene kaydedilemedi");
+        }
+
+      } catch (error) {
+        console.error("Submit error:", error);
+        showError("Muayene kaydedilemedi: " + error.message);
+      } finally {
+        // Re-enable submit button
+        const submitBtn = document.getElementById("submit-btn");
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Muayeneyi Kaydet";
+      }
+    }
+
+    // Initialize when DOM is ready
+    document.addEventListener("DOMContentLoaded", initializePage);
+  </script>
+</body>
+</html>

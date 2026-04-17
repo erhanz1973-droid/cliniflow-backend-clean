@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Cliniflow Admin - Eski Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Arial;
+      margin: 0;
+      background: #0b0f16;
+      color: #e6eaf2;
+      display: flex;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 800px;
+      background: #0f1522;
+      border: 1px solid #1c2432;
+      border-radius: 16px;
+      padding: 40px;
+      margin: 20px auto;
+    }
+    h1 {
+      font-size: 32px;
+      margin-bottom: 16px;
+      color: #ffffff;
+      text-align: center;
+    }
+    .subtitle {
+      font-size: 18px;
+      color: #a7b2c8;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .dashboard-item {
+      background: #1a2640;
+      border: 1px solid #2b3a58;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      transition: all 0.2s ease;
+    }
+    .dashboard-item:hover {
+      background: #2b3a58;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+    .dashboard-item h3 {
+      font-size: 18px;
+      margin: 0 0 10px 0;
+      color: #ffffff;
+    }
+    .dashboard-item p {
+      font-size: 14px;
+      color: #a7b2c8;
+      margin: 0;
+    }
+    .dashboard-item a {
+      color: #6aa6ff;
+      text-decoration: none;
+      font-weight: 600;
+      display: block;
+      padding: 10px 20px;
+      background: #3b4a68;
+      border-radius: 8px;
+      margin-top: 10px;
+      transition: all 0.2s ease;
+    }
+    .dashboard-item a:hover {
+      background: #4b5a78;
+      color: #8bb5ff;
+    }
+    .back-link {
+      text-align: center;
+      margin-top: 30px;
+    }
+    .back-link a {
+      color: #6aa6ff;
+      text-decoration: none;
+      font-size: 16px;
+      padding: 10px 20px;
+      background: #1a2640;
+      border: 1px solid #2b3a58;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+    }
+    .back-link a:hover {
+      background: #2b3a58;
+      color: #8bb5ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>⚠️ Eski Admin Panel</h1>
+    <p class="subtitle">Bu eski admin panel arayüzüdür. Yeni dashboard'a geçiş yapabilirsiniz.</p>
+    
+    <div class="dashboard-grid">
+      <div class="dashboard-item">
+        <h3>📊 Yeni Dashboard</h3>
+        <p>Güncel admin dashboard'ine erişmek için tıklayın</p>
+        <a href="/admin.html">Yeni Dashboard'a Git</a>
+      </div>
+      
+      <div class="dashboard-item">
+        <h3>👥 Doktor Başvuruları</h3>
+        <p>Doktor başvurularını incelemek için tıklayın</p>
+        <a href="/admin-doctor-applications.html">Doktor Başvuruları</a>
+      </div>
+      
+      <div class="dashboard-item">
+        <h3>👥 Hasta Yönetimi</h3>
+        <p>Hasta listesini yönetmek için tıklayın</p>
+        <a href="/admin-patients.html">Hasta Yönetimi</a>
+      </div>
+      
+      <div class="dashboard-item">
+        <h3>🏥 Klinik Ayarları</h3>
+        <p>Klinik ayarlarını yönetmek için tıklayın</p>
+        <a href="/admin-clinics.html">Klinik Ayarları</a>
+      </div>
+      
+      <div class="dashboard-item">
+        <h3>⚙️ Sistem Ayarları</h3>
+        <p>Sistem ayarlarını yönetmek için tıklayın</p>
+        <a href="/admin-settings.html">Sistem Ayarları</a>
+      </div>
+    </div>
+    
+    <div class="back-link">
+      <a href="/admin.html">⬅️ Yeni Dashboard'a Geri Dön</a>
+    </div>
+  </div>
+</body>
+</html>
