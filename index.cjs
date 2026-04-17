@@ -267,6 +267,12 @@ const {
 } = require("./lib/supabase");
 
 const app = express();
+console.log("SERVER ENTRY:", __filename);
+// Temporary: trace path handling (remove after debugging static vs redirects)
+app.use((req, res, next) => {
+  console.log("REQUEST:", req.path);
+  next();
+});
 const server = http.createServer(app);
 const _portEnv = process.env.PORT;
 const PORT =
@@ -280,6 +286,10 @@ const JWT_SECRET =
     : "yJ2uB87EHHAEqMyrePIrYQR0+pC3t8fFh5IJJ/QH6lY";
 const JWT_EXPIRES_IN = "30d";
 const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+/** When true, non-production can skip JWT on GET /api/admin/patients. Set to false to require token everywhere. */
+const DEV_MODE = true;
+/** Effective bypass: DEV_MODE and not production (never skip auth on live deploys). */
+const ADMIN_PATIENTS_DEV_BYPASS = DEV_MODE && !IS_PROD;
 const PERF_LOGS_ENABLED = !IS_PROD || String(process.env.PERF_LOGS || "").trim() === "1";
 /** Non-production: skip OTP hash / missing-row checks for /auth/verify-otp (patient & doctor). Set OTP_DEV_BYPASS=0 to enforce real OTP locally. */
 function isOtpDevBypassEnabled() {
@@ -543,6 +553,98 @@ async function resolveMessagesPatientDbId(patientId) {
   } catch (_) {
     return null;
   }
+}
+
+/** Token patientId ile URL/body patientId aynı hastayı mı gösteriyor? (JWT vs UUID / patient_id çakışması) */
+async function patientIdsMatchForToken(tokenPatientId, paramPatientId) {
+  const a = String(tokenPatientId || "").trim();
+  const b = String(paramPatientId || "").trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (!isSupabaseEnabled()) return false;
+  try {
+    const dbA = await resolveMessagesPatientDbId(a);
+    const dbB = await resolveMessagesPatientDbId(b);
+    if (dbA && dbB && dbA === dbB) return true;
+    if (dbA && b === dbA) return true;
+    if (dbB && a === dbB) return true;
+  } catch (_) {}
+  return false;
+}
+
+/** Teklif sohbeti: JWT (hasta veya doktor) bu offer + ilişkili treatment_request için yetkili mi? */
+async function authorizeOfferThreadAccess(req, offerId) {
+  const offerIdTrim = String(offerId || "").trim();
+  if (!offerIdTrim) return { ok: false, status: 400, error: "offer_id_required" };
+  if (!isSupabaseEnabled()) return { ok: false, status: 503, error: "supabase_required" };
+
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!token) return { ok: false, status: 401, error: "token_required" };
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return { ok: false, status: 401, error: "invalid_token" };
+  }
+
+  const { data: offerRow, error: oErr } = await supabase
+    .from("treatment_offers")
+    .select("id, clinic_id, doctor_id, request_id")
+    .eq("id", offerIdTrim)
+    .maybeSingle();
+  if (oErr || !offerRow) {
+    console.warn("[OFFER ACCESS] offer not found:", offerIdTrim, oErr?.message || "");
+    return { ok: false, status: 404, error: "offer_not_found" };
+  }
+
+  const { data: tr, error: trErr } = await supabase
+    .from("treatment_requests")
+    .select("*")
+    .eq("id", offerRow.request_id)
+    .maybeSingle();
+  if (trErr || !tr || !tr.id) return { ok: false, status: 404, error: "request_not_found" };
+
+  const role = String(decoded.role || "").toUpperCase();
+  if (role === "DOCTOR") {
+    const doctorIdTok = String(decoded.doctorId || "").trim();
+    const { data: doc } = await supabase
+      .from("doctors")
+      .select("id, clinic_id, status")
+      .eq("id", doctorIdTok)
+      .maybeSingle();
+    if (!doc || String(doc.status || "").toUpperCase() !== "APPROVED") {
+      return { ok: false, status: 403, error: "doctor_not_allowed" };
+    }
+    const docClinic = doc.clinic_id != null ? String(doc.clinic_id).trim() : "";
+    const trClinic = tr.clinic_id != null ? String(tr.clinic_id).trim() : "";
+    const offClinic = offerRow.clinic_id != null ? String(offerRow.clinic_id).trim() : "";
+    const clinicOk = docClinic && (docClinic === trClinic || (offClinic && docClinic === offClinic));
+    if (!clinicOk) {
+      console.warn("[OFFER ACCESS] clinic mismatch doctor", docClinic, "tr", trClinic);
+      return { ok: false, status: 403, error: "forbidden" };
+    }
+    return {
+      ok: true,
+      role: "doctor",
+      doctorId: String(doc.id),
+      offer: offerRow,
+      request: tr,
+    };
+  }
+
+  const tokPatient = String(decoded.patientId || "").trim();
+  if (!tokPatient) return { ok: false, status: 403, error: "forbidden" };
+  const resolved = await resolveMessagesPatientDbId(tokPatient);
+  const trPid = String(tr.patient_id || "").trim();
+  if (resolved && trPid === resolved) {
+    return { ok: true, role: "patient", patientId: resolved, offer: offerRow, request: tr };
+  }
+  if (trPid === tokPatient) {
+    return { ok: true, role: "patient", patientId: trPid, offer: offerRow, request: tr };
+  }
+  return { ok: false, status: 403, error: "forbidden" };
 }
 
 async function resolveClinicContextForPatientRow(internalPatientId) {
@@ -2625,36 +2727,12 @@ app.get("/privacy", (req, res) => {
 </html>`);
 });
 
-// ================== DASHBOARD REDIRECTS ==================
-// Keep both UIs:
-// - Dashboard (current): /admin.html  -> public/admin.html (for normal clinic admins)
-// - Legacy page:         /admin-v2.html -> admin_v2.html
-// - Super Admin:         redirects to SUPER_ADMIN_URL
+// ================== DASHBOARD / ADMIN UI ==================
+// /admin.html is served ONLY by express.static(publicDir) — no app.get("/admin.html") (avoids 301/redirect chains).
+// Legacy: /admin-v2.html -> admin_v2.html | /admin-v3.html -> redirect to /admin.html
+// Super Admin: SUPER_ADMIN_URL
 
 const SUPER_ADMIN_URL = process.env.SUPER_ADMIN_URL || "https://superadmin.clinifly.net/login";
-
-// /admin.html: Serve normal clinic admin dashboard (NOT Super Admin)
-// Super Admin has its own domain: https://superadmin.clinifly.net
-app.get("/admin.html", (req, res) => {
-  // Always serve the normal clinic admin dashboard
-  // The dashboard page itself will check for token and redirect to login if needed
-  const filePath = path.join(__dirname, "public", "admin.html");
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    // Try alternative paths (Render compatibility)
-    const altPath1 = path.join(process.cwd(), "public", "admin.html");
-    const altPath2 = path.resolve("public", "admin.html");
-    if (fs.existsSync(altPath1)) {
-      res.sendFile(altPath1);
-    } else if (fs.existsSync(altPath2)) {
-      res.sendFile(altPath2);
-    } else {
-      // If admin.html doesn't exist, redirect to login (NOT super admin)
-      res.redirect("/admin-login.html");
-    }
-  }
-});
 
 app.get("/", (req, res) => res.redirect("/admin-login.html"));
 
@@ -2668,15 +2746,8 @@ app.get("/api/version", (req, res) => res.json({
   built:   "2026-04-13",
 }));
 app.get("/admin", (req, res) => res.redirect("/admin-login.html"));
-// /dashboard should serve normal admin dashboard, NOT redirect to Super Admin
-app.get("/dashboard", (req, res) => {
-  const filePath = path.join(__dirname, "public", "admin.html");
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    res.redirect("/admin-login.html");
-  }
-});
+// Legacy bookmark: same document as /admin.html (served statically)
+app.get("/dashboard", (req, res) => res.redirect(302, "/admin.html"));
 
 // Explicit UI entrypoints
 app.get("/admin-v2.html", (req, res) => {
@@ -4021,8 +4092,96 @@ function requireToken(req, res, next) {
   next();
 }
 
-// POST /api/leads — AI ekranından “teklif al” (patient intent → clinics)
-// Body: { userId, treatments, country, imageUrl } — userId must match token patient.
+// ── Marketplace lead matching (country → optional city → optional radius) ───
+function _haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function _clinicRowActiveMarketplace(c) {
+  const s = String(c?.status ?? "active").toLowerCase();
+  return !["suspended", "reject", "rejected", "inactive", "closed"].includes(s);
+}
+
+/**
+ * @returns {Promise<Array<{ id: string, name?: string, country?: string, city?: string, latitude?: number, longitude?: number, prices?: object }>>}
+ */
+async function matchClinicsForMarketplaceLead({ country, city, patientLat, patientLng }) {
+  if (!isSupabaseEnabled()) return [];
+  const countryRaw = String(country || "").trim();
+  if (!countryRaw || countryRaw.toLowerCase() === "unknown") {
+    console.warn("[MARKETPLACE] match skipped: missing country");
+    return [];
+  }
+  const radiusKm = Math.max(25, Math.min(8000, parseFloat(process.env.LEAD_MATCH_RADIUS_KM || "400") || 400));
+
+  const sel = "id, name, country, city, latitude, longitude, status, prices, settings";
+  let { data: rows, error } = await supabase.from("clinics").select(sel).eq("country", countryRaw);
+  if (error) {
+    console.warn("[MARKETPLACE] clinics eq country:", error.message);
+    rows = [];
+  }
+  rows = (rows || []).filter(_clinicRowActiveMarketplace);
+  if (!rows.length) {
+    const r2 = await supabase.from("clinics").select(sel).ilike("country", countryRaw);
+    if (!r2.error && r2.data?.length) rows = r2.data.filter(_clinicRowActiveMarketplace);
+  }
+  const cityTrim = city != null ? String(city).trim() : "";
+  if (cityTrim) {
+    const byCity = rows.filter((r) => String(r.city || "").trim().toLowerCase() === cityTrim.toLowerCase());
+    if (byCity.length) rows = byCity;
+  }
+  if (
+    patientLat != null &&
+    patientLng != null &&
+    Number.isFinite(+patientLat) &&
+    Number.isFinite(+patientLng)
+  ) {
+    const plat = +patientLat;
+    const plng = +patientLng;
+    const withCoords = rows.filter((c) => c.latitude != null && c.longitude != null);
+    if (withCoords.length) {
+      const inRadius = withCoords.filter(
+        (c) => _haversineKm(plat, plng, +c.latitude, +c.longitude) <= radiusKm
+      );
+      if (inRadius.length) rows = inRadius;
+      else
+        console.warn(
+          "[MARKETPLACE] no clinics within radius km — keeping country/city list:",
+          radiusKm,
+          "| n=",
+          rows.length
+        );
+    }
+  }
+  return rows;
+}
+
+async function distributeLeadToClinics(leadId, clinics) {
+  if (!isSupabaseEnabled() || !leadId || !clinics?.length) return 0;
+  const payload = clinics.map((c) => ({
+    lead_id: leadId,
+    clinic_id: c.id,
+    status: "pending",
+  }));
+  const { error } = await supabase.from("lead_clinics").insert(payload);
+  if (error) {
+    console.error("[MARKETPLACE] lead_clinics insert:", error.message, error.details || "");
+    return 0;
+  }
+  return payload.length;
+}
+
+// POST /api/leads — AI ekranından “teklif al” → Supabase leads + fan-out lead_clinics
+// Body: { userId, treatments, country, imageUrl, summary?, city?, xray_url?, photo_url?, patient_lat?, patient_lng?, price_estimate? }
 app.post("/api/leads", requireToken, async (req, res) => {
   try {
     const patientId = String(req.patientId || "").trim();
@@ -4033,11 +4192,33 @@ app.post("/api/leads", requireToken, async (req, res) => {
     }
     const treatments = Array.isArray(body.treatments) ? body.treatments.map((t) => String(t).trim()).filter(Boolean) : [];
     const country = String(body.country || "").trim() || null;
-    const imageUrl = String(body.imageUrl || "").trim() || null;
+    const imageUrl = String(body.imageUrl || body.photo_url || "").trim() || null;
+    const photoUrl = String(body.photo_url || body.imageUrl || "").trim() || null;
+    const xrayUrl = String(body.xray_url || body.xrayUrl || "").trim() || null;
+    const summary = String(body.summary || "").trim() || null;
+    const city = String(body.city || "").trim() || null;
+    const priceEstimate = String(body.price_estimate || body.priceEstimate || "").trim() || null;
+    const patientLat = body.patient_lat != null ? parseFloat(String(body.patient_lat)) : NaN;
+    const patientLng = body.patient_lng != null ? parseFloat(String(body.patient_lng)) : NaN;
+
+    if (isSupabaseEnabled()) {
+      const cNorm = String(country || "").trim();
+      if (!cNorm || cNorm.toLowerCase() === "unknown") {
+        return res.status(400).json({
+          ok: false,
+          error: "country_required",
+          message: "Pazar yeri lead’i için ülke zorunludur.",
+        });
+      }
+    }
+
+    const leadId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const isHighValue = !!xrayUrl;
 
     const lead = {
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString(),
+      id: leadId,
+      created_at: createdAt,
       patient_id: patientId,
       user_id: patientId,
       treatments,
@@ -4050,37 +4231,273 @@ app.post("/api/leads", requireToken, async (req, res) => {
     list.push(lead);
     writeJson(AI_LEADS_FILE, list);
 
-    if (isSupabaseEnabled()) {
-      try {
-        const resolvedPid = await resolveMessagesPatientDbId(patientId);
-        if (resolvedPid) {
-          const row = {
-            id: lead.id,
-            patient_id: resolvedPid,
-            treatments,
-            country,
-            image_url: imageUrl,
-            created_at: lead.created_at,
-            source: "ai_result_offer",
-          };
-          const r1 = await supabase.from("ai_leads").insert(row);
-          if (r1.error) {
-            const r2 = await supabase.from("leads").insert(row);
-            if (r2.error) {
-              console.warn("[LEADS] Supabase insert skipped (file OK):", r1.error.message, "|", r2.error.message);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("[LEADS] Supabase optional insert failed:", e?.message);
-      }
+    if (!isSupabaseEnabled()) {
+      console.log("[LEADS] file-only lead", leadId.slice(0, 8), "| enable Supabase for marketplace distribution");
+      return res.json({
+        ok: true,
+        leadId,
+        distributedToClinicCount: 0,
+        message:
+          "Talebiniz kaydedildi (yerel). Pazar yeri dağıtımı için Supabase yapılandırılmalıdır.",
+      });
     }
 
-    console.log("[LEADS] saved offer request", lead.id, "| patient:", patientId.slice(0, 8), "| nTreat:", treatments.length);
-    return res.json({ ok: true, leadId: lead.id, message: "Talebiniz kliniklere gönderildi" });
+    const resolvedPid = await resolveMessagesPatientDbId(patientId);
+    if (!resolvedPid) {
+      console.warn("[LEADS] no resolved patient UUID — file lead only", patientId.slice(0, 12));
+      return res.status(400).json({
+        ok: false,
+        error: "patient_not_resolved",
+        message: "Hasta kaydı bulunamadı; lead oluşturulamadı.",
+      });
+    }
+
+    const row = {
+      id: leadId,
+      patient_id: resolvedPid,
+      treatments,
+      summary,
+      photo_url: photoUrl,
+      image_url: imageUrl,
+      xray_url: xrayUrl,
+      country,
+      city,
+      patient_lat: Number.isFinite(patientLat) ? patientLat : null,
+      patient_lng: Number.isFinite(patientLng) ? patientLng : null,
+      price_estimate: priceEstimate,
+      is_high_value: isHighValue,
+      created_at: createdAt,
+      source: "ai_result_offer",
+    };
+
+    const ins = await supabase.from("leads").insert(row);
+    if (ins.error) {
+      console.error("[LEADS] leads insert failed:", ins.error.message);
+      try {
+        await supabase.from("ai_leads").insert({
+          id: leadId,
+          patient_id: resolvedPid,
+          treatments,
+          country,
+          image_url: imageUrl,
+          created_at: createdAt,
+          source: "ai_result_offer",
+        });
+      } catch (_) {}
+      return res.status(500).json({
+        ok: false,
+        error: "lead_insert_failed",
+        message: ins.error.message || "Lead kaydı başarısız.",
+      });
+    }
+
+    const matched = await matchClinicsForMarketplaceLead({
+      country,
+      city,
+      patientLat: Number.isFinite(patientLat) ? patientLat : null,
+      patientLng: Number.isFinite(patientLng) ? patientLng : null,
+    });
+    const nDist = await distributeLeadToClinics(leadId, matched);
+
+    console.log(
+      "[MARKETPLACE] lead",
+      leadId.slice(0, 8),
+      "| patient:",
+      String(resolvedPid).slice(0, 8),
+      "| country:",
+      country,
+      "| matched:",
+      matched.length,
+      "| distributed:",
+      nDist
+    );
+
+    return res.json({
+      ok: true,
+      leadId,
+      distributedToClinicCount: nDist,
+      matchedClinicCount: matched.length,
+      message:
+        nDist > 0
+          ? `Talebiniz kaydedildi ve ${nDist} uygun kliniğe iletildi.`
+          : "Talebiniz kaydedildi; ülkenizle eşleşen aktif klinik bulunamadı veya konum filtresi eşleşmedi.",
+    });
   } catch (e) {
     console.error("[LEADS]", e?.message);
     return res.status(500).json({ ok: false, error: "lead_save_failed", message: e?.message || "Kayıt başarısız" });
+  }
+});
+
+// GET /api/clinic/leads — clinic admin JWT: leads routed to this clinic
+app.get("/api/clinic/leads", requireAdminAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const clinicId = String(req.clinicId || "").trim();
+    if (!clinicId) return res.status(403).json({ ok: false, error: "clinic_required" });
+
+    const { data: lcs, error: e1 } = await supabase
+      .from("lead_clinics")
+      .select("id, lead_id, status, created_at")
+      .eq("clinic_id", clinicId)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (e1) {
+      console.error("[CLINIC LEADS]", e1.message);
+      return res.status(500).json({ ok: false, error: "query_failed", message: e1.message });
+    }
+    const leadIds = [...new Set((lcs || []).map((x) => x.lead_id).filter(Boolean))];
+    if (!leadIds.length) return res.json({ ok: true, leads: [] });
+
+    const { data: leadRows, error: e2 } = await supabase.from("leads").select("*").in("id", leadIds);
+    if (e2) return res.status(500).json({ ok: false, error: "leads_fetch_failed", message: e2.message });
+    const byId = new Map((leadRows || []).map((r) => [r.id, r]));
+
+    const leads = (lcs || []).map((lc) => {
+      const L = byId.get(lc.lead_id);
+      const treatments = Array.isArray(L?.treatments) ? L.treatments : [];
+      const photo = L?.photo_url || L?.image_url || null;
+      return {
+        lead_clinic_id: lc.id,
+        status: lc.status,
+        routed_at: lc.created_at,
+        lead_id: lc.lead_id,
+        treatments,
+        summary: L?.summary || null,
+        photo_url: photo,
+        xray_url: L?.xray_url || null,
+        location: [L?.city, L?.country].filter(Boolean).join(", ") || L?.country || null,
+        city: L?.city || null,
+        country: L?.country || null,
+        price_estimate: L?.price_estimate || null,
+        is_high_value: !!L?.is_high_value,
+        created_at: L?.created_at,
+      };
+    });
+
+    return res.json({ ok: true, leads });
+  } catch (e) {
+    console.error("[CLINIC LEADS]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/clinic/offers — clinic submits offer for a lead
+app.post("/api/clinic/offers", requireAdminAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const clinicId = String(req.clinicId || "").trim();
+    const body = req.body || {};
+    const leadId = String(body.lead_id || body.leadId || "").trim();
+    const price = body.price != null ? parseFloat(String(body.price)) : NaN;
+    const note = String(body.note || "").trim() || null;
+    if (!leadId) return res.status(400).json({ ok: false, error: "lead_id_required" });
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({ ok: false, error: "invalid_price" });
+    }
+
+    const { data: lc, error: e0 } = await supabase
+      .from("lead_clinics")
+      .select("id, status")
+      .eq("lead_id", leadId)
+      .eq("clinic_id", clinicId)
+      .maybeSingle();
+    if (e0 || !lc) {
+      return res.status(403).json({ ok: false, error: "lead_not_routed_to_clinic" });
+    }
+
+    const offerRow = {
+      lead_id: leadId,
+      clinic_id: clinicId,
+      price,
+      note,
+      created_at: new Date().toISOString(),
+    };
+    const { data: offRows, error: e1 } = await supabase
+      .from("offers")
+      .upsert(offerRow, { onConflict: "lead_id,clinic_id" })
+      .select("id");
+    if (e1) {
+      console.error("[CLINIC OFFERS] upsert:", e1.message);
+      return res.status(500).json({ ok: false, error: "offer_save_failed", message: e1.message });
+    }
+
+    await supabase
+      .from("lead_clinics")
+      .update({ status: "offered" })
+      .eq("lead_id", leadId)
+      .eq("clinic_id", clinicId);
+
+    const offerId = offRows?.[0]?.id || null;
+    console.log("[CLINIC OFFERS] clinic", clinicId.slice(0, 8), "lead", leadId.slice(0, 8), "price", price);
+
+    return res.json({ ok: true, offerId, lead_id: leadId });
+  } catch (e) {
+    console.error("[CLINIC OFFERS]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/patient/offers?lead_id= — patient compares offers for a lead
+app.get("/api/patient/offers", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const leadId = String(req.query.lead_id || req.query.leadId || "").trim();
+    if (!leadId) return res.status(400).json({ ok: false, error: "lead_id_required" });
+
+    const tokenPid = String(req.patientId || "").trim();
+    const resolvedPid = await resolveMessagesPatientDbId(tokenPid);
+    if (!resolvedPid) {
+      return res.status(403).json({ ok: false, error: "patient_not_found" });
+    }
+
+    const { data: lead, error: e1 } = await supabase.from("leads").select("id, patient_id").eq("id", leadId).maybeSingle();
+    if (e1 || !lead) return res.status(404).json({ ok: false, error: "lead_not_found" });
+    if (String(lead.patient_id) !== String(resolvedPid)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    const { data: offers, error: e2 } = await supabase
+      .from("offers")
+      .select("id, clinic_id, price, note, created_at")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: true });
+    if (e2) return res.status(500).json({ ok: false, error: "offers_fetch_failed", message: e2.message });
+
+    const clinicIds = [...new Set((offers || []).map((o) => o.clinic_id).filter(Boolean))];
+    let nameById = new Map();
+    if (clinicIds.length) {
+      const { data: clinics } = await supabase
+        .from("clinics")
+        .select("id, name, clinic_code, city, country")
+        .in("id", clinicIds);
+      nameById = new Map((clinics || []).map((c) => [c.id, c]));
+    }
+
+    const out = (offers || []).map((o) => {
+      const c = nameById.get(o.clinic_id);
+      return {
+        id: o.id,
+        clinic_id: o.clinic_id,
+        clinic: c?.name || "Klinik",
+        clinic_code: c?.clinic_code || null,
+        city: c?.city || null,
+        country: c?.country || null,
+        price: o.price,
+        note: o.note,
+        created_at: o.created_at,
+      };
+    });
+
+    return res.json({ ok: true, lead_id: leadId, offers: out });
+  } catch (e) {
+    console.error("[PATIENT OFFERS]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
@@ -6376,6 +6793,15 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
       rating: ratingMap[c.id] ?? null,
       latitude: c.latitude ?? null,
       longitude: c.longitude ?? null,
+      /** Mobil liste: iki CTA — teklif akışı + kliniğe katıl */
+      links: [
+        { id: "request_quote", label: "Teklif al", clinicId: c.id },
+        {
+          id: "join_clinic",
+          label: "Kaydol",
+          clinicCode: c.clinic_code || null,
+        },
+      ],
     }));
 
     return res.json({ ok: true, clinics });
@@ -6914,86 +7340,42 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
   }
 });
 
-app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
-  const t0 = Date.now();
-  console.log("[ADMIN PATIENTS] request start clinicId:", req.clinicId);
-  try {
-    if (!isSupabaseEnabled()) {
-      console.error("[ADMIN PATIENTS] supabase not configured");
-      return res.status(500).json({ ok: false, error: "supabase_not_configured" });
-    }
-    if (!req.clinicId) {
-      console.error("[ADMIN PATIENTS] no clinicId on req");
-      return res.status(403).json({ ok: false, error: "clinic_not_authenticated" });
-    }
-
-    // ── Pagination params ─────────────────────────────────────────────────────
-    const page  = Math.max(1, parseInt(req.query.page)  || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-
-    // DB-level paginated fetch (avoids loading entire clinic patient list)
-    let fetchResult;
+app.get(
+  "/api/admin/patients",
+  (req, res, next) => {
+    if (ADMIN_PATIENTS_DEV_BYPASS) return next();
+    return requireAdminAuth(req, res, next);
+  },
+  async (req, res) => {
     try {
-      const fetchPromise = getPatientsByClinicPaginated(req.clinicId, { page, limit });
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("supabase_timeout")), 10000)
-      );
-      fetchResult = await Promise.race([fetchPromise, timeoutPromise]);
-    } catch (fetchErr) {
-      console.error("[ADMIN PATIENTS] getPatientsByClinicPaginated error:", fetchErr?.message);
-      return res.status(500).json({ ok: false, error: fetchErr?.message || "fetch_failed" });
-    }
+      let clinicId;
 
-    const { data: patients, total } = fetchResult;
-    const totalPages = Math.ceil(total / limit) || 1;
-
-    console.log("[ADMIN PATIENTS] fetched", patients.length, "of", total, "patients in", Date.now() - t0, "ms");
-
-    const normalized = (patients || []).map((p) => {
-      const createdAt = p.created_at ? new Date(p.created_at).getTime() : (p.createdAt || 0);
-      return {
-        id: p.id,
-        patient_id: p.patient_id,
-        name: p.name || "",
-        phone: p.phone || "",
-        status: p.status,
-        created_at: p.created_at,
-        primary_doctor_id: p.primary_doctor_id || null,
-        patientId: p.patient_id || p.patientId || p.id,
-        createdAt,
-      };
-    });
-
-    // Oral health scores are file-based (sync) — safe on Render ephemeral FS
-    const patientsWithScores = normalized.map((patient) => {
-      const patientId = patient.patientId || "";
-      if (patientId) {
-        try {
-          const scores = calculateOralHealthScore(patientId);
-          return { ...patient, beforeScore: scores.beforeScore, afterScore: scores.afterScore, oralHealthCompleted: scores.completed };
-        } catch (scoreErr) {
-          console.warn("[ADMIN PATIENTS] calculateOralHealthScore error for", patientId, scoreErr?.message);
+      if (!ADMIN_PATIENTS_DEV_BYPASS) {
+        if (!req.clinicId) {
+          return res.status(401).json({ ok: false, error: "Unauthorized" });
         }
+        clinicId = req.clinicId;
+      } else {
+        clinicId = String(req.query.clinicId || process.env.DEV_ADMIN_CLINIC_ID || "demo").trim();
       }
-      return patient;
-    });
 
-    console.log("[ADMIN PATIENTS] responding page", page, "of", totalPages, ", total", Date.now() - t0, "ms");
-    res.json({
-      ok: true,
-      patients: patientsWithScores,
-      list: patientsWithScores, // legacy compat
-      page,
-      limit,
-      total,
-      totalPages,
-      hasMore: page < totalPages,
-    });
-  } catch (error) {
-    console.error("[ADMIN PATIENTS] unhandled error:", error?.message);
-    res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+      const patients = await getPatientsByClinic(clinicId);
+
+      return res.json({
+        ok: true,
+        data: patients,
+        patients: patients,
+      });
+    } catch (err) {
+      console.error("[ADMIN PATIENTS ERROR]", err);
+
+      return res.status(500).json({
+        ok: false,
+        error: err.message || "Server error",
+      });
+    }
   }
-});
+);
 
 /* ================= ADMIN DOCTOR APPROVAL ================= */
 app.post("/api/admin/approve-doctor", requireAdminAuth, async (req, res) => {
@@ -14565,8 +14947,8 @@ app.post('/api/patient/upload-intraoral-photos', chatUpload.array('photos', 5), 
       return res.status(401).json({ ok: false, error: 'invalid_token' });
     }
 
-    if (tokenPatientId !== patientId) {
-      return res.status(403).json({ ok: false, error: 'patientId_mismatch', message: 'Token does not match patientId' });
+    if (!(await patientIdsMatchForToken(tokenPatientId, patientId))) {
+      return res.status(403).json({ ok: false, error: "patientId_mismatch", message: "Token does not match patientId" });
     }
 
     const files = Array.isArray(req.files) ? req.files : [];
@@ -14807,8 +15189,9 @@ async function collectPatientFiles(patientId) {
 app.get('/api/patient/:patientId/files', requireToken, async (req, res) => {
   try {
     const patientId = String(req.params.patientId || '').trim();
-    if (req.patientId !== patientId) {
-      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    const tokenPid = String(req.patientId || "").trim();
+    if (!(await patientIdsMatchForToken(tokenPid, patientId))) {
+      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
     }
     const files = await collectPatientFiles(patientId);
     return res.json({ ok: true, files });
@@ -14940,7 +15323,10 @@ app.post(
 app.post('/api/patient/:patientId/upload', requireToken, chatUpload.single('file'), async (req, res) => {
   try {
     const patientId = String(req.params.patientId || '').trim();
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    const tokenPid = String(req.patientId || "").trim();
+    if (!(await patientIdsMatchForToken(tokenPid, patientId))) {
+      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
+    }
 
     const file = req.file;
     if (!file) return res.status(400).json({ ok: false, error: 'no_file' });
@@ -15504,7 +15890,8 @@ app.post("/api/chat/upload", requireToken, chatUpload.array("files", 5), async (
     if (!patientId) {
       return res.status(400).json({ ok: false, error: "patientId_required" });
     }
-    if (req.patientId !== patientId) {
+    const tokenPid = String(req.patientId || "").trim();
+    if (!(await patientIdsMatchForToken(tokenPid, patientId))) {
       return res.status(403).json({ ok: false, error: "patientId_mismatch" });
     }
 
@@ -35246,11 +35633,14 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
     const patientId = String(req.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
 
-    // Fetch requests (with the target clinic name)
+    const resolvedPid = await resolveMessagesPatientDbId(patientId);
+    const pidForQuery = resolvedPid || patientId;
+
+    // Fetch requests (with the target clinic name) — DB patients.id UUID ile eşleşmeli
     const { data: requests, error: reqErr } = await supabase
       .from('treatment_requests')
       .select('*, clinics(id, name)')
-      .eq('patient_id', patientId)
+      .eq('patient_id', pidForQuery)
       .order('created_at', { ascending: false });
 
     if (reqErr) {
@@ -35310,6 +35700,67 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
   }
 });
 
+// POST /api/patient/treatment-requests — Teklif / quote isteği oluştur (hedef klinik)
+app.post("/api/patient/treatment-requests", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const rawPid = String(req.patientId || "").trim();
+    const resolvedPid = await resolveMessagesPatientDbId(rawPid);
+    if (!resolvedPid) {
+      return res.status(400).json({ ok: false, error: "patient_not_found", message: "Hasta kaydı çözümlenemedi." });
+    }
+    const body = req.body || {};
+    const description = String(body.description || "").trim();
+    const clinicId = String(body.target_clinic_id || body.clinic_id || "").trim();
+    const photos = Array.isArray(body.photos) ? body.photos.filter((u) => typeof u === "string" && u.trim()) : [];
+    if (!description) {
+      return res.status(400).json({ ok: false, error: "description_required" });
+    }
+    if (!clinicId) {
+      return res.status(400).json({ ok: false, error: "clinic_id_required" });
+    }
+
+    const row = {
+      patient_id: resolvedPid,
+      clinic_id: clinicId,
+      description,
+      photos,
+      status: "pending",
+    };
+
+    const ins = await supabase.from("treatment_requests").insert(row).select("id").maybeSingle();
+    if (ins.error) {
+      console.error("[TREATMENT-REQUESTS POST]", ins.error.message);
+      return res.status(500).json({ ok: false, error: "db_error", message: ins.error.message });
+    }
+
+    const newId = ins.data?.id;
+    try {
+      const { data: clin } = await supabase
+        .from("clinics")
+        .select("default_quote_owner")
+        .eq("id", clinicId)
+        .maybeSingle();
+      if (clin?.default_quote_owner && newId) {
+        await supabase
+          .from("treatment_requests")
+          .update({ assigned_to: clin.default_quote_owner })
+          .eq("id", newId);
+      }
+    } catch (e) {
+      console.warn("[TREATMENT-REQUESTS POST] assign default doctor:", e?.message || e);
+    }
+
+    console.log("[TREATMENT-REQUESTS POST] created", String(newId).slice(0, 8), "clinic", clinicId.slice(0, 8));
+    return res.json({ ok: true, id: newId });
+  } catch (e) {
+    console.error("[TREATMENT-REQUESTS POST]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 // POST /api/patient/treatment-requests/mark-seen
 // Sets patient_seen_at = NOW() on all answered requests that haven't been seen yet.
 // Called when the patient opens the My Requests screen — clears the home-screen badge.
@@ -35317,11 +35768,12 @@ app.post('/api/patient/treatment-requests/mark-seen', requireToken, async (req, 
   try {
     const patientId = String(req.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const resolvedPid = (await resolveMessagesPatientDbId(patientId)) || patientId;
 
     const { error } = await supabase
       .from('treatment_requests')
       .update({ patient_seen_at: new Date().toISOString() })
-      .eq('patient_id', patientId)
+      .eq('patient_id', resolvedPid)
       .eq('status', 'answered')
       .is('patient_seen_at', null);
 
@@ -35330,6 +35782,371 @@ app.post('/api/patient/treatment-requests/mark-seen', requireToken, async (req, 
   } catch (e) {
     console.error('[MARK-SEEN]', e);
     return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+// POST /api/patient/treatment-requests/upload — Teklif formu: sadece Bearer token (URL'de patientId yok; mismatch önlenir)
+app.post("/api/patient/treatment-requests/upload", requireToken, chatUpload.single("file"), async (req, res) => {
+  try {
+    const tokenPid = String(req.patientId || "").trim();
+    if (!tokenPid) return res.status(401).json({ ok: false, error: "unauthorized" });
+    const file = req.file;
+    if (!file) return res.status(400).json({ ok: false, error: "no_file" });
+
+    const mime = String(file.mimetype || "").toLowerCase();
+    const isImg = mime.startsWith("image/");
+    const isPdf = mime.includes("pdf");
+    if (!isImg && !isPdf) {
+      return res.status(400).json({ ok: false, error: "invalid_file_type", message: "Yalnızca görsel veya PDF." });
+    }
+    const maxBytes = isImg ? 10 * 1024 * 1024 : 20 * 1024 * 1024;
+    if (Number(file.size || 0) > maxBytes) {
+      return res.status(400).json({ ok: false, error: "file_too_large" });
+    }
+
+    let ext = path.extname(file.originalname || "").toLowerCase();
+    if (!ext) ext = isImg ? ".jpg" : ".pdf";
+
+    const dirPid = (await resolveMessagesPatientDbId(tokenPid)) || tokenPid;
+    const safeName = `quote_${Date.now()}_${crypto.randomBytes(4).toString("hex")}${ext}`;
+    const UPLOAD_DIR = path.join(__dirname, "public", "uploads", "patient", dirPid);
+    if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    const diskPath = path.join(UPLOAD_DIR, safeName);
+    fs.writeFileSync(diskPath, file.buffer);
+    const fileUrl = `/uploads/patient/${encodeURIComponent(dirPid)}/${encodeURIComponent(safeName)}`;
+
+    return res.json({ ok: true, url: fileUrl });
+  } catch (e) {
+    console.error("[TREATMENT-REQUESTS UPLOAD]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "upload_failed" });
+  }
+});
+
+// GET /api/doctor/treatment-requests — Gelen teklif talepleri (klinik bazlı)
+app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const clinicId = String(req.clinicId || "").trim();
+    const doctorId = String(req.doctorId || "").trim();
+    if (!clinicId) {
+      return res.status(400).json({ ok: false, error: "clinic_required", message: "Doktor kaydında klinik yok." });
+    }
+
+    const { data: rows, error: qErr } = await supabase
+      .from("treatment_requests")
+      .select("*, patients(full_name, name, first_name, last_name, email)")
+      .eq("clinic_id", clinicId)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (qErr) {
+      console.error("[DOCTOR TREATMENT-REQUESTS]", qErr.message);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+    const list = rows || [];
+    const requestIds = list.map((r) => r.id).filter(Boolean);
+    let offersForReq = [];
+    if (requestIds.length) {
+      const { data: off } = await supabase
+        .from("treatment_offers")
+        .select("id, request_id, doctor_id")
+        .in("request_id", requestIds);
+      offersForReq = off || [];
+    }
+
+    const out = [];
+    for (const tr of list) {
+      const reqOffers = offersForReq.filter((o) => o.request_id === tr.id);
+      const offerCount = reqOffers.length;
+      const mine = reqOffers.find((o) => String(o.doctor_id) === String(doctorId));
+      const myOfferId = mine?.id || null;
+      let unreadCount = 0;
+      if (myOfferId) {
+        const { count } = await supabase
+          .from("offer_messages")
+          .select("id", { count: "exact", head: true })
+          .eq("offer_id", myOfferId)
+          .eq("sender_role", "patient")
+          .is("read_at", null);
+        unreadCount = count || 0;
+      }
+      const p = tr.patients || {};
+      const patientName =
+        [p.full_name, p.name, [p.first_name, p.last_name].filter(Boolean).join(" ")].find((x) => x && String(x).trim()) ||
+        (p.email ? String(p.email).split("@")[0] : "") ||
+        "Hasta";
+      const photosRaw = tr.photos;
+      const photos = [];
+      if (Array.isArray(photosRaw)) {
+        for (const pitem of photosRaw) {
+          if (typeof pitem === "string" && pitem.trim()) photos.push({ url: pitem.trim(), type: "image" });
+          else if (pitem && typeof pitem === "object" && pitem.url) photos.push(pitem);
+        }
+      } else if (photosRaw && typeof photosRaw === "object") {
+        try {
+          const vals = Object.values(photosRaw);
+          for (const v of vals) {
+            if (typeof v === "string" && v.trim()) photos.push({ url: v.trim(), type: "image" });
+          }
+        } catch (_) {}
+      }
+      const assignedTo = tr.assigned_to != null ? String(tr.assigned_to).trim() : "";
+      out.push({
+        id: tr.id,
+        patient_name: patientName,
+        description: tr.description || "",
+        budget: tr.budget || null,
+        preferred_treatment: tr.preferred_treatment || null,
+        status: tr.status || "pending",
+        created_at: tr.created_at,
+        offer_count: offerCount,
+        my_offer_id: myOfferId,
+        unread_count: unreadCount,
+        is_assigned_to_me: !!assignedTo && assignedTo === String(doctorId),
+        photos: photos.length ? photos : null,
+      });
+    }
+
+    return res.json({ ok: true, requests: out });
+  } catch (e) {
+    console.error("[DOCTOR TREATMENT-REQUESTS]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/doctor/treatment-requests/:requestId/offer — Doktor teklifi gönderir
+app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const requestId = String(req.params.requestId || "").trim();
+    const clinicId = String(req.clinicId || "").trim();
+    const doctorId = String(req.doctorId || "").trim();
+    const body = req.body || {};
+    const treatmentType = String(body.treatment_type || "").trim();
+    if (!requestId || !treatmentType) {
+      return res.status(400).json({ ok: false, error: "validation_error" });
+    }
+
+    const { data: tr, error: trErr } = await supabase
+      .from("treatment_requests")
+      .select("id, clinic_id, status")
+      .eq("id", requestId)
+      .maybeSingle();
+    if (trErr || !tr) {
+      return res.status(404).json({ ok: false, error: "request_not_found" });
+    }
+    if (String(tr.clinic_id || "") !== clinicId) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    const ins = await supabase
+      .from("treatment_offers")
+      .insert({
+        request_id: requestId,
+        doctor_id: doctorId,
+        clinic_id: clinicId,
+        treatment_type: treatmentType,
+        price_range: body.price_range != null ? String(body.price_range) : null,
+        duration: body.duration != null ? String(body.duration) : null,
+        note: body.note != null ? String(body.note) : null,
+      })
+      .select("id")
+      .maybeSingle();
+    if (ins.error) {
+      console.error("[DOCTOR OFFER]", ins.error.message);
+      return res.status(500).json({ ok: false, error: "db_error", message: ins.error.message });
+    }
+
+    await supabase.from("treatment_requests").update({ status: "answered" }).eq("id", requestId);
+
+    return res.json({ ok: true, offer_id: ins.data?.id });
+  } catch (e) {
+    console.error("[DOCTOR OFFER]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/offer-messages?offer_id=
+app.get("/api/offer-messages", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const offerId = String(req.query.offer_id || "").trim();
+    const access = await authorizeOfferThreadAccess(req, offerId);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ ok: false, error: access.error || "forbidden" });
+    }
+
+    const { data: rows, error: mErr } = await supabase
+      .from("offer_messages")
+      .select("*")
+      .eq("offer_id", offerId)
+      .order("created_at", { ascending: true });
+    if (mErr) {
+      console.error("[OFFER MESSAGES GET]", mErr.message);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    const offerRow = access.offer;
+    const tr = access.request;
+    const patientUuid = String(tr.patient_id || "").trim();
+    const doctorUuid = String(offerRow.doctor_id || "").trim();
+
+    const { data: pat } = await supabase.from("patients").select("full_name, name, first_name, last_name").eq("id", patientUuid).maybeSingle();
+    const { data: doc } = await supabase.from("doctors").select("full_name, name").eq("id", doctorUuid).maybeSingle();
+    const patientLabel =
+      [pat?.full_name, pat?.name, [pat?.first_name, pat?.last_name].filter(Boolean).join(" ")].find((x) => x && String(x).trim()) ||
+      "Hasta";
+    const doctorLabel = doc?.full_name || doc?.name || "Doktor";
+
+    const messages = (rows || []).map((row) => {
+      const isDoc = row.sender_role === "doctor";
+      return {
+        id: row.id,
+        sender_id: row.sender_id,
+        sender_role: row.sender_role,
+        sender_name: isDoc ? doctorLabel : patientLabel,
+        text: row.text || null,
+        attachment_url: row.attachment_url || null,
+        attachment_type: row.attachment_type || null,
+        created_at: row.created_at,
+      };
+    });
+
+    return res.json({ ok: true, messages });
+  } catch (e) {
+    console.error("[OFFER MESSAGES GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/offer-messages
+app.post("/api/offer-messages", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const body = req.body || {};
+    const offerId = String(body.offer_id || "").trim();
+    const access = await authorizeOfferThreadAccess(req, offerId);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ ok: false, error: access.error || "forbidden" });
+    }
+
+    const textRaw = body.text != null ? String(body.text) : "";
+    const attachmentUrl = body.attachment_url != null ? String(body.attachment_url).trim() : "";
+    const attachmentType = body.attachment_type != null ? String(body.attachment_type).trim() : null;
+    if (!textRaw.trim() && !attachmentUrl) {
+      return res.status(400).json({ ok: false, error: "empty_message" });
+    }
+
+    let senderId;
+    let senderRole;
+    if (access.role === "doctor") {
+      senderId = access.doctorId;
+      senderRole = "doctor";
+    } else {
+      senderId = access.patientId;
+      senderRole = "patient";
+    }
+
+    const payload = {
+      offer_id: offerId,
+      sender_id: senderId,
+      sender_role: senderRole,
+      text: textRaw.trim() || " ",
+      attachment_url: attachmentUrl || null,
+      attachment_type: attachmentType && ["image", "xray", "document"].includes(attachmentType) ? attachmentType : null,
+    };
+
+    const ins = await supabase.from("offer_messages").insert(payload).select("*").maybeSingle();
+    if (ins.error) {
+      console.error("[OFFER MESSAGES POST]", ins.error.message);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+    const row = ins.data;
+    const tr = access.request;
+    const patientUuid = String(tr.patient_id || "").trim();
+    const doctorUuid = String(access.offer.doctor_id || "").trim();
+    const { data: pat } = await supabase.from("patients").select("full_name, name").eq("id", patientUuid).maybeSingle();
+    const { data: doc } = await supabase.from("doctors").select("full_name, name").eq("id", doctorUuid).maybeSingle();
+    const patientLabel = pat?.full_name || pat?.name || "Hasta";
+    const doctorLabel = doc?.full_name || doc?.name || "Doktor";
+    const isDoc = row.sender_role === "doctor";
+    const message = {
+      id: row.id,
+      sender_id: row.sender_id,
+      sender_role: row.sender_role,
+      sender_name: isDoc ? doctorLabel : patientLabel,
+      text: row.text || null,
+      attachment_url: row.attachment_url || null,
+      attachment_type: row.attachment_type || null,
+      created_at: row.created_at,
+    };
+    return res.json({ ok: true, message });
+  } catch (e) {
+    console.error("[OFFER MESSAGES POST]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/offer-messages/:offerId/read — Doktor: hastanın okunmamış mesajlarını işaretle
+app.post("/api/offer-messages/:offerId/read", requireDoctorAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const offerId = String(req.params.offerId || "").trim();
+    const access = await authorizeOfferThreadAccess(req, offerId);
+    if (!access.ok || access.role !== "doctor") {
+      return res.status(access.ok ? 403 : access.status || 403).json({ ok: false, error: access.error || "forbidden" });
+    }
+    await supabase
+      .from("offer_messages")
+      .update({ read_at: new Date().toISOString() })
+      .eq("offer_id", offerId)
+      .eq("sender_role", "patient")
+      .is("read_at", null);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[OFFER MESSAGES READ]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/offer-messages/upload — Teklif sohbeti ekleri (hasta + doktor)
+app.post("/api/offer-messages/upload", chatUpload.single("file"), async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const offerId = String(req.body?.offer_id || "").trim();
+    const access = await authorizeOfferThreadAccess(req, offerId);
+    if (!access.ok) {
+      return res.status(access.status || 403).json({ ok: false, error: access.error || "forbidden" });
+    }
+    const file = req.file;
+    if (!file) return res.status(400).json({ ok: false, error: "no_file" });
+    const mime = String(file.mimetype || "").toLowerCase();
+    const isImg = mime.startsWith("image/");
+    if (!isImg && !mime.includes("pdf")) {
+      return res.status(400).json({ ok: false, error: "invalid_file_type" });
+    }
+    let ext = path.extname(file.originalname || "").toLowerCase() || (isImg ? ".jpg" : ".pdf");
+    const safeName = `offer_${offerId.slice(0, 8)}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}${ext}`;
+    const dir = path.join(__dirname, "public", "uploads", "offer-messages", offerId);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const diskPath = path.join(dir, safeName);
+    fs.writeFileSync(diskPath, file.buffer);
+    const url = `/uploads/offer-messages/${encodeURIComponent(offerId)}/${encodeURIComponent(safeName)}`;
+    return res.json({ ok: true, url });
+  } catch (e) {
+    console.error("[OFFER MESSAGES UPLOAD]", e);
+    return res.status(500).json({ ok: false, error: "upload_failed" });
   }
 });
 
@@ -35363,12 +36180,13 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
   try {
     const patientId = String(req.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const resolvedPid = (await resolveMessagesPatientDbId(patientId)) || patientId;
 
     // Count answered requests the patient hasn't opened yet
     const { count: newOffers, error: offerErr } = await supabase
       .from('treatment_requests')
       .select('id', { count: 'exact', head: true })
-      .eq('patient_id', patientId)
+      .eq('patient_id', resolvedPid)
       .eq('status', 'answered')
       .is('patient_seen_at', null);
 
@@ -35383,7 +36201,7 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
       const { data: reqs } = await supabase
         .from('treatment_requests')
         .select('id')
-        .eq('patient_id', patientId);
+        .eq('patient_id', resolvedPid);
 
       if (reqs && reqs.length > 0) {
         const reqIds = reqs.map(r => r.id);

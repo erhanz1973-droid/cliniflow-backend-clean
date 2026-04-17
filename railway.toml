@@ -1,3 +1,5 @@
-# Railway: always run the repo-root clean backend (never server_OLD or legacy copies).
+# In Railway → Service → Settings: Root Directory must be the folder that CONTAINS this file,
+# package.json, and index.cjs (e.g. `cliniflow-backend-clean`), NOT the monorepo parent.
+# Start command runs from that root.
 [deploy]
 startCommand = "node index.cjs"
