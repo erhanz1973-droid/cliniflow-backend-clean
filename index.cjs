@@ -270,6 +270,18 @@ const app = express();
 // Avoid 304 Not Modified on JSON APIs — clients that always JSON.parse() break on empty 304 bodies
 app.set("etag", false);
 console.log("SERVER ENTRY:", __filename);
+
+process.on("unhandledRejection", (reason) => {
+  const msg =
+    reason && typeof reason === "object" && reason.stack
+      ? reason.stack
+      : String(reason ?? "");
+  console.error("[PROCESS] unhandledRejection", msg);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[PROCESS] uncaughtException", err && err.stack ? err.stack : err);
+});
+
 const server = http.createServer(app);
 const _portEnv = process.env.PORT;
 const PORT =
@@ -295,6 +307,11 @@ function maskEmailForLog(email) {
   return `${e.slice(0, 2)}***${e.slice(at)}`;
 }
 
+/** Step markers for register debugging (Railway logs). */
+function logRegisterTrace(route, step, meta = {}) {
+  console.log("[REGISTER_TRACE]", { route, step, ...meta });
+}
+
 /** Register OTP step: email must leave the server; no silent success if Brevo/SMTP fails. */
 function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
   const msg = String(err?.message != null ? err.message : err || "");
@@ -305,6 +322,9 @@ function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
   });
 
   if (msg === "email_not_configured" || msg.includes("email_not_configured")) {
+    logRegisterTrace(routeTag || "register", "STEP_OTP_FAILED_EMAIL_NOT_CONFIGURED", {
+      email: maskEmailForLog(emailNormalized),
+    });
     return res.status(503).json({
       ok: false,
       error: "email_not_configured",
@@ -3906,20 +3926,27 @@ app.post("/api/register", async (req, res) => {
       });
     }
 
+    logRegisterTrace("/api/register", "STEP_OTP_BLOCK_ENTER", {
+      email: maskEmailForLog(emailNormalized),
+    });
     console.log("[REGISTER] register_otp_start", { route: "/api/register", email: maskEmailForLog(emailNormalized) });
     cleanupExpiredOTPs();
 
+    logRegisterTrace("/api/register", "STEP_1_GENERATE_CODE", {});
     const otpCode = String(generateOTP()).trim();
     console.log("[REGISTER] register_otp_code_generated", {
       digits: otpCode.length,
       ...(OTP_DEBUG_LOG ? { code: otpCode } : {}),
     });
 
+    logRegisterTrace("/api/register", "STEP_2_STORE_OTP_FILE", {});
     await saveOTP(emailNormalized, otpCode, 0);
     console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
+    logRegisterTrace("/api/register", "STEP_3_BEFORE_SEND_EMAIL", {});
     console.log("[REGISTER] register_otp_before_send_email");
     await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
+    logRegisterTrace("/api/register", "STEP_4_AFTER_SEND_EMAIL", {});
     console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
 
     return res.json({
@@ -4042,6 +4069,10 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       message: "Geçersiz telefon numarası formatı.",
     });
   }
+
+  logRegisterTrace("/api/register/patient", "REGISTER_START", {
+    email: maskEmailForLog(emailNormalized),
+  });
 
   // Klinik kodu isteğe bağlı — yalnızca gönderilmiş ve boş değilse doğrulanır
   let validatedClinicCode = null;
@@ -4178,6 +4209,10 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     );
   }
 
+  logRegisterTrace("/api/register/patient", "STEP_BEFORE_DB_UPSERT", {
+    supabase: isSupabaseEnabled(),
+  });
+
   // === SUPABASE PATIENT UPSERT (ZORUNLU) ===
   if (isSupabaseEnabled()) {
     const payload = {
@@ -4276,6 +4311,9 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
 
     if (data?.id) console.log("[SUPABASE] ✅ patient upserted:", data.id);
     if (data) supabasePatientRow = data;
+    logRegisterTrace("/api/register/patient", "STEP_AFTER_DB_UPSERT", {
+      patientRowId: data?.id || supabasePatientRow?.id || null,
+    });
   }
 
   // FILE-BASED: Fallback storage (for backward compatibility)
@@ -4319,6 +4357,8 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     regs[requestId] = row;
     writeJson(REG_FILE, regs);
   }
+
+  logRegisterTrace("/api/register/patient", "STEP_BEFORE_REFERRAL_AND_OTP", {});
 
   // Handle referral code if provided (Supabase-first; file fallback only when enabled)
   if (referralCode && String(referralCode).trim()) {
@@ -4538,12 +4578,16 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
 
   // Send OTP for email verification — await Brevo/SMTP; no silent success if email fails
   try {
+    logRegisterTrace("/api/register/patient", "STEP_OTP_BLOCK_ENTER", {
+      email: maskEmailForLog(emailNormalized),
+    });
     console.log("[REGISTER] register_otp_start", {
       route: "/api/register/patient",
       email: maskEmailForLog(emailNormalized),
     });
     cleanupExpiredOTPs();
 
+    logRegisterTrace("/api/register/patient", "STEP_1_GENERATE_CODE", {});
     const otpCode = String(generateOTP()).trim();
     console.log("[REGISTER] register_otp_code_generated", {
       digits: otpCode.length,
@@ -4551,6 +4595,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     });
     const otpHash = await bcrypt.hash(otpCode, 10);
 
+    logRegisterTrace("/api/register/patient", "STEP_2_STORE_OTP_HASH", {});
     await storeOTPForEmail(emailNormalized, otpHash, null, {
       type: "patient_registration",
       phone: phone || "",
@@ -4559,8 +4604,10 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     });
     console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
+    logRegisterTrace("/api/register/patient", "STEP_3_BEFORE_SEND_EMAIL", {});
     console.log("[REGISTER] register_otp_before_send_email");
     await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
+    logRegisterTrace("/api/register/patient", "STEP_4_AFTER_SEND_EMAIL", {});
     console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
 
     return res.json({
@@ -39689,15 +39736,20 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v57');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v58');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
   console.log('🚀  built: ' + new Date().toISOString());
   console.log('🚀 ============================================');
-
-
-
+  console.log("[EMAIL_ENV_CHECK]", {
+    BREVO_API_KEY: !!process.env.BREVO_API_KEY,
+    SMTP_FROM: !!(process.env.SMTP_FROM || ""),
+    SMTP_HOST: !!process.env.SMTP_HOST,
+    SMTP_USER: !!process.env.SMTP_USER,
+    SMTP_PASS: !!process.env.SMTP_PASS,
+    hasSmtpTransporter: !!emailTransporter,
+  });
 
 
 
