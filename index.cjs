@@ -36452,6 +36452,126 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
   }
 });
 
+// POST /api/patient/treatment-requests — yeni talep (Supabase treatment_requests; doktor /api/doctor/treatment-requests ile görünür)
+app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: 'supabase_disabled' });
+    }
+    const tokenPatientId = String(req.patientId || '').trim();
+    if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+
+    const body = req.body || {};
+    const resolvedPatientId = await resolveMessagesPatientDbId(tokenPatientId);
+    if (!resolvedPatientId) {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    await applyClinicContextToPatientIfMissing(
+      resolvedPatientId,
+      body.clinicCode || body.clinic_code,
+      body.clinic_id || body.clinicId,
+    );
+
+    const clinicId = await resolveClinicIdForInbound(resolvedPatientId);
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.status(422).json({
+        ok: false,
+        error: 'CLINIC_NOT_RESOLVED',
+        message:
+          'Klinik eşleşmedi. Uygulamadan clinicCode veya clinic_id gönderin, hasta kaydına klinik bağlayın veya sunucuda DEFAULT_CLINIC_ID / DEFAULT_CLINIC_CODE tanımlayın.',
+      });
+    }
+
+    await patchPatientClinicIfMissing(resolvedPatientId, clinicId);
+
+    let photoUrls = null;
+    const rawPhotos = body.photo_urls != null ? body.photo_urls : body.attachment_urls;
+    if (Array.isArray(rawPhotos)) {
+      photoUrls = rawPhotos.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 24);
+    }
+    if (photoUrls && photoUrls.length === 0) photoUrls = null;
+
+    const description = String(body.description ?? body.message ?? '').trim();
+    const budget =
+      body.budget != null && String(body.budget).trim() ? String(body.budget).trim() : null;
+    let preferred =
+      body.preferred_treatment != null && String(body.preferred_treatment).trim()
+        ? String(body.preferred_treatment).trim()
+        : null;
+    if (!preferred && body.treatment != null && String(body.treatment).trim()) {
+      preferred = String(body.treatment).trim();
+    }
+
+    const hasPayload = Boolean(
+      description ||
+        budget ||
+        preferred ||
+        (photoUrls && photoUrls.length > 0),
+    );
+    if (!hasPayload) {
+      return res.status(400).json({
+        ok: false,
+        error: 'empty_request',
+        message: 'En azından açıklama, bütçe, tedavi tercihi veya fotoğraf URL’lerinden biri gerekli.',
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const payload = {
+      patient_id: resolvedPatientId,
+      clinic_id: clinicId,
+      description,
+      budget,
+      preferred_treatment: preferred,
+      status: 'pending',
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    if (photoUrls && photoUrls.length) {
+      payload.photo_urls = photoUrls;
+    }
+
+    const { data: inserted, error: insErr } = await insertIntoTableWithColumnPruning(
+      'treatment_requests',
+      payload,
+      '*',
+    );
+
+    if (insErr) {
+      console.error('[TREATMENT-REQUESTS POST]', insErr.message || insErr);
+      return res.status(500).json({
+        ok: false,
+        error: 'insert_failed',
+        message: insErr.message || String(insErr),
+      });
+    }
+
+    const row = inserted || {};
+    console.log('[TREATMENT-REQUESTS POST] ok', {
+      request_id: row.id,
+      patient_id: String(resolvedPatientId).slice(0, 8),
+      clinic_id: String(clinicId).slice(0, 8),
+    });
+
+    return res.status(201).json({
+      ok: true,
+      request: {
+        id: row.id != null ? String(row.id) : null,
+        clinic_id: row.clinic_id || clinicId,
+        description: row.description != null ? row.description : description,
+        budget: row.budget != null ? row.budget : budget,
+        preferred_treatment: row.preferred_treatment != null ? row.preferred_treatment : preferred,
+        status: row.status || 'pending',
+        created_at: row.created_at || nowIso,
+      },
+    });
+  } catch (e) {
+    console.error('[TREATMENT-REQUESTS POST]', e);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
 // POST /api/patient/treatment-requests/mark-seen
 // Sets patient_seen_at = NOW() on all answered requests that haven't been seen yet.
 // Called when the patient opens the My Requests screen — clears the home-screen badge.
@@ -39436,11 +39556,11 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v49');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v50');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
-  console.log('🚀  commit: 0bd30f59  built: ' + new Date().toISOString());
+  console.log('🚀  built: ' + new Date().toISOString());
   console.log('🚀 ============================================');
 
 
