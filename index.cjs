@@ -3430,8 +3430,9 @@ app.post("/api/register", async (req, res) => {
   }
 
   if (isSupabaseEnabled() && !supabaseClinicId) {
-
-    return res.status(400).json({ ok: false, error: "clinic_not_found", message: "Klinik kodu bulunamadı. Lütfen geçerli bir klinik kodu girin." });
+    console.warn(
+      "[REGISTER] no clinic resolved — saving patient with clinic_id null (set DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID or send clinicCode from app to bind a clinic)",
+    );
   }
 
   // === SUPABASE PATIENT UPSERT (ZORUNLU) ===
@@ -3512,7 +3513,21 @@ app.post("/api/register", async (req, res) => {
           return res.status(500).json({ ok: false, error: "register_failed" });
         }
       } else {
-        return res.status(500).json({ ok: false, error: error.message });
+        const hintNull =
+          !supabaseClinicId &&
+          String(error.message || "")
+            .toLowerCase()
+            .includes("clinic_id");
+        return res.status(500).json({
+          ok: false,
+          error: "register_failed",
+          message: error.message || String(error),
+          ...(hintNull
+            ? {
+                hint: "patients.clinic_id may be NOT NULL; run migration supabase/migrations/20260419120000_patients_clinic_id_nullable_register.sql or set DEFAULT_CLINIC_ID on the server.",
+              }
+            : {}),
+        });
       }
     }
 
@@ -4108,8 +4123,9 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
   }
 
   if (isSupabaseEnabled() && !supabaseClinicId) {
-
-    return res.status(400).json({ ok: false, error: "clinic_not_found", message: "Klinik kodu bulunamadı. Lütfen geçerli bir klinik kodu girin." });
+    console.warn(
+      "[REGISTER /api/patient/register] no clinic resolved — saving patient with clinic_id null (set DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID or send clinicCode from app to bind a clinic)",
+    );
   }
 
   // === SUPABASE PATIENT UPSERT (ZORUNLU) ===
@@ -4190,7 +4206,21 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
           return res.status(500).json({ ok: false, error: "register_failed" });
         }
       } else {
-        return res.status(500).json({ ok: false, error: error.message });
+        const hintNull =
+          !supabaseClinicId &&
+          String(error.message || "")
+            .toLowerCase()
+            .includes("clinic_id");
+        return res.status(500).json({
+          ok: false,
+          error: "register_failed",
+          message: error.message || String(error),
+          ...(hintNull
+            ? {
+                hint: "patients.clinic_id may be NOT NULL; run migration supabase/migrations/20260419120000_patients_clinic_id_nullable_register.sql or set DEFAULT_CLINIC_ID on the server.",
+              }
+            : {}),
+        });
       }
     }
 
@@ -39628,7 +39658,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v51');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v52');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
