@@ -528,6 +528,13 @@ app.param("patientId", (req, res, next, value) => {
     return next();
   }
 
+  // Bad client URLs reuse the treatment-requests namespace as if it were a patient id, e.g.
+  // /api/patient/treatment-requests/files → would match :patientId = "treatment-requests" on /api/patient/:patientId/files
+  if (raw.toLowerCase() === "treatment-requests") {
+    req.params.patientId = "me";
+    return next();
+  }
+
   let id = raw;
   const prefixedUuid = /^p_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(raw);
   if (prefixedUuid) id = prefixedUuid[1];
@@ -39667,7 +39674,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v53');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v54');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
