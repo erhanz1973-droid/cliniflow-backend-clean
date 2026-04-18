@@ -15799,6 +15799,17 @@ app.post(
   }
 );
 
+// POST /api/patient/treatment-requests/upload — register BEFORE :patientId/upload or Express matches
+// /api/patient/treatment-requests/upload → patientId="treatment-requests" → invalid_patient_id.
+app.post("/api/patient/treatment-requests/upload", requireToken, chatUpload.single("file"), async (req, res) => {
+  const pid = String(req.patientId || "").trim();
+  if (!pid) return res.status(401).json({ ok: false, error: "unauthorized" });
+  if (!req.body) req.body = {};
+  if (!String(req.body.source || "").trim()) req.body.source = "treatment_request";
+  req.params = { ...req.params, patientId: pid };
+  return handlePatientChatUpload(req, res);
+});
+
 // POST /api/patient/me/upload — token patient only (no :patientId param → avoids invalid_patient_id from bad client URLs)
 app.post("/api/patient/me/upload", requireToken, chatUpload.single("file"), async (req, res) => {
   const pid = String(req.patientId || "").trim();
