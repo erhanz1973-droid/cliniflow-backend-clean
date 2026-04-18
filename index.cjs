@@ -3213,8 +3213,43 @@ app.get("/super-admin.html", (req, res) => {
   }
 });
 
+/**
+ * Kayıtta klinik: clinicCode | clinic_code | clinics.id (UUID), ardından DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID.
+ * Mobil client'lar farklı alan adı kullanabildiği için backend burada birleştirir.
+ */
+async function augmentRegisterClinicFromBody(body) {
+  const b = body || {};
+  let code = String(b.clinicCode ?? b.clinic_code ?? "").trim();
+  const idHint = String(b.clinicId ?? b.clinic_id ?? "").trim();
+  if (!code && idHint && UUID_RE.test(idHint) && isSupabaseEnabled()) {
+    try {
+      const c = await getClinicById(idHint);
+      if (c?.clinic_code) code = String(c.clinic_code).trim().toUpperCase();
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  if (!code) {
+    const defCode = String(process.env.DEFAULT_CLINIC_CODE || "").trim();
+    if (defCode) code = defCode.toUpperCase();
+  }
+  if (!code && isSupabaseEnabled()) {
+    const defId = String(process.env.DEFAULT_CLINIC_ID || "").trim();
+    if (UUID_RE.test(defId)) {
+      try {
+        const c = await getClinicById(defId);
+        if (c?.clinic_code) code = String(c.clinic_code).trim().toUpperCase();
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+  }
+  return code;
+}
+
 // ================== REGISTER ==================
 app.post("/api/register", async (req, res) => {
+  try {
   const body = req.body || {};
   const {
     name = "",
@@ -3222,11 +3257,17 @@ app.post("/api/register", async (req, res) => {
     fullName = "",
     phone = "",
     email = "",
-    clinicCode = "",
     language = "",
   } = body;
   const referralCode = String(body.referralCode || body.inviterReferralCode || "").trim();
   const displayName = String(bodyPatientName || fullName || name || "").trim();
+
+  let clinicCode = "";
+  try {
+    clinicCode = await augmentRegisterClinicFromBody(body);
+  } catch (augErr) {
+    console.warn("[REGISTER] augmentRegisterClinicFromBody:", augErr?.message || augErr);
+  }
 
   console.log(`[REGISTER] Request received:`, { 
     name: displayName ? "***" : "", 
@@ -3759,17 +3800,21 @@ app.post("/api/register", async (req, res) => {
   try {
     // Review Mode Bypass: Skip OTP generation and saving for test@clinifly.net
     if (REVIEW_MODE && emailNormalized === "test@clinifly.net") {
-
-
-      
-      // Still return success response but without actually sending OTP
+      let reviewClinic = null;
+      if (validatedClinicCode && isSupabaseEnabled()) {
+        try {
+          reviewClinic = await getClinicByCode(validatedClinicCode);
+        } catch (_e) {
+          /* ignore */
+        }
+      }
       return res.status(201).json({
         ok: true,
-        clinicId: clinicData.id,
-        clinicCode: clinicData.clinic_code,
+        clinicId: reviewClinic?.id || supabaseClinicId || null,
+        clinicCode: reviewClinic?.clinic_code || validatedClinicCode || null,
         message: "Clinic registered successfully (Review Mode). Use OTP 123456 to verify.",
         reviewMode: true,
-        requiresOTP: true
+        requiresOTP: true,
       });
     }
     
@@ -3827,6 +3872,16 @@ app.post("/api/register", async (req, res) => {
       requiresOTP: true,
     });
   }
+  } catch (regErr) {
+    console.error("[REGISTER] unhandled:", regErr?.stack || regErr?.message || regErr);
+    if (!res.headersSent) {
+      res.status(500).json({
+        ok: false,
+        error: "internal_error",
+        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+      });
+    }
+  }
 });
 
 // POST /api/lead-contact — non-registered visitor message (creates lead patient + unassigned thread; not visible to doctors until admin assigns)
@@ -3867,6 +3922,7 @@ app.post("/api/lead-contact", async (req, res) => {
 // ================== PATIENT REGISTER (alias) ==================
 // Same as /api/register/patient — some clients use the swapped path
 app.post(["/api/patient/register", "/api/register/patient"], async (req, res) => {
+  try {
   const body = req.body || {};
   const {
     name = "",
@@ -3874,12 +3930,18 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     fullName = "",
     phone = "",
     email = "",
-    clinicCode = "",
     language = "",
   } = body;
   const referralCode = String(body.referralCode || body.inviterReferralCode || "").trim();
   /** Full display name: mobile often sends patientName; keep single field in DB (name/full_name), leave first/last empty */
   const displayName = String(bodyPatientName || fullName || name || "").trim();
+
+  let clinicCode = "";
+  try {
+    clinicCode = await augmentRegisterClinicFromBody(body);
+  } catch (augErr) {
+    console.warn("[REGISTER /api/patient/register] augmentRegisterClinicFromBody:", augErr?.message || augErr);
+  }
 
   console.log(`[REGISTER /api/patient/register] Request received:`, { 
     name: displayName ? "***" : "", 
@@ -4456,6 +4518,16 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       status: "PENDING",
       requiresOTP: true,
     });
+  }
+  } catch (regErr) {
+    console.error("[REGISTER /api/patient/register] unhandled:", regErr?.stack || regErr?.message || regErr);
+    if (!res.headersSent) {
+      res.status(500).json({
+        ok: false,
+        error: "internal_error",
+        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+      });
+    }
   }
 });
 
@@ -39556,7 +39628,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v50');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v51');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
