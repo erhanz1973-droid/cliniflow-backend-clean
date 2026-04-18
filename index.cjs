@@ -318,6 +318,7 @@ function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
   const emailCfg =
     msg.includes("SMTP_FROM") ||
     msg.includes("Brevo") ||
+    msg.includes("brevo_fetch_timeout") ||
     /failed to fetch|network|fetch/i.test(msg);
   return res.status(emailCfg ? 503 : 500).json({
     ok: false,
@@ -2743,6 +2744,13 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
 
 
 
+  const BREVO_FETCH_MS = Math.min(
+    Math.max(Number.parseInt(String(process.env.BREVO_FETCH_TIMEOUT_MS || "25000"), 10) || 25000, 5000),
+    120000,
+  );
+  const brevoAbort = new AbortController();
+  const brevoTimer = setTimeout(() => brevoAbort.abort(), BREVO_FETCH_MS);
+
   try {
     const response = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
@@ -2751,9 +2759,9 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
         "api-key": apiKey,
       },
       body: JSON.stringify(payload),
+      signal: brevoAbort.signal,
     });
-
-
+    clearTimeout(brevoTimer);
 
     if (!response.ok) {
       const text = await response.text();
@@ -2768,6 +2776,12 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
     });
     return result;
   } catch (error) {
+    clearTimeout(brevoTimer);
+    if (error?.name === "AbortError") {
+      const err = new Error(`brevo_fetch_timeout_${BREVO_FETCH_MS}ms`);
+      console.error(`[sendOTPEmail] ❌ Brevo API request timed out after ${BREVO_FETCH_MS}ms`);
+      throw err;
+    }
     console.error(`[sendOTPEmail] ❌ Error sending email via Brevo API:`, error.message);
     throw error;
   }
@@ -39675,7 +39689,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v56');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v57');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');

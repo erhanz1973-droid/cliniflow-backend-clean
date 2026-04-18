@@ -387,7 +387,7 @@
           registerFailed: "Kayıt başarısız. Lütfen tekrar deneyin.",
           genericError: "Kayıt hatası: {error}",
           termsNotAccepted: "Lütfen hizmet sözleşmesini kabul edin.",
-          timeout: "⏳ Sunucu başlatılıyor, lütfen birkaç saniye bekleyip tekrar deneyin."
+          timeout: "İstek zaman aşımı (60 sn). API adresi ve internet bağlantısını kontrol edin."
         },
         success: "Klinik kaydı başarılı! Giriş sayfasına yönlendiriliyorsunuz...",
         successTitle: "Kayıt Başarılı!",
@@ -978,7 +978,7 @@
           registerFailed: "Registration failed. Please try again.",
           genericError: "Registration error: {error}",
           termsNotAccepted: "Please accept the service agreement.",
-          timeout: "⏳ Server is starting up, please wait a moment and try again."
+          timeout: "Request timed out (60s). Check API URL and your network connection."
         },
         success: "Clinic registration successful! Redirecting to login page...",
         successTitle: "Registration Successful!",
