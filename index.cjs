@@ -553,6 +553,10 @@ app.param("patientId", (req, res, next, value) => {
         req.params.patientId = resolved;
         return next();
       }
+      console.warn("[param patientId] unknown segment (use /api/patient/me/... routes to avoid URL id)", {
+        len: raw.length,
+        prefix: String(raw).slice(0, 24),
+      });
       return res.status(400).json({
         ok: false,
         error: "Invalid patient id",
@@ -15647,11 +15651,26 @@ async function collectPatientFiles(patientId) {
   return Array.from(filesMap.values()).sort((a, b) => b.createdAt - a.createdAt);
 }
 
+// GET /api/patient/me/files — token patient only (register before :patientId so /me is not param-validated)
+app.get("/api/patient/me/files", requireToken, async (req, res) => {
+  try {
+    const patientId = String(req.patientId || "").trim();
+    if (!patientId) return res.status(401).json({ ok: false, error: "unauthorized" });
+    const files = await collectPatientFiles(patientId);
+    return res.json({ ok: true, files });
+  } catch (err) {
+    console.error("[PATIENT FILES me] error:", err.message);
+    return res.status(500).json({ ok: false, error: "server_error", files: [] });
+  }
+});
+
 // GET /api/patient/:patientId/files — Patient views their own files
 app.get('/api/patient/:patientId/files', requireToken, async (req, res) => {
   try {
-    const patientId = String(req.params.patientId || '').trim();
-    if (req.patientId !== patientId) {
+    const rawPid = String(req.params.patientId || "").trim();
+    const patientId =
+      rawPid.toLowerCase() === "me" ? String(req.patientId || "").trim() : rawPid;
+    if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
       return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
     }
     const files = await collectPatientFiles(patientId);
@@ -16093,35 +16112,65 @@ function validateIntraoralBuffer(buffer) {
   };
 }
 
+// POST /api/patient/me/validate-intraoral-image (no :patientId → avoids invalid_patient_id)
+app.post(
+  "/api/patient/me/validate-intraoral-image",
+  requireToken,
+  chatUpload.single("file"),
+  async (req, res) => {
+    const pid = String(req.patientId || "").trim();
+    if (!pid) return res.status(401).json({ ok: false, error: "unauthorized" });
+    req.params = { ...req.params, patientId: pid };
+    return handleValidateIntraoralImage(req, res);
+  }
+);
+
 // POST /api/patient/:patientId/validate-intraoral-image
-app.post('/api/patient/:patientId/validate-intraoral-image', requireToken, chatUpload.single('file'), async (req, res) => {
+app.post(
+  "/api/patient/:patientId/validate-intraoral-image",
+  requireToken,
+  chatUpload.single("file"),
+  handleValidateIntraoralImage
+);
+
+async function handleValidateIntraoralImage(req, res) {
   try {
-    const rawPid = String(req.params.patientId || '').trim();
+    const rawPid = String(req.params.patientId || "").trim();
     const patientId =
-      rawPid.toLowerCase() === 'me' ? String(req.patientId || '').trim() : String(req.params.patientId || '').trim();
+      rawPid.toLowerCase() === "me" ? String(req.patientId || "").trim() : String(req.params.patientId || "").trim();
     if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
-      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
     }
 
     const file = req.file;
-    if (!file) return res.status(400).json({ ok: false, error: 'no_file' });
+    if (!file) return res.status(400).json({ ok: false, error: "no_file" });
 
     const result = validateIntraoralBuffer(file.buffer);
     return res.json({ ok: true, ...result });
   } catch (err) {
-    console.error('[INTRAORAL VALIDATE] error:', err.message);
-    return res.status(500).json({ ok: false, error: 'server_error' });
+    console.error("[INTRAORAL VALIDATE] error:", err.message);
+    return res.status(500).json({ ok: false, error: "server_error" });
   }
+}
+
+// GET /api/patient/me/intraoral-photos
+app.get("/api/patient/me/intraoral-photos", requireToken, async (req, res) => {
+  const pid = String(req.patientId || "").trim();
+  if (!pid) return res.status(401).json({ ok: false, error: "unauthorized" });
+  req.params = { ...req.params, patientId: pid };
+  return handleGetIntraoralPhotos(req, res);
 });
 
 // GET /api/patient/:patientId/intraoral-photos — grouped by angle with validation status
-app.get('/api/patient/:patientId/intraoral-photos', requireToken, async (req, res) => {
+app.get("/api/patient/:patientId/intraoral-photos", requireToken, handleGetIntraoralPhotos);
+
+async function handleGetIntraoralPhotos(req, res) {
   try {
-    const rawPid = String(req.params.patientId || '').trim();
+    const rawPid = String(req.params.patientId || "").trim();
     const patientId =
-      rawPid.toLowerCase() === 'me' ? String(req.patientId || '').trim() : String(req.params.patientId || '').trim();
+      rawPid.toLowerCase() === "me" ? String(req.patientId || "").trim() : String(req.params.patientId || "").trim();
     if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
-      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
     }
 
     const REQUIRED_ANGLES = ['FRONT', 'LEFT', 'RIGHT', 'UPPER', 'LOWER'];
@@ -16228,7 +16277,7 @@ app.get('/api/patient/:patientId/intraoral-photos', requireToken, async (req, re
     console.error('[INTRAORAL PHOTOS] error:', err.message);
     return res.status(500).json({ ok: false, error: 'server_error', photos: [], byAngle: {}, missingAngles: [], allPresent: false, allValid: false });
   }
-});
+}
 
 // GET /api/doctor/patient/:patientId/intraoral-photos — Doctor views patient's intraoral photos
 app.get('/api/doctor/patient/:patientId/intraoral-photos', requireDoctorAuth, async (req, res) => {
