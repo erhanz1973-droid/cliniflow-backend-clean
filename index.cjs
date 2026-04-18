@@ -303,8 +303,19 @@ function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
     email: maskEmailForLog(emailNormalized),
     message: msg,
   });
+
+  if (msg === "email_not_configured" || msg.includes("email_not_configured")) {
+    return res.status(503).json({
+      ok: false,
+      error: "email_not_configured",
+      message:
+        "Doğrulama e-postası şu an gönderilemiyor (sunucu yapılandırması). Lütfen daha sonra tekrar deneyin.",
+      hint:
+        "Admin: Railway’de BREVO_API_KEY ekleyin veya SMTP_HOST, SMTP_USER, SMTP_PASS (Brevo SMTP) tanımlayın. Yalnızca SMTP_FROM yeterli değildir.",
+    });
+  }
+
   const emailCfg =
-    msg.includes("email_not_configured") ||
     msg.includes("SMTP_FROM") ||
     msg.includes("Brevo") ||
     /failed to fetch|network|fetch/i.test(msg);
@@ -312,7 +323,7 @@ function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
     ok: false,
     error: emailCfg ? "otp_email_failed" : "otp_send_failed",
     message: IS_PROD
-      ? "Doğrulama e-postası gönderilemedi. Lütfen bir süre sonra tekrar deneyin veya BREVO/SMTP ayarlarını kontrol edin."
+      ? "Doğrulama e-postası gönderilemedi. Lütfen bir süre sonra tekrar deneyin."
       : msg,
   });
 }
@@ -2270,6 +2281,7 @@ const chatUpload = multer({
 // ================== EMAIL OTP CONFIGURATION ==================
 // DEBUG: Log raw ENV values at startup
 console.log("[SMTP DEBUG] RAW ENV VALUES:", {
+  BREVO_API_KEY: process.env.BREVO_API_KEY ? "SET (length: " + process.env.BREVO_API_KEY.length + ")" : "MISSING",
   SMTP_HOST: process.env.SMTP_HOST || "MISSING",
   SMTP_PORT: process.env.SMTP_PORT || "MISSING",
   SMTP_USER: process.env.SMTP_USER ? "SET (" + process.env.SMTP_USER.substring(0, 5) + "...)" : "MISSING",
@@ -2300,10 +2312,13 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
   });
 
 } else {
-  console.error("[EMAIL] ❌ SMTP NOT configured - missing credentials:");
+  console.error("[EMAIL] ❌ SMTP NOT configured - missing HOST, USER, or PASS");
+}
 
-
-
+if (!process.env.BREVO_API_KEY && !emailTransporter) {
+  console.error(
+    "[EMAIL] ⚠️ OTP / transactional mail disabled: set BREVO_API_KEY (REST) OR SMTP_HOST + SMTP_USER + SMTP_PASS (e.g. smtp-relay.brevo.com). SMTP_FROM alone is not enough.",
+  );
 }
 
 // ================== PUSH NOTIFICATIONS ==================
@@ -39660,7 +39675,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v55');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v56');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
