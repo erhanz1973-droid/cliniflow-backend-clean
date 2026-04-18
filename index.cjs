@@ -284,6 +284,38 @@ const JWT_SECRET =
 const JWT_EXPIRES_IN = "30d";
 const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const PERF_LOGS_ENABLED = !IS_PROD || String(process.env.PERF_LOGS || "").trim() === "1";
+/** Set OTP_DEBUG=1 to log OTP digits in register/send paths (never enable in prod unless short tests). */
+const OTP_DEBUG_LOG = String(process.env.OTP_DEBUG || "").trim() === "1" || !IS_PROD;
+
+function maskEmailForLog(email) {
+  const e = String(email || "").trim().toLowerCase();
+  if (!e) return "(empty)";
+  const at = e.indexOf("@");
+  if (at < 1) return "***";
+  return `${e.slice(0, 2)}***${e.slice(at)}`;
+}
+
+/** Register OTP step: email must leave the server; no silent success if Brevo/SMTP fails. */
+function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
+  const msg = String(err?.message != null ? err.message : err || "");
+  console.error("[REGISTER] register_otp_failed", {
+    route: routeTag || "register",
+    email: maskEmailForLog(emailNormalized),
+    message: msg,
+  });
+  const emailCfg =
+    msg.includes("email_not_configured") ||
+    msg.includes("SMTP_FROM") ||
+    msg.includes("Brevo") ||
+    /failed to fetch|network|fetch/i.test(msg);
+  return res.status(emailCfg ? 503 : 500).json({
+    ok: false,
+    error: emailCfg ? "otp_email_failed" : "otp_send_failed",
+    message: IS_PROD
+      ? "Doğrulama e-postası gönderilemedi. Lütfen bir süre sonra tekrar deneyin veya BREVO/SMTP ayarlarını kontrol edin."
+      : msg,
+  });
+}
 /** Non-production: skip OTP hash / missing-row checks for /auth/verify-otp (patient & doctor). Set OTP_DEV_BYPASS=0 to enforce real OTP locally. */
 function isOtpDevBypassEnabled() {
   if (IS_PROD) return false;
@@ -2598,17 +2630,20 @@ async function markOTPVerified(email) {
  * Send OTP email using Brevo REST API (not SMTP)
  */
 async function sendOTPEmail(email, otpCode, lang = "en") {
-
-
-
+  console.log("[sendOTPEmail] START", {
+    email: maskEmailForLog(email),
+    digits: String(otpCode || "").length,
+    hasBrevoApiKey: !!process.env.BREVO_API_KEY,
+    hasSmtpTransporter: !!emailTransporter,
+    smtpFromSet: !!(process.env.SMTP_FROM || SMTP_FROM),
+  });
 
 
 
   
   // Review Mode Bypass: Skip email sending for test@clinifly.net
   if (REVIEW_MODE && email.toLowerCase() === "test@clinifly.net") {
-
-
+    console.log("[sendOTPEmail] REVIEW_MODE_SKIP", { email: maskEmailForLog(email) });
     return { messageId: "review-mode-bypass", accepted: [email] };
   }
   
@@ -2659,7 +2694,8 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
           ? `Clinifly doğrulama kodunuz: ${otpCode} (5 dk geçerli)`
           : `Your Clinifly verification code: ${otpCode} (valid for 5 minutes)`,
       });
-      console.log(`[sendOTPEmail] ✅ Email sent via SMTP transporter`, {
+      console.log("[sendOTPEmail] SMTP_OK", {
+        email: maskEmailForLog(email),
         messageId: info?.messageId || null,
         accepted: info?.accepted || null,
       });
@@ -2711,8 +2747,10 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
     }
 
     const result = await response.json();
-
-
+    console.log("[sendOTPEmail] BREVO_OK", {
+      email: maskEmailForLog(email),
+      messageId: result?.messageId ?? null,
+    });
     return result;
   } catch (error) {
     console.error(`[sendOTPEmail] ❌ Error sending email via Brevo API:`, error.message);
@@ -3838,45 +3876,30 @@ app.post("/api/register", async (req, res) => {
         requiresOTP: true,
       });
     }
-    
-    // Clean up expired OTPs
+
+    console.log("[REGISTER] register_otp_start", { route: "/api/register", email: maskEmailForLog(emailNormalized) });
     cleanupExpiredOTPs();
-    
-    // Generate OTP
-    const otpCode = generateOTP();
 
-    
-    // Save OTP (hashed) - this is fast, keep it sync
+    const otpCode = String(generateOTP()).trim();
+    console.log("[REGISTER] register_otp_code_generated", {
+      digits: otpCode.length,
+      ...(OTP_DEBUG_LOG ? { code: otpCode } : {}),
+    });
+
     await saveOTP(emailNormalized, otpCode, 0);
+    console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
-    
-    // FIRE-AND-FORGET: Send email WITHOUT waiting (Brevo REST API)
-    // This prevents API timeout from blocking the response
+    console.log("[REGISTER] register_otp_before_send_email");
+    await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
+    console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
 
-
-
-
-
-    
-
-    sendOTPEmail(emailNormalized, otpCode, patientLanguage)
-      .then(() => {
-
-      })
-      .catch((emailError) => {
-        console.error(`[REGISTER] ❌ Failed to send OTP email to ${emailNormalized}:`, emailError.message);
-        // Email failed but registration succeeded - user can request OTP again
-      });
-    
-    // Return success IMMEDIATELY - don't wait for email
-
-    res.json({ 
-      ok: true, 
+    return res.json({
+      ok: true,
       message: "Kayıt başarılı. Email adresinize gönderilen OTP kodunu girin.",
-      patientId, 
+      patientId,
       email: emailNormalized,
       language: patientLanguage,
-      requestId, 
+      requestId,
       status: "PENDING",
       requiresOTP: true,
       hasClinic: Boolean(supabaseClinicId),
@@ -3884,20 +3907,8 @@ app.post("/api/register", async (req, res) => {
       clinicCode: validatedClinicCode || null,
     });
   } catch (otpError) {
-
-    // Still return success, but user will need to request OTP manually
-    res.json({ 
-      ok: true, 
-      message: "Kayıt başarılı. Lütfen OTP kodu talep edin.",
-      patientId, 
-      email: emailNormalized,
-      requestId, 
-      status: "PENDING",
-      requiresOTP: true,
-      hasClinic: Boolean(supabaseClinicId),
-      clinicId: supabaseClinicId || null,
-      clinicCode: validatedClinicCode || null,
-    });
+    if (res.headersSent) return;
+    return respondRegisterOtpFailure(res, otpError, emailNormalized, "/api/register");
   }
   } catch (regErr) {
     console.error("[REGISTER] unhandled:", regErr?.stack || regErr?.message || regErr);
@@ -4496,53 +4507,40 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     }
   }
 
-  // Send OTP for email verification instead of returning token immediately
+  // Send OTP for email verification — await Brevo/SMTP; no silent success if email fails
   try {
-    // Clean up expired OTPs
+    console.log("[REGISTER] register_otp_start", {
+      route: "/api/register/patient",
+      email: maskEmailForLog(emailNormalized),
+    });
     cleanupExpiredOTPs();
-    
-    // Generate OTP with standardization
+
     const otpCode = String(generateOTP()).trim();
+    console.log("[REGISTER] register_otp_code_generated", {
+      digits: otpCode.length,
+      ...(OTP_DEBUG_LOG ? { code: otpCode } : {}),
+    });
     const otpHash = await bcrypt.hash(otpCode, 10);
 
-
-    
-    // Store OTP in Supabase (not file-based)
     await storeOTPForEmail(emailNormalized, otpHash, null, {
-      type: 'patient_registration',
-      phone: phone || '',
-      name: name || '',
-      language: language || 'en'
+      type: "patient_registration",
+      phone: phone || "",
+      name: name || "",
+      language: language || "en",
     });
+    console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
-    
-    // FIRE-AND-FORGET: Send email WITHOUT waiting (Brevo REST API)
-    // This prevents API timeout from blocking the response
+    console.log("[REGISTER] register_otp_before_send_email");
+    await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
+    console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
 
-
-
-
-
-    
-
-    sendOTPEmail(emailNormalized, otpCode, patientLanguage)
-      .then(() => {
-
-      })
-      .catch((emailError) => {
-        console.error(`[REGISTER /api/patient/register] ❌ Failed to send OTP email to ${emailNormalized}:`, emailError.message);
-        // Email failed but registration succeeded - user can request OTP again
-      });
-    
-    // Return success IMMEDIATELY - don't wait for email
-
-    res.json({ 
-      ok: true, 
+    return res.json({
+      ok: true,
       message: "Kayıt başarılı. Email adresinize gönderilen OTP kodunu girin.",
-      patientId, 
+      patientId,
       email: emailNormalized,
       language: patientLanguage,
-      requestId, 
+      requestId,
       status: "PENDING",
       requiresOTP: true,
       hasClinic: Boolean(supabaseClinicId),
@@ -4550,20 +4548,8 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       clinicCode: validatedClinicCode || null,
     });
   } catch (otpError) {
-
-    // Still return success, but user will need to request OTP manually
-    res.json({ 
-      ok: true, 
-      message: "Kayıt başarılı. Lütfen OTP kodu talep edin.",
-      patientId, 
-      email: emailNormalized,
-      requestId, 
-      status: "PENDING",
-      requiresOTP: true,
-      hasClinic: Boolean(supabaseClinicId),
-      clinicId: supabaseClinicId || null,
-      clinicCode: validatedClinicCode || null,
-    });
+    if (res.headersSent) return;
+    return respondRegisterOtpFailure(res, otpError, emailNormalized, "/api/register/patient");
   }
   } catch (regErr) {
     console.error("[REGISTER /api/patient/register] unhandled:", regErr?.stack || regErr?.message || regErr);
@@ -39674,7 +39660,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v54');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v55');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
