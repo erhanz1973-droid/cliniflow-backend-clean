@@ -522,6 +522,12 @@ app.param("patientId", (req, res, next, value) => {
     });
   }
 
+  // Mobile uses /api/patient/me/... — resolved in handlers after requireToken (upload, messages POST, etc.).
+  if (raw.toLowerCase() === "me") {
+    req.params.patientId = "me";
+    return next();
+  }
+
   let id = raw;
   const prefixedUuid = /^p_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(raw);
   if (prefixedUuid) id = prefixedUuid[1];
@@ -606,6 +612,17 @@ async function resolveMessagesPatientDbId(patientId) {
   } catch (_) {
     return null;
   }
+}
+
+/** Compare token patient id with URL param (after :patientId), including legacy p_ / patient_id forms. */
+async function patientIdsMatchForToken(tokenPid, paramPatientIdResolved) {
+  const a = String(tokenPid || "").trim();
+  const b = String(paramPatientIdResolved || "").trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const ia = await resolveMessagesPatientDbId(a);
+  const ib = await resolveMessagesPatientDbId(b);
+  return Boolean(ia && ib && ia === ib);
 }
 
 async function resolveClinicContextForPatientRow(internalPatientId) {
@@ -854,7 +871,7 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
 }
 
 /** Same storage as admin replies — keeps admin chat GET (patient_messages merge) consistent. */
-async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgType) {
+async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgType, threadIdOpt) {
   const resolvedPatientId = await resolveMessagesPatientDbId(patientIdParam);
   if (!resolvedPatientId) {
     return {
@@ -871,13 +888,19 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
     type: String(msgType || "text").trim() || "text",
     attachment: null,
   };
+  const baseRows = [];
+  if (threadIdOpt && UUID_RE.test(String(threadIdOpt).trim())) {
+    baseRows.push({ ...baseRow, thread_id: String(threadIdOpt).trim() });
+  }
+  baseRows.push(baseRow);
   const fromRoles = ["patient", "PATIENT"];
   let lastError = null;
   for (const from_role of fromRoles) {
+    for (const br of baseRows) {
     // Prefer row without sender_id: many DBs have no patient_messages.sender_id (PostgREST errors on unknown column).
     const variants = [
-      { ...baseRow, from_role },
-      { ...baseRow, from_role, sender_id: resolvedPatientId },
+      { ...br, from_role },
+      { ...br, from_role, sender_id: resolvedPatientId },
     ];
     for (let vi = 0; vi < variants.length; vi++) {
       const row = variants[vi];
@@ -907,6 +930,7 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
       }
       break;
     }
+    }
   }
   if (lastError) {
     console.warn("[MESSAGES] patient_messages patient insert failed (will try messages table):", lastError.message);
@@ -914,7 +938,166 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
   return { data: null, error: lastError || { message: "patient_messages_insert_failed" } };
 }
 
-async function insertMessageToSupabase({ patientId, sender, message, attachments, type, senderId: senderIdOpt }) {
+/** patient row → DEFAULT_CLINIC_ID → DEFAULT_CLINIC_CODE (applyClinicContextToPatientIfMissing runs before this). */
+async function resolveClinicIdForInbound(resolvedPatientId) {
+  const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
+    resolvedPatientId
+  );
+  let clinicId = rowClinicId ? String(rowClinicId).trim() : null;
+  const clinicCode = rowClinicCode ? String(rowClinicCode).trim() : null;
+  if (!clinicId && clinicCode) {
+    clinicId = await resolveClinicUuidFromClinicCode(clinicCode);
+  }
+  if (clinicId && UUID_RE.test(clinicId)) {
+    return clinicId;
+  }
+  const envDefaultId = String(process.env.DEFAULT_CLINIC_ID || "").trim();
+  if (UUID_RE.test(envDefaultId)) {
+    return envDefaultId;
+  }
+  const envCode = String(process.env.DEFAULT_CLINIC_CODE || "").trim().toUpperCase();
+  if (envCode) {
+    const c = await getClinicByCode(envCode);
+    if (c?.id) return String(c.id);
+  }
+  return null;
+}
+
+async function patchPatientClinicIfMissing(resolvedPatientId, clinicId) {
+  if (!isSupabaseEnabled() || !resolvedPatientId || !clinicId) return;
+  const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
+    resolvedPatientId
+  );
+  const has =
+    (rowClinicId && String(rowClinicId).trim()) || (rowClinicCode && String(rowClinicCode).trim());
+  if (has) return;
+  const patch = { clinic_id: clinicId };
+  const { data: c } = await supabase.from("clinics").select("clinic_code").eq("id", clinicId).maybeSingle();
+  if (c?.clinic_code) patch.clinic_code = String(c.clinic_code).trim().toUpperCase();
+  const { error } = await supabase.from("patients").update(patch).eq("id", resolvedPatientId);
+  if (error) {
+    console.warn("[MESSAGES] patchPatientClinicIfMissing failed", error.message || error);
+  }
+}
+
+/**
+ * Creates or promotes patient_chat_threads before inbound message insert (assigned_doctor_id = null → Unassigned).
+ * Prod log contract: inbound_thread_created | inbound_thread_promoted_to_lead
+ */
+async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
+  let existing = null;
+  try {
+    const { data: rows, error: qErr } = await supabase
+      .from("patient_chat_threads")
+      .select("id, is_lead, assigned_doctor_id, status, clinic_id")
+      .eq("patient_id", resolvedPatientId)
+      .order("created_at", { ascending: false })
+      .limit(3);
+    if (!qErr && Array.isArray(rows) && rows.length) existing = rows[0];
+  } catch (e) {
+    return { threadId: null, error: e };
+  }
+
+  const nowIso = new Date().toISOString();
+  if (existing?.id) {
+    if (existing.assigned_doctor_id) {
+      return { threadId: existing.id, error: null };
+    }
+    if (existing.is_lead === true) {
+      return { threadId: existing.id, error: null };
+    }
+    if (existing.is_lead === false && !existing.assigned_doctor_id) {
+      const { error: upErr } = await supabase
+        .from("patient_chat_threads")
+        .update({ is_lead: true, status: "unassigned", updated_at: nowIso })
+        .eq("id", existing.id);
+      if (upErr) return { threadId: null, error: upErr };
+      console.log("inbound_thread_promoted_to_lead", {
+        thread_id: existing.id,
+        patient_id: resolvedPatientId,
+      });
+      return { threadId: existing.id, error: null };
+    }
+    return { threadId: existing.id, error: null };
+  }
+
+  const threadPayload = {
+    patient_id: resolvedPatientId,
+    clinic_id: clinicId,
+    status: "unassigned",
+    assigned_doctor_id: null,
+    is_lead: true,
+  };
+  const { data: ins, error: tErr } = await insertIntoTableWithColumnPruning(
+    "patient_chat_threads",
+    threadPayload,
+    "id"
+  );
+  if (tErr) return { threadId: null, error: tErr };
+  console.log("inbound_thread_created", {
+    thread_id: ins?.id,
+    patient_id: resolvedPatientId,
+    clinic_id: clinicId,
+  });
+  return { threadId: ins?.id, error: null };
+}
+
+/**
+ * When the app sends a message from the clinic list it knows clinicCode/clinicId; patient row may still be unlinked.
+ * Best-effort: set patients.clinic_id / clinic_code only if the patient has neither (does not override existing clinic).
+ */
+async function applyClinicContextToPatientIfMissing(resolvedPatientId, contextClinicCodeRaw, contextClinicIdRaw) {
+  if (!isSupabaseEnabled() || !resolvedPatientId) return;
+  const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
+    resolvedPatientId
+  );
+  const hasClinic =
+    (rowClinicId && String(rowClinicId).trim()) || (rowClinicCode && String(rowClinicCode).trim());
+  if (hasClinic) return;
+
+  const ctxCode = String(contextClinicCodeRaw || "").trim().toUpperCase();
+  const ctxId = String(contextClinicIdRaw || "").trim();
+  let targetClinicId = null;
+  let targetClinicCode = null;
+  if (ctxId && UUID_RE.test(ctxId)) {
+    const { data: c } = await supabase.from("clinics").select("id, clinic_code").eq("id", ctxId).maybeSingle();
+    if (c?.id) {
+      targetClinicId = String(c.id);
+      if (c.clinic_code) targetClinicCode = String(c.clinic_code).trim().toUpperCase();
+    }
+  }
+  if (!targetClinicId && ctxCode) {
+    const c = await getClinicByCode(ctxCode);
+    if (c?.id) {
+      targetClinicId = String(c.id);
+      targetClinicCode = ctxCode;
+    }
+  }
+  if (!targetClinicId) return;
+
+  const patch = { clinic_id: targetClinicId };
+  if (targetClinicCode) patch.clinic_code = targetClinicCode;
+  const { error } = await supabase.from("patients").update(patch).eq("id", resolvedPatientId);
+  if (error) {
+    console.warn("[MESSAGES] patient_clinic_context_patch_failed", error.message || error);
+  } else {
+    console.log("[MESSAGES] patient_clinic_context_applied", {
+      patient_id: resolvedPatientId,
+      clinic_id: targetClinicId,
+    });
+  }
+}
+
+async function _insertMessageToSupabaseCore({
+  patientId,
+  sender,
+  message,
+  attachments,
+  type,
+  senderId: senderIdOpt,
+  contextClinicCode,
+  contextClinicId,
+}) {
   const resolvedPatientId = await resolveMessagesPatientDbId(patientId);
   if (!resolvedPatientId) {
     return {
@@ -927,27 +1110,82 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
     };
   }
 
+  await applyClinicContextToPatientIfMissing(resolvedPatientId, contextClinicCode, contextClinicId);
+
   const msgText = String(message || "").trim();
   const fromPatient = String(sender || "").toLowerCase() === "patient";
   const msgType = deriveMessageType(type, attachments);
 
+  let inboundClinicId = null;
+  let inboundThreadId = null;
+
+  if (fromPatient && isSupabaseEnabled()) {
+    inboundClinicId = await resolveClinicIdForInbound(resolvedPatientId);
+    if (!inboundClinicId) {
+      console.log("inbound_thread_skip_no_clinic", { patient_id: resolvedPatientId });
+      return {
+        data: null,
+        error: {
+          message: "CLINIC_NOT_RESOLVED",
+          code: "422",
+          details:
+            "Set patient clinic, send clinicCode/clinic_id on message, or DEFAULT_CLINIC_ID / DEFAULT_CLINIC_CODE",
+        },
+      };
+    }
+    await patchPatientClinicIfMissing(resolvedPatientId, inboundClinicId);
+    const thr = await ensureInboundLeadThread(resolvedPatientId, inboundClinicId);
+    if (!thr.threadId) {
+      console.error("inbound_thread_create_failed", {
+        patient_id: resolvedPatientId,
+        err: thr.error,
+      });
+      return {
+        data: null,
+        error: {
+          message: "inbound_thread_failed",
+          code: "500",
+          details: String(thr.error?.message || thr.error || "thread_create_failed"),
+        },
+      };
+    }
+    inboundThreadId = thr.threadId;
+  }
+
   if (fromPatient) {
-    const pmTry = await insertPatientMessageViaPatientMessages(patientId, msgText, msgType);
+    const pmTry = await insertPatientMessageViaPatientMessages(
+      patientId,
+      msgText,
+      msgType,
+      inboundThreadId
+    );
     if (!pmTry.error && pmTry.data) {
       return { data: pmTry.data, error: null };
     }
   }
-  const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
-    resolvedPatientId
-  );
-  let clinicCode =
-    rowClinicCode || (await resolveClinicCodeForPatient(resolvedPatientId)) || null;
-  let clinicId = rowClinicId || null;
-  if (!clinicId && clinicCode) {
-    clinicId = await resolveClinicUuidFromClinicCode(clinicCode);
+
+  let clinicId;
+  let clinicCode;
+  if (fromPatient && inboundClinicId) {
+    clinicId = inboundClinicId;
+    const { data: cl } = await supabase.from("clinics").select("clinic_code").eq("id", clinicId).maybeSingle();
+    clinicCode = cl?.clinic_code ? String(cl.clinic_code).trim().toUpperCase() : null;
+  } else {
+    const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
+      resolvedPatientId
+    );
+    clinicCode = rowClinicCode || (await resolveClinicCodeForPatient(resolvedPatientId)) || null;
+    clinicId = rowClinicId || null;
+    if (!clinicId && clinicCode) {
+      clinicId = await resolveClinicUuidFromClinicCode(clinicCode);
+    }
   }
 
   if (!clinicId && !clinicCode) {
+    console.error("[MESSAGES] patient_clinic_unknown_for_messages", {
+      patient_id: resolvedPatientId,
+      sender: String(sender || ""),
+    });
     return {
       data: null,
       error: {
@@ -957,6 +1195,11 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
       },
     };
   }
+
+  const threadOpt =
+    inboundThreadId && UUID_RE.test(String(inboundThreadId).trim())
+      ? { thread_id: String(inboundThreadId).trim() }
+      : {};
 
   const clinicFields = {
     ...(clinicId ? { clinic_id: clinicId } : {}),
@@ -985,6 +1228,7 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
     sender,
     message: msgText,
     ...(attachments != null ? { attachments } : {}),
+    ...threadOpt,
   };
   let primaryResult = await supabase
     .from("messages")
@@ -1019,6 +1263,7 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
     from_patient: fromPatient,
     created_at: createdAtIso,
     ...(attachments != null ? { attachments } : {}),
+    ...threadOpt,
   };
   let fb = await insertWithColumnPruning(fallbackNoText);
   if (!fb?.error) return fb;
@@ -1029,6 +1274,7 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
     ...clinicFields,
     ...senderFields,
     message: msgText,
+    ...threadOpt,
   });
   if (!fb?.error) return fb;
 
@@ -1043,6 +1289,7 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
     ...clinicFields,
     ...senderFieldsUpperType,
     message: msgText,
+    ...threadOpt,
   });
   if (!fb?.error) return fb;
 
@@ -1058,6 +1305,7 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
       from_patient: fromPatient,
       created_at: createdAtIso,
       ...(attachments != null ? { attachment: attachments } : {}),
+      ...threadOpt,
     });
     if (!fb?.error) return fb;
     const legMsg = String(fb?.error?.message || "");
@@ -1072,12 +1320,17 @@ async function insertMessageToSupabase({ patientId, sender, message, attachments
         from_patient: fromPatient,
         created_at: Date.now(),
         ...(attachments != null ? { attachment: attachments } : {}),
+        ...threadOpt,
       });
       if (!fb?.error) return fb;
     }
   }
 
   return fb || primaryResult;
+}
+
+async function insertMessageToSupabase(opts) {
+  return _insertMessageToSupabaseCore(opts);
 }
 
 /**
@@ -14757,6 +15010,15 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
       return res.status(400).json({ ok: false, error: "patientId_required", message: "Patient ID is required" });
     }
 
+    if (patientId.toLowerCase() === "me") {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_patient_id",
+        code: "invalid_patient_id",
+        message: "GET requires a patient UUID. Use POST /api/patient/me/messages with Authorization for the signed-in patient.",
+      });
+    }
+
     if (isSupabaseEnabled()) {
       fetchMessagesFromSupabase(patientId)
         .then(({ data, error, preMapped }) => {
@@ -14827,7 +15089,7 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
 app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
   try {
     const rawPid = String(req.params.patientId || "").trim();
-    const patientId = rawPid === "me" ? String(req.patientId || "").trim() : rawPid;
+    const patientId = rawPid.toLowerCase() === "me" ? String(req.patientId || "").trim() : rawPid;
 
     if (!patientId) {
       return res.status(400).json({ ok: false, error: "patientId_required" });
@@ -14869,12 +15131,18 @@ app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
       return res.json({ ok: true, message: newMessage });
     }
 
+    const ctxCode = body.clinicCode ?? body.clinic_code;
+    const ctxId = body.clinicId ?? body.clinic_id;
     const { data, error } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
       message: String(text).trim(),
       attachments: null,
       type: msgType,
+      ...(ctxCode != null && String(ctxCode).trim()
+        ? { contextClinicCode: String(ctxCode).trim() }
+        : {}),
+      ...(ctxId != null && String(ctxId).trim() ? { contextClinicId: String(ctxId).trim() } : {}),
     });
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
@@ -14885,6 +15153,17 @@ app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
       });
       if (String(error?.message || "") === "patient_not_found_for_messages") {
         return res.status(404).json({ ok: false, error: "patient_not_found" });
+      }
+      if (String(error?.message || "") === "CLINIC_NOT_RESOLVED") {
+        return res.status(422).json({
+          ok: false,
+          error: "CLINIC_NOT_RESOLVED",
+          code: "422",
+          message: "Clinic could not be resolved for this patient.",
+        });
+      }
+      if (String(error?.message || "") === "inbound_thread_failed") {
+        return res.status(500).json({ ok: false, error: "inbound_thread_failed", details: error?.details });
       }
       if (String(error?.message || "") === "patient_clinic_unknown_for_messages") {
         return res.status(422).json({ ok: false, error: "patient_clinic_required" });
@@ -15468,8 +15747,12 @@ app.post(
 // POST /api/patient/:patientId/upload — Guided photo / general upload (saves to patient_files table)
 app.post('/api/patient/:patientId/upload', requireToken, chatUpload.single('file'), async (req, res) => {
   try {
-    const patientId = String(req.params.patientId || '').trim();
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    const rawPid = String(req.params.patientId || '').trim();
+    const patientId =
+      rawPid.toLowerCase() === 'me' ? String(req.patientId || '').trim() : String(req.params.patientId || '').trim();
+    if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
+      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    }
 
     const file = req.file;
     if (!file) return res.status(400).json({ ok: false, error: 'no_file' });
@@ -15767,8 +16050,12 @@ function validateIntraoralBuffer(buffer) {
 // POST /api/patient/:patientId/validate-intraoral-image
 app.post('/api/patient/:patientId/validate-intraoral-image', requireToken, chatUpload.single('file'), async (req, res) => {
   try {
-    const patientId = String(req.params.patientId || '').trim();
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    const rawPid = String(req.params.patientId || '').trim();
+    const patientId =
+      rawPid.toLowerCase() === 'me' ? String(req.patientId || '').trim() : String(req.params.patientId || '').trim();
+    if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
+      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    }
 
     const file = req.file;
     if (!file) return res.status(400).json({ ok: false, error: 'no_file' });
@@ -15784,8 +16071,12 @@ app.post('/api/patient/:patientId/validate-intraoral-image', requireToken, chatU
 // GET /api/patient/:patientId/intraoral-photos — grouped by angle with validation status
 app.get('/api/patient/:patientId/intraoral-photos', requireToken, async (req, res) => {
   try {
-    const patientId = String(req.params.patientId || '').trim();
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    const rawPid = String(req.params.patientId || '').trim();
+    const patientId =
+      rawPid.toLowerCase() === 'me' ? String(req.patientId || '').trim() : String(req.params.patientId || '').trim();
+    if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
+      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+    }
 
     const REQUIRED_ANGLES = ['FRONT', 'LEFT', 'RIGHT', 'UPPER', 'LOWER'];
     const byAngle = {};
