@@ -3214,8 +3214,8 @@ app.get("/super-admin.html", (req, res) => {
 });
 
 /**
- * Kayıtta klinik: clinicCode | clinic_code | clinics.id (UUID), ardından DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID.
- * Mobil client'lar farklı alan adı kullanabildiği için backend burada birleştirir.
+ * Kayıtta klinik isteğe bağlı: hastalar klinik kodu olmadan da kayıt olabilir; boş bırakılabilir.
+ * İsteğe bağlı çözümleme: clinicCode | clinic_code | clinic_id (UUID), sonra DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID.
  */
 async function augmentRegisterClinicFromBody(body) {
   const b = body || {};
@@ -3302,15 +3302,13 @@ app.post("/api/register", async (req, res) => {
     });
   }
 
-  // Validate clinic code if provided
+  // Klinik kodu isteğe bağlı — yalnızca gönderilmiş ve boş değilse doğrulanır
   let validatedClinicCode = null;
   let foundClinicId = null;
   if (clinicCode && String(clinicCode).trim()) {
     const code = String(clinicCode).trim().toUpperCase();
     let foundClinic = null;
-    
 
-    
     // SUPABASE: Primary lookup
     if (isSupabaseEnabled()) {
       foundClinic = await getClinicByCode(code);
@@ -3430,8 +3428,8 @@ app.post("/api/register", async (req, res) => {
   }
 
   if (isSupabaseEnabled() && !supabaseClinicId) {
-    console.warn(
-      "[REGISTER] no clinic resolved — saving patient with clinic_id null (set DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID or send clinicCode from app to bind a clinic)",
+    console.log(
+      "[REGISTER] open signup — no clinic (clinic_id null). Optional: DEFAULT_CLINIC_* or clinicCode later.",
     );
   }
 
@@ -3827,6 +3825,7 @@ app.post("/api/register", async (req, res) => {
         ok: true,
         clinicId: reviewClinic?.id || supabaseClinicId || null,
         clinicCode: reviewClinic?.clinic_code || validatedClinicCode || null,
+        hasClinic: Boolean(reviewClinic?.id || supabaseClinicId),
         message: "Clinic registered successfully (Review Mode). Use OTP 123456 to verify.",
         reviewMode: true,
         requiresOTP: true,
@@ -3873,6 +3872,9 @@ app.post("/api/register", async (req, res) => {
       requestId, 
       status: "PENDING",
       requiresOTP: true,
+      hasClinic: Boolean(supabaseClinicId),
+      clinicId: supabaseClinicId || null,
+      clinicCode: validatedClinicCode || null,
     });
   } catch (otpError) {
 
@@ -3885,6 +3887,9 @@ app.post("/api/register", async (req, res) => {
       requestId, 
       status: "PENDING",
       requiresOTP: true,
+      hasClinic: Boolean(supabaseClinicId),
+      clinicId: supabaseClinicId || null,
+      clinicCode: validatedClinicCode || null,
     });
   }
   } catch (regErr) {
@@ -3991,14 +3996,12 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     });
   }
 
-  // Validate clinic code if provided
+  // Klinik kodu isteğe bağlı — yalnızca gönderilmiş ve boş değilse doğrulanır
   let validatedClinicCode = null;
   let foundClinicId = null;
   if (clinicCode && String(clinicCode).trim()) {
     const code = String(clinicCode).trim().toUpperCase();
     let foundClinic = null;
-    
-
 
     // SUPABASE: Primary lookup (source of truth)
     if (isSupabaseEnabled()) {
@@ -4123,8 +4126,8 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
   }
 
   if (isSupabaseEnabled() && !supabaseClinicId) {
-    console.warn(
-      "[REGISTER /api/patient/register] no clinic resolved — saving patient with clinic_id null (set DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID or send clinicCode from app to bind a clinic)",
+    console.log(
+      "[REGISTER /api/patient/register] open signup — no clinic (clinic_id null). Optional: DEFAULT_CLINIC_* or clinicCode later.",
     );
   }
 
@@ -4535,6 +4538,9 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       requestId, 
       status: "PENDING",
       requiresOTP: true,
+      hasClinic: Boolean(supabaseClinicId),
+      clinicId: supabaseClinicId || null,
+      clinicCode: validatedClinicCode || null,
     });
   } catch (otpError) {
 
@@ -4547,6 +4553,9 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       requestId, 
       status: "PENDING",
       requiresOTP: true,
+      hasClinic: Boolean(supabaseClinicId),
+      clinicId: supabaseClinicId || null,
+      clinicCode: validatedClinicCode || null,
     });
   }
   } catch (regErr) {
@@ -39658,7 +39667,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v52');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v53');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
