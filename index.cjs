@@ -1647,8 +1647,13 @@ app.get("/favicon.ico", (req, res) => res.status(204).end());
 const FORCE_FILE_STORAGE = false;  // Changed to false to use Supabase
 
 // Override isSupabaseEnabled to force file-based storage
+// Must return boolean — `a && b && c` would otherwise return the JWT string (secret leak in logs).
 function isSupabaseEnabled() {
-  return !FORCE_FILE_STORAGE && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return Boolean(
+    !FORCE_FILE_STORAGE &&
+      process.env.SUPABASE_URL &&
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+  );
 }
 
 // ================== CLINIC ORAL HEALTH AVERAGE ==================
@@ -39736,7 +39741,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v58');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v59');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
