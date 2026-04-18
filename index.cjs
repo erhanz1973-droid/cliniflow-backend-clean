@@ -14931,9 +14931,17 @@ app.post("/api/patient/me/messages", requireToken, async (req, res) => {
     if (!patientId) return res.status(401).json({ ok: false, error: "unauthorized" });
 
     const body = req.body || {};
+    let attachments = body.attachments != null ? body.attachments : body.attachment != null ? body.attachment : null;
+    if (typeof attachments === "string") {
+      try {
+        attachments = JSON.parse(attachments);
+      } catch (_) {
+        attachments = { url: attachments, name: "file" };
+      }
+    }
     const text = String(body.text || body.message || body.content || "").trim();
     const msgType = String(body.type || "text").trim() || "text";
-    if (!text) return res.status(400).json({ ok: false, error: "text_required" });
+    if (!text && !attachments) return res.status(400).json({ ok: false, error: "text_or_attachment_required" });
 
     if (!isSupabaseEnabled()) {
       if (!canUseFileFallback()) return res.status(500).json(supabaseDisabledPayload("messages"));
@@ -14954,12 +14962,18 @@ app.post("/api/patient/me/messages", requireToken, async (req, res) => {
       return res.json({ ok: true, message: newMessage });
     }
 
+    const ctxCode = body.clinicCode ?? body.clinic_code;
+    const ctxId = body.clinicId ?? body.clinic_id;
     const { data, error } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
-      message: text,
-      attachments: null,
+      message: text || (attachments ? "[attachment]" : ""),
+      attachments,
       type: msgType,
+      ...(ctxCode != null && String(ctxCode).trim()
+        ? { contextClinicCode: String(ctxCode).trim() }
+        : {}),
+      ...(ctxId != null && String(ctxId).trim() ? { contextClinicId: String(ctxId).trim() } : {}),
     });
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
@@ -14970,6 +14984,17 @@ app.post("/api/patient/me/messages", requireToken, async (req, res) => {
       });
       if (String(error?.message || "") === "patient_not_found_for_messages") {
         return res.status(404).json({ ok: false, error: "patient_not_found" });
+      }
+      if (String(error?.message || "") === "CLINIC_NOT_RESOLVED") {
+        return res.status(422).json({
+          ok: false,
+          error: "CLINIC_NOT_RESOLVED",
+          code: "422",
+          message: "Clinic could not be resolved for this patient.",
+        });
+      }
+      if (String(error?.message || "") === "inbound_thread_failed") {
+        return res.status(500).json({ ok: false, error: "inbound_thread_failed", details: error?.details });
       }
       if (String(error?.message || "") === "patient_clinic_unknown_for_messages") {
         return res.status(422).json({ ok: false, error: "patient_clinic_required" });
@@ -14985,7 +15010,10 @@ app.post("/api/patient/me/messages", requireToken, async (req, res) => {
       return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic });
     }
     const msg = mapDbMessageToLegacyMessage(data);
-    return res.json({ ok: true, message: msg || { text, from: "PATIENT", createdAt: now(), patientId } });
+    return res.json({
+      ok: true,
+      message: msg || { text: text || "[attachment]", from: "PATIENT", createdAt: now(), patientId },
+    });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
@@ -15096,11 +15124,19 @@ app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
     }
 
     const body = req.body || {};
+    let attachments = body.attachments != null ? body.attachments : body.attachment != null ? body.attachment : null;
+    if (typeof attachments === "string") {
+      try {
+        attachments = JSON.parse(attachments);
+      } catch (_) {
+        attachments = { url: attachments, name: "file" };
+      }
+    }
     const text = String(body.text || body.message || "").trim();
     const msgType = String(body.type || "text").trim() || "text";
 
-    if (!text) {
-      return res.status(400).json({ ok: false, error: "text_required", received: body });
+    if (!text && !attachments) {
+      return res.status(400).json({ ok: false, error: "text_or_attachment_required", received: body });
     }
 
     const tokenPid = String(req.patientId || "").trim();
@@ -15136,8 +15172,8 @@ app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
     const { data, error } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
-      message: String(text).trim(),
-      attachments: null,
+      message: text || (attachments ? "[attachment]" : ""),
+      attachments,
       type: msgType,
       ...(ctxCode != null && String(ctxCode).trim()
         ? { contextClinicCode: String(ctxCode).trim() }
@@ -15744,14 +15780,24 @@ app.post(
   }
 );
 
+// POST /api/patient/me/upload — token patient only (no :patientId param → avoids invalid_patient_id from bad client URLs)
+app.post("/api/patient/me/upload", requireToken, chatUpload.single("file"), async (req, res) => {
+  const pid = String(req.patientId || "").trim();
+  if (!pid) return res.status(401).json({ ok: false, error: "unauthorized" });
+  req.params = { ...req.params, patientId: pid };
+  return handlePatientChatUpload(req, res);
+});
+
 // POST /api/patient/:patientId/upload — Guided photo / general upload (saves to patient_files table)
-app.post('/api/patient/:patientId/upload', requireToken, chatUpload.single('file'), async (req, res) => {
+app.post("/api/patient/:patientId/upload", requireToken, chatUpload.single("file"), handlePatientChatUpload);
+
+async function handlePatientChatUpload(req, res) {
   try {
-    const rawPid = String(req.params.patientId || '').trim();
+    const rawPid = String(req.params.patientId || "").trim();
     const patientId =
-      rawPid.toLowerCase() === 'me' ? String(req.patientId || '').trim() : String(req.params.patientId || '').trim();
+      rawPid.toLowerCase() === "me" ? String(req.patientId || "").trim() : String(req.params.patientId || "").trim();
     if (!(await patientIdsMatchForToken(req.patientId, patientId))) {
-      return res.status(403).json({ ok: false, error: 'patient_id_mismatch' });
+      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
     }
 
     const file = req.file;
@@ -15838,10 +15884,10 @@ app.post('/api/patient/:patientId/upload', requireToken, chatUpload.single('file
       validation: validationResult,
     });
   } catch (err) {
-    console.error('[PATIENT UPLOAD] error:', err.message);
-    return res.status(500).json({ ok: false, error: 'server_error' });
+    console.error("[PATIENT UPLOAD] error:", err.message);
+    return res.status(500).json({ ok: false, error: "server_error" });
   }
-});
+}
 
 // GET /api/admin/patient/:patientId/files — Admin views patient files (alias)
 app.get('/api/admin/patient/:patientId/files', requireAdminAuth, async (req, res) => {
