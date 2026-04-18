@@ -7398,7 +7398,28 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       return res.status(503).json({ ok: false, error: "supabase_required" });
     }
 
-    const { data: threads, error } = await supabase
+    const ignorableMissing = (err) => {
+      const code = String(err?.code || "");
+      const msg = String(err?.message || "").toLowerCase();
+      return (
+        code === "42P01" ||
+        code === "PGRST205" ||
+        msg.includes("does not exist") ||
+        msg.includes("schema cache")
+      );
+    };
+    const ignorableColumn = (err) => {
+      const code = String(err?.code || "");
+      const msg = String(err?.message || "").toLowerCase();
+      return (
+        code === "42703" ||
+        code === "PGRST204" ||
+        msg.includes("column") && (msg.includes("does not exist") || msg.includes("could not find"))
+      );
+    };
+
+    let rows = [];
+    const qFull = await supabase
       .from("patient_chat_threads")
       .select("id, patient_id, clinic_id, status, assigned_doctor_id, assigned_at, admin_notes, is_lead, created_at, updated_at")
       .eq("clinic_id", clinicId)
@@ -7407,17 +7428,31 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       .order("created_at", { ascending: false })
       .limit(200);
 
-    if (error) {
-      const code = String(error.code || "");
-      const msg = String(error.message || "").toLowerCase();
-      if (code === "42P01" || msg.includes("does not exist")) {
-        return res.json({ ok: true, messages: [] });
+    if (!qFull.error && Array.isArray(qFull.data)) {
+      rows = qFull.data;
+    } else if (qFull.error && ignorableMissing(qFull.error)) {
+      return res.json({ ok: true, messages: [] });
+    } else if (qFull.error && ignorableColumn(qFull.error)) {
+      // Migration not fully applied or older schema: retry without is_lead / optional columns
+      const qMin = await supabase
+        .from("patient_chat_threads")
+        .select("id, patient_id, clinic_id, status, assigned_doctor_id, assigned_at, created_at, updated_at")
+        .eq("clinic_id", clinicId)
+        .is("assigned_doctor_id", null)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (qMin.error) {
+        if (ignorableMissing(qMin.error)) return res.json({ ok: true, messages: [] });
+        console.warn("[ADMIN unassigned-messages] fallback:", qMin.error.message);
+        return res.status(500).json({ ok: false, error: "fetch_failed" });
       }
-      console.warn("[ADMIN unassigned-messages]", error.message);
+      const raw = Array.isArray(qMin.data) ? qMin.data : [];
+      rows = raw.filter((r) => r && (r.is_lead === true || r.is_lead === undefined || r.is_lead === null));
+    } else if (qFull.error) {
+      console.warn("[ADMIN unassigned-messages]", qFull.error.message);
       return res.status(500).json({ ok: false, error: "fetch_failed" });
     }
 
-    const rows = Array.isArray(threads) ? threads : [];
     const pids = [...new Set(rows.map((r) => String(r.patient_id || "").trim()).filter((id) => UUID_RE.test(id)))];
     const patientById = {};
     if (pids.length) {
