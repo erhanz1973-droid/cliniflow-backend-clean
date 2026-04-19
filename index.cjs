@@ -38489,9 +38489,8 @@ async function assertOfferMessagingAccess(actor, offerId) {
   }
 
   if (actor.kind === "doctor") {
-    const keys = await doctorKeysForUuidFkInQuery([actor.doctorId]);
-    const oid = String(offer.doctor_id || "");
-    const okDoc = keys.some((k) => k && String(k) === oid);
+    // offer.doctor_id may be doctors.id (uuid) or legacy doctors.doctor_id (d_…); match like /api/doctor/treatment-requests.
+    const okDoc = await compareDoctorIds(actor.doctorId, offer.doctor_id);
     if (!okDoc) return { error: "forbidden" };
     return { ok: true, offer, tr };
   }
@@ -39089,7 +39088,7 @@ app.post("/api/offer-messages", async (req, res) => {
       sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
     } else {
       sender_role = "doctor";
-      sender_id = String(actor.doctorId);
+      sender_id = String(actor.doctor?.id || actor.doctorId || "").trim();
       sender_name = String(actor.doctor?.full_name || actor.doctor?.name || "").trim() || "Doctor";
     }
 
@@ -42136,7 +42135,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v80');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v81');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
