@@ -710,6 +710,17 @@ async function resolveMessagesPatientDbId(patientId) {
   }
 }
 
+/**
+ * treatment_requests / ratings rows use patients.id (UUID) after POST normalization, while JWT may still
+ * carry legacy patients.patient_id or p_<uuid>. Query with both so list + badge endpoints match inserts.
+ */
+function treatmentRequestPatientIdFilters(tokenPatientId, resolvedDbUuid) {
+  const raw = String(tokenPatientId || "").trim();
+  const u = resolvedDbUuid ? String(resolvedDbUuid).trim() : "";
+  const set = new Set([raw, u].filter(Boolean));
+  return [...set];
+}
+
 /** Compare token patient id with URL param (after :patientId), including legacy p_ / patient_id forms. */
 async function patientIdsMatchForToken(tokenPid, paramPatientIdResolved) {
   const a = String(tokenPid || "").trim();
@@ -35332,6 +35343,118 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
   }
 });
 
+/*
+ * GET /api/doctor/patients/:patientId/diagnoses
+ * encounter_diagnoses for all patient_encounters of this patient (not a legacy patient_diagnoses table).
+ */
+app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (req, res) => {
+  try {
+    const patientId = String(req.params.patientId || '').trim();
+    if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
+
+    if (!isSupabaseEnabled()) return res.status(500).json({ ok: false, error: 'supabase_not_configured' });
+
+    const patientSelects = [
+      'id, patient_id, clinic_id, clinic_code, name, full_name, phone, email, status, created_at',
+    ];
+    const findPatientByField = async (fieldName) => {
+      for (const selectClause of patientSelects) {
+        const result = await supabase
+          .from('patients')
+          .select(selectClause)
+          .eq(fieldName, patientId)
+          .maybeSingle();
+        if (!result.error) {
+          return { patient: result.data || null, error: null };
+        }
+        const code = String(result.error?.code || '');
+        if (!['42703', 'PGRST204', 'PGRST205', '22P02'].includes(code)) {
+          break;
+        }
+      }
+      return { patient: null, error: null };
+    };
+
+    let lookup = await findPatientByField('id');
+    if (!lookup.patient) {
+      lookup = await findPatientByField('patient_id');
+    }
+
+    if (!lookup.patient) {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    const patient = lookup.patient;
+    const statusRaw = String(patient?.status || '').toUpperCase();
+    if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    const patientKeyForAccess = String(patient?.id || patient?.patient_id || patientId).trim();
+    let isAssigned = false;
+    try {
+      isAssigned = await doctorHasTreatmentTeamAccessToPatientId(patientKeyForAccess, req);
+    } catch (e) {
+      console.error('[DOCTOR PATIENT DIAGNOSES] access check failed:', e?.message || e);
+    }
+    if (!isAssigned) {
+      try {
+        isAssigned = await doctorOwnsAnyEncounterForPatient(patient, req);
+      } catch (e) {
+        console.error('[DOCTOR PATIENT DIAGNOSES] encounter owner check failed:', e?.message || e);
+      }
+    }
+
+    if (!isAssigned) {
+      return res.status(403).json({ ok: false, error: 'patient_not_assigned' });
+    }
+
+    const internalUuid = String(patient?.id || '').trim();
+    if (!internalUuid) {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    const encounterPidKeys = await encounterPatientIdMatchSet(internalUuid, patientId);
+    if (!encounterPidKeys.length) {
+      return res.json({ ok: true, diagnoses: [] });
+    }
+
+    const { data: encounters, error: encErr } = await supabase
+      .from('patient_encounters')
+      .select('id')
+      .in('patient_id', encounterPidKeys);
+
+    if (encErr) {
+      const ignorable = ['42P01', 'PGRST116'].includes(String(encErr.code || ''));
+      if (!ignorable) {
+        console.error('[DOCTOR PATIENT DIAGNOSES] patient_encounters error:', encErr.message);
+        return res.status(500).json({ ok: false, error: 'fetch_failed', details: encErr.message });
+      }
+    }
+
+    const encounterIds = (encounters || []).map((e) => e.id).filter(Boolean);
+    if (!encounterIds.length) {
+      return res.json({ ok: true, diagnoses: [] });
+    }
+
+    const { data: diagnoses, error } = await supabase
+      .from('encounter_diagnoses')
+      .select('*')
+      .in('encounter_id', encounterIds)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[DOCTOR PATIENT DIAGNOSES] encounter_diagnoses error:', error.message);
+      return res.status(500).json({ ok: false, error: 'fetch_failed', details: error.message });
+    }
+
+    return res.json({ ok: true, diagnoses: diagnoses || [] });
+  } catch (err) {
+    console.error('[DOCTOR PATIENT DIAGNOSES] exception:', err);
+    return res.status(500).json({ ok: false, error: err.message || 'server_error' });
+  }
+});
+
 const DOCTOR_ROW_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -36825,14 +36948,21 @@ app.post("/api/patient/treatment-plans/:id/reject", requireToken, async (req, re
 // Uses plain selects + batch name lookups — avoids PostgREST embed failures when FKs are missing in API cache.
 app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
   try {
-    const patientId = String(req.patientId || '').trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const tokenPatientId = String(req.patientId || '').trim();
+    if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
 
-    const { data: requests, error: reqErr } = await supabase
-      .from('treatment_requests')
-      .select('*')
-      .eq('patient_id', patientId)
-      .order('created_at', { ascending: false });
+    const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+    const patientIdFilters = treatmentRequestPatientIdFilters(tokenPatientId, resolvedUuid);
+    if (!patientIdFilters.length) {
+      return res.json({ ok: true, requests: [] });
+    }
+
+    let reqQ = supabase.from('treatment_requests').select('*');
+    reqQ =
+      patientIdFilters.length === 1
+        ? reqQ.eq('patient_id', patientIdFilters[0])
+        : reqQ.in('patient_id', patientIdFilters);
+    const { data: requests, error: reqErr } = await reqQ.order('created_at', { ascending: false });
 
     if (reqErr) {
       console.error('[TREATMENT-REQUESTS GET]', reqErr.message);
@@ -37053,15 +37183,23 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
 // Called when the patient opens the My Requests screen — clears the home-screen badge.
 app.post('/api/patient/treatment-requests/mark-seen', requireToken, async (req, res) => {
   try {
-    const patientId = String(req.patientId || '').trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const tokenPatientId = String(req.patientId || '').trim();
+    if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
 
-    const { error } = await supabase
+    const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+    const patientIdFilters = treatmentRequestPatientIdFilters(tokenPatientId, resolvedUuid);
+    if (!patientIdFilters.length) return res.json({ ok: true });
+
+    let upd = supabase
       .from('treatment_requests')
       .update({ patient_seen_at: new Date().toISOString() })
-      .eq('patient_id', patientId)
       .eq('status', 'answered')
       .is('patient_seen_at', null);
+    upd =
+      patientIdFilters.length === 1
+        ? upd.eq('patient_id', patientIdFilters[0])
+        : upd.in('patient_id', patientIdFilters);
+    const { error } = await upd;
 
     if (error) console.warn('[MARK-SEEN]', error.message); // non-fatal
     return res.json({ ok: true });
@@ -37075,13 +37213,21 @@ app.post('/api/patient/treatment-requests/mark-seen', requireToken, async (req, 
 // Returns all ratings submitted by the authenticated patient.
 app.get('/api/patient/ratings', requireToken, async (req, res) => {
   try {
-    const patientId = String(req.patientId || '').trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const tokenPatientId = String(req.patientId || '').trim();
+    if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
 
-    const { data: ratings, error } = await supabase
+    const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+    const patientIdFilters = treatmentRequestPatientIdFilters(tokenPatientId, resolvedUuid);
+    if (!patientIdFilters.length) return res.json({ ok: true, ratings: [] });
+
+    let ratQ = supabase
       .from('ratings')
-      .select('id, clinic_id, offer_id, type, overall, created_at')
-      .eq('patient_id', patientId);
+      .select('id, clinic_id, offer_id, type, overall, created_at');
+    ratQ =
+      patientIdFilters.length === 1
+        ? ratQ.eq('patient_id', patientIdFilters[0])
+        : ratQ.in('patient_id', patientIdFilters);
+    const { data: ratings, error } = await ratQ;
 
     if (error) {
       console.error('[RATINGS GET]', error.message);
@@ -37099,16 +37245,26 @@ app.get('/api/patient/ratings', requireToken, async (req, res) => {
 // doctor_messages (unread messages from doctors in offer threads).
 app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
   try {
-    const patientId = String(req.patientId || '').trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const tokenPatientId = String(req.patientId || '').trim();
+    if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+
+    const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+    const patientIdFilters = treatmentRequestPatientIdFilters(tokenPatientId, resolvedUuid);
+    if (!patientIdFilters.length) {
+      return res.json({ ok: true, new_offers: 0, doctor_messages: 0 });
+    }
 
     // Count answered requests the patient hasn't opened yet
-    const { count: newOffers, error: offerErr } = await supabase
+    let offerQ = supabase
       .from('treatment_requests')
       .select('id', { count: 'exact', head: true })
-      .eq('patient_id', patientId)
       .eq('status', 'answered')
       .is('patient_seen_at', null);
+    offerQ =
+      patientIdFilters.length === 1
+        ? offerQ.eq('patient_id', patientIdFilters[0])
+        : offerQ.in('patient_id', patientIdFilters);
+    const { count: newOffers, error: offerErr } = await offerQ;
 
     if (offerErr) console.warn('[INBOX-SUMMARY offers]', offerErr.message);
 
@@ -37118,10 +37274,12 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
     let doctorMessages = 0;
     try {
       // First get all offer IDs for this patient's requests
-      const { data: reqs } = await supabase
-        .from('treatment_requests')
-        .select('id')
-        .eq('patient_id', patientId);
+      let reqsQ = supabase.from('treatment_requests').select('id');
+      reqsQ =
+        patientIdFilters.length === 1
+          ? reqsQ.eq('patient_id', patientIdFilters[0])
+          : reqsQ.in('patient_id', patientIdFilters);
+      const { data: reqs } = await reqsQ;
 
       if (reqs && reqs.length > 0) {
         const reqIds = reqs.map(r => r.id);
@@ -40032,7 +40190,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v63');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v67');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
