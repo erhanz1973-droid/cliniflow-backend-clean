@@ -223,8 +223,9 @@ const procedures = require("./shared/procedures");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
 const { fillIcdRowFromStatic, searchStaticDentalIcd } = require("./lib/icd10StaticLabels.cjs");
 const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileReferenceSeeds");
-const { resolveClinicCoords } = require("./lib/clinicCoords.cjs");
+const { resolveClinicCoords, hasFiniteCoords, buildGeocodeQuery } = require("./lib/clinicCoords.cjs");
 const { fetchPatientVisibleClinicRows } = require("./lib/patientClinicListing.cjs");
+const { filterClinicsWithinRadiusKm } = require("./lib/clinicHaversine.cjs");
 const {
   calculatePrices,
   parseTreatmentsFromQuery,
@@ -1509,7 +1510,9 @@ async function _insertMessageToSupabaseCore({
         },
       };
     }
-    await patchPatientClinicIfMissing(resolvedPatientId, inboundClinicId);
+    // Do not call patchPatientClinicIfMissing here: routing uses inboundClinicId on the message/thread,
+    // but patients.clinic_id = "clinic membership" must stay explicit (registration, invite, profile),
+    // not inferred from DEFAULT_CLINIC_* / first message (avoids e.g. everyone ending up on CEM clinic).
     const thr = await ensureInboundLeadThread(resolvedPatientId, inboundClinicId);
     if (!thr.threadId && thr.error) {
       console.error("inbound_thread_create_failed", {
@@ -7722,6 +7725,81 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
       error: "db_error",
       message: "Klinik listesi yüklenemedi. Lütfen daha sonra tekrar deneyin.",
     });
+  }
+});
+
+// GET /api/clinics/nearby — Haversine distance filter (no auth; optional Bearer for future use)
+// Query: lat, lng (required), radius (km, default 10, max 200).
+app.get("/api/clinics/nearby", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, clinics: [], radius_km: 10, center: null });
+    }
+    const lat = parseFloat(String(req.query.lat ?? "").replace(",", "."));
+    const lng = parseFloat(String(req.query.lng ?? "").replace(",", "."));
+    const radiusRaw = parseFloat(String(req.query.radius ?? "").replace(",", "."));
+    const radiusKm =
+      Number.isFinite(radiusRaw) && radiusRaw > 0 ? Math.min(Math.max(radiusRaw, 0.5), 200) : 10;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ ok: false, error: "lat_lng_required" });
+    }
+
+    const selects = [
+      "id, name, city, country, clinic_code, latitude, longitude, lat, lng, status",
+      "id, name, city, country, clinic_code, latitude, longitude, status",
+    ];
+    let raw = [];
+    let lastSelErr = null;
+    for (const sel of selects) {
+      const { data, error } = await supabase.from("clinics").select(sel).limit(500);
+      if (!error && Array.isArray(data)) {
+        raw = data;
+        break;
+      }
+      lastSelErr = error || lastSelErr;
+    }
+    if (!raw.length && lastSelErr) {
+      console.warn("[GET /api/clinics/nearby] clinics select:", lastSelErr.message);
+    }
+
+    const matched = filterClinicsWithinRadiusKm(raw, lat, lng, radiusKm);
+    const ids = matched.map((m) => m.row.id).filter(Boolean);
+    let ratingMap = {};
+    if (ids.length) {
+      try {
+        const { data: ratingRows, error: ratingErr } = await supabase
+          .from("ratings")
+          .select("clinic_id, overall, type")
+          .in("clinic_id", ids);
+        if (!ratingErr && ratingRows?.length) {
+          ratingMap = buildClinicRatingMapWeighted(ratingRows);
+        }
+      } catch (re) {
+        console.warn("[GET /api/clinics/nearby] ratings:", re?.message);
+      }
+    }
+
+    const clinics = matched.map(({ row, distance_km }) => ({
+      id: row.id,
+      name: row.name || "Klinik",
+      city: row.city || null,
+      country: row.country || null,
+      clinicCode: row.clinic_code || null,
+      rating: ratingMap[row.id] ?? null,
+      latitude: row.latitude ?? row.lat ?? null,
+      longitude: row.longitude ?? row.lng ?? null,
+      distance_km: Math.round(distance_km * 10) / 10,
+    }));
+
+    return res.json({
+      ok: true,
+      clinics,
+      radius_km: radiusKm,
+      center: { lat, lng },
+    });
+  } catch (e) {
+    console.error("[GET /api/clinics/nearby]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
@@ -16709,6 +16787,55 @@ async function collectPatientFiles(patientId) {
         });
       }
     } catch (pfCatch) { console.error('[FILES] patient_files catch:', pfCatch.message); }
+
+    // ── Source 2b: treatment_requests (teklif/marketplace uploads live in JSON; not always in patient_files)
+    try {
+      const pidFilters = treatmentRequestPatientIdFilters(patientId, patientUUID);
+      if (pidFilters.length) {
+        const trSelectVariants = [
+          "id, photos, photo_urls, attachment_urls, created_at",
+          "id, photos, photo_urls, created_at",
+          "id, photos, created_at",
+        ];
+        let trRows = [];
+        for (const sel of trSelectVariants) {
+          let q = supabase
+            .from("treatment_requests")
+            .select(sel)
+            .order("created_at", { ascending: false })
+            .limit(80);
+          q = pidFilters.length === 1 ? q.eq("patient_id", pidFilters[0]) : q.in("patient_id", pidFilters);
+          const { data, error } = await q;
+          if (!error && Array.isArray(data)) {
+            trRows = data;
+            break;
+          }
+        }
+        for (const tr of trRows) {
+          const urls = mergeAllTreatmentRequestPhotoUrls(tr);
+          const ts = tr.created_at ? new Date(tr.created_at).getTime() : Date.now();
+          const rid = String(tr.id || "").trim() || "unknown";
+          urls.forEach((u, i) => {
+            const url = String(u || "").trim();
+            if (!url) return;
+            addFile({
+              id: `treq_${rid}_${i}`,
+              name: `Quote request · ${i + 1}`,
+              url,
+              mimeType: "image/jpeg",
+              fileType: /\.pdf(\?|$)/i.test(url) ? "pdf" : "image",
+              subtype: null,
+              size: 0,
+              createdAt: ts,
+              from: "PATIENT",
+              source: "treatment_request",
+            });
+          });
+        }
+      }
+    } catch (trCatch) {
+      console.warn("[FILES] treatment_requests:", trCatch?.message || trCatch);
+    }
   }
 
   // ── Source 3: local disk — intraoral photos ───────────────────────────────
@@ -24663,6 +24790,26 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
     if (isSupabaseEnabled() && req.clinicId) {
       try {
 
+        const countryForGeoPut =
+          body.country != null && String(body.country).trim()
+            ? String(body.country).trim()
+            : existing.country;
+        if (!String(updated.address || "").trim()) {
+          return res.status(400).json({
+            ok: false,
+            error: "address_required",
+            message:
+              "Clinic address is required for maps and nearby search (Google Maps link is optional).",
+          });
+        }
+
+        const geoProbeClinic = {
+          address: updated.address,
+          city: updated.city,
+          country: countryForGeoPut,
+          name: updated.name,
+        };
+
         
         // Prepare update data for Supabase (remove password from update, handle separately)
         const isCreate = false; // PUT endpoint - always update, never create
@@ -24704,20 +24851,45 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         // 🔒 UPDATE sırasında unique alanları koru
         delete supabaseUpdate.clinic_code;
 
-        // ── Resolve lat/lng from Google Maps URL (parse-once-on-save) ──────
+        // ── Resolve lat/lng: optional Google Maps URL parse, else geocode (all plans / FREE-friendly) ──
         const incomingMapsUrl = updated.googleMapsUrl || '';
+        const mapUrlForResolve = incomingMapsUrl.trim();
         const existingMapsUrl = (req.clinic?.googleMapsUrl || req.clinic?.settings?.googleMapsUrl || '');
-        const mapsUrlChanged  = incomingMapsUrl && incomingMapsUrl !== existingMapsUrl;
+        const mapsUrlChanged = mapUrlForResolve !== String(existingMapsUrl || "").trim();
+        const clinicRowForCoords = {
+          ...req.clinic,
+          latitude: req.clinic?.latitude ?? req.clinic?.lat,
+          longitude: req.clinic?.longitude ?? req.clinic?.lng,
+        };
+        const needsCoords = !hasFiniteCoords(clinicRowForCoords);
 
-        if (mapsUrlChanged) {
-          const coords = await resolveClinicCoords(incomingMapsUrl, updated.address || '');
+        const geoQuery = buildGeocodeQuery(geoProbeClinic);
+
+        const updatedAddr = String(updated.address || "").trim();
+        const existingAddr = String(existing.address || "").trim();
+        const addressChanged = updatedAddr !== existingAddr;
+        const cityChanged = String(updated.city || "") !== String(existing.city || "");
+        const countryChanged =
+          String(countryForGeoPut || "").toUpperCase() !== String(existing.country || "").toUpperCase();
+        const locationChanged = addressChanged || cityChanged || countryChanged;
+
+        const canResolve = Boolean(mapUrlForResolve || geoQuery);
+        const shouldResolveCoords =
+          canResolve &&
+          (needsCoords || (mapUrlForResolve && mapsUrlChanged) || (locationChanged && geoQuery));
+
+        if (shouldResolveCoords) {
+          const coords = await resolveClinicCoords(mapUrlForResolve, geoQuery);
           if (coords) {
-            supabaseUpdate.latitude  = coords.latitude;
+            supabaseUpdate.latitude = coords.latitude;
             supabaseUpdate.longitude = coords.longitude;
             console.log(`[clinic update] coords resolved: ${coords.latitude}, ${coords.longitude}`);
-          } else if (incomingMapsUrl) {
-            // URL was provided but no coords extractable — warn but don't block save
-            console.warn(`[clinic update] could not extract coords from maps URL: ${incomingMapsUrl}`);
+          } else {
+            console.warn(
+              `[clinic update] could not resolve coords (maps parse or geocode). hasMapUrl=${Boolean(
+                mapUrlForResolve
+              )} geoQueryLen=${String(geoQuery || "").length}`
+            );
           }
         }
 
@@ -30022,7 +30194,13 @@ app.patch("/api/super-admin/clinics/:clinicId/contact", superAdminGuard, async (
 
     // ── Resolve coords from google_maps_url if provided ─────────────────
     if (patch.google_maps_url) {
-      const coords = await resolveClinicCoords(patch.google_maps_url, patch.city || '');
+      const { data: crmRow } = await supabase
+        .from("clinics")
+        .select("address, city, country, name")
+        .eq("id", clinicId)
+        .maybeSingle();
+      const merged = { ...crmRow, ...patch };
+      const coords = await resolveClinicCoords(patch.google_maps_url, buildGeocodeQuery(merged));
       if (coords) {
         patch.latitude  = coords.latitude;
         patch.longitude = coords.longitude;
@@ -37864,8 +38042,9 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
     ).trim();
     const explicitClinicCode = String(body.clinicCode || body.clinic_code || "").trim();
 
-    await applyClinicContextToPatientIfMissing(resolvedPatientId, explicitClinicCode, explicitClinicId);
-
+    // Route the request to a clinic on treatment_requests only. Do NOT set patients.clinic_id /
+    // is_lead here — marketplace quote flow must not auto-enroll the patient as a clinic member;
+    // membership stays explicit (registration, invite, "join clinic", etc.).
     const clinicId = await resolveClinicIdForInbound(resolvedPatientId, {
       contextClinicCode: explicitClinicCode,
       contextClinicId: explicitClinicId,
@@ -37878,8 +38057,6 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
           'Klinik eşleşmedi. Uygulamadan clinicCode veya clinic_id gönderin, hasta kaydına klinik bağlayın veya sunucuda DEFAULT_CLINIC_ID / DEFAULT_CLINIC_CODE tanımlayın.',
       });
     }
-
-    await patchPatientClinicIfMissing(resolvedPatientId, clinicId);
 
     let photoUrls = null;
     const rawPhotos = body.photo_urls != null ? body.photo_urls : body.attachment_urls;
@@ -38343,6 +38520,22 @@ function coerceTreatmentRequestPhotoUrls(raw) {
     return coerceTreatmentRequestPhotoUrls(vals);
   }
   return [];
+}
+
+/** All attachment URLs on a treatment_requests row (photos + photo_urls + attachment_urls), deduped. */
+function mergeAllTreatmentRequestPhotoUrls(tr) {
+  if (!tr || typeof tr !== "object") return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of [tr.photo_urls, tr.photos, tr.attachment_urls]) {
+    for (const u of coerceTreatmentRequestPhotoUrls(raw)) {
+      const s = String(u || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out.slice(0, 24);
 }
 
 function mergeDedupedPhotoUrlLists(primary, secondary) {
@@ -39107,10 +39300,22 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       return res.json({ ok: true, requests: [] });
     }
 
-    const { data: allOffers } = await supabase
-      .from("treatment_offers")
-      .select("id, request_id, doctor_id")
-      .in("request_id", requestIds);
+    let allOffers = [];
+    const offerSelectVariants = [
+      "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at, clinic_id",
+      "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at",
+      "id, request_id, doctor_id, created_at",
+    ];
+    for (const osel of offerSelectVariants) {
+      const { data: offerRows, error: offerErr } = await supabase
+        .from("treatment_offers")
+        .select(osel)
+        .in("request_id", requestIds);
+      if (!offerErr && Array.isArray(offerRows)) {
+        allOffers = offerRows;
+        break;
+      }
+    }
 
     const offersByReq = {};
     for (const o of allOffers || []) {
@@ -39118,6 +39323,10 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       if (!offersByReq[rid]) offersByReq[rid] = [];
       offersByReq[rid].push(o);
     }
+
+    /** Match this doctor's offer — compare to any resolved UUID (not only doctorKeys[0]). */
+    const doctorIdMatchSet = new Set(doctorKeys.map((k) => String(k || "").trim()).filter(Boolean));
+    if (rawDoctor) doctorIdMatchSet.add(String(rawDoctor).trim());
 
     const mapReqStatus = (s) => {
       const x = String(s || "").toLowerCase();
@@ -39135,7 +39344,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
 
     const requests = list.map((r) => {
       const offs = offersByReq[r.id] || [];
-      const mine = offs.find((o) => String(o.doctor_id) === String(doctorKey));
+      const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
       const pid = String(r.patient_id || "").trim();
       const patientName = (pid && nameById[pid]) || "Patient";
       let rawPhotoList = extractTreatmentRequestPhotoList(r);
@@ -39145,6 +39354,17 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const photosNormalized = rawPhotoList
         .map((u) => normalizeOfferAttachmentUrl(req, u) || String(u || "").trim())
         .filter(Boolean);
+      const myOfferPayload =
+        mine && mine.id
+          ? {
+              id: String(mine.id),
+              treatment_type: mine.treatment_type != null ? String(mine.treatment_type) : null,
+              price_range: mine.price_range != null ? String(mine.price_range) : null,
+              duration: mine.duration != null ? String(mine.duration) : null,
+              note: mine.note != null ? String(mine.note) : null,
+              created_at: mine.created_at || null,
+            }
+          : null;
       return {
         id: String(r.id),
         patient_name: patientName,
@@ -39155,6 +39375,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         created_at: r.created_at || new Date().toISOString(),
         offer_count: offs.length,
         my_offer_id: mine ? String(mine.id) : null,
+        my_offer: myOfferPayload,
         unread_count: 0,
         is_assigned_to_me: Boolean(mine),
         photos: photosNormalized,
@@ -41811,7 +42032,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v74');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v75');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');

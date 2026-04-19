@@ -292,7 +292,7 @@
         <div class="muted" data-i18n="settings.clinicLogoUrlHelp">Pro plan için logo görüntülenir</div>
         
         <label data-i18n="settings.address">Clinic Address</label>
-        <input type="text" id="clinicAddress" placeholder="Güzeloba, Havaalanı Cd. No:104 A, 07230 Muratpaşa/Antalya" />
+        <input type="text" id="clinicAddress" required placeholder="Güzeloba, Havaalanı Cd. No:104 A, 07230 Muratpaşa/Antalya" />
         <div class="muted" data-i18n="settings.addressHelp">Pro plan için hasta ekranında görüntülenir</div>
 
         <label>Chair Count</label>
@@ -367,13 +367,22 @@
     const brandingLocked = clinicPlan !== "PRO";
     const brandingNotice = $("brandingNotice");
     if (brandingNotice) brandingNotice.style.display = brandingLocked ? "block" : "none";
-    const brandingInputs = ["clinicName", "clinicLogoUrl", "clinicAddress", "googleMapLink", "primaryColor", "secondaryColor", "welcomeMessage"];
+    // Address & Google Maps stay editable on ALL plans (location / nearby); branding chrome stays PRO-only
+    const brandingInputs = ["clinicName", "clinicLogoUrl", "primaryColor", "secondaryColor", "welcomeMessage"];
     brandingInputs.forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.disabled = brandingLocked;
       el.style.opacity = brandingLocked ? "0.6" : "1";
       el.style.cursor = brandingLocked ? "not-allowed" : "text";
+    });
+    ["clinicAddress", "googleMapLink"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.disabled = false;
+      el.removeAttribute("readonly");
+      el.style.opacity = "1";
+      el.style.cursor = "text";
     });
   }
   function normalizePlanValue(planValue) {
@@ -618,11 +627,15 @@
         return;
       }
 
+      const clinicAddress = ($("clinicAddress")?.value || "").trim();
+      const googleMapsUrl = ($("googleMapLink")?.value || "").trim();
+
       const payload = {
         plan: normalizePlanValue(($("plan") ? $("plan").value : "") || clinicPlan || "FREE"),
         referral_discount_percent: $("referralDiscountPercent").value.trim(),
         city: cityVal,
-        address: $("clinicAddress")?.value.trim() || undefined,
+        address: clinicAddress || undefined,
+        googleMapsUrl: googleMapsUrl || undefined,
         // 🎯 Eski referral sistemi için settings
         settings: {
           chairCount: Math.max(1, Math.min(50, parseInt($("chairCount")?.value || "3", 10) || 3)),
@@ -649,14 +662,16 @@
         payload.branding = {
           clinicName: $("clinicName").value.trim(),
           clinicLogoUrl: $("clinicLogoUrl").value.trim(),
-          address: $("clinicAddress").value.trim(),
-          googleMapLink: $("googleMapLink").value.trim(),
+          address: clinicAddress,
+          googleMapLink: googleMapsUrl,
           primaryColor: colors.primaryColor,
           secondaryColor: colors.secondaryColor,
           welcomeMessage: $("welcomeMessage").value.trim(),
           showPoweredBy: $("showPoweredBy")?.checked !== false,
         };
       }
+
+      console.log("SAVE CLINIC", { address: clinicAddress, googleMapsUrl, plan: payload.plan });
 
       const loadingMsg = 'Kaydediliyor...';
       const loadingStatusEl = $("#status");
