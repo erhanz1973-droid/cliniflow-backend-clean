@@ -39102,11 +39102,12 @@ app.post("/api/offer-messages", async (req, res) => {
       attachment_type: attachment_type || null,
     };
 
-    const { data: inserted, error: insErr } = await supabase
-      .from("offer_messages")
-      .insert(insertRow)
-      .select("id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at")
-      .maybeSingle();
+    // Prod tables may predate sender_name / attachment_*; prune missing columns like other inserts.
+    const { data: inserted, error: insErr } = await insertIntoTableWithColumnPruning(
+      "offer_messages",
+      insertRow,
+      "*"
+    );
 
     if (insErr || !inserted) {
       console.error("[OFFER-MESSAGES POST]", insErr?.message || insErr);
@@ -39117,7 +39118,7 @@ app.post("/api/offer-messages", async (req, res) => {
       id: String(inserted.id),
       sender_id: String(inserted.sender_id || ""),
       sender_role: inserted.sender_role,
-      sender_name: inserted.sender_name || "",
+      sender_name: String(inserted.sender_name != null ? inserted.sender_name : sender_name || "").trim(),
       text: inserted.text,
       attachment_url:
         normalizeOfferAttachmentUrl(req, inserted.attachment_url) || inserted.attachment_url,
@@ -42135,7 +42136,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v81');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v82');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
