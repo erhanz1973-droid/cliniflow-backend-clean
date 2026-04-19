@@ -37839,6 +37839,8 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
     };
     if (photoUrls && photoUrls.length) {
       payload.photo_urls = photoUrls;
+      // Some DBs use `photos` (jsonb) instead of `photo_urls`; column pruning keeps whichever exists.
+      payload.photos = photoUrls;
     }
 
     const { data: inserted, error: insErr } = await insertIntoTableWithColumnPruning(
@@ -38155,6 +38157,9 @@ function normalizeOfferAttachmentUrl(req, url) {
   if (!u) return null;
   if (/^https?:\/\//i.test(u)) return u;
   if (u.startsWith("/")) return absoluteOfferFileUrl(req, u);
+  if (u.startsWith("uploads/") || u.includes("/uploads/")) {
+    return absoluteOfferFileUrl(req, u.startsWith("/") ? u : `/${u}`);
+  }
   return u;
 }
 
@@ -38165,6 +38170,44 @@ function isOfferMessagesTableUnavailableError(err) {
   if (code === "42P01" || code === "PGRST205") return true;
   if (m.includes("offer_messages") && (m.includes("does not exist") || m.includes("schema cache"))) return true;
   return false;
+}
+
+/** Normalize treatment_requests photo storage (photo_urls vs photos jsonb, string JSON, {url} objects). */
+function extractTreatmentRequestPhotoList(tr) {
+  if (!tr || typeof tr !== "object") return [];
+  const buckets = [tr.photo_urls, tr.photos, tr.attachment_urls];
+  for (const raw of buckets) {
+    const urls = coerceTreatmentRequestPhotoUrls(raw);
+    if (urls.length) return urls.slice(0, 24);
+  }
+  return [];
+}
+
+function coerceTreatmentRequestPhotoUrls(raw) {
+  if (raw == null) return [];
+  if (typeof raw === "string") {
+    try {
+      return coerceTreatmentRequestPhotoUrls(JSON.parse(raw));
+    } catch {
+      const s = raw.trim();
+      return s ? [s] : [];
+    }
+  }
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) => {
+        if (typeof x === "string") return x.trim();
+        if (x && typeof x === "object" && x.url != null) return String(x.url).trim();
+        return "";
+      })
+      .filter(Boolean);
+  }
+  if (typeof raw === "object") {
+    const vals = Object.values(raw).filter((v) => v != null);
+    if (!vals.length) return [];
+    return coerceTreatmentRequestPhotoUrls(vals);
+  }
+  return [];
 }
 
 /**
@@ -38204,16 +38247,8 @@ function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName) {
     });
   }
 
-  let photos = tr.photo_urls != null ? tr.photo_urls : null;
-  if (photos && typeof photos === "string") {
-    try {
-      photos = JSON.parse(photos);
-    } catch {
-      photos = null;
-    }
-  }
-  if (!Array.isArray(photos)) photos = [];
-  photos.slice(0, 24).forEach((raw, i) => {
+  const photos = extractTreatmentRequestPhotoList(tr);
+  photos.forEach((raw, i) => {
     const u = String(raw || "").trim();
     if (!u) return;
     const norm = normalizeOfferAttachmentUrl(req, u) || u;
@@ -38252,8 +38287,13 @@ async function loadOfferMessagingContext(offerId) {
   if (oErr || !offer) return null;
 
   const trSelects = [
-    "id, patient_id, description, budget, preferred_treatment, photo_urls, created_at, updated_at",
-    "id, patient_id, description, budget, preferred_treatment, created_at",
+    "id, patient_id, description, budget, preferred_treatment, photo_urls, photos, attachment_urls, created_at, updated_at",
+    "id, patient_id, description, budget, preferred_treatment, photo_urls, photos, created_at",
+    "id, patient_id, description, budget, preferred_treatment, photo_urls, created_at",
+    "id, patient_id, description, budget, preferred_treatment, photos, created_at",
+    "id, patient_id, description, photo_urls, photos, created_at",
+    "id, patient_id, description, photo_urls, created_at",
+    "id, patient_id, description, photos, created_at",
     "id, patient_id, description, created_at",
     "id, patient_id",
   ];
