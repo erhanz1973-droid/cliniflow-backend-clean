@@ -496,7 +496,7 @@
       });
       
       // Backend returns clinic object directly, not wrapped in { ok: true, clinic: {...} }
-      const branding = clinic.branding || {};
+      const branding = clinic.branding || clinic.settings?.branding || {};
       // IMPORTANT:
       // - subscriptionStatus is NOT a plan (can be TRIAL/ACTIVE) and would break the dropdown.
       // - Only use plan fields for plan UI.
@@ -542,7 +542,15 @@
           "";
         $("chairCount").value = loadedChairCount === null || loadedChairCount === undefined ? "" : String(loadedChairCount);
       }
-      if ($("googleMapLink")) $("googleMapLink").value = branding.googleMapLink || clinic.googleMapsUrl || "";
+      if ($("googleMapLink")) {
+        $("googleMapLink").value =
+          branding.googleMapLink ||
+          clinic.googleMapsUrl ||
+          clinic.google_maps_url ||
+          clinic.settings?.googleMapsUrl ||
+          clinic.settings?.google_maps_url ||
+          "";
+      }
       if ($("primaryColor")) $("primaryColor").value = branding.primaryColor || "#2563EB";
       if ($("secondaryColor")) $("secondaryColor").value = branding.secondaryColor || "#10B981";
       if ($("welcomeMessage")) $("welcomeMessage").value = branding.welcomeMessage || "";
@@ -616,7 +624,7 @@
       
       if (!token) {
         const msg = 'Admin token bulunamadı. Lütfen admin olarak giriş yapın.';
-        $("#status").innerHTML = '<div class="status error">' + msg + '</div>';
+        $("status").innerHTML = '<div class="status error">' + msg + '</div>';
         return;
       }
 
@@ -674,9 +682,10 @@
       console.log("SAVE CLINIC", { address: clinicAddress, googleMapsUrl, plan: payload.plan });
 
       const loadingMsg = 'Kaydediliyor...';
-      const loadingStatusEl = $("#status");
+      const loadingStatusEl = $("status");
       if (loadingStatusEl) {
         loadingStatusEl.innerHTML = '<div class="status">' + loadingMsg + '</div>';
+        loadingStatusEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
         
       console.log("🚀 SENDING PUT /api/admin/clinic", payload);
@@ -700,10 +709,11 @@
         throw new Error(data.error || 'HTTP ' + res.status);
       }
 
-      const successMsg = '✅ Ayarlar kaydedildi!';
-      const successStatusEl = $("#status");
+      const successMsg = '✅ Ayarlar kaydedildi! (Settings sunucuya yazıldı.)';
+      const successStatusEl = $("status");
       if (successStatusEl) {
         successStatusEl.innerHTML = '<div class="status success">' + successMsg + '</div>';
+        successStatusEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
       
       // Update the local clinicPlan variable to reflect the saved plan
@@ -713,9 +723,10 @@
     } catch (error) {
       console.error("Save clinic settings error:", error);
       const errorMsg = 'Kaydetme hatası: ' + error.message;
-      const statusErrorEl = $("#status");
+      const statusErrorEl = $("status");
       if (statusErrorEl) {
         statusErrorEl.innerHTML = '<div class="status error">' + errorMsg + '</div>';
+        statusErrorEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     }
   });

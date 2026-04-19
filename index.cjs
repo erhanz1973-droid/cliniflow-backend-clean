@@ -24564,6 +24564,31 @@ app.get('/api/patient/:patientId/treatment-prices', requirePatientTreatmentsAuth
 
 // Admin alias for deployments that expect scoped endpoint
 
+/** Maps URL from DB row: PostgREST uses google_maps_url; UI/settings use branding + settings JSON. */
+function pickGoogleMapsUrlFromClinicRow(clinic) {
+  if (!clinic || typeof clinic !== "object") return "";
+  let settings = clinic.settings;
+  if (typeof settings === "string") {
+    try {
+      settings = JSON.parse(settings);
+    } catch {
+      settings = {};
+    }
+  }
+  settings = settings && typeof settings === "object" ? settings : {};
+  const brandingTop = clinic.branding && typeof clinic.branding === "object" ? clinic.branding : {};
+  const brandingInSettings = settings.branding && typeof settings.branding === "object" ? settings.branding : {};
+  const raw =
+    clinic.google_maps_url ??
+    clinic.googleMapsUrl ??
+    settings.googleMapsUrl ??
+    settings.google_maps_url ??
+    brandingTop.googleMapLink ??
+    brandingInSettings.googleMapLink ??
+    "";
+  return String(raw || "").trim();
+}
+
 // GET /api/admin/clinic (Admin için) - token-based (multi-clinic)
 app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
   try {
@@ -24630,6 +24655,15 @@ app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
     const computedMax = planToMaxPatients(effectivePlan);
     safe.max_patients = computedMax;
     safe.maxPatients = computedMax;
+
+    const mapsUrlNorm = pickGoogleMapsUrlFromClinicRow(safe);
+    safe.googleMapsUrl = mapsUrlNorm;
+    if (!safe.branding || typeof safe.branding !== "object") {
+      safe.branding = { ...(safe.settings?.branding && typeof safe.settings.branding === "object" ? safe.settings.branding : {}) };
+    }
+    if (mapsUrlNorm && !String(safe.branding.googleMapLink || "").trim()) {
+      safe.branding = { ...safe.branding, googleMapLink: mapsUrlNorm };
+    }
 
     res.json(safe);
   } catch (error) {
@@ -24734,14 +24768,18 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       passwordHash = await bcrypt.hash(String(body.password).trim(), 10);
     }
     
-    // Handle branding object
-    const existingBranding = existing.branding || {};
+    // Handle branding object (Supabase often stores branding under settings.branding only)
+    const existingBranding =
+      (existing.branding && typeof existing.branding === "object" ? existing.branding : null) ||
+      (existing.settings?.branding && typeof existing.settings.branding === "object" ? existing.settings.branding : {}) ||
+      {};
     const bodyBranding = body.branding || {};
+    const existingMapsFallback = pickGoogleMapsUrlFromClinicRow(existing);
     const updatedBranding = {
       clinicName: bodyBranding.clinicName || existingBranding.clinicName || existing.name || "",
       clinicLogoUrl: bodyBranding.clinicLogoUrl || existingBranding.clinicLogoUrl || existing.logoUrl || "",
       address: bodyBranding.address || existingBranding.address || existing.address || "",
-      googleMapLink: bodyBranding.googleMapLink || existingBranding.googleMapLink || existing.googleMapsUrl || "",
+      googleMapLink: bodyBranding.googleMapLink || existingBranding.googleMapLink || existingMapsFallback || "",
       primaryColor: bodyBranding.primaryColor || existingBranding.primaryColor || "#2563EB",
       secondaryColor: bodyBranding.secondaryColor || existingBranding.secondaryColor || "#10B981",
       welcomeMessage: bodyBranding.welcomeMessage || existingBranding.welcomeMessage || "",
@@ -24762,7 +24800,9 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       email: String(existing.email || ""),
       website: String(body.website || existing.website || ""),
       logoUrl: String(body.logoUrl || bodyBranding.clinicLogoUrl || existing.logoUrl || existingBranding.clinicLogoUrl || ""),
-      googleMapsUrl: String(body.googleMapsUrl || bodyBranding.googleMapLink || existing.googleMapsUrl || existingBranding.googleMapLink || ""),
+      googleMapsUrl: String(
+        body.googleMapsUrl || bodyBranding.googleMapLink || existingMapsFallback || existing.googleMapsUrl || existingBranding.googleMapLink || ""
+      ),
       branding: updatedBranding,
       defaultInviterDiscountPercent: inviterPercent,
       defaultInvitedDiscountPercent: invitedPercent,
@@ -24775,7 +24815,9 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         defaultInvitedDiscountPercent: invitedPercent,
         referralLevels,
         logoUrl: String(body.logoUrl || bodyBranding.clinicLogoUrl || existing.logoUrl || existingBranding.clinicLogoUrl || ""),
-        googleMapsUrl: String(body.googleMapsUrl || bodyBranding.googleMapLink || existing.googleMapsUrl || existingBranding.googleMapLink || ""),
+        googleMapsUrl: String(
+          body.googleMapsUrl || bodyBranding.googleMapLink || existingMapsFallback || existing.googleMapsUrl || existingBranding.googleMapLink || ""
+        ),
         googleReviews: Array.isArray(body.googleReviews) ? body.googleReviews : (existing.googleReviews || []),
         trustpilotReviews: Array.isArray(body.trustpilotReviews) ? body.trustpilotReviews : (existing.trustpilotReviews || []),
         showTreatmentPrices,
@@ -24823,6 +24865,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
           city: updated.city ? String(updated.city).trim() : (body.city ? String(body.city).trim() : undefined),
           phone: updated.phone,
           website: updated.website,
+          google_maps_url: updated.googleMapsUrl ? String(updated.googleMapsUrl).trim() : null,
           settings: {
             branding: updatedBranding,
             chairCount: normalizedChairCount,
@@ -42032,7 +42075,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v75');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v77');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
