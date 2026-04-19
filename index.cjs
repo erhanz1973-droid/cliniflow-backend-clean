@@ -221,7 +221,7 @@ const nodemailer = require("nodemailer");
 const { randomUUID } = require("crypto");
 const procedures = require("./shared/procedures");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
-const { fillIcdRowFromStatic } = require("./lib/icd10StaticLabels.cjs");
+const { fillIcdRowFromStatic, searchStaticDentalIcd } = require("./lib/icd10StaticLabels.cjs");
 const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileReferenceSeeds");
 const { resolveClinicCoords } = require("./lib/clinicCoords.cjs");
 const { fetchPatientVisibleClinicRows } = require("./lib/patientClinicListing.cjs");
@@ -33930,11 +33930,54 @@ app.get('/api/icd/search', requireDoctorAuth, async (req, res) => {
     const q = qRaw.trim();
     const langQ = typeof req.query?.lang === 'string' ? req.query.lang : '';
 
-    if (q.length < 2) {
+    if (q.length < 1) {
       return res.json({ ok: true, results: [] });
     }
 
-    const like = `%${q}%`;
+    // Escape % and _ for ILIKE (Postgres), keep user intent for prefix search like K0 → K00.*
+    const likeFragment = String(q).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const like = `%${likeFragment}%`;
+
+    const mapCodesRow = (row) => {
+      const filled = fillIcdRowFromStatic(row);
+      return {
+        code: filled?.code || null,
+        category: filled?.category || null,
+        title_tr: filled?.title_tr || null,
+        title_en: filled?.title_en || null,
+        title_ru: filled?.title_ru || null,
+        title_ka: filled?.title_ka || null,
+        description_tr: filled?.description_tr || null,
+        description_en: filled?.description_en || null,
+        description_ru: filled?.description_ru || null,
+        description_ka: filled?.description_ka || null,
+        description: icdDisplayDescriptionFromRow(filled, langQ),
+      };
+    };
+
+    const mapDentalRow = (row) => {
+      const filled = fillIcdRowFromStatic(row);
+      return {
+        code: filled?.code || row?.code || null,
+        category: null,
+        title_tr: filled?.title_tr || null,
+        title_en: filled?.title_en || null,
+        title_ru: filled?.title_ru || null,
+        title_ka: filled?.title_ka || null,
+        description_tr: filled?.description_tr || null,
+        description_en: filled?.description_en || null,
+        description_ru: filled?.description_ru || null,
+        description_ka: filled?.description_ka || null,
+        description:
+          icdDisplayDescriptionFromRow(filled, langQ) ||
+          row?.description ||
+          row?.title_tr ||
+          row?.title_en ||
+          row?.description_tr ||
+          row?.description_en ||
+          null,
+      };
+    };
 
     const codesSelectCandidates = [
       'code, category, title_tr, title_en, title_ru, title_ka, description_tr, description_en, description_ru, description_ka',
@@ -33944,33 +33987,29 @@ app.get('/api/icd/search', requireDoctorAuth, async (req, res) => {
       'code',
     ];
 
+    const orForCodesSelect = (selectClause) => {
+      const parts = [`code.ilike.${like}`, `category.ilike.${like}`];
+      if (selectClause.includes('title_tr')) parts.push(`title_tr.ilike.${like}`);
+      if (selectClause.includes('title_en')) parts.push(`title_en.ilike.${like}`);
+      if (selectClause.includes('description_tr')) parts.push(`description_tr.ilike.${like}`);
+      if (selectClause.includes('description_en')) parts.push(`description_en.ilike.${like}`);
+      return parts.join(',');
+    };
+
     for (const selectClause of codesSelectCandidates) {
       const result = await supabase
         .from('icd10_codes')
         .select(selectClause)
-        .or(`code.ilike.${like},category.ilike.${like}`)
+        .or(orForCodesSelect(selectClause))
         .order('code', { ascending: true })
         .limit(20);
 
       if (!result.error) {
         const rows = Array.isArray(result.data) ? result.data : [];
-        const mapped = rows.map((row) => {
-          const filled = fillIcdRowFromStatic(row);
-          return {
-            code: filled?.code || null,
-            category: filled?.category || null,
-            title_tr: filled?.title_tr || null,
-            title_en: filled?.title_en || null,
-            title_ru: filled?.title_ru || null,
-            title_ka: filled?.title_ka || null,
-            description_tr: filled?.description_tr || null,
-            description_en: filled?.description_en || null,
-            description_ru: filled?.description_ru || null,
-            description_ka: filled?.description_ka || null,
-            description: icdDisplayDescriptionFromRow(filled, langQ),
-          };
-        });
-        return res.json({ ok: true, results: mapped });
+        if (rows.length > 0) {
+          return res.json({ ok: true, results: rows.map(mapCodesRow) });
+        }
+        continue;
       }
 
       const code = String(result.error?.code || '');
@@ -33986,40 +34025,32 @@ app.get('/api/icd/search', requireDoctorAuth, async (req, res) => {
       'code',
     ];
 
+    const orForDentalSelect = (selectClause) => {
+      const parts = [`code.ilike.${like}`];
+      if (selectClause.includes('description') && !selectClause.includes('description_tr')) {
+        parts.push(`description.ilike.${like}`);
+      }
+      if (selectClause.includes('description_tr')) parts.push(`description_tr.ilike.${like}`);
+      if (selectClause.includes('description_en')) parts.push(`description_en.ilike.${like}`);
+      if (selectClause.includes('title_tr')) parts.push(`title_tr.ilike.${like}`);
+      if (selectClause.includes('title_en')) parts.push(`title_en.ilike.${like}`);
+      return parts.join(',');
+    };
+
     for (const selectClause of dentalSelectCandidates) {
       const result = await supabase
         .from('icd10_dental_codes')
         .select(selectClause)
-        .or(`code.ilike.${like},description.ilike.${like}`)
+        .or(orForDentalSelect(selectClause))
         .order('code', { ascending: true })
         .limit(20);
 
       if (!result.error) {
         const rows = Array.isArray(result.data) ? result.data : [];
-        const mapped = rows.map((row) => {
-          const filled = fillIcdRowFromStatic(row);
-          return {
-            code: filled?.code || row?.code || null,
-            category: null,
-            title_tr: filled?.title_tr || null,
-            title_en: filled?.title_en || null,
-            title_ru: filled?.title_ru || null,
-            title_ka: filled?.title_ka || null,
-            description_tr: filled?.description_tr || null,
-            description_en: filled?.description_en || null,
-            description_ru: filled?.description_ru || null,
-            description_ka: filled?.description_ka || null,
-            description:
-              icdDisplayDescriptionFromRow(filled, langQ) ||
-              row?.description ||
-              row?.title_tr ||
-              row?.title_en ||
-              row?.description_tr ||
-              row?.description_en ||
-              null,
-          };
-        });
-        return res.json({ ok: true, results: mapped });
+        if (rows.length > 0) {
+          return res.json({ ok: true, results: rows.map(mapDentalRow) });
+        }
+        continue;
       }
 
       const code = String(result.error?.code || '');
@@ -34029,7 +34060,10 @@ app.get('/api/icd/search', requireDoctorAuth, async (req, res) => {
       }
     }
 
-    return res.json({ ok: true, results: [] });
+    const staticRows = searchStaticDentalIcd(q, 20);
+    const mappedStatic = staticRows.map((row) => mapCodesRow(row));
+
+    return res.json({ ok: true, results: mappedStatic });
   } catch (error) {
     console.error('[ICD SEARCH] exception:', error);
     return res.status(500).json({ ok: false, error: 'internal_error' });
@@ -40196,7 +40230,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v68');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v69');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
