@@ -521,6 +521,20 @@
           let errorMsg = json.message || json.error || "Kayıt başarısız";
           if (json.error === "missing_required_fields") {
             errorMsg = "Zorunlu alanlar eksik: " + Object.keys(json.details || {}).filter(key => !json.details[key]).join(", ");
+          } else if (json.error === "phone_already_registered") {
+            errorMsg = json.message || "Bu telefon numarası başka bir hesaba bağlı. Farklı bir numara kullanın veya kayıtlı e-postanızla giriş yapın.";
+          } else if (json.error === "email_not_configured" || json.error === "otp_email_failed") {
+            errorMsg = json.message || "Doğrulama e-postası gönderilemiyor. Lütfen daha sonra tekrar deneyin.";
+          } else if (json.error === "register_failed") {
+            errorMsg = json.message || "Kayıt tamamlanamadı. Lütfen tekrar deneyin.";
+          } else if (json.error === "clinic_not_found") {
+            errorMsg = json.message || "Klinik kodu bulunamadı.";
+          } else if (json.error === "invalid_referral_code") {
+            errorMsg = json.message || "Geçersiz referans kodu.";
+          } else if (json.error === "invalid_email") {
+            errorMsg = json.message || "Geçersiz e-posta adresi.";
+          } else if (json.error === "invalid_phone") {
+            errorMsg = json.message || "Geçersiz telefon numarası.";
           }
           showAlert(errorMsg);
           submitBtn.disabled = false;

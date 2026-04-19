@@ -312,6 +312,35 @@ function logRegisterTrace(route, step, meta = {}) {
   console.log("[REGISTER_TRACE]", { route, step, ...meta });
 }
 
+/** Turkish user-facing copy for `/api/register` and `/api/register/patient` JSON responses. */
+const REGISTER_USER_MSG = {
+  emailRequired: "E-posta adresi gereklidir.",
+  invalidEmail: "Geçersiz e-posta adresi.",
+  invalidPhone: "Geçersiz telefon numarası formatı.",
+  clinicNotFound: (code) =>
+    `Klinik kodu "${code}" bulunamadı. Lütfen geçerli bir klinik kodu girin.`,
+  registerFailed: "Kayıt tamamlanamadı. Lütfen bir süre sonra tekrar deneyin.",
+  registerFailedLookup:
+    "Kayıt sırasında bir tutarsızlık oluştu. Lütfen tekrar deneyin veya destek ile iletişime geçin.",
+  clinicIdNullableHint:
+    "Sunucu: hastalar için clinic_id zorunlu olabilir. Migration (patients.clinic_id nullable) veya DEFAULT_CLINIC_ID gerekir.",
+  phoneAlreadyRegistered:
+    "Bu telefon numarası başka bir hesaba bağlı. Farklı bir numara kullanın veya bu numarayı kayıtlı e-posta adresinizle deneyin.",
+  otpSentInstructions: "Kayıt alındı. E-postanıza gönderilen doğrulama kodunu girin.",
+  reviewModeClinic:
+    "Klinik kaydı (inceleme modu) tamamlandı. Doğrulama için OTP: 123456.",
+  otpEmailNotConfigured:
+    "Doğrulama e-postası şu an gönderilemiyor (sunucu yapılandırması). Lütfen daha sonra tekrar deneyin.",
+  otpEmailNotConfiguredHint:
+    "Yönetici: Railway’de BREVO_API_KEY ekleyin veya SMTP_HOST, SMTP_USER, SMTP_PASS (Brevo SMTP) tanımlayın. Yalnızca SMTP_FROM yeterli değildir.",
+  otpSendFailedGeneric:
+    "Doğrulama e-postası gönderilemedi. Lütfen bir süre sonra tekrar deneyin.",
+  selfReferralNotAllowed: "Kendi kendinize referans kullanamazsınız.",
+  referralCreateFailed: "Referans kaydı oluşturulamadı. Lütfen tekrar deneyin.",
+  invalidReferralCode: (code) =>
+    `"${code}" referans kodu geçersiz veya bulunamadı. Lütfen kontrol edip tekrar deneyin.`,
+};
+
 /** Register OTP step: email must leave the server; no silent success if Brevo/SMTP fails. */
 function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
   const msg = String(err?.message != null ? err.message : err || "");
@@ -328,10 +357,8 @@ function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
     return res.status(503).json({
       ok: false,
       error: "email_not_configured",
-      message:
-        "Doğrulama e-postası şu an gönderilemiyor (sunucu yapılandırması). Lütfen daha sonra tekrar deneyin.",
-      hint:
-        "Admin: Railway’de BREVO_API_KEY ekleyin veya SMTP_HOST, SMTP_USER, SMTP_PASS (Brevo SMTP) tanımlayın. Yalnızca SMTP_FROM yeterli değildir.",
+      message: REGISTER_USER_MSG.otpEmailNotConfigured,
+      hint: REGISTER_USER_MSG.otpEmailNotConfiguredHint,
     });
   }
 
@@ -343,9 +370,7 @@ function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
   return res.status(emailCfg ? 503 : 500).json({
     ok: false,
     error: emailCfg ? "otp_email_failed" : "otp_send_failed",
-    message: IS_PROD
-      ? "Doğrulama e-postası gönderilemedi. Lütfen bir süre sonra tekrar deneyin."
-      : msg,
+    message: IS_PROD ? REGISTER_USER_MSG.otpSendFailedGeneric : msg,
   });
 }
 /** Non-production: skip OTP hash / missing-row checks for /auth/verify-otp (patient & doctor). Set OTP_DEV_BYPASS=0 to enforce real OTP locally. */
@@ -3378,14 +3403,22 @@ app.post("/api/register", async (req, res) => {
   
   // Email is required for registration
   if (!email || !String(email).trim()) {
-    return res.status(400).json({ ok: false, error: "email_required", message: "Email gereklidir." });
+    return res.status(400).json({
+      ok: false,
+      error: "email_required",
+      message: REGISTER_USER_MSG.emailRequired,
+    });
   }
-  
+
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const emailNormalized = String(email).trim().toLowerCase();
   if (!emailRegex.test(emailNormalized)) {
-    return res.status(400).json({ ok: false, error: "invalid_email", message: "Geçersiz email formatı." });
+    return res.status(400).json({
+      ok: false,
+      error: "invalid_email",
+      message: REGISTER_USER_MSG.invalidEmail,
+    });
   }
 
   const patientLanguage = normalizePatientLanguage(language);
@@ -3397,7 +3430,7 @@ app.post("/api/register", async (req, res) => {
     return res.status(400).json({
       ok: false,
       error: "invalid_phone",
-      message: "Geçersiz telefon numarası formatı.",
+      message: REGISTER_USER_MSG.invalidPhone,
     });
   }
 
@@ -3461,10 +3494,10 @@ app.post("/api/register", async (req, res) => {
     } else {
       // Clinic not found - return error
 
-      return res.status(404).json({ 
-        ok: false, 
+      return res.status(404).json({
+        ok: false,
         error: "clinic_not_found",
-        message: `Klinik kodu "${code}" bulunamadı. Lütfen geçerli bir klinik kodu girin.`
+        message: REGISTER_USER_MSG.clinicNotFound(code),
       });
     }
   } else {
@@ -3532,6 +3565,10 @@ app.post("/api/register", async (req, res) => {
     );
   }
 
+  logRegisterTrace("/api/register", "STEP_BEFORE_DB_UPSERT", {
+    supabase: isSupabaseEnabled(),
+  });
+
   // === SUPABASE PATIENT UPSERT (ZORUNLU) ===
   if (isSupabaseEnabled()) {
     const payload = {
@@ -3547,7 +3584,7 @@ app.post("/api/register", async (req, res) => {
       role: (req.body?.role || "PATIENT").toUpperCase(), // 🔥 NORMALIZE ROLE TO UPPERCASE
       ...(phoneNormalized ? { phone: phoneNormalized } : {}),
     };
-    const { data, error } = await supabase
+    let { data: patientUpsertRow, error: patientUpsertErr } = await supabase
       .from("patients")
       .upsert(
         payload,
@@ -3558,78 +3595,142 @@ app.post("/api/register", async (req, res) => {
       .select()
       .single();
 
-    if (error) {
+    if (patientUpsertErr) {
       console.error("[SUPABASE] PATIENT UPSERT FAILED", {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
+        message: patientUpsertErr.message,
+        code: patientUpsertErr.code,
+        details: patientUpsertErr.details,
+        hint: patientUpsertErr.hint,
       });
-      // If email is already taken, treat registration as idempotent and reuse existing patient.
-      const isUniqueEmail =
-        String(error.code || "") === "23505" ||
-        String(error.message || "").toLowerCase().includes("patients_email_unique") ||
-        String(error.message || "").toLowerCase().includes("duplicate key");
-      if (isUniqueEmail) {
+      const detailBlob = `${patientUpsertErr.details || ""} ${patientUpsertErr.message || ""}`.toLowerCase();
+      const code23505 = String(patientUpsertErr.code || "") === "23505";
+      const isPhoneConstraint =
+        /patients_phone_unique|key \(phone\)/.test(detailBlob);
+      const isEmailConstraint =
+        /patients_email_unique|key \(email\)/.test(detailBlob) ||
+        String(patientUpsertErr.message || "").toLowerCase().includes("patients_email_unique");
+      const isDup =
+        code23505 ||
+        detailBlob.includes("duplicate key");
+
+      const reusePatientRow = async (existing) => {
+        patientId = existing.patient_id || existing.id;
+        if (patientLanguage && existing.language !== patientLanguage) {
+          await supabase.from("patients").update({ language: patientLanguage }).eq("id", existing.id);
+        }
         try {
-          const { data: existing, error: e2 } = await supabase
+          const { data: fullRow } = await supabase
             .from("patients")
-            .select("id, patient_id, email, language")
-            .eq("email", emailNormalized)
+            .select("id, patient_id, clinic_id, name, referral_code, email")
+            .eq("id", existing.id)
             .limit(1)
             .maybeSingle();
-          if (!e2 && existing) {
-            patientId = existing.patient_id || existing.id;
-
-            // Best-effort: keep language in sync
-            if (patientLanguage && existing.language !== patientLanguage) {
-              await supabase.from("patients").update({ language: patientLanguage }).eq("email", emailNormalized);
-            }
-            // Best-effort: keep supabase patient row for downstream (referrals)
-            try {
-              const { data: fullRow } = await supabase
-                .from("patients")
-                .select("id, patient_id, clinic_id, name, referral_code, email")
-                .eq("email", emailNormalized)
-                .limit(1)
-                .maybeSingle();
-              supabasePatientRow = fullRow || existing;
-            } catch {
-              supabasePatientRow = existing;
-            }
-          } else {
-            console.error("[REGISTER] Unique email but failed to fetch existing patient", {
-              message: e2?.message,
-              code: e2?.code,
-              details: e2?.details,
-            });
-            return res.status(500).json({ ok: false, error: "register_failed" });
-          }
-        } catch (e3) {
-
-          return res.status(500).json({ ok: false, error: "register_failed" });
+          supabasePatientRow = fullRow || existing;
+        } catch {
+          supabasePatientRow = existing;
         }
-      } else {
+        patientUpsertRow = supabasePatientRow;
+        patientUpsertErr = null;
+      };
+
+      let resolved = false;
+
+      if (isDup) {
+        if (isPhoneConstraint && phoneNormalized) {
+          const { data: byPhone, error: ePhone } = await supabase
+            .from("patients")
+            .select("id, patient_id, email, language")
+            .eq("phone", phoneNormalized)
+            .limit(1)
+            .maybeSingle();
+          if (!ePhone && byPhone) {
+            const em = String(byPhone.email || "").trim().toLowerCase();
+            if (em !== emailNormalized) {
+              return res.status(409).json({
+                ok: false,
+                error: "phone_already_registered",
+                message: REGISTER_USER_MSG.phoneAlreadyRegistered,
+              });
+            }
+            await reusePatientRow(byPhone);
+            resolved = true;
+          }
+        }
+
+        if (!resolved && patientUpsertErr && (isEmailConstraint || (code23505 && !isPhoneConstraint))) {
+          try {
+            const { data: existing, error: e2 } = await supabase
+              .from("patients")
+              .select("id, patient_id, email, language")
+              .eq("email", emailNormalized)
+              .limit(1)
+              .maybeSingle();
+            if (!e2 && existing) {
+              await reusePatientRow(existing);
+              resolved = true;
+            } else {
+              console.error("[REGISTER] Unique email but failed to fetch existing patient", {
+                message: e2?.message,
+                code: e2?.code,
+                details: e2?.details,
+              });
+              return res.status(500).json({
+                ok: false,
+                error: "register_failed",
+                message: REGISTER_USER_MSG.registerFailedLookup,
+              });
+            }
+          } catch (e3) {
+            return res.status(500).json({
+              ok: false,
+              error: "register_failed",
+              message: REGISTER_USER_MSG.registerFailed,
+            });
+          }
+        }
+
+        if (!resolved && patientUpsertErr && phoneNormalized && !isPhoneConstraint) {
+          const { data: byPhone, error: ePhone } = await supabase
+            .from("patients")
+            .select("id, patient_id, email, language")
+            .eq("phone", phoneNormalized)
+            .limit(1)
+            .maybeSingle();
+          if (!ePhone && byPhone) {
+            const em = String(byPhone.email || "").trim().toLowerCase();
+            if (em !== emailNormalized) {
+              return res.status(409).json({
+                ok: false,
+                error: "phone_already_registered",
+                message: REGISTER_USER_MSG.phoneAlreadyRegistered,
+              });
+            }
+            await reusePatientRow(byPhone);
+            resolved = true;
+          }
+        }
+      }
+
+      if (patientUpsertErr) {
         const hintNull =
           !supabaseClinicId &&
-          String(error.message || "")
+          String(patientUpsertErr.message || "")
             .toLowerCase()
             .includes("clinic_id");
         return res.status(500).json({
           ok: false,
           error: "register_failed",
-          message: error.message || String(error),
-          ...(hintNull
-            ? {
-                hint: "patients.clinic_id may be NOT NULL; run migration supabase/migrations/20260419120000_patients_clinic_id_nullable_register.sql or set DEFAULT_CLINIC_ID on the server.",
-              }
-            : {}),
+          message: REGISTER_USER_MSG.registerFailed,
+          ...(hintNull ? { hint: REGISTER_USER_MSG.clinicIdNullableHint } : {}),
         });
       }
     }
 
-    if (data?.id) console.log("[SUPABASE] ✅ patient upserted:", data.id);
-    if (data) supabasePatientRow = data;
+    if (patientUpsertRow?.id) console.log("[SUPABASE] ✅ patient upserted:", patientUpsertRow.id);
+    if (patientUpsertRow) supabasePatientRow = patientUpsertRow;
+    logRegisterTrace("/api/register", "STEP_AFTER_DB_UPSERT", {
+      patientRowId: patientUpsertRow?.id || supabasePatientRow?.id || null,
+    });
   }
 
   // FILE-BASED: Fallback storage (for backward compatibility)
@@ -3747,7 +3848,7 @@ app.post("/api/register", async (req, res) => {
           return res.status(400).json({
             ok: false,
             error: "invalid_referral_code",
-            message: `Referral code "${refCodeRaw}" is invalid or not found. Please check the code and try again.`,
+            message: REGISTER_USER_MSG.invalidReferralCode(refCodeRaw),
             supabase: lastInviterErr ? supabaseErrorPublic(lastInviterErr) : null,
           });
         }
@@ -3763,7 +3864,7 @@ app.post("/api/register", async (req, res) => {
           return res.status(400).json({
             ok: false,
             error: "invalid_referral_code",
-            message: `Referral code "${refCodeRaw}" is invalid or not found. Please check the code and try again.`,
+            message: REGISTER_USER_MSG.invalidReferralCode(refCodeRaw),
           });
         }
 
@@ -3802,7 +3903,7 @@ app.post("/api/register", async (req, res) => {
             return res.status(400).json({
               ok: false,
               error: "invalid_referral_code",
-              message: "Self-referral is not allowed.",
+              message: REGISTER_USER_MSG.selfReferralNotAllowed,
             });
           }
         }
@@ -3847,7 +3948,7 @@ app.post("/api/register", async (req, res) => {
           return res.status(500).json({
             ok: false,
             error: "referral_create_failed",
-            message: "Could not create referral. Please try again.",
+            message: REGISTER_USER_MSG.referralCreateFailed,
             supabase: supabaseErrorPublic(lastCreateErr),
           });
         }
@@ -3925,7 +4026,7 @@ app.post("/api/register", async (req, res) => {
         clinicId: reviewClinic?.id || supabaseClinicId || null,
         clinicCode: reviewClinic?.clinic_code || validatedClinicCode || null,
         hasClinic: Boolean(reviewClinic?.id || supabaseClinicId),
-        message: "Clinic registered successfully (Review Mode). Use OTP 123456 to verify.",
+        message: REGISTER_USER_MSG.reviewModeClinic,
         reviewMode: true,
         requiresOTP: true,
       });
@@ -3956,7 +4057,7 @@ app.post("/api/register", async (req, res) => {
 
     return res.json({
       ok: true,
-      message: "Kayıt başarılı. Email adresinize gönderilen OTP kodunu girin.",
+      message: REGISTER_USER_MSG.otpSentInstructions,
       patientId,
       email: emailNormalized,
       language: patientLanguage,
@@ -4052,14 +4153,22 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
   
   // Email is required for registration
   if (!email || !String(email).trim()) {
-    return res.status(400).json({ ok: false, error: "email_required", message: "Email gereklidir." });
+    return res.status(400).json({
+      ok: false,
+      error: "email_required",
+      message: REGISTER_USER_MSG.emailRequired,
+    });
   }
-  
+
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const emailNormalized = String(email).trim().toLowerCase();
   if (!emailRegex.test(emailNormalized)) {
-    return res.status(400).json({ ok: false, error: "invalid_email", message: "Geçersiz email formatı." });
+    return res.status(400).json({
+      ok: false,
+      error: "invalid_email",
+      message: REGISTER_USER_MSG.invalidEmail,
+    });
   }
 
   const patientLanguage = normalizePatientLanguage(language);
@@ -4071,7 +4180,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     return res.status(400).json({
       ok: false,
       error: "invalid_phone",
-      message: "Geçersiz telefon numarası formatı.",
+      message: REGISTER_USER_MSG.invalidPhone,
     });
   }
 
@@ -4143,10 +4252,10 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     } else {
       // Clinic not found - return error
 
-      return res.status(404).json({ 
-        ok: false, 
+      return res.status(404).json({
+        ok: false,
         error: "clinic_not_found",
-        message: `Klinik kodu "${code}" bulunamadı. Lütfen geçerli bir klinik kodu girin.`
+        message: REGISTER_USER_MSG.clinicNotFound(code),
       });
     }
   } else {
@@ -4233,7 +4342,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       role: (req.body?.role || "PATIENT").toUpperCase(), // 🔥 NORMALIZE ROLE TO UPPERCASE
       ...(phoneNormalized ? { phone: phoneNormalized } : {}),
     };
-    const { data, error } = await supabase
+    let { data: patientUpsertRow, error: patientUpsertErr } = await supabase
       .from("patients")
       .upsert(
         payload,
@@ -4244,80 +4353,141 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       .select()
       .single();
 
-    if (error) {
+    if (patientUpsertErr) {
       console.error("[SUPABASE] PATIENT UPSERT FAILED", {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
+        message: patientUpsertErr.message,
+        code: patientUpsertErr.code,
+        details: patientUpsertErr.details,
+        hint: patientUpsertErr.hint,
       });
-      // If email is already taken, treat registration as idempotent and reuse existing patient.
-      const isUniqueEmail =
-        String(error.code || "") === "23505" ||
-        String(error.message || "").toLowerCase().includes("patients_email_unique") ||
-        String(error.message || "").toLowerCase().includes("duplicate key");
-      if (isUniqueEmail) {
+      const detailBlob = `${patientUpsertErr.details || ""} ${patientUpsertErr.message || ""}`.toLowerCase();
+      const code23505 = String(patientUpsertErr.code || "") === "23505";
+      const isPhoneConstraint =
+        /patients_phone_unique|key \(phone\)/.test(detailBlob);
+      const isEmailConstraint =
+        /patients_email_unique|key \(email\)/.test(detailBlob) ||
+        String(patientUpsertErr.message || "").toLowerCase().includes("patients_email_unique");
+      const isDup =
+        code23505 ||
+        detailBlob.includes("duplicate key");
+
+      const reusePatientRow = async (existing) => {
+        patientId = existing.patient_id || existing.id;
+        if (patientLanguage && existing.language !== patientLanguage) {
+          await supabase.from("patients").update({ language: patientLanguage }).eq("id", existing.id);
+        }
         try {
-          const { data: existing, error: e2 } = await supabase
+          const { data: fullRow } = await supabase
             .from("patients")
-            .select("id, patient_id, email, language")
-            .eq("email", emailNormalized)
+            .select("id, patient_id, clinic_id, name, referral_code, email")
+            .eq("id", existing.id)
             .limit(1)
             .maybeSingle();
-          if (!e2 && existing) {
-            patientId = existing.patient_id || existing.id;
-
-            // Best-effort: keep language in sync
-            if (patientLanguage && existing.language !== patientLanguage) {
-              await supabase.from("patients").update({ language: patientLanguage }).eq("email", emailNormalized);
-            }
-            // Best-effort: keep supabase patient row for downstream (referrals)
-            try {
-              const { data: fullRow } = await supabase
-                .from("patients")
-                .select("id, patient_id, clinic_id, name, referral_code, email")
-                .eq("email", emailNormalized)
-                .limit(1)
-                .maybeSingle();
-              supabasePatientRow = fullRow || existing;
-            } catch {
-              supabasePatientRow = existing;
-            }
-          } else {
-            console.error("[REGISTER /api/patient/register] Unique email but failed to fetch existing patient", {
-              message: e2?.message,
-              code: e2?.code,
-              details: e2?.details,
-            });
-            return res.status(500).json({ ok: false, error: "register_failed" });
-          }
-        } catch (e3) {
-
-          return res.status(500).json({ ok: false, error: "register_failed" });
+          supabasePatientRow = fullRow || existing;
+        } catch {
+          supabasePatientRow = existing;
         }
-      } else {
+        patientUpsertRow = supabasePatientRow;
+        patientUpsertErr = null;
+      };
+
+      let resolved = false;
+
+      if (isDup) {
+        if (isPhoneConstraint && phoneNormalized) {
+          const { data: byPhone, error: ePhone } = await supabase
+            .from("patients")
+            .select("id, patient_id, email, language")
+            .eq("phone", phoneNormalized)
+            .limit(1)
+            .maybeSingle();
+          if (!ePhone && byPhone) {
+            const em = String(byPhone.email || "").trim().toLowerCase();
+            if (em !== emailNormalized) {
+              return res.status(409).json({
+                ok: false,
+                error: "phone_already_registered",
+                message: REGISTER_USER_MSG.phoneAlreadyRegistered,
+              });
+            }
+            await reusePatientRow(byPhone);
+            resolved = true;
+          }
+        }
+
+        if (!resolved && patientUpsertErr && (isEmailConstraint || (code23505 && !isPhoneConstraint))) {
+          try {
+            const { data: existing, error: e2 } = await supabase
+              .from("patients")
+              .select("id, patient_id, email, language")
+              .eq("email", emailNormalized)
+              .limit(1)
+              .maybeSingle();
+            if (!e2 && existing) {
+              await reusePatientRow(existing);
+              resolved = true;
+            } else {
+              console.error("[REGISTER /api/patient/register] Unique email but failed to fetch existing patient", {
+                message: e2?.message,
+                code: e2?.code,
+                details: e2?.details,
+              });
+              return res.status(500).json({
+                ok: false,
+                error: "register_failed",
+                message: REGISTER_USER_MSG.registerFailedLookup,
+              });
+            }
+          } catch (e3) {
+            return res.status(500).json({
+              ok: false,
+              error: "register_failed",
+              message: REGISTER_USER_MSG.registerFailed,
+            });
+          }
+        }
+
+        if (!resolved && patientUpsertErr && phoneNormalized && !isPhoneConstraint) {
+          const { data: byPhone, error: ePhone } = await supabase
+            .from("patients")
+            .select("id, patient_id, email, language")
+            .eq("phone", phoneNormalized)
+            .limit(1)
+            .maybeSingle();
+          if (!ePhone && byPhone) {
+            const em = String(byPhone.email || "").trim().toLowerCase();
+            if (em !== emailNormalized) {
+              return res.status(409).json({
+                ok: false,
+                error: "phone_already_registered",
+                message: REGISTER_USER_MSG.phoneAlreadyRegistered,
+              });
+            }
+            await reusePatientRow(byPhone);
+            resolved = true;
+          }
+        }
+      }
+
+      if (patientUpsertErr) {
         const hintNull =
           !supabaseClinicId &&
-          String(error.message || "")
+          String(patientUpsertErr.message || "")
             .toLowerCase()
             .includes("clinic_id");
         return res.status(500).json({
           ok: false,
           error: "register_failed",
-          message: error.message || String(error),
-          ...(hintNull
-            ? {
-                hint: "patients.clinic_id may be NOT NULL; run migration supabase/migrations/20260419120000_patients_clinic_id_nullable_register.sql or set DEFAULT_CLINIC_ID on the server.",
-              }
-            : {}),
+          message: REGISTER_USER_MSG.registerFailed,
+          ...(hintNull ? { hint: REGISTER_USER_MSG.clinicIdNullableHint } : {}),
         });
       }
     }
 
-    if (data?.id) console.log("[SUPABASE] ✅ patient upserted:", data.id);
-    if (data) supabasePatientRow = data;
+    if (patientUpsertRow?.id) console.log("[SUPABASE] ✅ patient upserted:", patientUpsertRow.id);
+    if (patientUpsertRow) supabasePatientRow = patientUpsertRow;
     logRegisterTrace("/api/register/patient", "STEP_AFTER_DB_UPSERT", {
-      patientRowId: data?.id || supabasePatientRow?.id || null,
+      patientRowId: patientUpsertRow?.id || supabasePatientRow?.id || null,
     });
   }
 
@@ -4437,7 +4607,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
           return res.status(400).json({
             ok: false,
             error: "invalid_referral_code",
-            message: `Referral code "${refCodeRaw}" is invalid or not found. Please check the code and try again.`,
+            message: REGISTER_USER_MSG.invalidReferralCode(refCodeRaw),
             supabase: lastInviterErr ? supabaseErrorPublic(lastInviterErr) : null,
           });
         }
@@ -4448,7 +4618,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
           return res.status(400).json({
             ok: false,
             error: "invalid_referral_code",
-            message: `Referral code "${refCodeRaw}" is invalid or not found. Please check the code and try again.`,
+            message: REGISTER_USER_MSG.invalidReferralCode(refCodeRaw),
           });
         }
 
@@ -4487,7 +4657,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
             return res.status(400).json({
               ok: false,
               error: "invalid_referral_code",
-              message: "Self-referral is not allowed.",
+              message: REGISTER_USER_MSG.selfReferralNotAllowed,
             });
           }
         }
@@ -4530,7 +4700,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
           return res.status(500).json({
             ok: false,
             error: "referral_create_failed",
-            message: "Could not create referral. Please try again.",
+            message: REGISTER_USER_MSG.referralCreateFailed,
             supabase: supabaseErrorPublic(lastCreateErr),
           });
         }
@@ -4617,7 +4787,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
 
     return res.json({
       ok: true,
-      message: "Kayıt başarılı. Email adresinize gönderilen OTP kodunu girin.",
+      message: REGISTER_USER_MSG.otpSentInstructions,
       patientId,
       email: emailNormalized,
       language: patientLanguage,
@@ -39741,7 +39911,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v59');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v60');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
