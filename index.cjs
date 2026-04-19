@@ -38380,16 +38380,20 @@ async function loadOfferMessagingContext(offerId) {
     .maybeSingle();
   if (oErr || !offer) return null;
 
+  // Prefer columns that exist on minimal schemas first — avoid `photo_urls` until last (many DBs never had that column).
   const trSelects = [
+    "id, patient_id, description, budget, preferred_treatment, created_at",
+    "id, patient_id, description, budget, preferred_treatment, created_at, updated_at",
+    "id, patient_id, description, budget, preferred_treatment, photos, created_at",
+    "id, patient_id, description, budget, preferred_treatment, attachment_urls, created_at",
+    "id, patient_id, description, budget, preferred_treatment, photos, attachment_urls, created_at, updated_at",
+    "id, patient_id, description, created_at",
+    "id, patient_id",
     "id, patient_id, description, budget, preferred_treatment, photo_urls, photos, attachment_urls, created_at, updated_at",
     "id, patient_id, description, budget, preferred_treatment, photo_urls, photos, created_at",
     "id, patient_id, description, budget, preferred_treatment, photo_urls, created_at",
-    "id, patient_id, description, budget, preferred_treatment, photos, created_at",
     "id, patient_id, description, photo_urls, photos, created_at",
     "id, patient_id, description, photo_urls, created_at",
-    "id, patient_id, description, photos, created_at",
-    "id, patient_id, description, created_at",
-    "id, patient_id",
   ];
 
   let tr = null;
@@ -38518,6 +38522,13 @@ app.post("/api/offer-messages/:offerId/read", async (req, res) => {
       .is("read_at", null);
 
     if (uErr) {
+      const rmsg = String(uErr.message || uErr.details || "").toLowerCase();
+      if (
+        rmsg.includes("read_at") &&
+        (rmsg.includes("does not exist") || rmsg.includes("schema cache") || isMissingColumnError(uErr, "read_at"))
+      ) {
+        return res.json({ ok: true, read_receipts_unsupported: true });
+      }
       console.error("[OFFER-MESSAGES READ]", uErr.message);
       return res.status(500).json({ ok: false, error: "db_error" });
     }
@@ -38907,14 +38918,17 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     }
 
     const trSelectVariants = [
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, attachment_urls",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos, attachment_urls",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos, attachment_urls",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
     ];
 
     let list = [];
+    let lastTrErr = null;
     for (const sel of trSelectVariants) {
       let trQuery = supabase
         .from("treatment_requests")
@@ -38929,9 +38943,10 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         list = trRows;
         break;
       }
-      if (trErr) {
-        console.warn("[DOCTOR treatment-requests] select retry:", sel, trErr.message);
-      }
+      lastTrErr = trErr || lastTrErr;
+    }
+    if (!list.length && lastTrErr) {
+      console.warn("[DOCTOR treatment-requests] select failed after variants:", lastTrErr.message);
     }
     const pids = [
       ...new Set(
