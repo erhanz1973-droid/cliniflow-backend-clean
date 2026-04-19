@@ -1,0 +1,23 @@
+---
+description: Cliniflow nerede deploy edilir — backend Railway, admin Netlify
+alwaysApply: true
+---
+
+# Deploy topology (do not confuse repos)
+
+## Backend API (this repo: `cliniflow-backend-clean`)
+
+- **Platform:** **Railway**
+- **Trigger:** `git push` to the branch connected in Railway (usually `main`).
+- **Entry:** root `index.cjs` (see `backend-entry-point` rule / parent `.cursor/rules`).
+- **Do not** assume Render unless the project explicitly migrates; production history uses **Railway**.
+
+## Admin dashboard (separate repo)
+
+- **Platform:** **Netlify** (admin / clinic dashboard UI — not deployed from this backend repo).
+- Changes to admin UI go through that repo’s Netlify pipeline, not Railway.
+
+## When helping the user
+
+- Backend changes → commit/push **this** repo → verify **Railway** build logs.
+- Admin UI changes → the **Netlify**-connected admin repo → verify **Netlify** deploy.
