@@ -2969,9 +2969,13 @@ async function requireAdminToken(req, res, next) {
 }
 
 // ================== HEALTH ==================
-// Ultra simple - no DB, no async - for Render health check
+// Ultra simple - no DB, no async - for Render / Railway / mobile “is the process up?” checks
 app.get("/health", (req, res) => {
-  res.status(200).json({ ok: true, status: "ok" });
+  res.status(200).json({
+    ok: true,
+    status: "ok",
+    emailConfigured: isTransactionalEmailConfigured(),
+  });
 });
 
 // Diagnostic entrypoint check - verifies this file is the running entry
@@ -39997,7 +40001,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v61');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v62');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
