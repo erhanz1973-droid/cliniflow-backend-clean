@@ -542,17 +542,23 @@
           return;
         }
         
-        // Store patient token
-        localStorage.setItem("patient_token", json.token);
-        localStorage.setItem("patient_id", json.patientId);
-        localStorage.setItem("clinic_id", json.clinicId);
-        
-        showAlert("Kayıt başarılı! Yönlendiriliyorsunuz...", "success");
-        
-        // Redirect to chat or patient dashboard
+        if (json.token) localStorage.setItem("patient_token", json.token);
+        if (json.patientId) localStorage.setItem("patient_id", json.patientId);
+        if (json.clinicId) localStorage.setItem("clinic_id", json.clinicId);
+
+        if (json.email_sent === false) {
+          showAlert(
+            json.message ||
+              "Kayıt alındı; doğrulama e-postası şu an gönderilemedi. Lütfen uygulamadan «kodu yeniden gönder» deneyin.",
+            "err"
+          );
+        } else {
+          showAlert("Kayıt başarılı! Yönlendiriliyorsunuz...", "success");
+        }
+
         setTimeout(() => {
           window.location.href = "/chat.html";
-        }, 1500);
+        }, json.email_sent === false ? 3500 : 1500);
         
       } catch (error) {
         console.error("[REGISTER] Error:", error);

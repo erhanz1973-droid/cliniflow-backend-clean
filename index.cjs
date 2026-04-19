@@ -332,47 +332,43 @@ const REGISTER_USER_MSG = {
   otpEmailNotConfigured:
     "Doğrulama e-postası şu an gönderilemiyor (sunucu yapılandırması). Lütfen daha sonra tekrar deneyin.",
   otpEmailNotConfiguredHint:
-    "Yönetici: Railway’de BREVO_API_KEY ekleyin veya SMTP_HOST, SMTP_USER, SMTP_PASS (Brevo SMTP) tanımlayın. Yalnızca SMTP_FROM yeterli değildir.",
+    "Yönetici: BREVO_API_KEY veya SMTP_HOST+SMTP_USER+SMTP_PASS tanımlayın; gönderen için EMAIL_FROM veya SMTP_FROM kullanın.",
   otpSendFailedGeneric:
     "Doğrulama e-postası gönderilemedi. Lütfen bir süre sonra tekrar deneyin.",
+  otpStoredEmailSendFailed:
+    "Kayıt alındı; doğrulama e-postası şu an gönderilemedi. Lütfen «kodu yeniden gönder» veya bir süre sonra tekrar deneyin.",
   selfReferralNotAllowed: "Kendi kendinize referans kullanamazsınız.",
   referralCreateFailed: "Referans kaydı oluşturulamadı. Lütfen tekrar deneyin.",
   invalidReferralCode: (code) =>
     `"${code}" referans kodu geçersiz veya bulunamadı. Lütfen kontrol edip tekrar deneyin.`,
 };
 
-/** Register OTP step: email must leave the server; no silent success if Brevo/SMTP fails. */
-function respondRegisterOtpFailure(res, err, emailNormalized, routeTag) {
-  const msg = String(err?.message != null ? err.message : err || "");
-  console.error("[REGISTER] register_otp_failed", {
-    route: routeTag || "register",
-    email: maskEmailForLog(emailNormalized),
-    message: msg,
-  });
-
-  if (msg === "email_not_configured" || msg.includes("email_not_configured")) {
-    logRegisterTrace(routeTag || "register", "STEP_OTP_FAILED_EMAIL_NOT_CONFIGURED", {
-      email: maskEmailForLog(emailNormalized),
-    });
-    return res.status(503).json({
-      ok: false,
-      error: "email_not_configured",
-      message: REGISTER_USER_MSG.otpEmailNotConfigured,
-      hint: REGISTER_USER_MSG.otpEmailNotConfiguredHint,
-    });
-  }
-
-  const emailCfg =
-    msg.includes("SMTP_FROM") ||
-    msg.includes("Brevo") ||
-    msg.includes("brevo_fetch_timeout") ||
-    /failed to fetch|network|fetch/i.test(msg);
-  return res.status(emailCfg ? 503 : 500).json({
-    ok: false,
-    error: emailCfg ? "otp_email_failed" : "otp_send_failed",
-    message: IS_PROD ? REGISTER_USER_MSG.otpSendFailedGeneric : msg,
-  });
+function buildRegisterOtpSuccessJson({
+  patientId,
+  emailNormalized,
+  patientLanguage,
+  requestId,
+  supabaseClinicId,
+  validatedClinicCode,
+  emailSent,
+}) {
+  return {
+    ok: true,
+    message: emailSent ? REGISTER_USER_MSG.otpSentInstructions : REGISTER_USER_MSG.otpStoredEmailSendFailed,
+    patientId,
+    email: emailNormalized,
+    language: patientLanguage,
+    requestId,
+    status: "PENDING",
+    requires_verification: true,
+    requiresOTP: true,
+    email_sent: emailSent,
+    hasClinic: Boolean(supabaseClinicId),
+    clinicId: supabaseClinicId || null,
+    clinicCode: validatedClinicCode || null,
+  };
 }
+
 /** Non-production: skip OTP hash / missing-row checks for /auth/verify-otp (patient & doctor). Set OTP_DEV_BYPASS=0 to enforce real OTP locally. */
 function isOtpDevBypassEnabled() {
   if (IS_PROD) return false;
@@ -2333,6 +2329,7 @@ const chatUpload = multer({
 // DEBUG: Log raw ENV values at startup
 console.log("[SMTP DEBUG] RAW ENV VALUES:", {
   BREVO_API_KEY: process.env.BREVO_API_KEY ? "SET (length: " + process.env.BREVO_API_KEY.length + ")" : "MISSING",
+  EMAIL_FROM: process.env.EMAIL_FROM || "MISSING",
   SMTP_HOST: process.env.SMTP_HOST || "MISSING",
   SMTP_PORT: process.env.SMTP_PORT || "MISSING",
   SMTP_USER: process.env.SMTP_USER ? "SET (" + process.env.SMTP_USER.substring(0, 5) + "...)" : "MISSING",
@@ -2345,7 +2342,8 @@ const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || "noreply@clinifly.net";
+const SMTP_FROM =
+  String(process.env.EMAIL_FROM || process.env.SMTP_FROM || "noreply@clinifly.net").trim() || "noreply@clinifly.net";
 
 // Nodemailer transporter for Brevo SMTP (no async - fast startup)
 let emailTransporter = null;
@@ -2370,6 +2368,12 @@ if (!process.env.BREVO_API_KEY && !emailTransporter) {
   console.error(
     "[EMAIL] ⚠️ OTP / transactional mail disabled: set BREVO_API_KEY (REST) OR SMTP_HOST + SMTP_USER + SMTP_PASS (e.g. smtp-relay.brevo.com). SMTP_FROM alone is not enough.",
   );
+}
+
+/** True if Brevo REST or full SMTP credentials are present (OTP send can be attempted). */
+function isTransactionalEmailConfigured() {
+  const brevo = String(process.env.BREVO_API_KEY || "").trim();
+  return Boolean(brevo) || Boolean(emailTransporter);
 }
 
 // ================== PUSH NOTIFICATIONS ==================
@@ -2701,7 +2705,7 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
     digits: String(otpCode || "").length,
     hasBrevoApiKey: !!process.env.BREVO_API_KEY,
     hasSmtpTransporter: !!emailTransporter,
-    smtpFromSet: !!(process.env.SMTP_FROM || SMTP_FROM),
+    smtpFromSet: !!(process.env.EMAIL_FROM || process.env.SMTP_FROM || SMTP_FROM),
   });
 
 
@@ -2714,7 +2718,7 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
   }
   
   const apiKey = process.env.BREVO_API_KEY;
-  const fromEmail = process.env.SMTP_FROM || SMTP_FROM; // prefer explicit env, fallback to default
+  const fromEmail = SMTP_FROM;
   const fromName = process.env.BREVO_FROM_NAME || "Clinifly";
 
 
@@ -2773,7 +2777,7 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
   }
 
   if (!fromEmail) {
-    console.error(`[sendOTPEmail] ❌ SMTP_FROM not set!`);
+    console.error(`[sendOTPEmail] ❌ EMAIL_FROM / SMTP_FROM not set!`);
     throw new Error("SMTP_FROM not set");
   }
 
@@ -3400,7 +3404,8 @@ app.post("/api/register", async (req, res) => {
     clinicCode: clinicCode || "(empty)",
     hasClinicCode: !!clinicCode 
   });
-  
+  console.log("[REGISTER] REGISTER_START", { route: "/api/register" });
+
   // Email is required for registration
   if (!email || !String(email).trim()) {
     return res.status(400).json({
@@ -3605,7 +3610,8 @@ app.post("/api/register", async (req, res) => {
       const detailBlob = `${patientUpsertErr.details || ""} ${patientUpsertErr.message || ""}`.toLowerCase();
       const code23505 = String(patientUpsertErr.code || "") === "23505";
       const isPhoneConstraint =
-        /patients_phone_unique|key \(phone\)/.test(detailBlob);
+        /patients_phone_unique|key \(phone\)/.test(detailBlob) ||
+        String(patientUpsertErr.message || "").toLowerCase().includes("patients_phone_unique");
       const isEmailConstraint =
         /patients_email_unique|key \(email\)/.test(detailBlob) ||
         String(patientUpsertErr.message || "").toLowerCase().includes("patients_email_unique");
@@ -3653,6 +3659,10 @@ app.post("/api/register", async (req, res) => {
               });
             }
             await reusePatientRow(byPhone);
+            console.log("[REGISTER] PHONE_CONFLICT_HANDLED", {
+              route: "/api/register",
+              idempotent: true,
+            });
             resolved = true;
           }
         }
@@ -3706,6 +3716,10 @@ app.post("/api/register", async (req, res) => {
               });
             }
             await reusePatientRow(byPhone);
+            console.log("[REGISTER] PHONE_CONFLICT_HANDLED", {
+              route: "/api/register",
+              idempotent: true,
+            });
             resolved = true;
           }
         }
@@ -4028,7 +4042,9 @@ app.post("/api/register", async (req, res) => {
         hasClinic: Boolean(reviewClinic?.id || supabaseClinicId),
         message: REGISTER_USER_MSG.reviewModeClinic,
         reviewMode: true,
+        requires_verification: true,
         requiresOTP: true,
+        email_sent: false,
       });
     }
 
@@ -4049,28 +4065,58 @@ app.post("/api/register", async (req, res) => {
     await saveOTP(emailNormalized, otpCode, 0);
     console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
+    if (!isTransactionalEmailConfigured()) {
+      logRegisterTrace("/api/register", "STEP_OTP_EMAIL_NOT_CONFIGURED", {
+        email: maskEmailForLog(emailNormalized),
+      });
+      return res.status(503).json({
+        ok: false,
+        error: "email_not_configured",
+        message: REGISTER_USER_MSG.otpEmailNotConfigured,
+        hint: REGISTER_USER_MSG.otpEmailNotConfiguredHint,
+      });
+    }
+
     logRegisterTrace("/api/register", "STEP_3_BEFORE_SEND_EMAIL", {});
     console.log("[REGISTER] register_otp_before_send_email");
-    await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
-    logRegisterTrace("/api/register", "STEP_4_AFTER_SEND_EMAIL", {});
-    console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
 
-    return res.json({
-      ok: true,
-      message: REGISTER_USER_MSG.otpSentInstructions,
-      patientId,
-      email: emailNormalized,
-      language: patientLanguage,
-      requestId,
-      status: "PENDING",
-      requiresOTP: true,
-      hasClinic: Boolean(supabaseClinicId),
-      clinicId: supabaseClinicId || null,
-      clinicCode: validatedClinicCode || null,
-    });
+    let emailSent = false;
+    try {
+      await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
+      emailSent = true;
+      console.log("[REGISTER] OTP_EMAIL_SENT", {
+        route: "/api/register",
+        email: maskEmailForLog(emailNormalized),
+        patientId,
+      });
+      logRegisterTrace("/api/register", "STEP_4_AFTER_SEND_EMAIL", {});
+      console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
+    } catch (err) {
+      console.error("[REGISTER] OTP_EMAIL_FAILED", {
+        route: "/api/register",
+        message: err?.message || err,
+      });
+    }
+
+    return res.json(
+      buildRegisterOtpSuccessJson({
+        patientId,
+        emailNormalized,
+        patientLanguage,
+        requestId,
+        supabaseClinicId,
+        validatedClinicCode,
+        emailSent,
+      }),
+    );
   } catch (otpError) {
     if (res.headersSent) return;
-    return respondRegisterOtpFailure(res, otpError, emailNormalized, "/api/register");
+    console.error("[REGISTER] register_otp_unexpected", otpError?.stack || otpError?.message || otpError);
+    return res.status(500).json({
+      ok: false,
+      error: "internal_error",
+      message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(otpError?.message || otpError),
+    });
   }
   } catch (regErr) {
     console.error("[REGISTER] unhandled:", regErr?.stack || regErr?.message || regErr);
@@ -4150,7 +4196,8 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     clinicCode: clinicCode || "(empty)",
     hasClinicCode: !!clinicCode 
   });
-  
+  console.log("[REGISTER] REGISTER_START", { route: "/api/register/patient" });
+
   // Email is required for registration
   if (!email || !String(email).trim()) {
     return res.status(400).json({
@@ -4363,7 +4410,8 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
       const detailBlob = `${patientUpsertErr.details || ""} ${patientUpsertErr.message || ""}`.toLowerCase();
       const code23505 = String(patientUpsertErr.code || "") === "23505";
       const isPhoneConstraint =
-        /patients_phone_unique|key \(phone\)/.test(detailBlob);
+        /patients_phone_unique|key \(phone\)/.test(detailBlob) ||
+        String(patientUpsertErr.message || "").toLowerCase().includes("patients_phone_unique");
       const isEmailConstraint =
         /patients_email_unique|key \(email\)/.test(detailBlob) ||
         String(patientUpsertErr.message || "").toLowerCase().includes("patients_email_unique");
@@ -4411,6 +4459,10 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
               });
             }
             await reusePatientRow(byPhone);
+            console.log("[REGISTER] PHONE_CONFLICT_HANDLED", {
+              route: "/api/register/patient",
+              idempotent: true,
+            });
             resolved = true;
           }
         }
@@ -4464,6 +4516,10 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
               });
             }
             await reusePatientRow(byPhone);
+            console.log("[REGISTER] PHONE_CONFLICT_HANDLED", {
+              route: "/api/register/patient",
+              idempotent: true,
+            });
             resolved = true;
           }
         }
@@ -4751,7 +4807,7 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     }
   }
 
-  // Send OTP for email verification — await Brevo/SMTP; no silent success if email fails
+  // Send OTP for email verification: 503 only if email transport not configured; send errors → 200 + email_sent: false
   try {
     logRegisterTrace("/api/register/patient", "STEP_OTP_BLOCK_ENTER", {
       email: maskEmailForLog(emailNormalized),
@@ -4779,28 +4835,58 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     });
     console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
+    if (!isTransactionalEmailConfigured()) {
+      logRegisterTrace("/api/register/patient", "STEP_OTP_EMAIL_NOT_CONFIGURED", {
+        email: maskEmailForLog(emailNormalized),
+      });
+      return res.status(503).json({
+        ok: false,
+        error: "email_not_configured",
+        message: REGISTER_USER_MSG.otpEmailNotConfigured,
+        hint: REGISTER_USER_MSG.otpEmailNotConfiguredHint,
+      });
+    }
+
     logRegisterTrace("/api/register/patient", "STEP_3_BEFORE_SEND_EMAIL", {});
     console.log("[REGISTER] register_otp_before_send_email");
-    await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
-    logRegisterTrace("/api/register/patient", "STEP_4_AFTER_SEND_EMAIL", {});
-    console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
 
-    return res.json({
-      ok: true,
-      message: REGISTER_USER_MSG.otpSentInstructions,
-      patientId,
-      email: emailNormalized,
-      language: patientLanguage,
-      requestId,
-      status: "PENDING",
-      requiresOTP: true,
-      hasClinic: Boolean(supabaseClinicId),
-      clinicId: supabaseClinicId || null,
-      clinicCode: validatedClinicCode || null,
-    });
+    let emailSent = false;
+    try {
+      await sendOTPEmail(emailNormalized, otpCode, patientLanguage);
+      emailSent = true;
+      console.log("[REGISTER] OTP_EMAIL_SENT", {
+        route: "/api/register/patient",
+        email: maskEmailForLog(emailNormalized),
+        patientId,
+      });
+      logRegisterTrace("/api/register/patient", "STEP_4_AFTER_SEND_EMAIL", {});
+      console.log("[REGISTER] register_otp_after_send_email", { email: maskEmailForLog(emailNormalized) });
+    } catch (err) {
+      console.error("[REGISTER] OTP_EMAIL_FAILED", {
+        route: "/api/register/patient",
+        message: err?.message || err,
+      });
+    }
+
+    return res.json(
+      buildRegisterOtpSuccessJson({
+        patientId,
+        emailNormalized,
+        patientLanguage,
+        requestId,
+        supabaseClinicId,
+        validatedClinicCode,
+        emailSent,
+      }),
+    );
   } catch (otpError) {
     if (res.headersSent) return;
-    return respondRegisterOtpFailure(res, otpError, emailNormalized, "/api/register/patient");
+    console.error("[REGISTER] register_otp_unexpected", otpError?.stack || otpError?.message || otpError);
+    return res.status(500).json({
+      ok: false,
+      error: "internal_error",
+      message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(otpError?.message || otpError),
+    });
   }
   } catch (regErr) {
     console.error("[REGISTER /api/patient/register] unhandled:", regErr?.stack || regErr?.message || regErr);
@@ -39911,19 +39997,18 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v60');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v61');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
   console.log('🚀  built: ' + new Date().toISOString());
   console.log('🚀 ============================================');
   console.log("[EMAIL_ENV_CHECK]", {
-    BREVO_API_KEY: !!process.env.BREVO_API_KEY,
-    SMTP_FROM: !!(process.env.SMTP_FROM || ""),
-    SMTP_HOST: !!process.env.SMTP_HOST,
-    SMTP_USER: !!process.env.SMTP_USER,
-    SMTP_PASS: !!process.env.SMTP_PASS,
-    hasSmtpTransporter: !!emailTransporter,
+    hasBrevo: !!process.env.BREVO_API_KEY,
+    hasSMTP:
+      !!process.env.SMTP_HOST &&
+      !!process.env.SMTP_USER &&
+      !!process.env.SMTP_PASS,
   });
 
 
