@@ -38172,6 +38172,51 @@ function isOfferMessagesTableUnavailableError(err) {
   return false;
 }
 
+function isOfferMessagesReadAtColumnMissingError(err) {
+  if (!err) return false;
+  const m = String(err.message || err.details || err.hint || "").toLowerCase();
+  return m.includes("read_at") && (m.includes("does not exist") || m.includes("schema cache"));
+}
+
+/**
+ * Inbox badge: unread offer_messages for sender_role, usually read_at IS NULL.
+ * If read_at column is missing in DB, count all messages for that role (approximate badge).
+ */
+async function countOfferMessagesByRoleForInbox(offerIds, senderRole) {
+  const ids = Array.isArray(offerIds) ? offerIds.filter(Boolean) : [];
+  if (!ids.length) return 0;
+  const role = String(senderRole || "").trim();
+  if (!role) return 0;
+
+  const inList = ids.length === 1 ? [ids[0]] : ids;
+  const qUnread = () =>
+    supabase
+      .from("offer_messages")
+      .select("id", { count: "exact", head: true })
+      .in("offer_id", inList)
+      .eq("sender_role", role)
+      .is("read_at", null);
+
+  const { count: c1, error: e1 } = await qUnread();
+  if (!e1) return c1 || 0;
+  if (isOfferMessagesTableUnavailableError(e1)) return 0;
+  if (!isOfferMessagesReadAtColumnMissingError(e1)) {
+    console.warn("[countOfferMessagesByRoleForInbox]", e1.message);
+    return 0;
+  }
+
+  const { count: c2, error: e2 } = await supabase
+    .from("offer_messages")
+    .select("id", { count: "exact", head: true })
+    .in("offer_id", inList)
+    .eq("sender_role", role);
+  if (e2) {
+    if (!isOfferMessagesTableUnavailableError(e2)) console.warn("[countOfferMessagesByRoleForInbox] fallback", e2.message);
+    return 0;
+  }
+  return c2 || 0;
+}
+
 /** Normalize treatment_requests photo storage (photo_urls vs photos jsonb, string JSON, {url} objects). */
 function extractTreatmentRequestPhotoList(tr) {
   if (!tr || typeof tr !== "object") return [];
@@ -38750,13 +38795,7 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
 
         if (offerRows && offerRows.length > 0) {
           const offerIds = offerRows.map(o => o.id);
-          const { count } = await supabase
-            .from('offer_messages')
-            .select('id', { count: 'exact', head: true })
-            .in('offer_id', offerIds)
-            .eq('sender_role', 'doctor')
-            .is('read_at', null);
-          doctorMessages = count || 0;
+          doctorMessages = await countOfferMessagesByRoleForInbox(offerIds, "doctor");
         }
       }
     } catch (e2) {
@@ -38807,13 +38846,7 @@ app.get("/api/doctor/inbox-summary", requireDoctorAuth, async (req, res) => {
         .eq("doctor_id", doctorKey);
       const offerIds = (myOffers || []).map((o) => o.id).filter(Boolean);
       if (!oErr && offerIds.length > 0) {
-        const { count: msgCount } = await supabase
-          .from("offer_messages")
-          .select("id", { count: "exact", head: true })
-          .in("offer_id", offerIds)
-          .eq("sender_role", "patient")
-          .is("read_at", null);
-        patient_messages = msgCount || 0;
+        patient_messages = await countOfferMessagesByRoleForInbox(offerIds, "patient");
       }
     } catch (e2) {
       console.warn("[DOCTOR inbox-summary] messages", e2?.message);
