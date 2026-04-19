@@ -444,6 +444,15 @@ function deriveMessageType(explicitType, attachment) {
   return "text";
 }
 
+/** True when inbound patient message carries a file/photo — must use full messages insert (attachments). */
+function hasInboundAttachments(attachments) {
+  if (attachments == null) return false;
+  if (typeof attachments !== "object") return true;
+  const u = attachments.url ?? attachments.attachment_url;
+  if (u != null && String(u).trim()) return true;
+  return Object.keys(attachments).length > 0;
+}
+
 async function resolveClinicCodeForPatient(patientId) {
   if (!patientId) return null;
   try {
@@ -1486,7 +1495,10 @@ async function _insertMessageToSupabaseCore({
       contextClinicId,
     });
     if (!inboundClinicId) {
-      console.log("inbound_thread_skip_no_clinic", { patient_id: resolvedPatientId });
+      console.error("[MESSAGES] CLINIC_NOT_RESOLVED — inbound patient message blocked", {
+        patient_id: resolvedPatientId,
+        hint: "Send clinicId/clinicCode on POST body or link patient to a clinic; set DEFAULT_CLINIC_ID on server if needed",
+      });
       return {
         data: null,
         error: {
@@ -1516,7 +1528,8 @@ async function _insertMessageToSupabaseCore({
     inboundThreadId = thr.threadId || null;
   }
 
-  if (fromPatient) {
+  // Text-only fast path: patient_messages. Skip when photos/files present — those rows need attachments JSON.
+  if (fromPatient && !hasInboundAttachments(attachments)) {
     const pmTry = await insertPatientMessageViaPatientMessages(
       patientId,
       msgText,
@@ -1524,6 +1537,12 @@ async function _insertMessageToSupabaseCore({
       inboundThreadId
     );
     if (!pmTry.error && pmTry.data) {
+      console.log("MESSAGE_INSERT", {
+        patient_id: resolvedPatientId,
+        clinic_id: inboundClinicId || null,
+        thread_id: inboundThreadId || null,
+        via: "patient_messages",
+      });
       return { data: pmTry.data, error: null };
     }
   }
@@ -1600,7 +1619,16 @@ async function _insertMessageToSupabaseCore({
     .select("*")
     .single();
 
-  if (!primaryResult?.error) return primaryResult;
+  if (!primaryResult?.error) {
+    console.log("MESSAGE_INSERT", {
+      patient_id: resolvedPatientId,
+      clinic_id: clinicId || inboundClinicId || null,
+      thread_id: inboundThreadId || null,
+      message_id: primaryResult.data?.id || null,
+      via: "messages",
+    });
+    return primaryResult;
+  }
 
   const pCode = String(primaryResult.error?.code || "");
   const retryPrimary =
@@ -1608,7 +1636,16 @@ async function _insertMessageToSupabaseCore({
 
   if (retryPrimary) {
     const pruned = await insertWithColumnPruning({ ...primaryPayload });
-    if (!pruned?.error) return pruned;
+    if (!pruned?.error) {
+      console.log("MESSAGE_INSERT", {
+        patient_id: resolvedPatientId,
+        clinic_id: clinicId || inboundClinicId || null,
+        thread_id: inboundThreadId || null,
+        message_id: pruned.data?.id || null,
+        via: "messages_pruned",
+      });
+      return pruned;
+    }
     const prCode = String(pruned.error?.code || "");
     const prRetry = isMissingColumnError(pruned.error) || prCode === "23502" || prCode === "23514";
     if (!prRetry) return pruned;
@@ -1630,7 +1667,16 @@ async function _insertMessageToSupabaseCore({
     ...threadOpt,
   };
   let fb = await insertWithColumnPruning(fallbackNoText);
-  if (!fb?.error) return fb;
+  if (!fb?.error) {
+    console.log("MESSAGE_INSERT", {
+      patient_id: resolvedPatientId,
+      clinic_id: clinicId || inboundClinicId || null,
+      thread_id: inboundThreadId || null,
+      message_id: fb.data?.id || null,
+      via: "messages_fallback",
+    });
+    return fb;
+  }
 
   // Minimal: patient_id + clinic + sender_type + message
   fb = await insertWithColumnPruning({
@@ -1640,7 +1686,16 @@ async function _insertMessageToSupabaseCore({
     message: msgText,
     ...threadOpt,
   });
-  if (!fb?.error) return fb;
+  if (!fb?.error) {
+    console.log("MESSAGE_INSERT", {
+      patient_id: resolvedPatientId,
+      clinic_id: clinicId || inboundClinicId || null,
+      thread_id: inboundThreadId || null,
+      message_id: fb.data?.id || null,
+      via: "messages_fallback_minimal",
+    });
+    return fb;
+  }
 
   // Some DBs use UPPERCASE enum for sender_type
   const senderFieldsUpperType = {
@@ -1655,7 +1710,16 @@ async function _insertMessageToSupabaseCore({
     message: msgText,
     ...threadOpt,
   });
-  if (!fb?.error) return fb;
+  if (!fb?.error) {
+    console.log("MESSAGE_INSERT", {
+      patient_id: resolvedPatientId,
+      clinic_id: clinicId || inboundClinicId || null,
+      thread_id: inboundThreadId || null,
+      message_id: fb.data?.id || null,
+      via: "messages_fallback_upper_sender",
+    });
+    return fb;
+  }
 
   // Legacy: text + clinic_code; created_at is often TIMESTAMPTZ (use ISO), not BIGINT ms
   if (clinicCode) {
@@ -1671,7 +1735,16 @@ async function _insertMessageToSupabaseCore({
       ...(attachments != null ? { attachment: attachments } : {}),
       ...threadOpt,
     });
-    if (!fb?.error) return fb;
+    if (!fb?.error) {
+      console.log("MESSAGE_INSERT", {
+        patient_id: resolvedPatientId,
+        clinic_id: clinicId || inboundClinicId || null,
+        thread_id: inboundThreadId || null,
+        message_id: fb.data?.id || null,
+        via: "messages_fallback_legacy",
+      });
+      return fb;
+    }
     const legMsg = String(fb?.error?.message || "");
     if (fb?.error && (String(fb.error.code || "") === "22008" || legMsg.includes("out of range"))) {
       fb = await insertWithColumnPruning({
@@ -1686,7 +1759,16 @@ async function _insertMessageToSupabaseCore({
         ...(attachments != null ? { attachment: attachments } : {}),
         ...threadOpt,
       });
-      if (!fb?.error) return fb;
+      if (!fb?.error) {
+        console.log("MESSAGE_INSERT", {
+          patient_id: resolvedPatientId,
+          clinic_id: clinicId || inboundClinicId || null,
+          thread_id: inboundThreadId || null,
+          message_id: fb.data?.id || null,
+          via: "messages_fallback_legacy_ms",
+        });
+        return fb;
+      }
     }
   }
 
@@ -17599,12 +17681,18 @@ app.post("/api/chat/upload", requireToken, chatUpload.array("files", 5), async (
       };
 
       if (isSupabaseEnabled()) {
+        const ctxCode = body.clinicCode ?? body.clinic_code;
+        const ctxId = body.clinicId ?? body.clinic_id;
         const { error: saveErr } = await insertMessageToSupabase({
           patientId,
           sender: "patient",
           message: "",
           attachments: newMessage.attachment,
           type: fileType,
+          ...(ctxCode != null && String(ctxCode).trim()
+            ? { contextClinicCode: String(ctxCode).trim() }
+            : {}),
+          ...(ctxId != null && String(ctxId).trim() ? { contextClinicId: String(ctxId).trim() } : {}),
         });
         if (saveErr) {
           const supabasePublic = supabaseErrorPublic(saveErr);
