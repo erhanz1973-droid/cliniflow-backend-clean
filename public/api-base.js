@@ -5,20 +5,21 @@
  *   <script>window.CLINIFLOW_API_BASE_URL="https://your-api.example.com"</script> before this file
  *   or <meta name="cliniflow-api-base" content="https://your-api.example.com" />
  *
- * Railway backend (admin on Render, API on Railway):
+ * Production API is on Railway; admin UI may still be on Render:
  *   <script>window.__CLINIFLOW_RAILWAY_BACKEND__="https://YOUR-APP.up.railway.app"</script> before this file
  *   or <meta name="cliniflow-api-base" content="https://YOUR-APP.up.railway.app" />
  *
  * Defaults:
  *   localhost / 127.0.0.1 → http://<host>:10000
- *   cliniflow-admin.onrender.com → https://cliniflow-backend-dg8a.onrender.com (legacy: admin static → API on old Render backend)
- *   cliniflow-backend-*.onrender.com → https://cliniflow-admin.onrender.com (static HTML on backend → full admin API on admin service)
+ *   cliniflow-admin.onrender.com → DEFAULT_BACKEND_API (Railway production API)
+ *   cliniflow-backend-*.onrender.com → https://cliniflow-admin.onrender.com (static HTML on legacy Render backend → admin API on admin service)
  */
 (function () {
   'use strict';
   var w = typeof window !== 'undefined' ? window : {};
 
-  var DEFAULT_BACKEND_RENDER = 'https://cliniflow-backend-dg8a.onrender.com';
+  /** Primary API (Railway). Legacy Render backend URL kept in comments only: cliniflow-backend-dg8a.onrender.com */
+  var DEFAULT_BACKEND_API = 'https://cliniflow-backend-clean-production.up.railway.app';
   var DEFAULT_ADMIN_API_RENDER = 'https://cliniflow-admin.onrender.com';
   var RENDER_ADMIN_HOST = 'cliniflow-admin.onrender.com';
 
@@ -54,7 +55,7 @@
       return stripTrailingSlash(DEFAULT_ADMIN_API_RENDER);
     }
     if (h === RENDER_ADMIN_HOST) {
-      return stripTrailingSlash(DEFAULT_BACKEND_RENDER);
+      return stripTrailingSlash(DEFAULT_BACKEND_API);
     }
     return '';
   }

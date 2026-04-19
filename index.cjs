@@ -1542,6 +1542,10 @@ const _corsExtra = String(process.env.CORS_ORIGINS || process.env.ALLOWED_ORIGIN
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+/** Optional: set on Railway (or any host) to allow that exact origin, e.g. https://xxx.up.railway.app */
+const _corsPublicApi = String(process.env.RAILWAY_PUBLIC_URL || process.env.PUBLIC_API_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 const corsOptions = {
   origin: [
     "http://localhost:8082",
@@ -1549,9 +1553,11 @@ const corsOptions = {
     "https://clinic.clinifly.net",
     "https://cliniflow-admin.onrender.com",
     "https://cliniflow-backend-dg8a.onrender.com",
+    "https://cliniflow-backend-clean-production.up.railway.app",
     "http://localhost:10000",
     "http://localhost:8081",
     "http://localhost:8082",
+    ...(_corsPublicApi ? [_corsPublicApi] : []),
     ..._corsExtra,
   ],
   credentials: true,
@@ -28104,7 +28110,7 @@ app.post("/api/admin/login", async (req, res) => {
         ok: false,
         error: "admin_service_unavailable",
         message:
-          "Admin login requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on this server (e.g. set them on the Render cliniflow-admin service).",
+          "Admin login requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on this server (set them on your Railway service or admin host).",
       });
     }
 
@@ -40168,7 +40174,7 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 
 // ================== START ==================
-// Render: bind the same http.Server instance; handle listen errors (avoid silent uncaughtException).
+// Railway / Render: bind the same http.Server instance; handle listen errors (avoid silent uncaughtException).
 server.on("error", (err) => {
   console.error("[SERVER] listen/bind error:", err && err.message ? err.message : err);
   process.exit(1);
@@ -40190,7 +40196,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v67');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v68');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
