@@ -38275,17 +38275,19 @@ async function loadOfferMessagingContext(offerId) {
 }
 
 async function fetchOfferMessagesForOfferId(offerId) {
-  const q = () =>
+  // supabase-js v2: filters (.eq, .order) must chain after .select() / .insert() / etc. — not on .from() alone.
+  const build = (cols) =>
     supabase
       .from("offer_messages")
+      .select(cols)
       .eq("offer_id", offerId)
       .order("created_at", { ascending: true });
 
-  let { data: rows, error } = await q().select(
+  let { data: rows, error } = await build(
     "id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at"
   );
   if (error && !isOfferMessagesTableUnavailableError(error)) {
-    const r2 = await q().select("*");
+    const r2 = await build("*");
     rows = r2.data;
     error = r2.error;
   }
