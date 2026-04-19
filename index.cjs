@@ -226,6 +226,7 @@ const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileRef
 const { resolveClinicCoords, hasFiniteCoords, buildGeocodeQuery } = require("./lib/clinicCoords.cjs");
 const { fetchPatientVisibleClinicRows } = require("./lib/patientClinicListing.cjs");
 const { filterClinicsWithinRadiusKm } = require("./lib/clinicHaversine.cjs");
+const { countryPriorityScore, sortNearbyMatchesByUserCountry } = require("./lib/clinicCountryPriority.cjs");
 const {
   calculatePrices,
   parseTreatmentsFromQuery,
@@ -759,6 +760,29 @@ async function resolveClinicContextForPatientRow(internalPatientId) {
     if (!["PGRST116", "42P01", "42703", "PGRST204", "PGRST205"].includes(code)) break;
   }
   return { clinicId: null, clinicCode: null };
+}
+
+/** When patients.clinic_id is empty but lead thread has clinic (incoming requests / offers). */
+async function resolveClinicFromPatientChatThread(internalPatientId) {
+  const id = String(internalPatientId || "").trim();
+  if (!id || !isSupabaseEnabled()) return { clinicId: null, clinicCode: null };
+  try {
+    const { data, error } = await supabase
+      .from("patient_chat_threads")
+      .select("clinic_id")
+      .eq("patient_id", id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data?.clinic_id) return { clinicId: null, clinicCode: null };
+    const cid = String(data.clinic_id).trim();
+    if (!cid) return { clinicId: null, clinicCode: null };
+    const { data: crow } = await supabase.from("clinics").select("clinic_code").eq("id", cid).maybeSingle();
+    const code = crow?.clinic_code ? String(crow.clinic_code).trim().toUpperCase() : null;
+    return { clinicId: cid, clinicCode: code };
+  } catch (_) {
+    return { clinicId: null, clinicCode: null };
+  }
 }
 
 async function resolveClinicUuidFromClinicCode(clinicCodeRaw) {
@@ -1564,6 +1588,15 @@ async function _insertMessageToSupabaseCore({
     clinicId = rowClinicId || null;
     if (!clinicId && clinicCode) {
       clinicId = await resolveClinicUuidFromClinicCode(clinicCode);
+    }
+
+    // Lead threads often have clinic_id here before patients row is backfilled
+    if (!clinicId && !clinicCode) {
+      const thr = await resolveClinicFromPatientChatThread(resolvedPatientId);
+      if (thr.clinicId) {
+        clinicId = thr.clinicId;
+        clinicCode = thr.clinicCode || clinicCode;
+      }
     }
   }
 
@@ -7669,7 +7702,7 @@ function buildClinicRatingMapWeighted(ratingRows) {
 // ================== PATIENT: BROWSE CLINICS ("Find a clinic") ==================
 // Priority: (1) Supabase RPC nearby_clinics(lat,lng) — (2) same country — (3) all (cap 20).
 // Avoid PostgREST .or(status...) — filter suspended/inactive in JS instead.
-// GET /api/patient/clinics?lat=&lng=&country=
+// GET /api/patient/clinics?lat=&lng=&country= — pass country (e.g. Georgia or GE) to prioritize same-country clinics
 app.get("/api/patient/clinics", requireToken, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
@@ -7683,7 +7716,7 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
       patientId: req.patientId,
       lat: req.query.lat,
       lng: req.query.lng,
-      country: req.query.country,
+      country: req.query.country || req.query.userCountry,
       selectFull: selFull,
       selectLite: selLite,
     });
@@ -7729,7 +7762,7 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
 });
 
 // GET /api/clinics/nearby — Haversine distance filter (no auth; optional Bearer for future use)
-// Query: lat, lng (required), radius (km, default 10, max 200).
+// Query: lat, lng (required), radius (km, default 10, max 200), optional country|userCountry (prioritize same country, then distance).
 app.get("/api/clinics/nearby", async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
@@ -7762,7 +7795,11 @@ app.get("/api/clinics/nearby", async (req, res) => {
       console.warn("[GET /api/clinics/nearby] clinics select:", lastSelErr.message);
     }
 
-    const matched = filterClinicsWithinRadiusKm(raw, lat, lng, radiusKm);
+    let matched = filterClinicsWithinRadiusKm(raw, lat, lng, radiusKm);
+    const userCountryNearby = req.query.country || req.query.userCountry;
+    if (userCountryNearby) {
+      matched = sortNearbyMatchesByUserCountry(matched, String(userCountryNearby));
+    }
     const ids = matched.map((m) => m.row.id).filter(Boolean);
     let ratingMap = {};
     if (ids.length) {
@@ -8054,7 +8091,7 @@ app.get("/api/patient/price-estimate", requireToken, async (req, res) => {
       patientId: req.patientId,
       lat: req.query.lat,
       lng: req.query.lng,
-      country: req.query.country,
+      country: req.query.country || req.query.userCountry,
       selectFull: selFull,
       selectLite: selLite,
     });
@@ -17918,7 +17955,7 @@ function detectSpecialtyFromInsights(insights) {
  *
  * Excludes patient's own clinic. Returns [] on error (non-fatal).
  */
-async function getRecommendedClinics({ insights = [], patientId, userLocation, preferredCountry } = {}) {
+async function getRecommendedClinics({ insights = [], patientId, userLocation, preferredCountry, userCountry } = {}) {
   if (!isSupabaseEnabled()) return [];
   try {
     const specialty = detectSpecialtyFromInsights(insights);
@@ -18007,8 +18044,16 @@ async function getRecommendedClinics({ insights = [], patientId, userLocation, p
     }
     // Country mode: no radius filter — all results already filtered by DB query
 
-    // Sort: distance ASC (when available) → rating DESC
+    const countryHint =
+      String(userCountry || "").trim() ||
+      (preferredCountry && preferredCountry !== "nearby" ? String(preferredCountry).trim() : "");
+
+    // Sort: user's country first → distance ASC (when available) → rating DESC
     candidates.sort((a, b) => {
+      if (countryHint) {
+        const p = countryPriorityScore(a.country, countryHint) - countryPriorityScore(b.country, countryHint);
+        if (p !== 0) return -p;
+      }
       if (a.distanceKm != null && b.distanceKm != null && a.distanceKm !== b.distanceKm) {
         return a.distanceKm - b.distanceKm;
       }
@@ -23378,7 +23423,7 @@ function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = nu
 }
 
 // POST /api/chat/ai-analyze
-// Accepts: { patientId, imageUrl, photoType? }
+// Accepts: { patientId, imageUrl, photoType?, userLocation?, preferredCountry?, userCountry? }
 // Feature flags: ENABLE_AI_ANALYSIS, ENABLE_SMILE_SIMULATION
 // Timeouts:      AI_TIMEOUT_MS (default 30 000 ms)
 // Images are processed in-memory as base64 — no external storage required
@@ -23390,7 +23435,14 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       return res.status(503).json({ ok: false, error: 'ai_disabled', message: 'AI analysis is disabled via ENABLE_AI_ANALYSIS=false' });
     }
 
-    const { patientId, imageUrl, photoType = 'general', userLocation = null, preferredCountry = null } = req.body || {};
+    const {
+      patientId,
+      imageUrl,
+      photoType = "general",
+      userLocation = null,
+      preferredCountry = null,
+      userCountry = null,
+    } = req.body || {};
 
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
     if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
@@ -23600,7 +23652,13 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     const missingToothConfidence = treatmentPlan.missingTooth?.confidence ?? null;
 
     // ── Clinic recommendations (non-blocking — runs concurrently with save) ──
-    const recommendedClinics = await getRecommendedClinics({ insights, patientId, userLocation, preferredCountry });
+    const recommendedClinics = await getRecommendedClinics({
+      insights,
+      patientId,
+      userLocation,
+      preferredCountry,
+      userCountry,
+    });
 
     // ── Save AI result as CLINIC message ──────────────────────────────
     await insertMessageToSupabase({
@@ -33279,13 +33337,16 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     }
 
     const msgType = String(req.body?.type || "text").trim() || "text";
+    const doctorUuid = String(req.doctor?.id || "").trim();
     const { data, error } = await insertMessageToSupabase({
       patientId,
       sender: "clinic",
       message: text,
       attachments: null,
       type: msgType,
-      senderId: String(req.doctorId || req?.doctor?.id || "").trim(),
+      senderId: doctorUuid || String(req.doctorId || "").trim(),
+      contextClinicId: req.clinicId || null,
+      contextClinicCode: req.doctor?.clinic_code ? String(req.doctor.clinic_code).trim().toUpperCase() : null,
     });
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
@@ -42075,7 +42136,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v77');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v80');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
