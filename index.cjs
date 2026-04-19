@@ -7479,6 +7479,42 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
   }
 });
 
+/** Display rating per clinic: 80% avg(treatment) + 20% avg(experience); untyped rows fall back to simple average for that bucket. */
+function buildClinicRatingMapWeighted(ratingRows) {
+  const ratingMap = {};
+  if (!Array.isArray(ratingRows) || !ratingRows.length) return ratingMap;
+  const WT = 0.8;
+  const WE = 0.2;
+  const byClinic = {};
+  const push = (cid, bucket, v) => {
+    if (!byClinic[cid]) byClinic[cid] = { treatment: [], experience: [], other: [] };
+    byClinic[cid][bucket].push(v);
+  };
+  for (const r of ratingRows) {
+    const cid = r.clinic_id;
+    if (cid == null || String(cid).trim() === "") continue;
+    const v = r.overall;
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const typ = String(r.type || "").trim().toLowerCase();
+    if (typ === "treatment") push(cid, "treatment", v);
+    else if (typ === "experience") push(cid, "experience", v);
+    else push(cid, "other", v);
+  }
+  const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+  for (const [cid, g] of Object.entries(byClinic)) {
+    const at = avg(g.treatment);
+    const ae = avg(g.experience);
+    const ao = avg(g.other);
+    let score = null;
+    if (at != null && ae != null) score = WT * at + WE * ae;
+    else if (at != null) score = at;
+    else if (ae != null) score = ae;
+    else if (ao != null) score = ao;
+    if (score != null) ratingMap[cid] = Math.round(score * 10) / 10;
+  }
+  return ratingMap;
+}
+
 // ================== PATIENT: BROWSE CLINICS ("Find a clinic") ==================
 // Priority: (1) Supabase RPC nearby_clinics(lat,lng) — (2) same country — (3) all (cap 20).
 // Avoid PostgREST .or(status...) — filter suspended/inactive in JS instead.
@@ -7502,27 +7538,17 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
     });
 
     const ids = rows.map((c) => c.id).filter((id) => id != null && String(id).trim() !== "");
-    const ratingMap = {};
+    let ratingMap = {};
     if (ids.length) {
       try {
         const { data: ratingRows, error: ratingErr } = await supabase
           .from("ratings")
-          .select("clinic_id, overall")
+          .select("clinic_id, overall, type")
           .in("clinic_id", ids);
         if (ratingErr) {
           console.warn("[GET /api/patient/clinics] ratings query skipped:", ratingErr.message);
         } else if (ratingRows?.length) {
-          const grouped = {};
-          for (const r of ratingRows) {
-            if (!grouped[r.clinic_id]) grouped[r.clinic_id] = [];
-            const v = r.overall;
-            if (typeof v === "number" && Number.isFinite(v)) grouped[r.clinic_id].push(v);
-          }
-          for (const [id, scores] of Object.entries(grouped)) {
-            if (scores.length)
-              ratingMap[id] =
-                Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
-          }
+          ratingMap = buildClinicRatingMapWeighted(ratingRows);
         }
       } catch (re) {
         console.warn("[GET /api/patient/clinics] ratings exception:", re?.message);
@@ -17616,22 +17642,10 @@ async function getRecommendedClinics({ insights = [], patientId, userLocation, p
     const ids = clinics.map(c => c.id);
     const { data: ratingRows } = await supabase
       .from('ratings')
-      .select('clinic_id, overall')
+      .select('clinic_id, overall, type')
       .in('clinic_id', ids);
 
-    const ratingMap = {};
-    if (ratingRows?.length) {
-      const grouped = {};
-      for (const r of ratingRows) {
-        if (!grouped[r.clinic_id]) grouped[r.clinic_id] = [];
-        grouped[r.clinic_id].push(r.overall);
-      }
-      for (const [id, scores] of Object.entries(grouped)) {
-        ratingMap[id] = Math.round(
-          (scores.reduce((a, b) => a + b, 0) / scores.length) * 10
-        ) / 10;
-      }
-    }
+    const ratingMap = ratingRows?.length ? buildClinicRatingMapWeighted(ratingRows) : {};
 
     const useCountryFilter = preferredCountry && preferredCountry !== 'nearby';
     const hasUserLocation  = !useCountryFilter &&
@@ -37809,6 +37823,446 @@ app.get('/api/patient/ratings', requireToken, async (req, res) => {
   } catch (e) {
     console.error('[RATINGS GET]', e);
     return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+// POST /api/patient/ratings — submit experience (communication) or treatment-outcome rating (mobile: app/rate.tsx)
+app.post('/api/patient/ratings', requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: 'supabase_disabled' });
+    }
+    const tokenPatientId = String(req.patientId || '').trim();
+    if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+
+    const body = req.body || {};
+    const offerId = String(body.offer_id || body.offerId || '').trim();
+    const type = String(body.type || '').trim().toLowerCase();
+    if (!offerId || !UUID_RE.test(offerId)) {
+      return res.status(400).json({ ok: false, error: 'offer_id_required' });
+    }
+    if (type !== 'experience' && type !== 'treatment') {
+      return res.status(400).json({ ok: false, error: 'invalid_type' });
+    }
+    const overall = Number(body.overall);
+    if (!Number.isFinite(overall) || overall < 1 || overall > 5) {
+      return res.status(400).json({ ok: false, error: 'invalid_overall' });
+    }
+
+    const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+    const patientIdFilters = treatmentRequestPatientIdFilters(tokenPatientId, resolvedUuid);
+    if (!patientIdFilters.length) return res.status(403).json({ ok: false, error: 'forbidden' });
+
+    const { data: offerRow, error: offErr } = await supabase
+      .from('treatment_offers')
+      .select('id, clinic_id, request_id')
+      .eq('id', offerId)
+      .maybeSingle();
+    if (offErr || !offerRow?.id) {
+      return res.status(404).json({ ok: false, error: 'offer_not_found' });
+    }
+
+    const { data: reqRow, error: trErr } = await supabase
+      .from('treatment_requests')
+      .select('id, patient_id')
+      .eq('id', offerRow.request_id)
+      .maybeSingle();
+    if (trErr || !reqRow?.patient_id) {
+      return res.status(404).json({ ok: false, error: 'request_not_found' });
+    }
+
+    const reqPid = String(reqRow.patient_id);
+    if (!patientIdFilters.includes(reqPid)) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+
+    const clinicId = offerRow.clinic_id != null ? String(offerRow.clinic_id).trim() : '';
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.status(422).json({ ok: false, error: 'clinic_not_resolved' });
+    }
+
+    let dupQ = supabase.from('ratings').select('id').eq('offer_id', offerId).eq('type', type);
+    dupQ =
+      patientIdFilters.length === 1
+        ? dupQ.eq('patient_id', patientIdFilters[0])
+        : dupQ.in('patient_id', patientIdFilters);
+    const { data: existing } = await dupQ.maybeSingle();
+    if (existing?.id) return res.status(409).json({ ok: false, error: 'already_rated' });
+
+    const insertRow = {
+      patient_id: reqPid,
+      clinic_id: clinicId,
+      offer_id: offerId,
+      type,
+      overall,
+    };
+    if (type === 'experience') {
+      const c = body.communication != null ? Number(body.communication) : NaN;
+      if (Number.isFinite(c) && c >= 1 && c <= 5) insertRow.communication = c;
+      const p = body.price != null ? Number(body.price) : NaN;
+      if (Number.isFinite(p) && p >= 1 && p <= 5) insertRow.price = p;
+    } else {
+      const r = body.result != null ? Number(body.result) : NaN;
+      if (Number.isFinite(r) && r >= 1 && r <= 5) insertRow.result = r;
+    }
+    const com = body.comment != null ? String(body.comment).trim() : '';
+    if (com) insertRow.comment = com.slice(0, 1000);
+
+    const { error: insErr } = await supabase.from('ratings').insert(insertRow);
+    if (insErr) {
+      console.error('[RATINGS POST]', insErr.message);
+      const msg = String(insErr.message || '');
+      if (msg.includes('duplicate') || msg.includes('23505') || insErr.code === '23505') {
+        return res.status(409).json({ ok: false, error: 'already_rated' });
+      }
+      return res.status(500).json({ ok: false, error: 'db_error' });
+    }
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('[RATINGS POST]', e);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+// ── Offer-thread chat (mobile: app/offer-chat.tsx — patient + doctor JWT) ───
+async function resolveOfferMessagingActor(req, res) {
+  const auth = req.headers.authorization || "";
+  const headTok = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const altTok = req.headers["x-patient-token"] || "";
+  const token = String(headTok || altTok || "").trim();
+  if (!token) {
+    res.status(401).json({ ok: false, error: "missing_token" });
+    return null;
+  }
+
+  const tokens = readJson(TOK_FILE, {});
+  if (tokens[token]?.patientId) {
+    return { kind: "patient", patientId: String(tokens[token].patientId).trim() };
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded?.patientId) {
+      return { kind: "patient", patientId: String(decoded.patientId).trim() };
+    }
+    const roleNorm = String(decoded?.role || "").toUpperCase();
+    if (roleNorm === "DOCTOR") {
+      const doctorIdFromToken = String(decoded.doctorId || "").trim();
+      const doctorEmail = String(decoded.email || "").trim().toLowerCase();
+      let doctor = null;
+      const attempts = [
+        () => supabase.from("doctors").select("id, doctor_id, clinic_id, status, full_name, name").eq("id", doctorIdFromToken).maybeSingle(),
+        () => supabase.from("doctors").select("id, doctor_id, clinic_id, status, full_name, name").eq("doctor_id", doctorIdFromToken).maybeSingle(),
+        () =>
+          doctorEmail
+            ? supabase.from("doctors").select("id, doctor_id, clinic_id, status, full_name, name").eq("email", doctorEmail).maybeSingle()
+            : Promise.resolve({ data: null }),
+      ];
+      for (const run of attempts) {
+        const { data } = await run();
+        if (data) {
+          doctor = data;
+          break;
+        }
+      }
+      if (!doctor) {
+        res.status(401).json({ ok: false, error: "doctor_not_found" });
+        return null;
+      }
+      if (String(doctor.status || "").toUpperCase() !== "APPROVED") {
+        res.status(403).json({ ok: false, error: "doctor_not_approved" });
+        return null;
+      }
+      const did = String(doctor.id || doctor.doctor_id || doctorIdFromToken);
+      return { kind: "doctor", doctorId: did, doctor };
+    }
+  } catch (e) {
+    res.status(401).json({ ok: false, error: "invalid_token" });
+    return null;
+  }
+
+  res.status(401).json({ ok: false, error: "unauthorized" });
+  return null;
+}
+
+async function loadOfferMessagingContext(offerId) {
+  const { data: offer, error: oErr } = await supabase
+    .from("treatment_offers")
+    .select("id, request_id, doctor_id")
+    .eq("id", offerId)
+    .maybeSingle();
+  if (oErr || !offer) return null;
+  const { data: tr, error: tErr } = await supabase
+    .from("treatment_requests")
+    .select("id, patient_id")
+    .eq("id", offer.request_id)
+    .maybeSingle();
+  if (tErr || !tr?.patient_id) return null;
+  return { offer, tr };
+}
+
+async function assertOfferMessagingAccess(actor, offerId) {
+  if (!isSupabaseEnabled()) return { error: "supabase_disabled" };
+  const ctx = await loadOfferMessagingContext(offerId);
+  if (!ctx) return { error: "not_found" };
+  const { offer, tr } = ctx;
+
+  if (actor.kind === "patient") {
+    const resolvedUuid = await resolveMessagesPatientDbId(actor.patientId);
+    const filters = treatmentRequestPatientIdFilters(actor.patientId, resolvedUuid);
+    if (!filters.includes(String(tr.patient_id))) return { error: "forbidden" };
+    return { ok: true, offer, tr };
+  }
+
+  if (actor.kind === "doctor") {
+    const keys = await doctorKeysForUuidFkInQuery([actor.doctorId]);
+    const oid = String(offer.doctor_id || "");
+    const okDoc = keys.some((k) => k && String(k) === oid);
+    if (!okDoc) return { error: "forbidden" };
+    return { ok: true, offer, tr };
+  }
+  return { error: "forbidden" };
+}
+
+function absoluteOfferFileUrl(req, relPath) {
+  const p = String(relPath || "");
+  if (!p.startsWith("/")) return p;
+  const host = req.get("host");
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
+  if (host) return `${proto}://${host}${p}`;
+  return p;
+}
+
+// POST /api/offer-messages/upload — must be registered before /api/offer-messages (POST body)
+app.post("/api/offer-messages/upload", chatUpload.single("file"), async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const actor = await resolveOfferMessagingActor(req, res);
+    if (!actor) return;
+
+    const offerId = String((req.body && req.body.offer_id) || "").trim();
+    if (!UUID_RE.test(offerId)) {
+      return res.status(400).json({ ok: false, error: "invalid_offer_id" });
+    }
+
+    const access = await assertOfferMessagingAccess(actor, offerId);
+    if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
+    if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
+    if (access.error) return res.status(403).json({ ok: false, error: access.error });
+
+    const file = req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ ok: false, error: "no_file" });
+    }
+
+    const mime = String(file.mimetype || "").toLowerCase();
+    const att = String((req.body && req.body.attachment_type) || "image").toLowerCase();
+    const isImage = mime.startsWith("image/") || att === "image" || att === "xray";
+    const allowedImage = new Set(["image/jpeg", "image/jpg", "image/png", "image/heic", "image/heif", "image/webp"]);
+    const allowedPdf = "application/pdf";
+    if (isImage && !allowedImage.has(mime)) {
+      return res.status(400).json({ ok: false, error: "invalid_file_type" });
+    }
+    if (!isImage && mime !== allowedPdf && att !== "document") {
+      return res.status(400).json({ ok: false, error: "invalid_file_type" });
+    }
+
+    let ext = path.extname(file.originalname || "").toLowerCase();
+    if (!ext) {
+      if (mime === "image/png") ext = ".png";
+      else if (mime.includes("jpeg") || mime === "image/jpg") ext = ".jpg";
+      else if (mime === "application/pdf") ext = ".pdf";
+      else ext = ".bin";
+    }
+    const safeName = `${crypto.randomUUID()}${ext}`;
+    const dir = path.join(__dirname, "public", "uploads", "offer-messages", offerId);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const diskPath = path.join(dir, safeName);
+    fs.writeFileSync(diskPath, file.buffer);
+
+    const rel = `/uploads/offer-messages/${encodeURIComponent(offerId)}/${encodeURIComponent(safeName)}`;
+    return res.json({ ok: true, url: absoluteOfferFileUrl(req, rel) });
+  } catch (e) {
+    console.error("[OFFER-MESSAGES UPLOAD]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/offer-messages/:offerId/read — mark other party's messages read
+app.post("/api/offer-messages/:offerId/read", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const actor = await resolveOfferMessagingActor(req, res);
+    if (!actor) return;
+
+    const offerId = String(req.params.offerId || "").trim();
+    if (!UUID_RE.test(offerId)) {
+      return res.status(400).json({ ok: false, error: "invalid_offer_id" });
+    }
+
+    const access = await assertOfferMessagingAccess(actor, offerId);
+    if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
+    if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
+    if (access.error) return res.status(403).json({ ok: false, error: access.error });
+
+    const markSender = actor.kind === "doctor" ? "patient" : "doctor";
+    const nowIso = new Date().toISOString();
+    const { error: uErr } = await supabase
+      .from("offer_messages")
+      .update({ read_at: nowIso })
+      .eq("offer_id", offerId)
+      .eq("sender_role", markSender)
+      .is("read_at", null);
+
+    if (uErr) {
+      console.error("[OFFER-MESSAGES READ]", uErr.message);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[OFFER-MESSAGES READ]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/offer-messages?offer_id=
+app.get("/api/offer-messages", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const actor = await resolveOfferMessagingActor(req, res);
+    if (!actor) return;
+
+    const offerId = String(req.query.offer_id || "").trim();
+    if (!UUID_RE.test(offerId)) {
+      return res.status(400).json({ ok: false, error: "invalid_offer_id" });
+    }
+
+    const access = await assertOfferMessagingAccess(actor, offerId);
+    if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
+    if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
+    if (access.error) return res.status(403).json({ ok: false, error: access.error });
+
+    const { data: rows, error } = await supabase
+      .from("offer_messages")
+      .select("id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at")
+      .eq("offer_id", offerId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("[OFFER-MESSAGES GET]", error.message);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    const messages = (rows || []).map((m) => ({
+      id: String(m.id),
+      sender_id: String(m.sender_id || ""),
+      sender_role: m.sender_role,
+      sender_name: m.sender_name || "",
+      text: m.text,
+      attachment_url: m.attachment_url,
+      attachment_type: m.attachment_type,
+      created_at: m.created_at,
+    }));
+    return res.json({ ok: true, messages });
+  } catch (e) {
+    console.error("[OFFER-MESSAGES GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/offer-messages — send text and/or attachment
+app.post("/api/offer-messages", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const actor = await resolveOfferMessagingActor(req, res);
+    if (!actor) return;
+
+    const body = req.body || {};
+    const offerId = String(body.offer_id || body.offerId || "").trim();
+    if (!UUID_RE.test(offerId)) {
+      return res.status(400).json({ ok: false, error: "invalid_offer_id" });
+    }
+
+    const access = await assertOfferMessagingAccess(actor, offerId);
+    if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
+    if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
+    if (access.error) return res.status(403).json({ ok: false, error: access.error });
+
+    const { tr } = access;
+    const textRaw = body.text != null ? String(body.text) : "";
+    const text = textRaw.trim().slice(0, 5000);
+    const attachment_url = body.attachment_url != null ? String(body.attachment_url).trim().slice(0, 2048) : "";
+    let attachment_type = body.attachment_type != null ? String(body.attachment_type).trim().toLowerCase() : null;
+    if (attachment_type && !["image", "xray", "document"].includes(attachment_type)) {
+      return res.status(400).json({ ok: false, error: "invalid_attachment_type" });
+    }
+    if (!text && !attachment_url) {
+      return res.status(400).json({ ok: false, error: "empty_message" });
+    }
+    if (attachment_url && !attachment_type) attachment_type = "image";
+
+    let sender_id = "";
+    let sender_role = "patient";
+    let sender_name = "";
+
+    if (actor.kind === "patient") {
+      sender_role = "patient";
+      sender_id = String(tr.patient_id);
+      const { data: prow } = await supabase
+        .from("patients")
+        .select("name, full_name")
+        .eq("id", tr.patient_id)
+        .maybeSingle();
+      sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
+    } else {
+      sender_role = "doctor";
+      sender_id = String(actor.doctorId);
+      sender_name = String(actor.doctor?.full_name || actor.doctor?.name || "").trim() || "Doctor";
+    }
+
+    const insertRow = {
+      offer_id: offerId,
+      sender_id,
+      sender_role,
+      sender_name,
+      text: text || null,
+      attachment_url: attachment_url || null,
+      attachment_type: attachment_type || null,
+    };
+
+    const { data: inserted, error: insErr } = await supabase
+      .from("offer_messages")
+      .insert(insertRow)
+      .select("id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at")
+      .maybeSingle();
+
+    if (insErr || !inserted) {
+      console.error("[OFFER-MESSAGES POST]", insErr?.message || insErr);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    const message = {
+      id: String(inserted.id),
+      sender_id: String(inserted.sender_id || ""),
+      sender_role: inserted.sender_role,
+      sender_name: inserted.sender_name || "",
+      text: inserted.text,
+      attachment_url: inserted.attachment_url,
+      attachment_type: inserted.attachment_type,
+      created_at: inserted.created_at,
+    };
+    return res.json({ ok: true, message });
+  } catch (e) {
+    console.error("[OFFER-MESSAGES POST]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
