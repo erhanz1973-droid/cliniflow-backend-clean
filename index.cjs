@@ -1186,14 +1186,24 @@ async function resolveClinicIdFromSiblingPatientSameContact(resolvedPatientId) {
 }
 
 /**
- * Inbound hasta mesajı için clinic UUID.
- * Sıra: hasta satırı → DEFAULT_* → istekteki clinicCode/clinic_id → mevcut thread/messages geçmişi.
- * applyClinicContextToPatientIfMissing önce çalışır; yine de JWT/body ile satır güncellenmediyse bağlam+geçmiş burada devreye girer.
+ * Inbound hasta mesajı / tedavi talebi için clinic UUID.
+ * Önce istek bağlamı (clinic_id / clinic_code) — örn. quote-request target_clinic_id — sonra hasta satırı, DEFAULT_*, geçmiş.
+ * Böylece "teklif al" ile seçilen klinik, hastanın eski clinic_id kaydından önce uygulanır.
  */
 async function resolveClinicIdForInbound(resolvedPatientId, contextOpt) {
   const opt = contextOpt && typeof contextOpt === "object" ? contextOpt : {};
   const ctxCodeRaw = opt.contextClinicCode != null ? String(opt.contextClinicCode).trim() : "";
   const ctxIdRaw = opt.contextClinicId != null ? String(opt.contextClinicId).trim() : "";
+
+  if (ctxIdRaw && UUID_RE.test(ctxIdRaw)) {
+    const { data: crow } = await supabase.from("clinics").select("id").eq("id", ctxIdRaw).maybeSingle();
+    if (crow?.id && UUID_RE.test(String(crow.id))) return String(crow.id);
+  }
+  const ctxCodeUpper = ctxCodeRaw.toUpperCase();
+  if (ctxCodeUpper) {
+    const c = await getClinicByCode(ctxCodeUpper);
+    if (c?.id) return String(c.id);
+  }
 
   const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
     resolvedPatientId
@@ -1213,15 +1223,6 @@ async function resolveClinicIdForInbound(resolvedPatientId, contextOpt) {
   const envCode = String(process.env.DEFAULT_CLINIC_CODE || "").trim().toUpperCase();
   if (envCode) {
     const c = await getClinicByCode(envCode);
-    if (c?.id) return String(c.id);
-  }
-  if (ctxIdRaw && UUID_RE.test(ctxIdRaw)) {
-    const { data: crow } = await supabase.from("clinics").select("id").eq("id", ctxIdRaw).maybeSingle();
-    if (crow?.id && UUID_RE.test(String(crow.id))) return String(crow.id);
-  }
-  const ctxCodeUpper = ctxCodeRaw.toUpperCase();
-  if (ctxCodeUpper) {
-    const c = await getClinicByCode(ctxCodeUpper);
     if (c?.id) return String(c.id);
   }
   const fromHistory = await resolveClinicIdFromExistingMessagingHistory(resolvedPatientId);
@@ -37656,15 +37657,20 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
 
-    await applyClinicContextToPatientIfMissing(
-      resolvedPatientId,
-      body.clinicCode || body.clinic_code,
-      body.clinic_id || body.clinicId,
-    );
+    const explicitClinicId = String(
+      body.target_clinic_id ??
+        body.clinic_id ??
+        body.clinicId ??
+        body.context_clinic_id ??
+        "",
+    ).trim();
+    const explicitClinicCode = String(body.clinicCode || body.clinic_code || "").trim();
+
+    await applyClinicContextToPatientIfMissing(resolvedPatientId, explicitClinicCode, explicitClinicId);
 
     const clinicId = await resolveClinicIdForInbound(resolvedPatientId, {
-      contextClinicCode: body.clinicCode || body.clinic_code,
-      contextClinicId: body.clinic_id || body.clinicId,
+      contextClinicCode: explicitClinicCode,
+      contextClinicId: explicitClinicId,
     });
     if (!clinicId || !UUID_RE.test(clinicId)) {
       return res.status(422).json({
@@ -37681,6 +37687,9 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
     const rawPhotos = body.photo_urls != null ? body.photo_urls : body.attachment_urls;
     if (Array.isArray(rawPhotos)) {
       photoUrls = rawPhotos.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 24);
+    }
+    if ((!photoUrls || photoUrls.length === 0) && Array.isArray(body.photos)) {
+      photoUrls = body.photos.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 24);
     }
     if (photoUrls && photoUrls.length === 0) photoUrls = null;
 
