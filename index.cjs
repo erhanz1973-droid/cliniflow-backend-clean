@@ -1260,6 +1260,47 @@ function isPatientChatThreadsTableUnavailable(err) {
 }
 
 /**
+ * Admin “assign doctor” when patient_chat_threads is missing: still set patients.assigned_doctor_id (column-pruned).
+ */
+async function assignDoctorToLeadPatientRowFallback(patientId, clinicId, doctorUuid, assignedAtIso) {
+  try {
+    const { data: prow, error: pe } = await supabase
+      .from("patients")
+      .select("id, clinic_id")
+      .eq("id", patientId)
+      .maybeSingle();
+    if (pe || !prow?.id) return { ok: false, reason: "patient_not_found" };
+    if (String(prow.clinic_id || "").trim() !== String(clinicId).trim()) {
+      return { ok: false, reason: "patient_clinic_mismatch" };
+    }
+    let patch = { assigned_doctor_id: doctorUuid, updated_at: assignedAtIso };
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      const { data, error } = await supabase
+        .from("patients")
+        .update(patch)
+        .eq("id", patientId)
+        .select("id, assigned_doctor_id")
+        .maybeSingle();
+      if (!error && data?.id) {
+        return {
+          ok: true,
+          patientId: data.id,
+          assignedDoctorId: data.assigned_doctor_id || doctorUuid,
+        };
+      }
+      if (!error && !data?.id) return { ok: false, reason: "update_no_row" };
+      if (!isMissingColumnError(error)) return { ok: false, reason: "update_error", detail: error };
+      const col = getMissingColumnName(error);
+      if (!col || !(col in patch)) return { ok: false, reason: "update_error", detail: error };
+      delete patch[col];
+    }
+    return { ok: false, reason: "prune_exhausted" };
+  } catch (e) {
+    return { ok: false, reason: "exception", detail: e };
+  }
+}
+
+/**
  * Creates or promotes patient_chat_threads before inbound message insert (assigned_doctor_id = null → Unassigned).
  * Prod log contract: inbound_thread_created | inbound_thread_promoted_to_lead
  * Tablo yoksa thread_id olmadan devam edilir (messages / patient_messages yine yazılır).
@@ -8714,11 +8755,31 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
     if (upErr) {
       console.warn("[ADMIN assign-doctor] update failed:", upErr.message);
       if (isPatientChatThreadsTableUnavailable(upErr)) {
+        const fb = await assignDoctorToLeadPatientRowFallback(
+          patientId,
+          clinicId,
+          doctorUuid,
+          assignedAtIso
+        );
+        if (fb.ok) {
+          return res.json({
+            ok: true,
+            threadId: null,
+            patientId: fb.patientId,
+            assignedDoctorId: fb.assignedDoctorId,
+            status: "assigned",
+            assignedAt: assignedAtIso,
+            mode: "patients_assigned_doctor",
+            message:
+              "patient_chat_threads kullanılamadı; doktor ataması patients kaydına yazıldı. İdeal: Supabase migration 20260418120000_patient_chat_threads_leads.sql",
+          });
+        }
+        console.warn("[ADMIN assign-doctor] patients fallback failed:", fb.reason, fb.detail || fb);
         return res.status(503).json({
           ok: false,
           error: "patient_chat_threads_required",
           message:
-            "patient_chat_threads tablosu yok. Supabase migration: 20260418120000_patient_chat_threads_leads.sql",
+            "patient_chat_threads tablosu yok ve patients güncellenemedi. Migration: 20260418120000_patient_chat_threads_leads.sql — patients.assigned_doctor_id sütununu kontrol edin.",
         });
       }
       return res.status(500).json({ ok: false, error: "update_failed" });
@@ -8763,11 +8824,30 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         });
       }
       if (insErr && isPatientChatThreadsTableUnavailable(insErr)) {
+        const fb2 = await assignDoctorToLeadPatientRowFallback(
+          patientId,
+          clinicId,
+          doctorUuid,
+          assignedAtIso
+        );
+        if (fb2.ok) {
+          return res.json({
+            ok: true,
+            threadId: null,
+            patientId: fb2.patientId,
+            assignedDoctorId: fb2.assignedDoctorId,
+            status: "assigned",
+            assignedAt: assignedAtIso,
+            mode: "patients_assigned_doctor",
+            message:
+              "patient_chat_threads kullanılamadı; doktor ataması patients kaydına yazıldı. İdeal: migration 20260418120000_patient_chat_threads_leads.sql",
+          });
+        }
         return res.status(503).json({
           ok: false,
           error: "patient_chat_threads_required",
           message:
-            "patient_chat_threads tablosu yok. Supabase migration: 20260418120000_patient_chat_threads_leads.sql",
+            "patient_chat_threads tablosu yok ve patients güncellenemedi. Migration: 20260418120000_patient_chat_threads_leads.sql",
         });
       }
       return res.status(409).json({
