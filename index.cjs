@@ -1045,8 +1045,67 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
   return { data: null, error: lastError || { message: "patient_messages_insert_failed" } };
 }
 
-/** patient row → DEFAULT_CLINIC_ID → DEFAULT_CLINIC_CODE (applyClinicContextToPatientIfMissing runs before this). */
-async function resolveClinicIdForInbound(resolvedPatientId) {
+/** Hastanın daha önce mesajlaştığı thread / messages satırından clinic_id (hasta satırı boşken, örn. nullable kayıt). */
+async function resolveClinicIdFromExistingMessagingHistory(resolvedPatientId) {
+  const pid = String(resolvedPatientId || "").trim();
+  if (!pid || !isSupabaseEnabled()) return null;
+  const ignorable = (e) => {
+    if (!e) return true;
+    const c = String(e.code || "");
+    const m = String(e.message || "").toLowerCase();
+    return (
+      c === "42P01" ||
+      c === "PGRST205" ||
+      m.includes("does not exist") ||
+      m.includes("schema cache")
+    );
+  };
+  for (const orderCol of ["updated_at", "created_at"]) {
+    const { data, error } = await supabase
+      .from("patient_chat_threads")
+      .select("clinic_id")
+      .eq("patient_id", pid)
+      .not("clinic_id", "is", null)
+      .order(orderCol, { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error && String(error.code || "") === "42703" && orderCol === "updated_at") continue;
+    if (!error && data?.clinic_id) {
+      const id = String(data.clinic_id).trim();
+      if (UUID_RE.test(id)) return id;
+    }
+    if (error && !ignorable(error)) break;
+  }
+  const { data: msgRow, error: mErr } = await supabase
+    .from("messages")
+    .select("clinic_id, clinic_code")
+    .eq("patient_id", pid)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!mErr && msgRow) {
+    if (msgRow.clinic_id) {
+      const id = String(msgRow.clinic_id).trim();
+      if (UUID_RE.test(id)) return id;
+    }
+    if (msgRow.clinic_code) {
+      const resolved = await resolveClinicUuidFromClinicCode(String(msgRow.clinic_code).trim().toUpperCase());
+      if (resolved && UUID_RE.test(resolved)) return resolved;
+    }
+  }
+  return null;
+}
+
+/**
+ * Inbound hasta mesajı için clinic UUID.
+ * Sıra: hasta satırı → DEFAULT_* → istekteki clinicCode/clinic_id → mevcut thread/messages geçmişi.
+ * applyClinicContextToPatientIfMissing önce çalışır; yine de JWT/body ile satır güncellenmediyse bağlam+geçmiş burada devreye girer.
+ */
+async function resolveClinicIdForInbound(resolvedPatientId, contextOpt) {
+  const opt = contextOpt && typeof contextOpt === "object" ? contextOpt : {};
+  const ctxCodeRaw = opt.contextClinicCode != null ? String(opt.contextClinicCode).trim() : "";
+  const ctxIdRaw = opt.contextClinicId != null ? String(opt.contextClinicId).trim() : "";
+
   const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
     resolvedPatientId
   );
@@ -1067,6 +1126,17 @@ async function resolveClinicIdForInbound(resolvedPatientId) {
     const c = await getClinicByCode(envCode);
     if (c?.id) return String(c.id);
   }
+  if (ctxIdRaw && UUID_RE.test(ctxIdRaw)) {
+    const { data: crow } = await supabase.from("clinics").select("id").eq("id", ctxIdRaw).maybeSingle();
+    if (crow?.id && UUID_RE.test(String(crow.id))) return String(crow.id);
+  }
+  const ctxCodeUpper = ctxCodeRaw.toUpperCase();
+  if (ctxCodeUpper) {
+    const c = await getClinicByCode(ctxCodeUpper);
+    if (c?.id) return String(c.id);
+  }
+  const fromHistory = await resolveClinicIdFromExistingMessagingHistory(resolvedPatientId);
+  if (fromHistory) return fromHistory;
   return null;
 }
 
@@ -1227,7 +1297,10 @@ async function _insertMessageToSupabaseCore({
   let inboundThreadId = null;
 
   if (fromPatient && isSupabaseEnabled()) {
-    inboundClinicId = await resolveClinicIdForInbound(resolvedPatientId);
+    inboundClinicId = await resolveClinicIdForInbound(resolvedPatientId, {
+      contextClinicCode,
+      contextClinicId,
+    });
     if (!inboundClinicId) {
       console.log("inbound_thread_skip_no_clinic", { patient_id: resolvedPatientId });
       return {
@@ -35055,11 +35128,9 @@ app.get('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req, 
   }
 });
 
-app.post('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req, res) => {
+/** Shared body for POST /api/doctor/encounters/:id/treatments and POST /api/doctor/patients/:patientId/treatments */
+async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
   try {
-    const encounterId = String(req.params.id || '').trim();
-    if (!encounterId) return res.status(400).json({ ok: false, error: 'encounter_id_required' });
-
     const allowed = await doctorCanAccessPatientEncounter(encounterId, req);
     if (!allowed) return res.status(404).json({ ok: false, error: 'encounter_not_found' });
 
@@ -35202,6 +35273,12 @@ app.post('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req,
     console.error('[DOCTOR ENCOUNTERS] treatments post exception:', error);
     return res.status(500).json({ ok: false, error: 'internal_error', message: error.message });
   }
+}
+
+app.post('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req, res) => {
+  const encounterId = String(req.params.id || '').trim();
+  if (!encounterId) return res.status(400).json({ ok: false, error: 'encounter_id_required' });
+  return doctorPostEncounterTreatmentInner(encounterId, req, res);
 });
 
 /** PUT/PATCH encounter_treatment — doktor uygulaması tedavi düzenle (cliniflow-app treatment-item) */
@@ -35379,6 +35456,127 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
     return res.json({ ok: true, treatments: rows || [] });
   } catch (err) {
     console.error('[DOCTOR PATIENT TREATMENTS] exception:', err);
+    return res.status(500).json({ ok: false, error: err.message || 'server_error' });
+  }
+});
+
+/*
+ * POST /api/doctor/patients/:patientId/treatments
+ * cliniflow-app treatment-plan: securePost — encounter_id body içinde opsiyonel; yoksa hastanın erişilebilir en yeni encounter'ı.
+ */
+app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (req, res) => {
+  try {
+    const patientId = String(req.params.patientId || '').trim();
+    if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
+    if (!isSupabaseEnabled()) return res.status(500).json({ ok: false, error: 'supabase_not_configured' });
+
+    const patientSelects = [
+      'id, patient_id, clinic_id, clinic_code, name, full_name, phone, email, status, created_at',
+    ];
+    const findPatientByField = async (fieldName) => {
+      for (const selectClause of patientSelects) {
+        const result = await supabase
+          .from('patients')
+          .select(selectClause)
+          .eq(fieldName, patientId)
+          .maybeSingle();
+        if (!result.error) {
+          return { patient: result.data || null, error: null };
+        }
+        const code = String(result.error?.code || '');
+        if (!['42703', 'PGRST204', 'PGRST205', '22P02'].includes(code)) {
+          break;
+        }
+      }
+      return { patient: null, error: null };
+    };
+
+    let lookup = await findPatientByField('id');
+    if (!lookup.patient) {
+      lookup = await findPatientByField('patient_id');
+    }
+
+    if (!lookup.patient) {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    const patient = lookup.patient;
+    const statusRaw = String(patient?.status || '').toUpperCase();
+    if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    const patientKeyForAccess = String(patient?.id || patient?.patient_id || patientId).trim();
+    let isAssigned = false;
+    try {
+      isAssigned = await doctorHasTreatmentTeamAccessToPatientId(patientKeyForAccess, req);
+    } catch (e) {
+      console.error('[DOCTOR PATIENT TREATMENTS POST] access check failed:', e?.message || e);
+    }
+    if (!isAssigned) {
+      try {
+        isAssigned = await doctorOwnsAnyEncounterForPatient(patient, req);
+      } catch (e) {
+        console.error('[DOCTOR PATIENT TREATMENTS POST] encounter owner check failed:', e?.message || e);
+      }
+    }
+
+    if (!isAssigned) {
+      return res.status(403).json({ ok: false, error: 'patient_not_assigned' });
+    }
+
+    const internalUuid = String(patient?.id || '').trim();
+    if (!internalUuid) {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+
+    const encounterPidKeys = await encounterPatientIdMatchSet(internalUuid, patientId);
+    const { data: encRows, error: encListErr } = await supabase
+      .from('patient_encounters')
+      .select('id, created_at')
+      .in('patient_id', encounterPidKeys)
+      .order('created_at', { ascending: false });
+
+    if (encListErr) {
+      console.error('[DOCTOR PATIENT TREATMENTS POST] patient_encounters:', encListErr);
+      return res.status(500).json({ ok: false, error: 'encounters_fetch_failed' });
+    }
+
+    const rowList = (encRows || []).filter((e) => e && e.id);
+    if (!rowList.length) {
+      return res.status(400).json({ ok: false, error: 'no_encounter_for_patient' });
+    }
+
+    const norm = (u) => String(u || '').replace(/-/g, '').toLowerCase();
+    const bodyEncRaw = String((req.body || {}).encounter_id || '').trim();
+    let resolvedEncounterId = null;
+
+    if (bodyEncRaw) {
+      const match = rowList.find((e) => norm(e.id) === norm(bodyEncRaw));
+      if (!match) {
+        return res.status(400).json({ ok: false, error: 'invalid_encounter_id' });
+      }
+      const eid = String(match.id);
+      if (!(await doctorCanAccessPatientEncounter(eid, req))) {
+        return res.status(403).json({ ok: false, error: 'encounter_not_accessible' });
+      }
+      resolvedEncounterId = eid;
+    } else {
+      for (const e of rowList) {
+        const eid = String(e.id);
+        if (await doctorCanAccessPatientEncounter(eid, req)) {
+          resolvedEncounterId = eid;
+          break;
+        }
+      }
+      if (!resolvedEncounterId) {
+        return res.status(403).json({ ok: false, error: 'no_accessible_encounter' });
+      }
+    }
+
+    return doctorPostEncounterTreatmentInner(resolvedEncounterId, req, res);
+  } catch (err) {
+    console.error('[DOCTOR PATIENT TREATMENTS POST] exception:', err);
     return res.status(500).json({ ok: false, error: err.message || 'server_error' });
   }
 });
@@ -37119,7 +37317,10 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       body.clinic_id || body.clinicId,
     );
 
-    const clinicId = await resolveClinicIdForInbound(resolvedPatientId);
+    const clinicId = await resolveClinicIdForInbound(resolvedPatientId, {
+      contextClinicCode: body.clinicCode || body.clinic_code,
+      contextClinicId: body.clinic_id || body.clinicId,
+    });
     if (!clinicId || !UUID_RE.test(clinicId)) {
       return res.status(422).json({
         ok: false,
@@ -40230,7 +40431,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v69');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v71');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
