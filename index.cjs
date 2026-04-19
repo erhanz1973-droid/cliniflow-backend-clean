@@ -1248,9 +1248,20 @@ async function patchPatientClinicIfMissing(resolvedPatientId, clinicId) {
   }
 }
 
+/** Bazı prod DB'lerde patient_chat_threads yok; PostgREST PGRST205 “schema cache” / `chat_threads` önerisi. */
+function isPatientChatThreadsTableUnavailable(err) {
+  if (!err) return false;
+  const c = String(err.code || "");
+  const m = String(err.message || err.details || err.hint || "").toLowerCase();
+  if (c === "PGRST205" || c === "42P01") return true;
+  if (m.includes("patient_chat_threads") && (m.includes("schema cache") || m.includes("does not exist"))) return true;
+  return false;
+}
+
 /**
  * Creates or promotes patient_chat_threads before inbound message insert (assigned_doctor_id = null → Unassigned).
  * Prod log contract: inbound_thread_created | inbound_thread_promoted_to_lead
+ * Tablo yoksa thread_id olmadan devam edilir (messages / patient_messages yine yazılır).
  */
 async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
   let existing = null;
@@ -1261,8 +1272,18 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
       .eq("patient_id", resolvedPatientId)
       .order("created_at", { ascending: false })
       .limit(3);
+    if (qErr && isPatientChatThreadsTableUnavailable(qErr)) {
+      console.warn(
+        "[MESSAGES] ensureInboundLeadThread: patient_chat_threads not in schema — skip thread row (inbound message still allowed)"
+      );
+      return { threadId: null, error: null };
+    }
     if (!qErr && Array.isArray(rows) && rows.length) existing = rows[0];
   } catch (e) {
+    if (isPatientChatThreadsTableUnavailable(e)) {
+      console.warn("[MESSAGES] ensureInboundLeadThread: patient_chat_threads unavailable — skip thread row");
+      return { threadId: null, error: null };
+    }
     return { threadId: null, error: e };
   }
 
@@ -1301,7 +1322,13 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
     threadPayload,
     "id"
   );
-  if (tErr) return { threadId: null, error: tErr };
+  if (tErr) {
+    if (isPatientChatThreadsTableUnavailable(tErr)) {
+      console.warn("[MESSAGES] patient_chat_threads insert skipped — table missing");
+      return { threadId: null, error: null };
+    }
+    return { threadId: null, error: tErr };
+  }
   console.log("inbound_thread_created", {
     thread_id: ins?.id,
     patient_id: resolvedPatientId,
@@ -1406,7 +1433,7 @@ async function _insertMessageToSupabaseCore({
     }
     await patchPatientClinicIfMissing(resolvedPatientId, inboundClinicId);
     const thr = await ensureInboundLeadThread(resolvedPatientId, inboundClinicId);
-    if (!thr.threadId) {
+    if (!thr.threadId && thr.error) {
       console.error("inbound_thread_create_failed", {
         patient_id: resolvedPatientId,
         err: thr.error,
@@ -1420,7 +1447,7 @@ async function _insertMessageToSupabaseCore({
         },
       };
     }
-    inboundThreadId = thr.threadId;
+    inboundThreadId = thr.threadId || null;
   }
 
   if (fromPatient) {
@@ -40522,7 +40549,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v72');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v73');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
