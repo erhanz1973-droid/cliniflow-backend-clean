@@ -38804,23 +38804,33 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
-    let trQuery = supabase
-      .from("treatment_requests")
-      .select("id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id")
-      .order("created_at", { ascending: false })
-      .limit(400);
+    const trSelectVariants = [
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos, attachment_urls",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
+    ];
 
-    if (clinicId && UUID_RE.test(clinicId)) {
-      trQuery = trQuery.eq("clinic_id", clinicId);
+    let list = [];
+    for (const sel of trSelectVariants) {
+      let trQuery = supabase
+        .from("treatment_requests")
+        .select(sel)
+        .order("created_at", { ascending: false })
+        .limit(400);
+      if (clinicId && UUID_RE.test(clinicId)) {
+        trQuery = trQuery.eq("clinic_id", clinicId);
+      }
+      const { data: trRows, error: trErr } = await trQuery;
+      if (!trErr && Array.isArray(trRows)) {
+        list = trRows;
+        break;
+      }
+      if (trErr) {
+        console.warn("[DOCTOR treatment-requests] select retry:", sel, trErr.message);
+      }
     }
-
-    const { data: trRows, error: trErr } = await trQuery;
-    if (trErr) {
-      console.warn("[DOCTOR treatment-requests]", trErr.message);
-      return res.json({ ok: true, requests: [] });
-    }
-
-    const list = Array.isArray(trRows) ? trRows : [];
     const pids = [
       ...new Set(
         list
@@ -38871,6 +38881,10 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const mine = offs.find((o) => String(o.doctor_id) === String(doctorKey));
       const pid = String(r.patient_id || "").trim();
       const patientName = (pid && nameById[pid]) || "Patient";
+      const rawPhotoList = extractTreatmentRequestPhotoList(r);
+      const photosNormalized = rawPhotoList
+        .map((u) => normalizeOfferAttachmentUrl(req, u) || String(u || "").trim())
+        .filter(Boolean);
       return {
         id: String(r.id),
         patient_name: patientName,
@@ -38883,7 +38897,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         my_offer_id: mine ? String(mine.id) : null,
         unread_count: 0,
         is_assigned_to_me: Boolean(mine),
-        photos: null,
+        photos: photosNormalized.length ? photosNormalized : null,
       };
     });
 
