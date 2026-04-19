@@ -38210,11 +38210,105 @@ function coerceTreatmentRequestPhotoUrls(raw) {
   return [];
 }
 
+function mergeDedupedPhotoUrlLists(primary, secondary) {
+  const seen = new Set();
+  const out = [];
+  for (const list of [primary, secondary]) {
+    if (!Array.isArray(list)) continue;
+    for (const u of list) {
+      const s = String(u || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out.slice(0, 24);
+}
+
+/**
+ * Eski kayıtlarda treatment_requests.photo_urls boş olabilir; aynı hasta / zaman penceresindeki patient_files satırlarından URL topla.
+ * Tek batch sorgu; istek başına talep oluşturma zamanına göre eşleştirir.
+ */
+async function mapPatientFilesPhotosByTreatmentRequestId(trRows) {
+  const out = {};
+  if (!isSupabaseEnabled() || !Array.isArray(trRows) || !trRows.length) return out;
+
+  const need = trRows.filter(
+    (r) =>
+      r &&
+      r.id &&
+      UUID_RE.test(String(r.patient_id)) &&
+      !extractTreatmentRequestPhotoList(r).length
+  );
+  if (!need.length) return out;
+
+  const pids = [...new Set(need.map((r) => String(r.patient_id)))];
+  let pfiles = [];
+  try {
+    const { data, error } = await supabase
+      .from("patient_files")
+      .select("patient_id, file_url, file_type, mime_type, created_at, source")
+      .in("patient_id", pids.length === 1 ? [pids[0]] : pids)
+      .order("created_at", { ascending: true });
+    if (error) {
+      const c = String(error.code || "");
+      if (c !== "42P01" && c !== "PGRST205") {
+        console.warn("[mapPatientFilesPhotosByTreatmentRequestId]", error.message);
+      }
+      return out;
+    }
+    pfiles = Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.warn("[mapPatientFilesPhotosByTreatmentRequestId] catch", e?.message);
+    return out;
+  }
+
+  const byPid = {};
+  for (const f of pfiles) {
+    const pid = String(f.patient_id || "").trim();
+    if (!pid) continue;
+    if (!byPid[pid]) byPid[pid] = [];
+    byPid[pid].push(f);
+  }
+
+  const isImageRow = (f) => {
+    const mime = String(f.mime_type || "").toLowerCase();
+    const ftype = String(f.file_type || "").toLowerCase();
+    return ftype === "image" || ftype === "xray" || mime.startsWith("image/");
+  };
+
+  for (const r of need) {
+    const pid = String(r.patient_id);
+    const created = r.created_at ? new Date(r.created_at).getTime() : Date.now();
+    const windowStart = created - 72 * 3600000;
+    const windowEnd = created + 45 * 60000;
+    let files = (byPid[pid] || []).filter((f) => {
+      if (!f.file_url || !isImageRow(f)) return false;
+      const ft = f.created_at ? new Date(f.created_at).getTime() : 0;
+      return ft >= windowStart && ft <= windowEnd;
+    });
+    if (!files.length) {
+      files = (byPid[pid] || []).filter((f) => {
+        if (!f.file_url || !isImageRow(f)) return false;
+        const ft = f.created_at ? new Date(f.created_at).getTime() : 0;
+        return ft <= created + 20 * 60000 && ft >= created - 7 * 24 * 3600000;
+      });
+    }
+    const urls = mergeDedupedPhotoUrlLists(
+      [],
+      files.map((f) => String(f.file_url).trim()).filter(Boolean)
+    );
+    if (urls.length) out[String(r.id)] = urls;
+  }
+  return out;
+}
+
 /**
  * Initial quote/request body lives on treatment_requests, not offer_messages.
  * Reconstruct thread seed so doctor "Open conversation" shows the same text + photos.
+ * @param {string[]|null} fallbackPhotoUrls — from patient_files when row never had photo_urls (legacy).
  */
-function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName) {
+function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, fallbackPhotoUrls) {
   const out = [];
   if (!tr || !tr.id) return out;
   const nm = String(patientName || "Patient").trim() || "Patient";
@@ -38247,7 +38341,7 @@ function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName) {
     });
   }
 
-  const photos = extractTreatmentRequestPhotoList(tr);
+  const photos = mergeDedupedPhotoUrlLists(extractTreatmentRequestPhotoList(tr), fallbackPhotoUrls);
   photos.forEach((raw, i) => {
     const u = String(raw || "").trim();
     if (!u) return;
@@ -38471,7 +38565,15 @@ app.get("/api/offer-messages", async (req, res) => {
       return res.status(500).json({ ok: false, error: "db_error" });
     }
 
-    const syn = buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName);
+    let patientFileFallbackUrls = [];
+    try {
+      const fbMap = await mapPatientFilesPhotosByTreatmentRequestId([tr]);
+      patientFileFallbackUrls = fbMap[String(tr.id)] || [];
+    } catch (fbErr) {
+      console.warn("[OFFER-MESSAGES GET] patient_files fallback:", fbErr?.message);
+    }
+
+    const syn = buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, patientFileFallbackUrls);
     const real = (fm.rows || []).map((m) => ({
       id: String(m.id),
       sender_id: String(m.sender_id || ""),
@@ -38876,12 +38978,22 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       return "pending";
     };
 
+    let patientFilesFallbackByReqId = {};
+    try {
+      patientFilesFallbackByReqId = await mapPatientFilesPhotosByTreatmentRequestId(list);
+    } catch (fbErr) {
+      console.warn("[DOCTOR treatment-requests] patient_files fallback:", fbErr?.message);
+    }
+
     const requests = list.map((r) => {
       const offs = offersByReq[r.id] || [];
       const mine = offs.find((o) => String(o.doctor_id) === String(doctorKey));
       const pid = String(r.patient_id || "").trim();
       const patientName = (pid && nameById[pid]) || "Patient";
-      const rawPhotoList = extractTreatmentRequestPhotoList(r);
+      let rawPhotoList = extractTreatmentRequestPhotoList(r);
+      if (!rawPhotoList.length) {
+        rawPhotoList = patientFilesFallbackByReqId[String(r.id)] || [];
+      }
       const photosNormalized = rawPhotoList
         .map((u) => normalizeOfferAttachmentUrl(req, u) || String(u || "").trim())
         .filter(Boolean);
