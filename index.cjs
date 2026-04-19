@@ -5335,49 +5335,48 @@ app.post("/auth/request-otp", async (req, res) => {
       });
     }
     
-    // Check if email sending is configured (Brevo REST API or SMTP transporter)
-    const hasBrevo = !!process.env.BREVO_API_KEY;
-    const hasSmtpTransporter = !!emailTransporter;
-    if (!hasBrevo && !hasSmtpTransporter) {
-      console.error("[OTP] ❌ Email not configured - cannot send OTP!");
-
-
-      // Keep legacy error code for client compatibility
-      return res.status(500).json({
+    if (!isTransactionalEmailConfigured()) {
+      console.error("[AUTH REQUEST-OTP] email transport missing → 503", {
+        role,
+        email: maskEmailForLog(resolvedEmail),
+        ...getTransactionalEmailDiagnostic(),
+      });
+      return res.status(503).json({
         ok: false,
-        error: "smtp_not_configured",
-        message: "Email servisi yapılandırılmamış. Lütfen destek ile iletişime geçin.",
+        error: "email_not_configured",
+        message: REGISTER_USER_MSG.otpEmailNotConfigured,
+        hint: REGISTER_USER_MSG.otpEmailNotConfiguredHint,
       });
     }
-    console.log("[OTP] ✅ Email sending is configured, proceeding...", {
-      brevo: hasBrevo,
-      smtp: hasSmtpTransporter,
-    });
-    
-    // Clean up expired OTPs
-    cleanupExpiredOTPs();
-    
-    // Generate OTP
-    const otpCode = generateOTP();
 
-    // Save OTP under email key (file-based store)
+    cleanupExpiredOTPs();
+
+    const otpCode = generateOTP();
     await saveOTP(resolvedEmail, otpCode, 0);
-    
-    // FIRE-AND-FORGET: Send email WITHOUT waiting or error handling
-    // SMTP timeout should NOT block OTP request
-    setImmediate(() => {
-      sendOTPEmail(resolvedEmail, otpCode, foundLanguage)
-        .catch((emailError) => {
-          console.error("[OTP] ❌ Failed to send email:", emailError.message);
-          // Email failed but OTP is saved - user can request again
-        });
-    });
-    
-    // Return success IMMEDIATELY - don't wait for email
-    res.json({
+
+    let emailSent = false;
+    try {
+      await sendOTPEmail(resolvedEmail, otpCode, foundLanguage);
+      emailSent = true;
+      console.log("[OTP] request-otp send OK", {
+        role,
+        email: maskEmailForLog(resolvedEmail),
+      });
+    } catch (emailErr) {
+      console.error("[OTP] request-otp sendOTPEmail failed", {
+        role,
+        email: maskEmailForLog(resolvedEmail),
+        message: String(emailErr?.message || emailErr),
+        ...getTransactionalEmailDiagnostic(),
+      });
+    }
+
+    return res.json({
       ok: true,
-      message: "OTP email adresinize gönderildi",
-      // For UI convenience (not secret): return email + userId
+      message: emailSent
+        ? "OTP email adresinize gönderildi."
+        : REGISTER_USER_MSG.otpStoredEmailSendFailed,
+      email_sent: emailSent,
       email: resolvedEmail,
       ...(role === "DOCTOR" ? {
         doctorId: String(foundUserId || ""),
@@ -15399,9 +15398,11 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
   }
 });
 
-// POST /api/patient/me/messages (mobile convenience)
-app.post("/api/patient/me/messages", requireToken, async (req, res) => {
+// POST /api/patient/me/messages — also registered as POST /api/patient/messages (alias for mobile clients)
+async function postPatientMeMessagesHandler(req, res) {
   try {
+    console.log("[MESSAGES] POST", { path: req.path, patientFromToken: Boolean(req.patientId) });
+
     const patientId = String(req.patientId || "").trim();
     if (!patientId) return res.status(401).json({ ok: false, error: "unauthorized" });
 
@@ -15492,7 +15493,11 @@ app.post("/api/patient/me/messages", requireToken, async (req, res) => {
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
-});
+}
+
+app.post("/api/patient/me/messages", requireToken, postPatientMeMessagesHandler);
+// Alias: some apps use /api/patient/messages (must NOT use /api/register/patient for chat)
+app.post("/api/patient/messages", requireToken, postPatientMeMessagesHandler);
 
 // GET /api/patient/:patientId/messages
 app.get("/api/patient/:patientId/messages", (req, res) => {
