@@ -31656,21 +31656,23 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req) {
     if (clinicId && UUID_RE.test(clinicId)) {
       q = q.eq("clinic_id", clinicId);
     }
-    const { data, error } = await q.maybeSingle();
+    const { data, error } = await q.order("updated_at", { ascending: false }).limit(1).maybeSingle();
     if (!error && data) thread = data;
   } catch (_) {
     thread = null;
   }
 
-  if (thread && thread.is_lead) {
-    if (!thread.assigned_doctor_id) {
-      return { ok: false, status: 403, error: "lead_unassigned" };
-    }
+  // Assigned doctor on this thread — always allow (even after is_lead cleared on patient upgrade).
+  if (thread?.assigned_doctor_id) {
     const match = await compareDoctorIds(thread.assigned_doctor_id, req.doctorId);
-    if (!match) {
+    if (match) {
+      return { ok: true, patientId: resolvedPatientId };
+    }
+    if (thread.is_lead) {
       return { ok: false, status: 403, error: "not_assigned_doctor" };
     }
-    return { ok: true, patientId: resolvedPatientId };
+  } else if (thread?.is_lead) {
+    return { ok: false, status: 403, error: "lead_unassigned" };
   }
 
   const allowed = await doctorHasTreatmentTeamAccessToPatientId(patientIdParam, req);
@@ -33073,8 +33075,7 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       await supabase
         .from("patient_chat_threads")
         .update({ updated_at: ts })
-        .eq("patient_id", patientId)
-        .eq("is_lead", true);
+        .eq("patient_id", patientId);
     } catch (_) {
       /* non-fatal */
     }
@@ -38952,7 +38953,7 @@ app.get("/api/doctor/inbox-summary", requireDoctorAuth, async (req, res) => {
   }
 });
 
-// GET /api/doctor/inbox — assigned lead conversations only (assignedDoctorId === current doctor)
+// GET /api/doctor/inbox — threads assigned to this doctor (not limited to is_lead; patients may graduate)
 app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
@@ -38961,19 +38962,25 @@ app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
     const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
     const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
     const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
-    const doctorKey = doctorKeys[0] || rawDoctor;
-    if (!doctorKey || !UUID_RE.test(clinicId)) {
+    if (!doctorKeys.length || !UUID_RE.test(clinicId)) {
+      console.log("[DOCTOR inbox] skip — doctorKeys or clinicId", {
+        doctorKeysLen: doctorKeys.length,
+        clinicIdOk: UUID_RE.test(clinicId),
+      });
       return res.json({ ok: true, items: [] });
     }
 
-    const { data: threads, error } = await supabase
+    console.log("[DOCTOR inbox] DOCTOR_ID", rawDoctor, "resolvedKeys", doctorKeys, "clinic_id", clinicId);
+
+    let threadsQuery = supabase
       .from("patient_chat_threads")
-      .select("id, patient_id, status, assigned_doctor_id, assigned_at, updated_at, created_at")
+      .select("id, patient_id, status, assigned_doctor_id, assigned_at, updated_at, created_at, is_lead")
       .eq("clinic_id", clinicId)
-      .eq("is_lead", true)
-      .eq("assigned_doctor_id", doctorKey)
+      .in("assigned_doctor_id", doctorKeys)
       .order("updated_at", { ascending: false })
       .limit(200);
+
+    const { data: threads, error } = await threadsQuery;
 
     if (error) {
       const code = String(error.code || "");
@@ -38986,6 +38993,7 @@ app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
     }
 
     const rows = Array.isArray(threads) ? threads : [];
+    console.log("[DOCTOR inbox] THREADS FOUND", rows.length);
     const pids = [...new Set(rows.map((r) => String(r.patient_id || "").trim()).filter((id) => UUID_RE.test(id)))];
     const patientById = {};
     if (pids.length) {
@@ -39039,14 +39047,16 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
+    // Prefer selects that include photo columns first. A minimal select that omits them
+    // would succeed on every DB and would never load patient images for the list.
     const trSelectVariants = [
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, attachment_urls",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos, attachment_urls",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos, attachment_urls",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos, attachment_urls",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, attachment_urls",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls",
+      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
     ];
 
     let list = [];
