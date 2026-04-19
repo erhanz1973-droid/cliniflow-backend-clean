@@ -1232,6 +1232,29 @@ async function resolveClinicIdForInbound(resolvedPatientId, contextOpt) {
   return null;
 }
 
+/** Best-effort `patients` row update; drops unknown columns (e.g. is_lead on pre-migration DB). */
+async function updatePatientRowWithColumnPruning(resolvedPatientId, patch) {
+  if (!isSupabaseEnabled() || !resolvedPatientId || !patch || typeof patch !== "object") {
+    return { ok: false };
+  }
+  let p = { ...patch };
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const { error } = await supabase.from("patients").update(p).eq("id", resolvedPatientId);
+    if (!error) return { ok: true };
+    if (!isMissingColumnError(error)) {
+      console.warn("[patients] updatePatientRowWithColumnPruning failed", error.message || error);
+      return { ok: false, error };
+    }
+    const col = getMissingColumnName(error);
+    if (!col || !(col in p)) {
+      console.warn("[patients] updatePatientRowWithColumnPruning prune stalled", error.message || error);
+      return { ok: false, error };
+    }
+    delete p[col];
+  }
+  return { ok: false, error: new Error("prune_exhausted") };
+}
+
 async function patchPatientClinicIfMissing(resolvedPatientId, clinicId) {
   if (!isSupabaseEnabled() || !resolvedPatientId || !clinicId) return;
   const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
@@ -1240,12 +1263,12 @@ async function patchPatientClinicIfMissing(resolvedPatientId, clinicId) {
   const has =
     (rowClinicId && String(rowClinicId).trim()) || (rowClinicCode && String(rowClinicCode).trim());
   if (has) return;
-  const patch = { clinic_id: clinicId };
+  const patch = { clinic_id: clinicId, is_lead: true };
   const { data: c } = await supabase.from("clinics").select("clinic_code").eq("id", clinicId).maybeSingle();
   if (c?.clinic_code) patch.clinic_code = String(c.clinic_code).trim().toUpperCase();
-  const { error } = await supabase.from("patients").update(patch).eq("id", resolvedPatientId);
-  if (error) {
-    console.warn("[MESSAGES] patchPatientClinicIfMissing failed", error.message || error);
+  const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patch);
+  if (!up.ok) {
+    console.warn("[MESSAGES] patchPatientClinicIfMissing failed", up.error?.message || up.error || "update_failed");
   }
 }
 
@@ -1381,7 +1404,7 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
 
 /**
  * When the app sends a message from the clinic list it knows clinicCode/clinicId; patient row may still be unlinked.
- * Best-effort: set patients.clinic_id / clinic_code only if the patient has neither (does not override existing clinic).
+ * Best-effort: set patients.clinic_id / clinic_code and mark is_lead only if the patient has neither (does not override existing clinic).
  */
 async function applyClinicContextToPatientIfMissing(resolvedPatientId, contextClinicCodeRaw, contextClinicIdRaw) {
   if (!isSupabaseEnabled() || !resolvedPatientId) return;
@@ -1412,11 +1435,11 @@ async function applyClinicContextToPatientIfMissing(resolvedPatientId, contextCl
   }
   if (!targetClinicId) return;
 
-  const patch = { clinic_id: targetClinicId };
+  const patch = { clinic_id: targetClinicId, is_lead: true };
   if (targetClinicCode) patch.clinic_code = targetClinicCode;
-  const { error } = await supabase.from("patients").update(patch).eq("id", resolvedPatientId);
-  if (error) {
-    console.warn("[MESSAGES] patient_clinic_context_patch_failed", error.message || error);
+  const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patch);
+  if (!up.ok) {
+    console.warn("[MESSAGES] patient_clinic_context_patch_failed", up.error?.message || up.error || "update_failed");
   } else {
     console.log("[MESSAGES] patient_clinic_context_applied", {
       patient_id: resolvedPatientId,
@@ -7671,18 +7694,21 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
     }
 
     const codeStored = String(clinic.clinic_code || clinicCodeRaw).trim().toUpperCase();
-    const { error: upErr } = await supabase
-      .from("patients")
-      .update({
-        clinic_id: clinic.id,
-        clinic_code: codeStored,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", patientRow.id);
+    const upJoin = await updatePatientRowWithColumnPruning(patientRow.id, {
+      clinic_id: clinic.id,
+      clinic_code: codeStored,
+      updated_at: new Date().toISOString(),
+      is_lead: false,
+    });
 
-    if (upErr) {
-      console.error("[PATCH /api/patient/clinic] update failed:", upErr.message || upErr);
-      return res.status(500).json({ ok: false, error: "update_failed", message: upErr.message || "Güncelleme başarısız." });
+    if (!upJoin.ok) {
+      const upErr = upJoin.error;
+      console.error("[PATCH /api/patient/clinic] update failed:", upErr?.message || upErr);
+      return res.status(500).json({
+        ok: false,
+        error: "update_failed",
+        message: upErr?.message || "Güncelleme başarısız.",
+      });
     }
 
     const patientStatus = String(patientRow.status || "PENDING").toUpperCase();
@@ -8160,11 +8186,13 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
     // ── Pagination params ─────────────────────────────────────────────────────
     const page  = Math.max(1, parseInt(req.query.page)  || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const includeLeadsRaw = String(req.query.include_leads || req.query.includeLeads || "").trim().toLowerCase();
+    const includeLeads = includeLeadsRaw === "1" || includeLeadsRaw === "true" || includeLeadsRaw === "yes";
 
     // DB-level paginated fetch (avoids loading entire clinic patient list)
     let fetchResult;
     try {
-      const fetchPromise = getPatientsByClinicPaginated(req.clinicId, { page, limit });
+      const fetchPromise = getPatientsByClinicPaginated(req.clinicId, { page, limit, includeLeads });
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("supabase_timeout")), 10000)
       );
@@ -25184,7 +25212,7 @@ app.get("/api/admin/referrals", requireAdminAuth, async (req, res) => {
         if (items.length === 0) {
           let clinicPatients = [];
           if (clinicId) {
-            clinicPatients = await getPatientsByClinic(clinicId);
+            clinicPatients = await getPatientsByClinic(clinicId, { includeLeads: true });
           }
           if ((!clinicPatients || clinicPatients.length === 0) && clinicCode) {
             try {
@@ -38074,22 +38102,6 @@ async function resolveOfferMessagingActor(req, res) {
   return null;
 }
 
-async function loadOfferMessagingContext(offerId) {
-  const { data: offer, error: oErr } = await supabase
-    .from("treatment_offers")
-    .select("id, request_id, doctor_id")
-    .eq("id", offerId)
-    .maybeSingle();
-  if (oErr || !offer) return null;
-  const { data: tr, error: tErr } = await supabase
-    .from("treatment_requests")
-    .select("id, patient_id")
-    .eq("id", offer.request_id)
-    .maybeSingle();
-  if (tErr || !tr?.patient_id) return null;
-  return { offer, tr };
-}
-
 async function assertOfferMessagingAccess(actor, offerId) {
   if (!isSupabaseEnabled()) return { error: "supabase_disabled" };
   const ctx = await loadOfferMessagingContext(offerId);
@@ -38144,6 +38156,144 @@ function normalizeOfferAttachmentUrl(req, url) {
   if (/^https?:\/\//i.test(u)) return u;
   if (u.startsWith("/")) return absoluteOfferFileUrl(req, u);
   return u;
+}
+
+function isOfferMessagesTableUnavailableError(err) {
+  if (!err) return false;
+  const code = String(err.code || "");
+  const m = String(err.message || err.details || err.hint || "").toLowerCase();
+  if (code === "42P01" || code === "PGRST205") return true;
+  if (m.includes("offer_messages") && (m.includes("does not exist") || m.includes("schema cache"))) return true;
+  return false;
+}
+
+/**
+ * Initial quote/request body lives on treatment_requests, not offer_messages.
+ * Reconstruct thread seed so doctor "Open conversation" shows the same text + photos.
+ */
+function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName) {
+  const out = [];
+  if (!tr || !tr.id) return out;
+  const nm = String(patientName || "Patient").trim() || "Patient";
+  const pid = String(tr.patient_id || "").trim();
+  const baseIso = tr.created_at ? String(tr.created_at) : new Date().toISOString();
+  const baseMs = new Date(baseIso).getTime() || Date.now();
+
+  const lines = [];
+  const desc = String(tr.description || "").trim();
+  if (desc) lines.push(desc);
+  const b = tr.budget != null && String(tr.budget).trim() ? String(tr.budget).trim() : "";
+  if (b) lines.push(`Budget: ${b}`);
+  const pref =
+    tr.preferred_treatment != null && String(tr.preferred_treatment).trim()
+      ? String(tr.preferred_treatment).trim()
+      : "";
+  if (pref) lines.push(`Preferred treatment: ${pref}`);
+  const textBody = lines.join("\n\n");
+  if (textBody) {
+    out.push({
+      id: `synthetic:tr:${tr.id}:text`,
+      sender_id: pid,
+      sender_role: "patient",
+      sender_name: nm,
+      text: textBody,
+      attachment_url: null,
+      attachment_type: null,
+      created_at: baseIso,
+      source: "treatment_request",
+    });
+  }
+
+  let photos = tr.photo_urls != null ? tr.photo_urls : null;
+  if (photos && typeof photos === "string") {
+    try {
+      photos = JSON.parse(photos);
+    } catch {
+      photos = null;
+    }
+  }
+  if (!Array.isArray(photos)) photos = [];
+  photos.slice(0, 24).forEach((raw, i) => {
+    const u = String(raw || "").trim();
+    if (!u) return;
+    const norm = normalizeOfferAttachmentUrl(req, u) || u;
+    out.push({
+      id: `synthetic:tr:${tr.id}:photo:${i}`,
+      sender_id: pid,
+      sender_role: "patient",
+      sender_name: nm,
+      text: null,
+      attachment_url: norm,
+      attachment_type: "image",
+      created_at: new Date(baseMs + i + 1).toISOString(),
+      source: "treatment_request",
+    });
+  });
+  return out;
+}
+
+function mergeOfferMessagesByTime(a, b) {
+  const all = [...(a || []), ...(b || [])];
+  all.sort((x, y) => {
+    const tx = new Date(x.created_at || 0).getTime();
+    const ty = new Date(y.created_at || 0).getTime();
+    return tx - ty;
+  });
+  return all;
+}
+
+/** Fetch offer + treatment_requests row (including description / photos for synthetic thread). */
+async function loadOfferMessagingContext(offerId) {
+  const { data: offer, error: oErr } = await supabase
+    .from("treatment_offers")
+    .select("id, request_id, doctor_id")
+    .eq("id", offerId)
+    .maybeSingle();
+  if (oErr || !offer) return null;
+
+  const trSelects = [
+    "id, patient_id, description, budget, preferred_treatment, photo_urls, created_at, updated_at",
+    "id, patient_id, description, budget, preferred_treatment, created_at",
+    "id, patient_id, description, created_at",
+    "id, patient_id",
+  ];
+
+  let tr = null;
+  for (const sel of trSelects) {
+    const { data: t, error: tErr } = await supabase
+      .from("treatment_requests")
+      .select(sel)
+      .eq("id", offer.request_id)
+      .maybeSingle();
+    if (!tErr && t?.patient_id) {
+      tr = t;
+      break;
+    }
+  }
+  if (!tr?.patient_id) return null;
+  return { offer, tr };
+}
+
+async function fetchOfferMessagesForOfferId(offerId) {
+  const q = () =>
+    supabase
+      .from("offer_messages")
+      .eq("offer_id", offerId)
+      .order("created_at", { ascending: true });
+
+  let { data: rows, error } = await q().select(
+    "id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at"
+  );
+  if (error && !isOfferMessagesTableUnavailableError(error)) {
+    const r2 = await q().select("*");
+    rows = r2.data;
+    error = r2.error;
+  }
+  if (error && isOfferMessagesTableUnavailableError(error)) {
+    return { rows: [], error: null, tableMissing: true };
+  }
+  if (error) return { rows: null, error, tableMissing: false };
+  return { rows: rows || [], error: null, tableMissing: false };
 }
 
 // POST /api/offer-messages/upload — must be registered before /api/offer-messages (POST body)
@@ -38261,18 +38411,26 @@ app.get("/api/offer-messages", async (req, res) => {
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
 
-    const { data: rows, error } = await supabase
-      .from("offer_messages")
-      .select("id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at")
-      .eq("offer_id", offerId)
-      .order("created_at", { ascending: true });
+    const tr = access.tr;
+    let patientName = "Patient";
+    const pidForName = String(tr?.patient_id || "").trim();
+    if (pidForName && UUID_RE.test(pidForName)) {
+      const { data: prow } = await supabase
+        .from("patients")
+        .select("name, full_name")
+        .eq("id", pidForName)
+        .maybeSingle();
+      patientName = String(prow?.full_name || prow?.name || "Patient").trim() || "Patient";
+    }
 
-    if (error) {
-      console.error("[OFFER-MESSAGES GET]", error.message);
+    const fm = await fetchOfferMessagesForOfferId(offerId);
+    if (fm.error) {
+      console.error("[OFFER-MESSAGES GET]", fm.error.message || fm.error, fm.error.code || "");
       return res.status(500).json({ ok: false, error: "db_error" });
     }
 
-    const messages = (rows || []).map((m) => ({
+    const syn = buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName);
+    const real = (fm.rows || []).map((m) => ({
       id: String(m.id),
       sender_id: String(m.sender_id || ""),
       sender_role: m.sender_role,
@@ -38282,7 +38440,10 @@ app.get("/api/offer-messages", async (req, res) => {
       attachment_type: m.attachment_type,
       created_at: m.created_at,
     }));
-    return res.json({ ok: true, messages });
+    const messages = mergeOfferMessagesByTime(syn, real);
+    const payload = { ok: true, messages };
+    if (fm.tableMissing) payload.offer_messages_table_missing = true;
+    return res.json(payload);
   } catch (e) {
     console.error("[OFFER-MESSAGES GET]", e);
     return res.status(500).json({ ok: false, error: "internal_error" });
