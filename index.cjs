@@ -267,6 +267,7 @@ const {
 } = require("./lib/supabase");
 
 const app = express();
+console.log("🚀 BACKEND CLEAN RUNNING");
 // Avoid 304 Not Modified on JSON APIs — clients that always JSON.parse() break on empty 304 bodies
 app.set("etag", false);
 console.log("SERVER ENTRY:", __filename);
