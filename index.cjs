@@ -1096,6 +1096,95 @@ async function resolveClinicIdFromExistingMessagingHistory(resolvedPatientId) {
   return null;
 }
 
+/** Yeniden kayıt yeni patients.id oluşturduğunda thread/messages geçmişi boş kalır; aynı telefon veya e-posta ile clinic_id dolu eski satırı bul. */
+async function resolveClinicIdFromSiblingPatientSameContact(resolvedPatientId) {
+  const pid = String(resolvedPatientId || "").trim();
+  if (!pid || !isSupabaseEnabled()) return null;
+
+  const selectAttempts = [
+    "id, phone, email, clinic_id, created_at",
+    "id, phone, email, created_at",
+    "phone, email",
+  ];
+  let me = null;
+  for (const sel of selectAttempts) {
+    const r = await supabase.from("patients").select(sel).eq("id", pid).maybeSingle();
+    if (!r.error && r.data) {
+      me = r.data;
+      break;
+    }
+    const code = String(r.error?.code || "");
+    if (!["42703", "PGRST204", "PGRST205", "42P01", "PGRST116"].includes(code)) break;
+  }
+  if (!me) return null;
+
+  const phone = me.phone != null ? String(me.phone).trim() : "";
+  const email =
+    me.email != null ? String(me.email).trim().toLowerCase() : "";
+
+  const tryExact = async (field, value) => {
+    if (!value) return null;
+    const { data, error } = await supabase
+      .from("patients")
+      .select("clinic_id")
+      .neq("id", pid)
+      .eq(field, value)
+      .not("clinic_id", "is", null)
+      .limit(1)
+      .maybeSingle();
+    if (error) return null;
+    if (data?.clinic_id) {
+      const id = String(data.clinic_id).trim();
+      if (UUID_RE.test(id)) return id;
+    }
+    return null;
+  };
+
+  let found = await tryExact("phone", phone);
+  if (found) {
+    console.log("[MESSAGES] inbound clinic resolved from sibling row (phone exact)", {
+      patient_id: pid.slice(0, 8),
+    });
+    return found;
+  }
+  if (email) {
+    found = await tryExact("email", email);
+    if (found) {
+      console.log("[MESSAGES] inbound clinic resolved from sibling row (email)", {
+        patient_id: pid.slice(0, 8),
+      });
+      return found;
+    }
+  }
+
+  const digitsOnly = (s) => String(s || "").replace(/\D/g, "");
+  const myD = digitsOnly(phone);
+  if (myD.length >= 10) {
+    const tail = myD.slice(-10);
+    const { data: rows, error } = await supabase
+      .from("patients")
+      .select("id, phone, clinic_id")
+      .neq("id", pid)
+      .not("clinic_id", "is", null)
+      .limit(120);
+    if (!error && Array.isArray(rows)) {
+      for (const row of rows) {
+        const od = digitsOnly(row.phone);
+        if (od.length >= 10 && od.slice(-10) === tail) {
+          const cid = String(row.clinic_id || "").trim();
+          if (UUID_RE.test(cid)) {
+            console.log("[MESSAGES] inbound clinic resolved from sibling row (phone tail match)", {
+              patient_id: pid.slice(0, 8),
+            });
+            return cid;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Inbound hasta mesajı için clinic UUID.
  * Sıra: hasta satırı → DEFAULT_* → istekteki clinicCode/clinic_id → mevcut thread/messages geçmişi.
@@ -1137,6 +1226,8 @@ async function resolveClinicIdForInbound(resolvedPatientId, contextOpt) {
   }
   const fromHistory = await resolveClinicIdFromExistingMessagingHistory(resolvedPatientId);
   if (fromHistory) return fromHistory;
+  const fromSibling = await resolveClinicIdFromSiblingPatientSameContact(resolvedPatientId);
+  if (fromSibling) return fromSibling;
   return null;
 }
 
@@ -40431,7 +40522,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v71');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v72');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
