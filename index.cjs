@@ -2376,6 +2376,22 @@ function isTransactionalEmailConfigured() {
   return Boolean(brevo) || Boolean(emailTransporter);
 }
 
+/** Booleans only — log when register OTP returns 503 (no secrets). */
+function getTransactionalEmailDiagnostic() {
+  const hasHost = Boolean(String(process.env.SMTP_HOST || "").trim());
+  const hasUser = Boolean(String(process.env.SMTP_USER || "").trim());
+  const hasPass = Boolean(String(process.env.SMTP_PASS || "").trim());
+  return {
+    hasBrevoKey: Boolean(String(process.env.BREVO_API_KEY || "").trim()),
+    hasSMTPHost: hasHost,
+    hasSMTPUser: hasUser,
+    hasSMTPPass: hasPass,
+    smtpTripletComplete: hasHost && hasUser && hasPass,
+    nodemailerTransportCreated: Boolean(emailTransporter),
+    hasFromAddress: Boolean(String(process.env.EMAIL_FROM || process.env.SMTP_FROM || "").trim()),
+  };
+}
+
 // ================== PUSH NOTIFICATIONS ==================
 let webpush = null;
 let VAPID_PUBLIC_KEY = "";
@@ -4073,6 +4089,11 @@ app.post("/api/register", async (req, res) => {
       logRegisterTrace("/api/register", "STEP_OTP_EMAIL_NOT_CONFIGURED", {
         email: maskEmailForLog(emailNormalized),
       });
+      console.error("[REGISTER] email transport missing → 503", {
+        route: "/api/register",
+        email: maskEmailForLog(emailNormalized),
+        ...getTransactionalEmailDiagnostic(),
+      });
       return res.status(503).json({
         ok: false,
         error: "email_not_configured",
@@ -4842,6 +4863,11 @@ app.post(["/api/patient/register", "/api/register/patient"], async (req, res) =>
     if (!isTransactionalEmailConfigured()) {
       logRegisterTrace("/api/register/patient", "STEP_OTP_EMAIL_NOT_CONFIGURED", {
         email: maskEmailForLog(emailNormalized),
+      });
+      console.error("[REGISTER] email transport missing → 503", {
+        route: "/api/register/patient",
+        email: maskEmailForLog(emailNormalized),
+        ...getTransactionalEmailDiagnostic(),
       });
       return res.status(503).json({
         ok: false,
@@ -40001,7 +40027,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v62');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v63');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
