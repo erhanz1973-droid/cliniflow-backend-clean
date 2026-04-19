@@ -38113,13 +38113,37 @@ async function assertOfferMessagingAccess(actor, offerId) {
   return { error: "forbidden" };
 }
 
+/** Stable public base for URLs when Host header is missing (workers, health checks). */
+function publicApiBaseFromEnv() {
+  const raw = String(
+    process.env.PUBLIC_API_URL ||
+      process.env.RAILWAY_PUBLIC_DOMAIN ||
+      process.env.PUBLIC_APP_URL ||
+      "",
+  ).trim();
+  if (!raw) return "";
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw.replace(/\/$/, "");
+  return `https://${raw.replace(/^\/+/, "").replace(/\/$/, "")}`;
+}
+
 function absoluteOfferFileUrl(req, relPath) {
   const p = String(relPath || "");
   if (!p.startsWith("/")) return p;
-  const host = req.get("host");
+  const envBase = publicApiBaseFromEnv();
+  if (envBase) return `${envBase}${p}`;
+  const host = (req.get("x-forwarded-host") || req.get("host") || "").split(",")[0].trim();
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
   if (host) return `${proto}://${host}${p}`;
   return p;
+}
+
+/** DB may store /uploads/... ; clients (RN Image) need https://host/... */
+function normalizeOfferAttachmentUrl(req, url) {
+  const u = String(url || "").trim();
+  if (!u) return null;
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.startsWith("/")) return absoluteOfferFileUrl(req, u);
+  return u;
 }
 
 // POST /api/offer-messages/upload — must be registered before /api/offer-messages (POST body)
@@ -38254,7 +38278,7 @@ app.get("/api/offer-messages", async (req, res) => {
       sender_role: m.sender_role,
       sender_name: m.sender_name || "",
       text: m.text,
-      attachment_url: m.attachment_url,
+      attachment_url: normalizeOfferAttachmentUrl(req, m.attachment_url) || m.attachment_url,
       attachment_type: m.attachment_type,
       created_at: m.created_at,
     }));
@@ -38298,6 +38322,10 @@ app.post("/api/offer-messages", async (req, res) => {
     }
     if (attachment_url && !attachment_type) attachment_type = "image";
 
+    const attachmentUrlStored = attachment_url
+      ? normalizeOfferAttachmentUrl(req, attachment_url) || attachment_url
+      : null;
+
     let sender_id = "";
     let sender_role = "patient";
     let sender_name = "";
@@ -38323,7 +38351,7 @@ app.post("/api/offer-messages", async (req, res) => {
       sender_role,
       sender_name,
       text: text || null,
-      attachment_url: attachment_url || null,
+      attachment_url: attachmentUrlStored,
       attachment_type: attachment_type || null,
     };
 
@@ -38344,7 +38372,8 @@ app.post("/api/offer-messages", async (req, res) => {
       sender_role: inserted.sender_role,
       sender_name: inserted.sender_name || "",
       text: inserted.text,
-      attachment_url: inserted.attachment_url,
+      attachment_url:
+        normalizeOfferAttachmentUrl(req, inserted.attachment_url) || inserted.attachment_url,
       attachment_type: inserted.attachment_type,
       created_at: inserted.created_at,
     };
