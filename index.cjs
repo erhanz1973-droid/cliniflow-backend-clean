@@ -39047,9 +39047,10 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
-    // Prefer selects that include photo columns first. A minimal select that omits them
-    // would succeed on every DB and would never load patient images for the list.
+    // Prefer full rows first: `*` loads every column (photos, photo_urls, attachment_urls, …).
+    // Listing only base columns can succeed while omitting photo JSONB → UI never gets images.
     const trSelectVariants = [
+      "*",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos, attachment_urls",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos",
       "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos, attachment_urls",
@@ -39156,7 +39157,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         my_offer_id: mine ? String(mine.id) : null,
         unread_count: 0,
         is_assigned_to_me: Boolean(mine),
-        photos: photosNormalized.length ? photosNormalized : null,
+        photos: photosNormalized,
       };
     });
 
