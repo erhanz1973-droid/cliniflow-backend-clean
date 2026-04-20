@@ -1,5 +1,12 @@
-# In Railway → Service → Settings: Root Directory must be the folder that CONTAINS this file,
-# package.json, and index.cjs (e.g. `cliniflow-backend-clean`), NOT the monorepo parent.
-# Start command runs from that root.
+# Railway config-as-code: https://docs.railway.app/deploy/config-as-code
+# Service → Settings → Root Directory = this folder (package.json + index.cjs),
+# e.g. cliniflow-backend-clean — not the monorepo parent.
+
+[build]
+builder = "nixpacks"
+
 [deploy]
-startCommand = "node index.cjs"
+startCommand = "npm start"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"

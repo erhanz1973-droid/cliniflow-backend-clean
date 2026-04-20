@@ -7666,6 +7666,10 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
           level2: null,
           level3: null,
         };
+      const clinicNameResolved =
+        (clinicData && clinicData.name && String(clinicData.name).trim()) ||
+        (branding && branding.clinicName && String(branding.clinicName).trim()) ||
+        "";
       return res.json({
         ok: true,
         patientId: req.patientId,
@@ -7674,6 +7678,8 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
         name: meName,
         phone: p?.phone || "",
         email: p?.email || "",
+        clinic_id: p?.clinic_id ? String(p.clinic_id) : null,
+        clinic_name: clinicNameResolved || null,
         clinicCode,
         clinicPlan,
         branding,
@@ -7698,6 +7704,8 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
       name: p?.name || "",
       phone: p?.phone || "",
       email: p?.email || "",
+      clinic_id: p?.clinic_id ? String(p.clinic_id) : p?.clinicId ? String(p.clinicId) : null,
+      clinic_name: p?.clinic_name || p?.clinicName || null,
       clinicCode: p?.clinicCode || p?.clinic_code || "",
       clinicPlan: p?.clinicPlan || "FREE",
       branding: null,
