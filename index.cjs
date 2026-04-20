@@ -39275,6 +39275,10 @@ async function loadOfferMessagingContext(offerId) {
   return { offer, tr };
 }
 
+/**
+ * Load every row in the offer thread. Scope ONLY by offer_id — never by sender_id / user id.
+ * (Filtering by sender would hide the other party and break chat.)
+ */
 async function fetchOfferMessagesForOfferId(offerId) {
   // supabase-js v2: filters (.eq, .order) must chain after .select() / .insert() / etc. — not on .from() alone.
   const build = (cols) =>
