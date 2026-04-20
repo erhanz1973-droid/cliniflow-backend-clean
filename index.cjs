@@ -39131,110 +39131,7 @@ function formatTreatmentRequestDescriptionForChat(raw) {
   return parts.join("\n\n").trim();
 }
 
-/**
- * Initial quote/request body lives on treatment_requests, not offer_messages.
- * Reconstruct thread seed so doctor "Open conversation" shows the same text + photos.
- * @param {string[]|null} fallbackPhotoUrls — from patient_files when row never had photo_urls (legacy).
- */
-function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, fallbackPhotoUrls) {
-  const out = [];
-  if (!tr || !tr.id) return out;
-  const nm = String(patientName || "Patient").trim() || "Patient";
-  const pid = String(tr.patient_id || "").trim();
-  const baseIso = tr.created_at ? String(tr.created_at) : new Date().toISOString();
-  const baseMs = new Date(baseIso).getTime() || Date.now();
-
-  const lines = [];
-  const descRaw = String(tr.description || "").trim();
-  const desc = descRaw ? formatTreatmentRequestDescriptionForChat(descRaw) : "";
-  if (desc) lines.push(desc);
-  const b = tr.budget != null && String(tr.budget).trim() ? String(tr.budget).trim() : "";
-  if (b) lines.push(`Budget: ${b}`);
-  const pref =
-    tr.preferred_treatment != null && String(tr.preferred_treatment).trim()
-      ? String(tr.preferred_treatment).trim()
-      : "";
-  if (pref) lines.push(`Preferred treatment: ${pref}`);
-  const textBody = lines.join("\n\n");
-  if (textBody) {
-    out.push({
-      id: `synthetic:tr:${tr.id}:text`,
-      sender_id: pid,
-      sender_role: "patient",
-      sender_name: nm,
-      text: textBody,
-      attachment_url: null,
-      attachment_type: null,
-      created_at: baseIso,
-      source: "treatment_request",
-    });
-  }
-
-  const photos = mergeDedupedPhotoUrlLists(extractTreatmentRequestPhotoList(tr), fallbackPhotoUrls);
-  photos.forEach((raw, i) => {
-    const u = String(raw || "").trim();
-    if (!u) return;
-    const norm = normalizeOfferAttachmentUrl(req, u) || u;
-    out.push({
-      id: `synthetic:tr:${tr.id}:photo:${i}`,
-      sender_id: pid,
-      sender_role: "patient",
-      sender_name: nm,
-      text: null,
-      attachment_url: norm,
-      attachment_type: "image",
-      created_at: new Date(baseMs + i + 1).toISOString(),
-      source: "treatment_request",
-    });
-  });
-  return out;
-}
-
-/**
- * Doktor teklifi (treatment_offers) kartta görünür ama offer_messages'a yazılmaz.
- * Hasta "Doktora mesaj" dediğinde aynı içeriğin sohbette de görünmesi için sentetik balon.
- */
-function buildSyntheticDoctorInitialOfferMessage(req, offerRow, doctorDisplayName) {
-  if (!offerRow || !offerRow.id) return null;
-  const oid = String(offerRow.id).trim();
-  const docId = String(offerRow.doctor_id || "").trim();
-  const nm = String(doctorDisplayName || "Doctor").trim() || "Doctor";
-  const tt = offerRow.treatment_type != null ? String(offerRow.treatment_type).trim() : "";
-  const pr = offerRow.price_range != null ? String(offerRow.price_range).trim() : "";
-  const dur = offerRow.duration != null ? String(offerRow.duration).trim() : "";
-  const note = offerRow.note != null ? String(offerRow.note).trim() : "";
-  const lines = [];
-  if (tt) lines.push(`Treatment: ${tt}`);
-  if (pr) lines.push(`Price range: ${pr}`);
-  if (dur) lines.push(`Duration: ${dur}`);
-  if (note) lines.push(note);
-  const textBody = lines.join("\n\n").trim();
-  if (!textBody) return null;
-  const created = offerRow.created_at ? String(offerRow.created_at) : new Date().toISOString();
-  return {
-    id: `synthetic:offer:${oid}:initial`,
-    sender_id: docId || "doctor",
-    sender_role: "doctor",
-    sender_name: nm,
-    text: textBody,
-    attachment_url: null,
-    attachment_type: null,
-    created_at: created,
-    source: "treatment_offer",
-  };
-}
-
-function mergeOfferMessagesByTime(a, b) {
-  const all = [...(a || []), ...(b || [])];
-  all.sort((x, y) => {
-    const tx = new Date(x.created_at || 0).getTime();
-    const ty = new Date(y.created_at || 0).getTime();
-    return tx - ty;
-  });
-  return all;
-}
-
-/** Fetch offer + treatment_requests row (including description / photos for synthetic thread). */
+/** Fetch offer + treatment_requests row for messaging access checks and related flows. */
 async function loadOfferMessagingContext(offerId) {
   const { data: offer, error: oErr } = await supabase
     .from("treatment_offers")
@@ -39425,74 +39322,14 @@ app.get("/api/offer-messages", async (req, res) => {
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
 
-    const tr = access.tr;
-    let patientName = "Patient";
-    const pidForName = String(tr?.patient_id || "").trim();
-    if (pidForName && UUID_RE.test(pidForName)) {
-      const { data: prow } = await supabase
-        .from("patients")
-        .select("name, full_name")
-        .eq("id", pidForName)
-        .maybeSingle();
-      patientName = String(prow?.full_name || prow?.name || "Patient").trim() || "Patient";
-    }
-
+    // Chat thread = offer_messages only (no synthetic treatment_request / treatment_offer rows).
     const fm = await fetchOfferMessagesForOfferId(offerId);
     if (fm.error) {
       console.error("[OFFER-MESSAGES GET]", fm.error.message || fm.error, fm.error.code || "");
       return res.status(500).json({ ok: false, error: "db_error" });
     }
 
-    let patientFileFallbackUrls = [];
-    try {
-      const fbMap = await mapPatientFilesPhotosByTreatmentRequestId([tr]);
-      patientFileFallbackUrls = fbMap[String(tr.id)] || [];
-    } catch (fbErr) {
-      console.warn("[OFFER-MESSAGES GET] patient_files fallback:", fbErr?.message);
-    }
-
-    const syn = buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, patientFileFallbackUrls);
-
-    let offerDetail = null;
-    const offerSelects = [
-      "id, doctor_id, treatment_type, price_range, duration, note, created_at",
-      "id, doctor_id, treatment_type, price_range, duration, created_at",
-      "id, doctor_id, note, created_at",
-      "id, doctor_id, created_at",
-    ];
-    for (const sel of offerSelects) {
-      const { data: od, error: odErr } = await supabase
-        .from("treatment_offers")
-        .select(sel)
-        .eq("id", offerId)
-        .maybeSingle();
-      if (!odErr && od?.id) {
-        offerDetail = od;
-        break;
-      }
-    }
-
-    let doctorOfferName = "Doctor";
-    const dk = String(offerDetail?.doctor_id || "").trim();
-    if (dk) {
-      const q1 = await supabase.from("doctors").select("full_name, name").eq("id", dk).maybeSingle();
-      if (q1.data) {
-        doctorOfferName =
-          String(q1.data.full_name || q1.data.name || doctorOfferName).trim() || doctorOfferName;
-      } else {
-        const q2 = await supabase.from("doctors").select("full_name, name").eq("doctor_id", dk).maybeSingle();
-        if (q2.data) {
-          doctorOfferName =
-            String(q2.data.full_name || q2.data.name || doctorOfferName).trim() || doctorOfferName;
-        }
-      }
-    }
-
-    const synDocRow =
-      offerDetail && buildSyntheticDoctorInitialOfferMessage(req, offerDetail, doctorOfferName);
-    const synDocArr = synDocRow ? [synDocRow] : [];
-
-    const real = (fm.rows || []).map((m) => ({
+    const messages = (fm.rows || []).map((m) => ({
       id: String(m.id),
       sender_id: String(m.sender_id || ""),
       sender_role: m.sender_role,
@@ -39502,9 +39339,13 @@ app.get("/api/offer-messages", async (req, res) => {
       attachment_type: m.attachment_type,
       created_at: m.created_at,
     }));
-    const messages = mergeOfferMessagesByTime(mergeOfferMessagesByTime(syn, synDocArr), real);
-    const payload = { ok: true, messages };
-    if (fm.tableMissing) payload.offer_messages_table_missing = true;
+
+    const payload = {
+      ok: true,
+      messages,
+      offer_messages_table_missing: Boolean(fm.tableMissing),
+    };
+    console.log("[GET RAW SOURCE]", payload);
     return res.json(payload);
   } catch (e) {
     console.error("[OFFER-MESSAGES GET]", e);
