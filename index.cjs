@@ -225,7 +225,7 @@ const { fillIcdRowFromStatic, searchStaticDentalIcd } = require("./lib/icd10Stat
 const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileReferenceSeeds");
 const { resolveClinicCoords, hasFiniteCoords, buildGeocodeQuery } = require("./lib/clinicCoords.cjs");
 const { fetchPatientVisibleClinicRows } = require("./lib/patientClinicListing.cjs");
-const { filterClinicsWithinRadiusKm } = require("./lib/clinicHaversine.cjs");
+const { filterClinicsWithinRadiusKm, nearbyBoundingBoxDeg } = require("./lib/clinicHaversine.cjs");
 const { countryPriorityScore, sortNearbyMatchesByUserCountry } = require("./lib/clinicCountryPriority.cjs");
 const {
   calculatePrices,
@@ -455,6 +455,46 @@ function hasInboundAttachments(attachments) {
   return Object.keys(attachments).length > 0;
 }
 
+function collectHttpsPhotoUrlsFromMessageBody(body) {
+  const b = body || {};
+  const out = [];
+  const push = (u) => {
+    const s = String(u || "").trim();
+    if (/^https?:\/\//i.test(s)) out.push(s);
+  };
+  if (Array.isArray(b.photo_urls)) for (const x of b.photo_urls) push(x);
+  if (Array.isArray(b.photoUrls)) for (const x of b.photoUrls) push(x);
+  push(b.image);
+  push(b.imageUrl);
+  return [...new Set(out)];
+}
+
+function attachmentObjectFromPhotoUrl(url) {
+  const u = String(url || "").trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+  return { url: u, name: "photo.jpg", fileType: "image", mimeType: "image/jpeg" };
+}
+
+function firstTreatmentRequestPhotoUrl(photos) {
+  if (!Array.isArray(photos) || photos.length === 0) return null;
+  const p0 = photos[0];
+  if (typeof p0 === "string" && /^https?:\/\//i.test(p0.trim())) return p0.trim();
+  if (p0 && typeof p0 === "object" && p0.url) {
+    const u = String(p0.url || "").trim();
+    return u || null;
+  }
+  return null;
+}
+
+function treatmentRequestRowPhotos(r) {
+  if (!r) return [];
+  if (Array.isArray(r.photos) && r.photos.length) return r.photos;
+  if (Array.isArray(r.photo_urls) && r.photo_urls.length) {
+    return r.photo_urls.map((u) => (typeof u === "string" ? { url: u } : u));
+  }
+  return [];
+}
+
 async function resolveClinicCodeForPatient(patientId) {
   if (!patientId) return null;
   try {
@@ -598,6 +638,14 @@ function mapPatientMessagesRowToLegacy(row) {
     patientId: row.patient_id || undefined,
     ...(readAt != null ? { readAt } : {}),
   };
+}
+
+/** Insert is either `messages` or `patient_messages` — map once (avoid double-mapping POST bodies). */
+function legacyMessageFromInsertedRow(row, insertedTable) {
+  if (!row) return null;
+  const t = String(insertedTable || "messages");
+  if (t === "patient_messages") return mapPatientMessagesRowToLegacy(row);
+  return mapDbMessageToLegacyMessage(row);
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -994,7 +1042,7 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
       .insert({ ...baseRow, from_role })
       .select("*")
       .single();
-    if (!error) return { data: mapPatientMessagesRowToLegacy(data), error: null };
+    if (!error) return { data, error: null };
     lastError = error;
     const msg = String(error?.message || "").toLowerCase();
     const code = String(error?.code || "");
@@ -1051,7 +1099,7 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
         .insert(row)
         .select("*")
         .single();
-      if (!error) return { data: mapPatientMessagesRowToLegacy(data), error: null };
+      if (!error) return { data, error: null };
       lastError = error;
       const msg = String(error?.message || "").toLowerCase();
       const code = String(error?.code || "");
@@ -1570,7 +1618,7 @@ async function _insertMessageToSupabaseCore({
         thread_id: inboundThreadId || null,
         via: "patient_messages",
       });
-      return { data: pmTry.data, error: null };
+      return { data: pmTry.data, error: null, insertedTable: "patient_messages" };
     }
   }
 
@@ -1663,7 +1711,7 @@ async function _insertMessageToSupabaseCore({
       message_id: primaryResult.data?.id || null,
       via: "messages",
     });
-    return primaryResult;
+    return { ...primaryResult, insertedTable: "messages" };
   }
 
   const pCode = String(primaryResult.error?.code || "");
@@ -1680,7 +1728,7 @@ async function _insertMessageToSupabaseCore({
         message_id: pruned.data?.id || null,
         via: "messages_pruned",
       });
-      return pruned;
+      return { ...pruned, insertedTable: "messages" };
     }
     const prCode = String(pruned.error?.code || "");
     const prRetry = isMissingColumnError(pruned.error) || prCode === "23502" || prCode === "23514";
@@ -1711,7 +1759,7 @@ async function _insertMessageToSupabaseCore({
       message_id: fb.data?.id || null,
       via: "messages_fallback",
     });
-    return fb;
+    return { ...fb, insertedTable: "messages" };
   }
 
   // Minimal: patient_id + clinic + sender_type + message
@@ -1730,7 +1778,7 @@ async function _insertMessageToSupabaseCore({
       message_id: fb.data?.id || null,
       via: "messages_fallback_minimal",
     });
-    return fb;
+    return { ...fb, insertedTable: "messages" };
   }
 
   // Some DBs use UPPERCASE enum for sender_type
@@ -1754,7 +1802,7 @@ async function _insertMessageToSupabaseCore({
       message_id: fb.data?.id || null,
       via: "messages_fallback_upper_sender",
     });
-    return fb;
+    return { ...fb, insertedTable: "messages" };
   }
 
   // Legacy: text + clinic_code; created_at is often TIMESTAMPTZ (use ISO), not BIGINT ms
@@ -1779,7 +1827,7 @@ async function _insertMessageToSupabaseCore({
         message_id: fb.data?.id || null,
         via: "messages_fallback_legacy",
       });
-      return fb;
+      return { ...fb, insertedTable: "messages" };
     }
     const legMsg = String(fb?.error?.message || "");
     if (fb?.error && (String(fb.error.code || "") === "22008" || legMsg.includes("out of range"))) {
@@ -1803,7 +1851,7 @@ async function _insertMessageToSupabaseCore({
           message_id: fb.data?.id || null,
           via: "messages_fallback_legacy_ms",
         });
-        return fb;
+        return { ...fb, insertedTable: "messages" };
       }
     }
   }
@@ -1889,12 +1937,13 @@ async function createLeadFromPublicContact({ clinicCode, name, email, phone, tex
     console.warn("[LEAD CONTACT] message insert failed:", msgInsert.error?.message || msgInsert.error);
     return { ok: false, status: 500, error: "message_create_failed" };
   }
-  const mapped = mapDbMessageToLegacyMessage(msgInsert.data);
+  const mapped = legacyMessageFromInsertedRow(msgInsert.data, msgInsert.insertedTable);
   return {
     ok: true,
     patientId: internalPatientId,
     legacyPatientId,
-    message: mapped || { text: msgText, from: "PATIENT", createdAt: now() },
+    message: msgInsert.data ?? null,
+    legacyMessage: mapped || { text: msgText, from: "PATIENT", createdAt: now() },
   };
 }
 
@@ -4570,6 +4619,7 @@ app.post("/api/lead-contact", async (req, res) => {
       patientId: result.patientId,
       legacyPatientId: result.legacyPatientId,
       message: result.message,
+      legacyMessage: result.legacyMessage,
       status: "unassigned",
       assignedDoctorId: null,
     });
@@ -7781,19 +7831,82 @@ app.get("/api/clinics/nearby", async (req, res) => {
       "id, name, city, country, clinic_code, latitude, longitude, lat, lng, status",
       "id, name, city, country, clinic_code, latitude, longitude, status",
     ];
-    let raw = [];
-    let lastSelErr = null;
-    for (const sel of selects) {
-      const { data, error } = await supabase.from("clinics").select(sel).limit(500);
-      if (!error && Array.isArray(data)) {
-        raw = data;
-        break;
+
+    /** Load candidate rows: same source order as patient browse — RPC first, then geo bbox (not a random .limit). */
+    async function loadNearbyCandidateRows() {
+      try {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc("nearby_clinics", {
+          user_lat: lat,
+          user_lng: lng,
+          radius_km: radiusKm,
+        });
+        if (!rpcErr && Array.isArray(rpcData) && rpcData.length) {
+          return { raw: rpcData, source: "rpc" };
+        }
+        if (rpcErr) {
+          console.warn("[GET /api/clinics/nearby] nearby_clinics RPC:", rpcErr.message);
+        }
+      } catch (re) {
+        console.warn("[GET /api/clinics/nearby] nearby_clinics exception:", re?.message || re);
       }
-      lastSelErr = error || lastSelErr;
+
+      const { latMin, latMax, lngMin, lngMax } = nearbyBoundingBoxDeg(lat, lng, radiusKm);
+      let lastSelErr = null;
+
+      for (const sel of selects) {
+        const { data, error } = await supabase
+          .from("clinics")
+          .select(sel)
+          .gte("latitude", latMin)
+          .lte("latitude", latMax)
+          .gte("longitude", lngMin)
+          .lte("longitude", lngMax)
+          .not("latitude", "is", null)
+          .not("longitude", "is", null)
+          .limit(2500);
+        if (!error && Array.isArray(data)) {
+          return { raw: data, source: "bbox_latlng" };
+        }
+        lastSelErr = error || lastSelErr;
+      }
+
+      for (const sel of selects) {
+        const { data, error } = await supabase
+          .from("clinics")
+          .select(sel)
+          .gte("lat", latMin)
+          .lte("lat", latMax)
+          .gte("lng", lngMin)
+          .lte("lng", lngMax)
+          .not("lat", "is", null)
+          .not("lng", "is", null)
+          .limit(2500);
+        if (!error && Array.isArray(data)) {
+          return { raw: data, source: "bbox_latlng_altcols" };
+        }
+        lastSelErr = error || lastSelErr;
+      }
+
+      let raw = [];
+      for (const sel of selects) {
+        const { data, error } = await supabase.from("clinics").select(sel).limit(8000);
+        if (!error && Array.isArray(data)) {
+          raw = data;
+          break;
+        }
+        lastSelErr = error || lastSelErr;
+      }
+      if (!raw.length && lastSelErr) {
+        console.warn("[GET /api/clinics/nearby] clinics select (fallback):", lastSelErr.message);
+      } else if (raw.length) {
+        console.warn(
+          "[GET /api/clinics/nearby] using capped table scan fallback; define nearby_clinics RPC or fix bbox columns."
+        );
+      }
+      return { raw, source: "scan_fallback" };
     }
-    if (!raw.length && lastSelErr) {
-      console.warn("[GET /api/clinics/nearby] clinics select:", lastSelErr.message);
-    }
+
+    const { raw } = await loadNearbyCandidateRows();
 
     let matched = filterClinicsWithinRadiusKm(raw, lat, lng, radiusKm);
     const userCountryNearby = req.query.country || req.query.userCountry;
@@ -16169,9 +16282,20 @@ async function postPatientMeMessagesHandler(req, res) {
         attachments = { url: attachments, name: "file" };
       }
     }
-    const text = String(body.text || body.message || body.content || "").trim();
-    const msgType = String(body.type || "text").trim() || "text";
+    const photoUrlsBody = collectHttpsPhotoUrlsFromMessageBody(body);
+    if (
+      (!attachments || !hasInboundAttachments(attachments)) &&
+      photoUrlsBody.length > 0
+    ) {
+      attachments = attachmentObjectFromPhotoUrl(photoUrlsBody[0]);
+    }
+    let text = String(body.text || body.message || body.content || "").trim();
+    const msgType =
+      attachments && hasInboundAttachments(attachments)
+        ? "image"
+        : String(body.type || "text").trim() || "text";
     if (!text && !attachments) return res.status(400).json({ ok: false, error: "text_or_attachment_required" });
+    if (!text && attachments) text = "📷";
 
     if (!isSupabaseEnabled()) {
       if (!canUseFileFallback()) return res.status(500).json(supabaseDisabledPayload("messages"));
@@ -16194,7 +16318,7 @@ async function postPatientMeMessagesHandler(req, res) {
 
     const ctxCode = body.clinicCode ?? body.clinic_code;
     const ctxId = body.clinicId ?? body.clinic_id;
-    const { data, error } = await insertMessageToSupabase({
+    const { data, error, insertedTable } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
       message: text || (attachments ? "[attachment]" : ""),
@@ -16239,10 +16363,11 @@ async function postPatientMeMessagesHandler(req, res) {
       }
       return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic });
     }
-    const msg = mapDbMessageToLegacyMessage(data);
+    const leg = legacyMessageFromInsertedRow(data, insertedTable);
     return res.json({
       ok: true,
-      message: msg || { text: text || "[attachment]", from: "PATIENT", createdAt: now(), patientId },
+      message: data,
+      legacyMessage: leg || { text: text || "[attachment]", from: "PATIENT", createdAt: now(), patientId },
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
@@ -16403,7 +16528,7 @@ app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
 
     const ctxCode = body.clinicCode ?? body.clinic_code;
     const ctxId = body.clinicId ?? body.clinic_id;
-    const { data, error } = await insertMessageToSupabase({
+    const { data, error, insertedTable } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
       message: text || (attachments ? "[attachment]" : ""),
@@ -16448,8 +16573,12 @@ app.post("/api/patient/:patientId/messages", requireToken, async (req, res) => {
       }
       return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic });
     }
-    const msg = mapDbMessageToLegacyMessage(data);
-    return res.json({ ok: true, message: msg || { text, from: "PATIENT", createdAt: now(), patientId } });
+    const leg = legacyMessageFromInsertedRow(data, insertedTable);
+    return res.json({
+      ok: true,
+      message: data,
+      legacyMessage: leg || { text, from: "PATIENT", createdAt: now(), patientId },
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
@@ -16475,16 +16604,18 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
       return res.status(400).json({ ok: false, error: "text_required", received: body });
     }
 
-    const sendAndRespond = (newMessage) => {
-      // Send push notification to patient (never breaks API)
+    const sendAndRespond = (legacyMsg, rawRow) => {
+      const mid = String(legacyMsg?.id || "").trim();
       const messagePreview = text.length > 100 ? text.substring(0, 100) + "..." : text;
       sendPushNotification(patientId, "Klinikten Yeni Mesaj", messagePreview, {
         url: "/chat",
-        data: { messageId: newMessage.id }
-      }).catch(err => {
-
+        data: { messageId: mid || undefined },
+      }).catch(() => {});
+      return res.json({
+        ok: true,
+        message: rawRow != null ? rawRow : legacyMsg,
+        legacyMessage: legacyMsg,
       });
-      return res.json({ ok: true, message: newMessage });
     };
 
     if (!isSupabaseEnabled()) {
@@ -16503,7 +16634,7 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
       };
       messages.push(newMessage);
       writeJson(chatFile, { patientId, messages, updatedAt: now() });
-      return sendAndRespond(newMessage);
+      return sendAndRespond(newMessage, null);
     }
 
     (async () => {
@@ -16514,9 +16645,15 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
           msgType
         );
         if (!pmTry.error && pmTry.data) {
-          return sendAndRespond(pmTry.data);
+          const leg = mapPatientMessagesRowToLegacy(pmTry.data) || {
+            id: String(pmTry.data?.message_id || pmTry.data?.id || ""),
+            text: String(text).trim(),
+            from: "CLINIC",
+            createdAt: now(),
+          };
+          return sendAndRespond(leg, pmTry.data);
         }
-        const { data, error } = await insertMessageToSupabase({
+        const { data, error, insertedTable } = await insertMessageToSupabase({
           patientId,
           sender: "clinic",
           message: String(text).trim(),
@@ -16540,13 +16677,14 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
           }
           return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic });
         }
-        const msg = mapDbMessageToLegacyMessage(data) || {
-          id: `msg_${now()}_${crypto.randomBytes(4).toString("hex")}`,
-          text: String(text).trim(),
-          from: "CLINIC",
-          createdAt: now(),
-        };
-        return sendAndRespond(msg);
+        const msg =
+          legacyMessageFromInsertedRow(data, insertedTable) || {
+            id: `msg_${now()}_${crypto.randomBytes(4).toString("hex")}`,
+            text: String(text).trim(),
+            from: "CLINIC",
+            createdAt: now(),
+          };
+        return sendAndRespond(msg, data);
       } catch (e) {
         return res.status(500).json({ ok: false, error: "messages_save_failed", exception: String(e?.message || e) });
       }
@@ -33338,7 +33476,7 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
 
     const msgType = String(req.body?.type || "text").trim() || "text";
     const doctorUuid = String(req.doctor?.id || "").trim();
-    const { data, error } = await insertMessageToSupabase({
+    const { data, error, insertedTable } = await insertMessageToSupabase({
       patientId,
       sender: "clinic",
       message: text,
@@ -33361,8 +33499,9 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     } catch (_) {
       /* non-fatal */
     }
-    const msg = mapDbMessageToLegacyMessage(data);
-    return res.json({ ok: true, message: msg || { text, from: "CLINIC", createdAt: now() } });
+    const leg =
+      legacyMessageFromInsertedRow(data, insertedTable) || { text, from: "CLINIC", createdAt: now() };
+    return res.json({ ok: true, message: data, legacyMessage: leg });
   } catch (e) {
     console.error("[POST /api/messages/:id/reply]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -38102,11 +38241,15 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
 
     const result = requests.map((r) => {
       const cid = r.clinic_id ? String(r.clinic_id) : '';
+      const photos = treatmentRequestRowPhotos(r);
+      const image_url = firstTreatmentRequestPhotoUrl(photos);
       return {
         id: r.id,
         clinic_id: r.clinic_id || null,
         clinic_name: cid ? clinicNameById[cid] ?? null : null,
         description: r.description,
+        photos,
+        image_url,
         budget: r.budget || null,
         preferred_treatment: r.preferred_treatment || null,
         status: r.status,
@@ -38132,6 +38275,112 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
     if (!tokenPatientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
 
     const body = req.body || {};
+    const clinicIdsMulti = Array.isArray(body.clinicIds)
+      ? body.clinicIds.map((x) => String(x || '').trim()).filter(Boolean)
+      : [];
+
+    // Mobil AI teklif akışı: çoklu klinik + zorunlu https fotoğraf + her kliniğe mesajda ek
+    if (clinicIdsMulti.length > 0) {
+      const resolvedMulti = await resolveMessagesPatientDbId(tokenPatientId);
+      if (!resolvedMulti) {
+        return res.status(404).json({ ok: false, error: 'patient_not_found' });
+      }
+      const messageMc = String(body.message || '').trim();
+      const imageMc = String(body.image || body.imageUrl || '').trim();
+      if (!imageMc || !/^https?:\/\//i.test(imageMc)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'photo_url_required',
+          message: 'Teklif talebi için geçerli bir fotoğraf adresi (https) zorunludur.',
+        });
+      }
+      const analysisMc = body.analysis;
+      let descriptionMc = messageMc;
+      const analysisBlockMc =
+        analysisMc === undefined || analysisMc === null
+          ? ''
+          : typeof analysisMc === 'string'
+            ? analysisMc
+            : JSON.stringify(analysisMc);
+      const trimmedAnalysisMc = analysisBlockMc.slice(0, 12000);
+      if (trimmedAnalysisMc) {
+        descriptionMc = messageMc
+          ? `${messageMc}\n\n--- AI analysis (summary) ---\n${trimmedAnalysisMc}`
+          : `Dental quote request (AI-assisted).\n\n--- AI analysis (summary) ---\n${trimmedAnalysisMc}`;
+      }
+      if (!descriptionMc) {
+        descriptionMc = 'I would like to receive a quote from your clinic.';
+      }
+      descriptionMc = `${descriptionMc}\n\n--- Photo ---\n${imageMc}`;
+      if (descriptionMc.length > 50000) descriptionMc = descriptionMc.slice(0, 50000);
+
+      const photosMc = [{ url: imageMc }];
+      const requestIdsMc = [];
+      const nowIsoMc = new Date().toISOString();
+      const chatTextMc =
+        messageMc ||
+        (trimmedAnalysisMc
+          ? 'Diş hekimliği teklif talebi — fotoğraf ve AI özeti eklendi.'
+          : 'Diş hekimliği teklif talebi — fotoğraf eklendi.');
+      const photoAttachMc = {
+        url: imageMc,
+        name: 'dental-quote.jpg',
+        fileType: 'image',
+        mimeType: 'image/jpeg',
+      };
+
+      for (const cidRaw of clinicIdsMulti) {
+        const cidMc = String(cidRaw || '').trim();
+        if (!UUID_RE.test(cidMc)) {
+          return res.status(400).json({ ok: false, error: 'invalid_clinic_id', message: cidMc });
+        }
+        const payloadMc = {
+          patient_id: resolvedMulti,
+          clinic_id: cidMc,
+          description: descriptionMc,
+          status: 'pending',
+          created_at: nowIsoMc,
+          updated_at: nowIsoMc,
+          photos: photosMc,
+          photo_urls: [imageMc],
+        };
+        const { data: insertedMc, error: insErrMc } = await insertIntoTableWithColumnPruning(
+          'treatment_requests',
+          payloadMc,
+          '*',
+        );
+        if (insErrMc) {
+          console.error('[TREATMENT-REQUESTS POST multi]', insErrMc.message || insErrMc);
+          return res.status(500).json({
+            ok: false,
+            error: 'insert_failed',
+            message: insErrMc.message || String(insErrMc),
+          });
+        }
+        const rowMc = insertedMc || {};
+        if (rowMc.id != null) requestIdsMc.push(String(rowMc.id));
+
+        const msgInsMc = await insertMessageToSupabase({
+          patientId: tokenPatientId,
+          sender: 'patient',
+          message: chatTextMc,
+          attachments: photoAttachMc,
+          type: 'image',
+          contextClinicId: cidMc,
+        });
+        if (msgInsMc.error) {
+          console.error('[TREATMENT-REQUESTS] Mesaj/foto eklenemedi', cidMc, msgInsMc.error);
+          return res.status(500).json({
+            ok: false,
+            error: 'message_attach_failed',
+            message: String(msgInsMc.error?.message || msgInsMc.error || 'Mesaj kaydı başarısız'),
+          });
+        }
+      }
+
+      return res.json({ ok: true, requestIds: requestIdsMc });
+    }
+
     const resolvedPatientId = await resolveMessagesPatientDbId(tokenPatientId);
     if (!resolvedPatientId) {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
@@ -42136,7 +42385,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v82');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v85');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
