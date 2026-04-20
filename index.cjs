@@ -39174,7 +39174,8 @@ async function loadOfferMessagingContext(offerId) {
 
 /**
  * Load every row in the offer thread. Scope ONLY by offer_id — never by sender_id / user id.
- * (Filtering by sender would hide the other party and break chat.)
+ * Equivalent to: SELECT * FROM offer_messages WHERE offer_id = $1 ORDER BY created_at ASC.
+ * No empty fallback: failures return { error } for HTTP 500 / db_error.
  */
 async function fetchOfferMessagesForOfferId(offerId) {
   // supabase-js v2: filters (.eq, .order) must chain after .select() / .insert() / etc. — not on .from() alone.
@@ -39185,19 +39186,18 @@ async function fetchOfferMessagesForOfferId(offerId) {
       .eq("offer_id", offerId)
       .order("created_at", { ascending: true });
 
-  let { data: rows, error } = await build(
-    "id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at"
-  );
+  let { data: rows, error } = await build("*");
   if (error && !isOfferMessagesTableUnavailableError(error)) {
-    const r2 = await build("*");
+    const r2 = await build(
+      "id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at"
+    );
     rows = r2.data;
     error = r2.error;
   }
-  if (error && isOfferMessagesTableUnavailableError(error)) {
-    return { rows: [], error: null, tableMissing: true };
+  if (error) {
+    return { rows: null, error };
   }
-  if (error) return { rows: null, error, tableMissing: false };
-  return { rows: rows || [], error: null, tableMissing: false };
+  return { rows: rows || [], error: null };
 }
 
 // POST /api/offer-messages/upload — must be registered before /api/offer-messages (POST body)
@@ -39340,11 +39340,7 @@ app.get("/api/offer-messages", async (req, res) => {
       created_at: m.created_at,
     }));
 
-    const payload = {
-      ok: true,
-      messages,
-      offer_messages_table_missing: Boolean(fm.tableMissing),
-    };
+    const payload = { ok: true, messages };
     console.log("[GET RAW SOURCE]", payload);
     return res.json(payload);
   } catch (e) {
