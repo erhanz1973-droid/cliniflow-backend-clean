@@ -39029,6 +39029,100 @@ async function mapPatientFilesPhotosByTreatmentRequestId(trRows) {
   return out;
 }
 
+const AI_SUMMARY_MARKER_CHAT = "\n\n--- AI analysis (summary) ---\n";
+
+function pushHumanPartsFromDentalJsonChat(parts, jsonStr) {
+  const j = String(jsonStr || "").trim();
+  if (!j.startsWith("{")) return "unparsed";
+  try {
+    const parsed = JSON.parse(j);
+    const summary = String(
+      parsed.summary || parsed.recommendation || parsed.overallNote || ""
+    ).trim();
+    if (summary) parts.push(summary);
+    const ins = Array.isArray(parsed.insights) ? parsed.insights : [];
+    for (const x of ins.slice(0, 5)) {
+      const line = String(x || "").trim();
+      if (line) parts.push(`• ${line}`);
+    }
+    if (summary || (ins && ins.length > 0)) return "added";
+    const bareOk =
+      parsed.ok === true &&
+      !summary &&
+      (!ins || ins.length === 0) &&
+      !parsed.recommendation &&
+      !parsed.overallNote;
+    return bareOk ? "bare_ok" : "unparsed";
+  } catch {
+    return "unparsed";
+  }
+}
+
+function unwrapApiMessageEnvelopeChat(s) {
+  let t = String(s || "").trim();
+  for (let depth = 0; depth < 2; depth++) {
+    if (!t.startsWith("{")) break;
+    try {
+      const env = JSON.parse(t);
+      if (
+        env &&
+        typeof env === "object" &&
+        env.ok === true &&
+        typeof env.message === "string"
+      ) {
+        const inner = String(env.message).trim();
+        if (inner) t = inner;
+        else break;
+      } else break;
+    } catch {
+      break;
+    }
+  }
+  return t;
+}
+
+/** cliniflow-app/lib/treatmentRequestDescription.ts ile aynı kurallar — sentetik sohbet metni. */
+function formatTreatmentRequestDescriptionForChat(raw) {
+  let full = unwrapApiMessageEnvelopeChat(String(raw || ""));
+  if (!full) return "";
+
+  let userPart = full;
+  let jsonChunk = "";
+
+  const aiIdx = full.indexOf(AI_SUMMARY_MARKER_CHAT);
+  if (aiIdx !== -1) {
+    userPart = full.slice(0, aiIdx).trim();
+    jsonChunk = full.slice(aiIdx + AI_SUMMARY_MARKER_CHAT.length);
+  }
+
+  const photoIdx = jsonChunk.search(/\n\n--- Photo ---\n/i);
+  if (photoIdx !== -1) {
+    jsonChunk = jsonChunk.slice(0, photoIdx).trim();
+  } else {
+    jsonChunk = jsonChunk.replace(/\n\n--- Photo ---\n[\s\S]*$/i, "").trim();
+  }
+  userPart = userPart.replace(/\n\n--- Photo ---\n[\s\S]*$/i, "").trim();
+
+  const parts = [];
+
+  if (userPart) {
+    const up = userPart.trim();
+    if (up.startsWith("{")) {
+      const r = pushHumanPartsFromDentalJsonChat(parts, up);
+      if (r === "unparsed") parts.push(userPart);
+    } else {
+      parts.push(userPart);
+    }
+  }
+
+  const j = jsonChunk.trim();
+  if (j.startsWith("{")) {
+    pushHumanPartsFromDentalJsonChat(parts, j);
+  }
+
+  return parts.join("\n\n").trim();
+}
+
 /**
  * Initial quote/request body lives on treatment_requests, not offer_messages.
  * Reconstruct thread seed so doctor "Open conversation" shows the same text + photos.
@@ -39043,7 +39137,8 @@ function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, f
   const baseMs = new Date(baseIso).getTime() || Date.now();
 
   const lines = [];
-  const desc = String(tr.description || "").trim();
+  const descRaw = String(tr.description || "").trim();
+  const desc = descRaw ? formatTreatmentRequestDescriptionForChat(descRaw) : "";
   if (desc) lines.push(desc);
   const b = tr.budget != null && String(tr.budget).trim() ? String(tr.budget).trim() : "";
   if (b) lines.push(`Budget: ${b}`);
