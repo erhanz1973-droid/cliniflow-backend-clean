@@ -39041,6 +39041,40 @@ function buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, f
   return out;
 }
 
+/**
+ * Doktor teklifi (treatment_offers) kartta görünür ama offer_messages'a yazılmaz.
+ * Hasta "Doktora mesaj" dediğinde aynı içeriğin sohbette de görünmesi için sentetik balon.
+ */
+function buildSyntheticDoctorInitialOfferMessage(req, offerRow, doctorDisplayName) {
+  if (!offerRow || !offerRow.id) return null;
+  const oid = String(offerRow.id).trim();
+  const docId = String(offerRow.doctor_id || "").trim();
+  const nm = String(doctorDisplayName || "Doctor").trim() || "Doctor";
+  const tt = offerRow.treatment_type != null ? String(offerRow.treatment_type).trim() : "";
+  const pr = offerRow.price_range != null ? String(offerRow.price_range).trim() : "";
+  const dur = offerRow.duration != null ? String(offerRow.duration).trim() : "";
+  const note = offerRow.note != null ? String(offerRow.note).trim() : "";
+  const lines = [];
+  if (tt) lines.push(`Treatment: ${tt}`);
+  if (pr) lines.push(`Price range: ${pr}`);
+  if (dur) lines.push(`Duration: ${dur}`);
+  if (note) lines.push(note);
+  const textBody = lines.join("\n\n").trim();
+  if (!textBody) return null;
+  const created = offerRow.created_at ? String(offerRow.created_at) : new Date().toISOString();
+  return {
+    id: `synthetic:offer:${oid}:initial`,
+    sender_id: docId || "doctor",
+    sender_role: "doctor",
+    sender_name: nm,
+    text: textBody,
+    attachment_url: null,
+    attachment_type: null,
+    created_at: created,
+    source: "treatment_offer",
+  };
+}
+
 function mergeOfferMessagesByTime(a, b) {
   const all = [...(a || []), ...(b || [])];
   all.sort((x, y) => {
@@ -39265,6 +39299,46 @@ app.get("/api/offer-messages", async (req, res) => {
     }
 
     const syn = buildSyntheticOfferMessagesFromTreatmentRequest(req, tr, patientName, patientFileFallbackUrls);
+
+    let offerDetail = null;
+    const offerSelects = [
+      "id, doctor_id, treatment_type, price_range, duration, note, created_at",
+      "id, doctor_id, treatment_type, price_range, duration, created_at",
+      "id, doctor_id, note, created_at",
+      "id, doctor_id, created_at",
+    ];
+    for (const sel of offerSelects) {
+      const { data: od, error: odErr } = await supabase
+        .from("treatment_offers")
+        .select(sel)
+        .eq("id", offerId)
+        .maybeSingle();
+      if (!odErr && od?.id) {
+        offerDetail = od;
+        break;
+      }
+    }
+
+    let doctorOfferName = "Doctor";
+    const dk = String(offerDetail?.doctor_id || "").trim();
+    if (dk) {
+      const q1 = await supabase.from("doctors").select("full_name, name").eq("id", dk).maybeSingle();
+      if (q1.data) {
+        doctorOfferName =
+          String(q1.data.full_name || q1.data.name || doctorOfferName).trim() || doctorOfferName;
+      } else {
+        const q2 = await supabase.from("doctors").select("full_name, name").eq("doctor_id", dk).maybeSingle();
+        if (q2.data) {
+          doctorOfferName =
+            String(q2.data.full_name || q2.data.name || doctorOfferName).trim() || doctorOfferName;
+        }
+      }
+    }
+
+    const synDocRow =
+      offerDetail && buildSyntheticDoctorInitialOfferMessage(req, offerDetail, doctorOfferName);
+    const synDocArr = synDocRow ? [synDocRow] : [];
+
     const real = (fm.rows || []).map((m) => ({
       id: String(m.id),
       sender_id: String(m.sender_id || ""),
@@ -39275,7 +39349,7 @@ app.get("/api/offer-messages", async (req, res) => {
       attachment_type: m.attachment_type,
       created_at: m.created_at,
     }));
-    const messages = mergeOfferMessagesByTime(syn, real);
+    const messages = mergeOfferMessagesByTime(mergeOfferMessagesByTime(syn, synDocArr), real);
     const payload = { ok: true, messages };
     if (fm.tableMissing) payload.offer_messages_table_missing = true;
     return res.json(payload);
