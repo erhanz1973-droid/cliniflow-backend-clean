@@ -38836,6 +38836,52 @@ async function countOfferMessagesByRoleForInbox(offerIds, senderRole) {
   return c2 || 0;
 }
 
+/**
+ * Per-offer unread counts for doctor dashboard: patient messages with read_at IS NULL.
+ * Returns { [offerId: string]: number } (only keys for requested ids; missing id ⇒ 0).
+ */
+async function countUnreadPatientMessagesByOfferIds(offerIds) {
+  const ids = [
+    ...new Set(
+      (offerIds || [])
+        .map((x) => String(x || "").trim())
+        .filter((id) => UUID_RE.test(id))
+    ),
+  ];
+  const tally = Object.fromEntries(ids.map((id) => [id, 0]));
+  if (!ids.length) return tally;
+
+  const chunkSize = 80;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const part = ids.slice(i, i + chunkSize);
+    let q = supabase
+      .from("offer_messages")
+      .select("offer_id")
+      .in("offer_id", part)
+      .eq("sender_role", "patient")
+      .is("read_at", null);
+    let { data, error } = await q;
+    if (error && isOfferMessagesReadAtColumnMissingError(error)) {
+      ({ data, error } = await supabase
+        .from("offer_messages")
+        .select("offer_id")
+        .in("offer_id", part)
+        .eq("sender_role", "patient"));
+    }
+    if (error) {
+      if (!isOfferMessagesTableUnavailableError(error)) {
+        console.warn("[countUnreadPatientMessagesByOfferIds]", error.message);
+      }
+      continue;
+    }
+    for (const row of data || []) {
+      const oid = String(row.offer_id || "").trim();
+      if (Object.prototype.hasOwnProperty.call(tally, oid)) tally[oid] += 1;
+    }
+  }
+  return tally;
+}
+
 /** Normalize treatment_requests photo storage (photo_urls vs photos jsonb, string JSON, {url} objects). */
 function extractTreatmentRequestPhotoList(tr) {
   if (!tr || typeof tr !== "object") return [];
@@ -39769,6 +39815,14 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       console.warn("[DOCTOR treatment-requests] patient_files fallback:", fbErr?.message);
     }
 
+    const mineOfferIds = [];
+    for (const r of list) {
+      const offs = offersByReq[r.id] || [];
+      const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
+      if (mine?.id) mineOfferIds.push(String(mine.id));
+    }
+    const unreadByOffer = await countUnreadPatientMessagesByOfferIds(mineOfferIds);
+
     const requests = list.map((r) => {
       const offs = offersByReq[r.id] || [];
       const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
@@ -39792,6 +39846,8 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
               created_at: mine.created_at || null,
             }
           : null;
+      const myOid = mine?.id ? String(mine.id) : null;
+      const unread_count = myOid ? unreadByOffer[myOid] || 0 : 0;
       return {
         id: String(r.id),
         patient_name: patientName,
@@ -39803,7 +39859,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         offer_count: offs.length,
         my_offer_id: mine ? String(mine.id) : null,
         my_offer: myOfferPayload,
-        unread_count: 0,
+        unread_count,
         is_assigned_to_me: Boolean(mine),
         photos: photosNormalized,
       };
