@@ -39174,30 +39174,18 @@ async function loadOfferMessagingContext(offerId) {
 
 /**
  * Load every row in the offer thread. Scope ONLY by offer_id — never by sender_id / user id.
- * Equivalent to: SELECT * FROM offer_messages WHERE offer_id = $1 ORDER BY created_at ASC.
- * No empty fallback: failures return { error } for HTTP 500 / db_error.
+ * SELECT * FROM offer_messages WHERE offer_id = $1 ORDER BY created_at ASC.
+ * Empty result => { rows: [] }; only a non-null PostgREST error means failure (never conflate with "no rows").
  */
 async function fetchOfferMessagesForOfferId(offerId) {
-  // supabase-js v2: filters (.eq, .order) must chain after .select() / .insert() / etc. — not on .from() alone.
-  const build = (cols) =>
-    supabase
-      .from("offer_messages")
-      .select(cols)
-      .eq("offer_id", offerId)
-      .order("created_at", { ascending: true });
+  const { data, error } = await supabase
+    .from("offer_messages")
+    .select("*")
+    .eq("offer_id", offerId)
+    .order("created_at", { ascending: true });
 
-  let { data: rows, error } = await build("*");
-  if (error && !isOfferMessagesTableUnavailableError(error)) {
-    const r2 = await build(
-      "id, sender_id, sender_role, sender_name, text, attachment_url, attachment_type, created_at"
-    );
-    rows = r2.data;
-    error = r2.error;
-  }
-  if (error) {
-    return { rows: null, error };
-  }
-  return { rows: rows || [], error: null };
+  if (error) return { rows: null, error };
+  return { rows: Array.isArray(data) ? data : [], error: null };
 }
 
 // POST /api/offer-messages/upload — must be registered before /api/offer-messages (POST body)
@@ -39304,7 +39292,7 @@ app.post("/api/offer-messages/:offerId/read", async (req, res) => {
 });
 
 // GET /api/offer-messages?offer_id=
-app.get("/api/offer-messages", async (req, res) => {
+app.get("/api/offer-messages", async (req, res, next) => {
   try {
     if (!isSupabaseEnabled()) {
       return res.status(503).json({ ok: false, error: "supabase_disabled" });
@@ -39322,10 +39310,10 @@ app.get("/api/offer-messages", async (req, res) => {
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
 
-    // Chat thread = offer_messages only (no synthetic treatment_request / treatment_offer rows).
+    // Chat thread = offer_messages rows only.
     const fm = await fetchOfferMessagesForOfferId(offerId);
     if (fm.error) {
-      console.error("[OFFER-MESSAGES GET]", fm.error.message || fm.error, fm.error.code || "");
+      console.error("[OFFER-MESSAGES GET] SQL/PostgREST error:", fm.error.message || fm.error, fm.error.code || "");
       return res.status(500).json({ ok: false, error: "db_error" });
     }
 
@@ -39344,8 +39332,7 @@ app.get("/api/offer-messages", async (req, res) => {
     console.log("[GET RAW SOURCE]", payload);
     return res.json(payload);
   } catch (e) {
-    console.error("[OFFER-MESSAGES GET]", e);
-    return res.status(500).json({ ok: false, error: "internal_error" });
+    next(e);
   }
 });
 
