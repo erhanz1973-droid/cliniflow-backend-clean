@@ -42475,16 +42475,14 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       return res.status(500).json({ ok: false, error: 'plans_fetch_failed' });
     }
 
-    if (!plans.length) {
-      return res.json({ ok: true, tasks: [] });
-    }
-
     const planIds = plans.map((p) => p.id).filter(Boolean);
     const encounterIds = [...new Set(plans.map((p) => p.encounter_id).filter(Boolean))];
 
     const readItemsFromTable = async (tableName) => {
+      if (!planIds.length) return [];
       const itemSelects = [
-        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, type, category, status, due_date, priority, high_priority, created_at, updated_at',
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, type, category, status, due_date, scheduled_at, appointment_date, date, priority, high_priority, created_at, updated_at',
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, due_date, scheduled_at, appointment_date, date, created_at, updated_at',
         'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, created_at, updated_at',
         'id, treatment_plan_id, status, created_at',
       ];
@@ -42516,23 +42514,25 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
     };
 
     let treatmentItems = [];
-    try {
-      const primary = await readItemsFromTable('treatment_items');
-      const fallback = await readItemsFromTable('treatment_plan_items');
-      // Aynı id iki tabloda kopyaysa yalnızca treatment_items kazanır (yanlış plan eşlemesi önlenir)
-      const byItemId = new Map();
-      for (const row of primary || []) {
-        const iid = String(row?.id || '').trim();
-        if (iid) byItemId.set(iid, row);
+    if (planIds.length > 0) {
+      try {
+        const primary = await readItemsFromTable('treatment_items');
+        const fallback = await readItemsFromTable('treatment_plan_items');
+        // Aynı id iki tabloda kopyaysa yalnızca treatment_items kazanır (yanlış plan eşlemesi önlenir)
+        const byItemId = new Map();
+        for (const row of primary || []) {
+          const iid = String(row?.id || '').trim();
+          if (iid) byItemId.set(iid, row);
+        }
+        for (const row of fallback || []) {
+          const iid = String(row?.id || '').trim();
+          if (iid && !byItemId.has(iid)) byItemId.set(iid, row);
+        }
+        treatmentItems = Array.from(byItemId.values());
+      } catch (err) {
+        console.error('[DOCTOR TASKS] items fetch failed:', err);
+        return res.status(500).json({ ok: false, error: 'items_fetch_failed' });
       }
-      for (const row of fallback || []) {
-        const iid = String(row?.id || '').trim();
-        if (iid && !byItemId.has(iid)) byItemId.set(iid, row);
-      }
-      treatmentItems = Array.from(byItemId.values());
-    } catch (err) {
-      console.error('[DOCTOR TASKS] items fetch failed:', err);
-      return res.status(500).json({ ok: false, error: 'items_fetch_failed' });
     }
 
     const encounterMap = new Map();
@@ -42598,7 +42598,19 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       if (p?.id) planMap.set(String(p.id), p);
     });
 
-    const tasks = (treatmentItems || [])
+    /** Randevuya bağlı plan satırlarında SCHEDULED / BOOKED vb. sık; görev listesinde PLANNED say. */
+    const normalizePlanItemStatusForTasks = (raw) => {
+      const u = String(raw || 'PLANNED').toUpperCase().replace(/-/g, '_');
+      if (u === 'ACTIVE' || u === 'IN_PROGRESS') return 'IN_PROGRESS';
+      if (
+        ['SCHEDULED', 'BOOKED', 'CONFIRMED', 'PENDING', 'TODO', 'WAITING', 'OPEN', 'NEW', 'DRAFT'].includes(u)
+      ) {
+        return 'PLANNED';
+      }
+      return u;
+    };
+
+    const tasksFromPlans = (treatmentItems || [])
       .map((item) => {
         const treatmentPlanId = String(item?.treatment_plan_id || '');
         if (!treatmentPlanId) return null;
@@ -42611,8 +42623,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
         const planPid = String(plan?.patient_id != null ? plan.patient_id : '').trim();
         // Tedavi planının hastası öncelikli (encounter yanlış/eski patient_id taşıyorsa yanlış isim önlenir)
         const patientId = planPid || encPid;
-        const statusRaw = String(item?.status || 'PLANNED').toUpperCase();
-        const status = statusRaw === 'ACTIVE' ? 'IN_PROGRESS' : statusRaw;
+        const status = normalizePlanItemStatusForTasks(item?.status);
 
         return {
           id: String(item?.id || ''),
@@ -42626,16 +42637,175 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           type: String(item?.type || 'PROCEDURE').toUpperCase(),
           procedure_name: String(item?.procedure_name || item?.procedure_code || 'Procedure'),
           procedure_category: String(item?.category || ''),
-          due_date: item?.due_date || item?.updated_at || item?.created_at || plan?.created_at || encounter?.created_at || null,
+          due_date:
+            item?.due_date ||
+            item?.scheduled_at ||
+            item?.appointment_date ||
+            item?.date ||
+            item?.updated_at ||
+            item?.created_at ||
+            plan?.created_at ||
+            encounter?.created_at ||
+            null,
           scheduled_by: 'DOCTOR',
           priority: String(item?.priority || 'MEDIUM').toUpperCase(),
           high_priority: item?.high_priority === true,
           status,
           created_at: item?.created_at || null,
+          source: 'treatment_plan_item',
         };
       })
       .filter((task) => !!task && !!task.id)
       .filter((task) => ['PLANNED', 'IN_PROGRESS'].includes(String(task.status || '').toUpperCase()));
+
+    // Doktor uygulamasında yeni eklenen işlemler çoğunlukla encounter_treatments'ta; tedavi planı satırı olmayabilir.
+    let encounterTreatmentRows = [];
+    if (doctorKeysUuidFk.length > 0) {
+      const etSelects = [
+        'id, encounter_id, tooth_number, procedure_type, status, scheduled_at, created_at, assigned_doctor_id, created_by_doctor_id',
+        'id, encounter_id, tooth_number, procedure_type, status, scheduled_at, created_at',
+      ];
+      for (const sel of etSelects) {
+        const byEtId = new Map();
+        let schemaBad = false;
+        for (const col of ['assigned_doctor_id', 'created_by_doctor_id']) {
+          const result = await timedDbQuery(
+            `[DOCTOR TASKS] encounter_treatments by ${col}`,
+            () =>
+              supabase
+                .from('encounter_treatments')
+                .select(sel)
+                .in(col, doctorKeysUuidFk)
+                .order('scheduled_at', { ascending: false, nullsFirst: false })
+                .order('created_at', { ascending: false })
+                .limit(8000)
+          );
+          if (result.error) {
+            const code = String(result.error.code || '');
+            if (['42703', 'PGRST204', 'PGRST205'].includes(code)) {
+              schemaBad = true;
+              break;
+            }
+            console.warn('[DOCTOR TASKS] encounter_treatments fetch:', result.error.message || result.error);
+            break;
+          }
+          (result.data || []).forEach((row) => {
+            const eid = String(row?.id || '').trim();
+            if (eid) byEtId.set(eid, row);
+          });
+        }
+        if (schemaBad) {
+          continue;
+        }
+        encounterTreatmentRows = Array.from(byEtId.values());
+        break;
+      }
+    }
+
+    const etEncounterIds = [
+      ...new Set(
+        encounterTreatmentRows
+          .map((r) => String(r?.encounter_id || '').trim())
+          .filter(Boolean)
+      ),
+    ];
+    const missingEncIds = etEncounterIds.filter((id) => !encounterMap.has(id));
+    if (missingEncIds.length) {
+      const encounterSelectsEt = [
+        'id, patient_id, created_at',
+        'id, patient_id',
+      ];
+      for (const selectClause of encounterSelectsEt) {
+        const { data, error } = await timedDbQuery(
+          `[DOCTOR TASKS] patient_encounters for ET (${missingEncIds.length})`,
+          () => supabase.from('patient_encounters').select(selectClause).in('id', missingEncIds)
+        );
+        if (!error) {
+          (data || []).forEach((row) => {
+            if (row?.id) encounterMap.set(String(row.id), row);
+          });
+          break;
+        }
+      }
+    }
+
+    const etPatientIdsNeedingLabels = new Set();
+    for (const et of encounterTreatmentRows) {
+      const enc = encounterMap.get(String(et?.encounter_id || ''));
+      const pid = String(enc?.patient_id || '').trim();
+      if (pid && !patientMap.has(pid)) etPatientIdsNeedingLabels.add(pid);
+    }
+    if (etPatientIdsNeedingLabels.size) {
+      const addRowsEt = (rows) => {
+        (rows || []).forEach((p) => {
+          const idA = String(p?.id || '');
+          const idB = String(p?.patient_id || '');
+          const label = String(p?.name || p?.full_name || p?.patient_id || p?.id || '').trim();
+          if (idA) patientMap.set(idA, label);
+          if (idB) patientMap.set(idB, label);
+        });
+      };
+      const ids = Array.from(etPatientIdsNeedingLabels).filter(Boolean);
+      for (let i = 0; i < ids.length; i += 80) {
+        const chunk = ids.slice(i, i + 80);
+        const r1 = await timedDbQuery(`[DOCTOR TASKS] patients (ET) by id (${chunk.length})`, () =>
+          supabase.from('patients').select('id, patient_id, full_name, name').in('id', chunk)
+        );
+        if (!r1.error) addRowsEt(r1.data);
+        const r2 = await timedDbQuery(`[DOCTOR TASKS] patients (ET) by patient_id (${chunk.length})`, () =>
+          supabase.from('patients').select('id, patient_id, full_name, name').in('patient_id', chunk)
+        );
+        if (!r2.error) addRowsEt(r2.data);
+      }
+    }
+
+    const tasksFromEt = encounterTreatmentRows
+      .map((et) => {
+        const st = String(et?.status || '').toLowerCase();
+        if (['completed', 'cancelled', 'canceled', 'done', 'skipped', 'aborted'].includes(st)) {
+          return null;
+        }
+        const taskStatus =
+          st === 'active' || st === 'in_progress' ? 'IN_PROGRESS' : 'PLANNED';
+        if (!['PLANNED', 'IN_PROGRESS'].includes(taskStatus)) {
+          return null;
+        }
+        const encounter = encounterMap.get(String(et?.encounter_id || '')) || null;
+        const patientId = String(encounter?.patient_id || '').trim();
+        const procLabel = String(et?.procedure_type || 'Procedure')
+          .replace(/_/g, ' ')
+          .trim() || 'Procedure';
+
+        return {
+          id: String(et?.id || ''),
+          patient_id: patientId,
+          patient: {
+            id: patientId,
+            name: patientMap.get(patientId) || patientId || 'Unknown Patient',
+          },
+          treatment_plan_id: '',
+          encounter_id: String(et?.encounter_id || ''),
+          tooth_number: et?.tooth_number != null && et?.tooth_number !== '' ? String(et.tooth_number) : '',
+          type: 'PROCEDURE',
+          procedure_name: procLabel,
+          procedure_category: '',
+          due_date: et?.scheduled_at || et?.created_at || null,
+          scheduled_by: 'DOCTOR',
+          priority: 'MEDIUM',
+          high_priority: false,
+          status: taskStatus,
+          created_at: et?.created_at || null,
+          source: 'encounter_treatment',
+        };
+      })
+      .filter((task) => task && task.id);
+
+    const taskSortKey = (t) => {
+      const raw = t?.due_date || t?.created_at || 0;
+      const n = new Date(raw).getTime();
+      return Number.isFinite(n) ? n : 0;
+    };
+    const tasks = [...tasksFromPlans, ...tasksFromEt].sort((a, b) => taskSortKey(b) - taskSortKey(a));
 
     return res.json({ ok: true, tasks });
   } catch (error) {
@@ -42759,6 +42929,53 @@ async function patchDoctorTaskStatusHandler(req, res) {
     }
     if (fallback.updated) {
       return res.json({ ok: true, task: fallback.data });
+    }
+
+    // encounter_treatments — görev listesi bu tablodan da gelir (tedavi planı satırı olmadan)
+    const doctorKeysRawEt = [...new Set([
+      String(req.doctorId || '').trim(),
+      String(req?.doctor?.id || '').trim(),
+      String(req?.doctor?.doctor_id || '').trim(),
+    ].filter(Boolean))];
+    const doctorKeysUuidFkEt = await doctorKeysForUuidFkInQuery(doctorKeysRawEt);
+
+    const etDbStatus =
+      nextStatus === 'done'
+        ? 'completed'
+        : nextStatus === 'in_progress'
+          ? 'active'
+          : 'planned';
+
+    const etRowRes = await supabase
+      .from('encounter_treatments')
+      .select('id, assigned_doctor_id, created_by_doctor_id')
+      .eq('id', taskId)
+      .maybeSingle();
+
+    if (!etRowRes.error && etRowRes.data?.id) {
+      const row = etRowRes.data;
+      const aid = String(row.assigned_doctor_id || '').trim();
+      const cid = String(row.created_by_doctor_id || '').trim();
+      const allowed = doctorKeysUuidFkEt.some((k) => k && (k === aid || k === cid));
+      if (!allowed) {
+        return res.status(403).json({ ok: false, error: 'forbidden' });
+      }
+      const etUp = await supabase
+        .from('encounter_treatments')
+        .update({ status: etDbStatus, updated_at: new Date().toISOString() })
+        .eq('id', taskId)
+        .select('id, status')
+        .maybeSingle();
+      if (!etUp.error && etUp.data) {
+        return res.json({ ok: true, task: etUp.data });
+      }
+      const etUpNoSel = await supabase
+        .from('encounter_treatments')
+        .update({ status: etDbStatus, updated_at: new Date().toISOString() })
+        .eq('id', taskId);
+      if (!etUpNoSel.error) {
+        return res.json({ ok: true, task: { id: taskId, status: etDbStatus } });
+      }
     }
 
     return res.status(404).json({ ok: false, error: 'task_not_found' });
