@@ -42600,7 +42600,8 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
 
     /** Randevuya bağlı plan satırlarında SCHEDULED / BOOKED vb. sık; görev listesinde PLANNED say. */
     const normalizePlanItemStatusForTasks = (raw) => {
-      const u = String(raw || 'PLANNED').toUpperCase().replace(/-/g, '_');
+      const u = String(raw || 'PLANNED').toUpperCase().replace(/-/g, '_').trim();
+      if (!u) return 'PLANNED';
       if (u === 'ACTIVE' || u === 'IN_PROGRESS') return 'IN_PROGRESS';
       if (
         ['SCHEDULED', 'BOOKED', 'CONFIRMED', 'PENDING', 'TODO', 'WAITING', 'OPEN', 'NEW', 'DRAFT'].includes(u)
