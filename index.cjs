@@ -31998,9 +31998,16 @@ function splitDoctorKeysUuidAndOther(keys) {
 async function resolveDoctorCodeKeysToUuids(others) {
   const arr = [...new Set((others || []).map((k) => String(k || "").trim()).filter(Boolean))];
   if (!arr.length) return [];
+  const variants = new Set();
+  for (const k of arr) {
+    variants.add(k);
+    variants.add(k.toUpperCase());
+    variants.add(k.toLowerCase());
+  }
+  const expanded = [...variants];
   const out = [];
-  for (let i = 0; i < arr.length; i += 80) {
-    const chunk = arr.slice(i, i + 80);
+  for (let i = 0; i < expanded.length; i += 80) {
+    const chunk = expanded.slice(i, i + 80);
     const { data, error } = await supabase.from("doctors").select("id").in("doctor_id", chunk);
     if (error) {
       const c = String(error.code || "");
@@ -32438,6 +32445,90 @@ async function collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysR
 }
 
 /**
+ * Dashboard "bugün" takvimi: Railway = UTC; CLINIFLOW_CALENDAR_TZ=Asia/Tbilisi gibi IANA ile bölgesel gün.
+ * (Aksi halde GET+4’te gece yarısı sınırında UTC günü ile klinik günü ayrışır.)
+ */
+function getCliniflowDashboardCalendarTZ() {
+  const t = process.env.CLINIFLOW_CALENDAR_TZ || process.env.CLINIFLOW_DASHBOARD_TZ;
+  return t && String(t).trim() ? String(t).trim() : "UTC";
+}
+
+function ymdInTimeZone(dateObj, timeZone) {
+  const tz = timeZone || "UTC";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dateObj);
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  const d = parts.find((p) => p.type === "day")?.value;
+  if (!y || !m || !d) {
+    const x = dateObj instanceof Date ? dateObj : new Date(dateObj);
+    return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`;
+  }
+  return `${y}-${m}-${d}`;
+}
+
+function addCalendarDaysYmd(ymd, deltaDays) {
+  const [y, m, d] = ymd.split("-").map((x) => parseInt(x, 10, 10));
+  const dt = new Date(Date.UTC(y, m - 1, d + deltaDays));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** [startIso, endIso) — dayYmd’nin timeZone içindeki takvim günü (yarın başlangıcına kadar). */
+function zonedCivilDayRangeIso(dayYmd, timeZone) {
+  const tz = timeZone || "UTC";
+  if (tz === "UTC") {
+    const dayStartIso = `${dayYmd}T00:00:00.000Z`;
+    const end = new Date(`${dayYmd}T00:00:00.000Z`);
+    end.setUTCDate(end.getUTCDate() + 1);
+    return { startIso: dayStartIso, endIso: end.toISOString() };
+  }
+  const fmt = (ms) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+
+  function firstInstantOfZonedDay(labelYmd) {
+    const [y, m0, d0] = labelYmd.split("-").map((x) => parseInt(x, 10, 10));
+    let lo = Date.UTC(y, m0 - 1, d0 - 1, 0, 0, 0);
+    let hi = Date.UTC(y, m0 - 1, d0 + 2, 0, 0, 0);
+    while (lo < hi - 1000) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (fmt(mid) < labelYmd) lo = mid;
+      else hi = mid;
+    }
+    let t = hi;
+    const cap = Date.UTC(y, m0 - 1, d0 + 3, 0, 0, 0);
+    while (t < cap && fmt(t) !== labelYmd) t += 60000;
+    return t;
+  }
+
+  const startMs = firstInstantOfZonedDay(dayYmd);
+  const endMs = firstInstantOfZonedDay(addCalendarDaysYmd(dayYmd, 1));
+  return { startIso: new Date(startMs).toISOString(), endIso: new Date(endMs).toISOString() };
+}
+
+function zonedCivilDayRangeMs(dayYmd, timeZone) {
+  const { startIso, endIso } = zonedCivilDayRangeIso(dayYmd, timeZone);
+  return { startMs: Date.parse(startIso), endMs: Date.parse(endIso) };
+}
+
+function formatTimeHmInZone(ms, timeZone) {
+  const tz = timeZone || "UTC";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ms));
+  const hh = parts.find((p) => p.type === "hour")?.value;
+  const mm = parts.find((p) => p.type === "minute")?.value;
+  if (hh != null && mm != null) return `${hh}:${mm}`;
+  return new Date(ms).toISOString().slice(11, 16);
+}
+
+/**
  * GET /api/admin/appointments ile uyum: date / appointment_date eşleşmesi, start_at UTC penceresi,
  * clinic_id + hasta listesi (satırda clinic_id boş olsa bile).
  * Tek sorguda boş dönse bile diğer stratejileri dener; sonuçları id ile birleştirir.
@@ -32445,10 +32536,8 @@ async function collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysR
 async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw) {
   const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
   const clinicCode = clinicCodeRaw ? String(clinicCodeRaw).trim() : "";
-  const dayStartIso = `${dayYmd}T00:00:00.000Z`;
-  const dayEndAnchor = new Date(dayStartIso);
-  dayEndAnchor.setUTCDate(dayEndAnchor.getUTCDate() + 1);
-  const dayEndIso = dayEndAnchor.toISOString();
+  const calTz = getCliniflowDashboardCalendarTZ();
+  const { startIso: dayStartIso, endIso: dayEndIso } = zonedCivilDayRangeIso(dayYmd, calTz);
 
   const seen = new Set();
   const merged = [];
@@ -32518,6 +32607,23 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
     });
   }
 
+  /** date / appointment_date sütunu timestamptz ise eq(YYYY-MM-DD) kaçırır; aralık dene */
+  const selRange =
+    "id, patient_id, date, appointment_date, start_at, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
+  for (const a of attempts) {
+    await tryQuery(`${a.dateCol}+cid+range`, () => {
+      let q = supabase
+        .from("appointments")
+        .select(selRange)
+        .gte(a.dateCol, dayStartIso)
+        .lt(a.dateCol, dayEndIso)
+        .order(a.timeOrder, { ascending: true })
+        .limit(80);
+      if (cid) q = q.eq("clinic_id", cid);
+      return q;
+    });
+  }
+
   if (clinicCode) {
     for (const a of attempts) {
       await tryQuery(`${a.dateCol}+clinic_code`, () =>
@@ -32526,6 +32632,18 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
           .select(a.sel)
           .eq("clinic_code", clinicCode)
           .eq(a.dateCol, dayYmd)
+          .order(a.timeOrder, { ascending: true })
+          .limit(80)
+      );
+    }
+    for (const a of attempts) {
+      await tryQuery(`${a.dateCol}+clinic_code+range`, () =>
+        supabase
+          .from("appointments")
+          .select(selRange)
+          .eq("clinic_code", clinicCode)
+          .gte(a.dateCol, dayStartIso)
+          .lt(a.dateCol, dayEndIso)
           .order(a.timeOrder, { ascending: true })
           .limit(80)
       );
@@ -32592,6 +32710,18 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
           .limit(80)
       );
     }
+    for (const a of attempts) {
+      await tryQuery(`${a.dateCol}+patients+range`, () =>
+        supabase
+          .from("appointments")
+          .select(selRange)
+          .in("patient_id", pidSlice)
+          .gte(a.dateCol, dayStartIso)
+          .lt(a.dateCol, dayEndIso)
+          .order(a.timeOrder, { ascending: true })
+          .limit(80)
+      );
+    }
     await tryQuery("start_at+patients", () =>
       supabase
         .from("appointments")
@@ -32625,17 +32755,9 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
   const cid = clinicId ? String(clinicId).trim() : "";
   if (!cid) return out;
 
-  const localYmd = (d) => {
-    const x = d instanceof Date ? d : new Date(d);
-    const y = x.getFullYear();
-    const m = String(x.getMonth() + 1).padStart(2, "0");
-    const day = String(x.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-  const todayStr = localYmd(new Date());
-  const tomorrowD = new Date();
-  tomorrowD.setDate(tomorrowD.getDate() + 1);
-  const tomorrowStr = localYmd(tomorrowD);
+  const calTz = getCliniflowDashboardCalendarTZ();
+  const todayStr = ymdInTimeZone(new Date(), calTz);
+  const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
 
   async function fetchAppointmentsForDay(dayYmd) {
     return fetchAppointmentsForDayMerged(dayYmd, cid);
@@ -32673,10 +32795,7 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
       if (encRows.length === 0) return [];
       const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
       const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
-      const dayStart = new Date(`${dayYmd}T00:00:00`);
-      const dayEnd = new Date(`${dayYmd}T23:59:59.999`);
-      const startMs = dayStart.getTime();
-      const endMs = dayEnd.getTime();
+      const { startMs, endMs } = zonedCivilDayRangeMs(dayYmd, getCliniflowDashboardCalendarTZ());
       const slotOut = [];
       for (let i = 0; i < encIds.length; i += 80) {
         const chunk = encIds.slice(i, i + 80);
@@ -32688,14 +32807,13 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
         if (etErr) continue;
         for (const row of etRows || []) {
           const t = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
-          if (!Number.isFinite(t) || t < startMs || t > endMs) continue;
+          if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
           const st = String(row.status || "").toLowerCase();
           if (st === "cancelled" || st === "canceled") continue;
           const eid = String(row.encounter_id || "");
           const pid = encToPatient.get(eid);
           if (!pid) continue;
-          const d = new Date(t);
-          const timeStr = d.toTimeString().slice(0, 5);
+          const timeStr = formatTimeHmInZone(t, getCliniflowDashboardCalendarTZ());
           const proc = String(row.procedure_type || "TREATMENT").trim();
           const tooth = row.tooth_number != null ? ` · 🦷 ${row.tooth_number}` : "";
           slotOut.push({
@@ -33890,18 +34008,24 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
       }
     }
 
-    // Bugün / yarın — yerel takvim (toISOString UTC kayması yüzünden yanlış güne düşmesin)
-    const localYmd = (d) => {
-      const x = d instanceof Date ? d : new Date(d);
-      const y = x.getFullYear();
-      const m = String(x.getMonth() + 1).padStart(2, "0");
-      const day = String(x.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    };
-    const todayStr = localYmd(new Date());
-    const tomorrowD = new Date();
-    tomorrowD.setDate(tomorrowD.getDate() + 1);
-    const tomorrowStr = localYmd(tomorrowD);
+    // Bugün / yarın — CLINIFLOW_CALENDAR_TZ (varsayılan UTC); Gürcistan vb. için Railway’de Asia/Tbilisi
+    const calendarTz = getCliniflowDashboardCalendarTZ();
+    const todayStr = ymdInTimeZone(new Date(), calendarTz);
+    const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
+    if (process.env.CLINIFLOW_DEBUG_DASHBOARD_CALENDAR === "1") {
+      const { startIso, endIso } = zonedCivilDayRangeIso(todayStr, calendarTz);
+      console.log(
+        "[DOCTOR DASHBOARD] calendarTZ:",
+        calendarTz,
+        "todayYmd:",
+        todayStr,
+        "range:",
+        startIso,
+        endIso,
+        "doctorId:",
+        doctorId
+      );
+    }
 
     /** appointments: admin takvimiyle aynı kaynaklar (date / appointment_date / start_at / clinic hastaları) */
     async function fetchAppointmentsForDay(dayYmd) {
@@ -33954,10 +34078,7 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
         if (encRows.length === 0) return [];
         const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
         const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
-        const dayStart = new Date(`${dayYmd}T00:00:00`);
-        const dayEnd = new Date(`${dayYmd}T23:59:59.999`);
-        const startMs = dayStart.getTime();
-        const endMs = dayEnd.getTime();
+        const { startMs, endMs } = zonedCivilDayRangeMs(dayYmd, getCliniflowDashboardCalendarTZ());
         const out = [];
         for (let i = 0; i < encIds.length; i += 80) {
           const chunk = encIds.slice(i, i + 80);
@@ -33969,14 +34090,13 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
           if (etErr) continue;
           for (const row of etRows || []) {
             const t = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
-            if (!Number.isFinite(t) || t < startMs || t > endMs) continue;
+            if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
             const st = String(row.status || "").toLowerCase();
             if (st === "cancelled" || st === "canceled") continue;
             const eid = String(row.encounter_id || "");
             const pid = encToPatient.get(eid);
             if (!pid) continue;
-            const d = new Date(t);
-            const timeStr = d.toTimeString().slice(0, 5);
+            const timeStr = formatTimeHmInZone(t, getCliniflowDashboardCalendarTZ());
             const proc = String(row.procedure_type || "TREATMENT").trim();
             const tooth = row.tooth_number != null ? ` · 🦷 ${row.tooth_number}` : "";
             out.push({
@@ -34068,10 +34188,7 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
         if (planById.size === 0) return [];
 
         const planIds = [...planById.keys()];
-        const dayStart = new Date(`${dayYmd}T00:00:00`);
-        const dayEnd = new Date(`${dayYmd}T23:59:59.999`);
-        const startMs = dayStart.getTime();
-        const endMs = dayEnd.getTime();
+        const { startMs, endMs } = zonedCivilDayRangeMs(dayYmd, getCliniflowDashboardCalendarTZ());
         const out = [];
 
         const trySelects = [
@@ -34100,7 +34217,7 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
             }
             for (const row of rows || []) {
               const t = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
-              if (!Number.isFinite(t) || t < startMs || t > endMs) continue;
+              if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
               const st = String(row.status || "").toLowerCase();
               if (st === "cancelled" || st === "canceled") continue;
               const planId = String(row.treatment_plan_id || "").trim();
@@ -34109,8 +34226,7 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
               const eid = String(plan.encounter_id || "").trim();
               let pid = (eid && encToPatient.get(eid)) || String(plan.patient_id || "").trim();
               if (!pid) continue;
-              const d = new Date(t);
-              const timeStr = d.toTimeString().slice(0, 5);
+              const timeStr = formatTimeHmInZone(t, getCliniflowDashboardCalendarTZ());
               const proc = String(row.procedure_name || row.procedure_code || "TREATMENT").trim();
               const toothRaw = row.tooth_number != null ? row.tooth_number : row.tooth_fdi_code;
               const tooth =
