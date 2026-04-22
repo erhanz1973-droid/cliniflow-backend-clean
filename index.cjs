@@ -32514,6 +32514,14 @@ function zonedCivilDayRangeMs(dayYmd, timeZone) {
   return { startMs: Date.parse(startIso), endMs: Date.parse(endIso) };
 }
 
+/** /api/admin/appointments ile aynı: YYYY-MM-DD etiketi → start_at için [00:00Z, +1 gün) */
+function adminUtcDayRangeIsoForYmd(dayYmd) {
+  const dayStartIso = `${dayYmd}T00:00:00.000Z`;
+  const end = new Date(`${dayYmd}T00:00:00.000Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { startIso: dayStartIso, endIso: end.toISOString() };
+}
+
 function formatTimeHmInZone(ms, timeZone) {
   const tz = timeZone || "UTC";
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -32529,29 +32537,35 @@ function formatTimeHmInZone(ms, timeZone) {
 }
 
 /**
- * GET /api/admin/appointments ile uyum: date / appointment_date eşleşmesi, start_at UTC penceresi,
- * clinic_id + hasta listesi (satırda clinic_id boş olsa bile).
- * Tek sorguda boş dönse bile diğer stratejileri dener; sonuçları id ile birleştirir.
+ * GET /api/admin/appointments ile uyum: appointments + appointment_requests,
+ * date / appointment_date, start_at (bölgesel gün + admin’in UTC günü birleşik),
+ * clinic_id + hasta listesi.
  */
 async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw) {
   const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
   const clinicCode = clinicCodeRaw ? String(clinicCodeRaw).trim() : "";
   const calTz = getCliniflowDashboardCalendarTZ();
-  const { startIso: dayStartIso, endIso: dayEndIso } = zonedCivilDayRangeIso(dayYmd, calTz);
+  const zonedR = zonedCivilDayRangeIso(dayYmd, calTz);
+  const utcAdminR = adminUtcDayRangeIsoForYmd(dayYmd);
+  const tsRanges = [zonedR];
+  if (utcAdminR.startIso !== zonedR.startIso || utcAdminR.endIso !== zonedR.endIso) {
+    tsRanges.push(utcAdminR);
+  }
 
   const seen = new Set();
   const merged = [];
-  const pushRows = (rows) => {
+  const pushRows = (rows, tableName) => {
     for (const r of rows || []) {
       const id = String(r?.id ?? "").trim();
       if (!id) continue;
-      if (seen.has(id)) continue;
-      seen.add(id);
+      const k = `${tableName}:${id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
       merged.push(r);
     }
   };
 
-  const tryQuery = async (label, fn) => {
+  const tryQuery = async (label, tableName, fn) => {
     try {
       const { data, error } = await fn();
       const code = String(error?.code || "");
@@ -32560,7 +32574,7 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
         return;
       }
       if (error) return;
-      pushRows(Array.isArray(data) ? data : []);
+      pushRows(Array.isArray(data) ? data : [], tableName);
     } catch (e) {
       console.warn("[APPOINTMENTS DAY MERGED]", label, e?.message || e);
     }
@@ -32599,139 +32613,147 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
     },
   ];
 
-  for (const a of attempts) {
-    await tryQuery(`${a.dateCol}+cid`, () => {
-      let q = supabase.from("appointments").select(a.sel).eq(a.dateCol, dayYmd).order(a.timeOrder, { ascending: true }).limit(80);
-      if (cid) q = q.eq("clinic_id", cid);
-      return q;
-    });
-  }
-
-  /** date / appointment_date sütunu timestamptz ise eq(YYYY-MM-DD) kaçırır; aralık dene */
   const selRange =
     "id, patient_id, date, appointment_date, start_at, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
-  for (const a of attempts) {
-    await tryQuery(`${a.dateCol}+cid+range`, () => {
-      let q = supabase
-        .from("appointments")
-        .select(selRange)
-        .gte(a.dateCol, dayStartIso)
-        .lt(a.dateCol, dayEndIso)
-        .order(a.timeOrder, { ascending: true })
-        .limit(80);
-      if (cid) q = q.eq("clinic_id", cid);
-      return q;
-    });
-  }
-
-  if (clinicCode) {
-    for (const a of attempts) {
-      await tryQuery(`${a.dateCol}+clinic_code`, () =>
-        supabase
-          .from("appointments")
-          .select(a.sel)
-          .eq("clinic_code", clinicCode)
-          .eq(a.dateCol, dayYmd)
-          .order(a.timeOrder, { ascending: true })
-          .limit(80)
-      );
-    }
-    for (const a of attempts) {
-      await tryQuery(`${a.dateCol}+clinic_code+range`, () =>
-        supabase
-          .from("appointments")
-          .select(selRange)
-          .eq("clinic_code", clinicCode)
-          .gte(a.dateCol, dayStartIso)
-          .lt(a.dateCol, dayEndIso)
-          .order(a.timeOrder, { ascending: true })
-          .limit(80)
-      );
-    }
-  }
-
   const selStart =
     "id, patient_id, start_at, date, time, appointment_date, appointment_time, status, chair_number, notes, doctor_id, procedure";
-  if (cid) {
-    await tryQuery("start_at+cid", () =>
-      supabase
-        .from("appointments")
-        .select(selStart)
-        .eq("clinic_id", cid)
-        .gte("start_at", dayStartIso)
-        .lt("start_at", dayEndIso)
-        .order("start_at", { ascending: true })
-        .limit(80)
-    );
-    await tryQuery("startAt+cid", () =>
-      supabase
-        .from("appointments")
-        .select(selStart.replace("start_at", "startAt"))
-        .eq("clinic_id", cid)
-        .gte("startAt", dayStartIso)
-        .lt("startAt", dayEndIso)
-        .order("startAt", { ascending: true })
-        .limit(80)
-    );
-  } else {
-    await tryQuery("start_at", () =>
-      supabase
-        .from("appointments")
-        .select(selStart)
-        .gte("start_at", dayStartIso)
-        .lt("start_at", dayEndIso)
-        .order("start_at", { ascending: true })
-        .limit(80)
-    );
-  }
 
-  if (clinicCode) {
-    await tryQuery("start_at+clinic_code", () =>
-      supabase
-        .from("appointments")
-        .select(selStart)
-        .eq("clinic_code", clinicCode)
-        .gte("start_at", dayStartIso)
-        .lt("start_at", dayEndIso)
-        .order("start_at", { ascending: true })
-        .limit(80)
-    );
-  }
+  for (const tableName of ["appointments", "appointment_requests"]) {
+    for (const a of attempts) {
+      await tryQuery(`${tableName}:${a.dateCol}+cid`, tableName, () => {
+        let q = supabase.from(tableName).select(a.sel).eq(a.dateCol, dayYmd).order(a.timeOrder, { ascending: true }).limit(80);
+        if (cid) q = q.eq("clinic_id", cid);
+        return q;
+      });
+    }
 
-  if (pidSlice.length) {
-    for (const a of attempts) {
-      await tryQuery(`${a.dateCol}+patients`, () =>
-        supabase
-          .from("appointments")
-          .select(a.sel)
-          .in("patient_id", pidSlice)
-          .eq(a.dateCol, dayYmd)
-          .order(a.timeOrder, { ascending: true })
-          .limit(80)
-      );
+    for (const dr of tsRanges) {
+      for (const a of attempts) {
+        await tryQuery(`${tableName}:${a.dateCol}+cid+range`, tableName, () => {
+          let q = supabase
+            .from(tableName)
+            .select(selRange)
+            .gte(a.dateCol, dr.startIso)
+            .lt(a.dateCol, dr.endIso)
+            .order(a.timeOrder, { ascending: true })
+            .limit(80);
+          if (cid) q = q.eq("clinic_id", cid);
+          return q;
+        });
+      }
     }
-    for (const a of attempts) {
-      await tryQuery(`${a.dateCol}+patients+range`, () =>
-        supabase
-          .from("appointments")
-          .select(selRange)
-          .in("patient_id", pidSlice)
-          .gte(a.dateCol, dayStartIso)
-          .lt(a.dateCol, dayEndIso)
-          .order(a.timeOrder, { ascending: true })
-          .limit(80)
-      );
+
+    if (clinicCode) {
+      for (const a of attempts) {
+        await tryQuery(`${tableName}:${a.dateCol}+clinic_code`, tableName, () =>
+          supabase
+            .from(tableName)
+            .select(a.sel)
+            .eq("clinic_code", clinicCode)
+            .eq(a.dateCol, dayYmd)
+            .order(a.timeOrder, { ascending: true })
+            .limit(80)
+        );
+      }
+      for (const dr of tsRanges) {
+        for (const a of attempts) {
+          await tryQuery(`${tableName}:${a.dateCol}+clinic_code+range`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(selRange)
+              .eq("clinic_code", clinicCode)
+              .gte(a.dateCol, dr.startIso)
+              .lt(a.dateCol, dr.endIso)
+              .order(a.timeOrder, { ascending: true })
+              .limit(80)
+          );
+        }
+      }
     }
-    await tryQuery("start_at+patients", () =>
-      supabase
-        .from("appointments")
-        .select(selStart)
-        .in("patient_id", pidSlice)
-        .gte("start_at", dayStartIso)
-        .lt("start_at", dayEndIso)
-        .order("start_at", { ascending: true })
-        .limit(80)
-    );
+
+    for (const dr of tsRanges) {
+      if (cid) {
+        await tryQuery(`${tableName}:start_at+cid`, tableName, () =>
+          supabase
+            .from(tableName)
+            .select(selStart)
+            .eq("clinic_id", cid)
+            .gte("start_at", dr.startIso)
+            .lt("start_at", dr.endIso)
+            .order("start_at", { ascending: true })
+            .limit(80)
+        );
+        await tryQuery(`${tableName}:startAt+cid`, tableName, () =>
+          supabase
+            .from(tableName)
+            .select(selStart.replace("start_at", "startAt"))
+            .eq("clinic_id", cid)
+            .gte("startAt", dr.startIso)
+            .lt("startAt", dr.endIso)
+            .order("startAt", { ascending: true })
+            .limit(80)
+        );
+      } else {
+        await tryQuery(`${tableName}:start_at`, tableName, () =>
+          supabase
+            .from(tableName)
+            .select(selStart)
+            .gte("start_at", dr.startIso)
+            .lt("start_at", dr.endIso)
+            .order("start_at", { ascending: true })
+            .limit(80)
+        );
+      }
+
+      if (clinicCode) {
+        await tryQuery(`${tableName}:start_at+clinic_code`, tableName, () =>
+          supabase
+            .from(tableName)
+            .select(selStart)
+            .eq("clinic_code", clinicCode)
+            .gte("start_at", dr.startIso)
+            .lt("start_at", dr.endIso)
+            .order("start_at", { ascending: true })
+            .limit(80)
+        );
+      }
+
+      if (pidSlice.length) {
+        for (const a of attempts) {
+          await tryQuery(`${tableName}:${a.dateCol}+patients`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(a.sel)
+              .in("patient_id", pidSlice)
+              .eq(a.dateCol, dayYmd)
+              .order(a.timeOrder, { ascending: true })
+              .limit(80)
+          );
+        }
+        for (const a of attempts) {
+          await tryQuery(`${tableName}:${a.dateCol}+patients+range`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(selRange)
+              .in("patient_id", pidSlice)
+              .gte(a.dateCol, dr.startIso)
+              .lt(a.dateCol, dr.endIso)
+              .order(a.timeOrder, { ascending: true })
+              .limit(80)
+          );
+        }
+        await tryQuery(`${tableName}:start_at+patients`, tableName, () =>
+          supabase
+            .from(tableName)
+            .select(selStart)
+            .in("patient_id", pidSlice)
+            .gte("start_at", dr.startIso)
+            .lt("start_at", dr.endIso)
+            .order("start_at", { ascending: true })
+            .limit(80)
+        );
+      }
+    }
   }
 
   merged.sort((a, b) => {
