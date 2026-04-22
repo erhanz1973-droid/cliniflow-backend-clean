@@ -32539,22 +32539,19 @@ function formatTimeHmInZone(ms, timeZone) {
 }
 
 /**
- * Doctor dashboard — randevu kaynağı: treatment_plans + patient_encounters (appointments tablosu yok).
- * Gün sınırı: encounters zamanı Asia/Tbilisi yerel tarihine göre (DATE(ts AT TIME ZONE 'Asia/Tbilisi') = gün).
+ * patient_encounters için yalnızca gerçek randevu/ziyaret zamanı (created_at / updated_at yok).
+ * Öncelik: scheduled_at → encounter_date → visit_date. Geçerli yoksa NaN ve encounter id ile uyarı.
  */
 function encounterScheduleInstantMs(enc) {
   if (!enc || typeof enc !== "object") return NaN;
-  const cands = [
-    enc.scheduled_at,
-    enc.encounter_date,
-    enc.visit_date,
-    enc.created_at,
-    enc.updated_at,
-  ];
+  const id = String(enc?.id ?? "").trim();
+  const cands = [enc.scheduled_at, enc.encounter_date, enc.visit_date];
   for (const c of cands) {
-    const t = c != null ? Date.parse(String(c)) : NaN;
+    if (c == null || String(c).trim() === "") continue;
+    const t = Date.parse(String(c));
     if (Number.isFinite(t)) return t;
   }
+  if (id) console.warn("No schedule date for encounter:", id);
   return NaN;
 }
 
