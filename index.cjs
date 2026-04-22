@@ -32558,50 +32558,144 @@ function encounterScheduleInstantMs(enc) {
   return NaN;
 }
 
-async function fetchDoctorDashboardTreatmentPlansForDay(supabaseClient, dayYmd, doctorKeysUuidFk, clinicIdRaw) {
+/** treatment_plans üzerindeki zaman alanları (encounter tarihi boş / eski olabilir) */
+function planScheduleInstantMs(plan) {
+  if (!plan || typeof plan !== "object") return NaN;
+  const cands = [
+    plan.scheduled_at,
+    plan.scheduledAt,
+    plan.scheduled_for,
+    plan.scheduledFor,
+    plan.scheduled_date,
+    plan.scheduledDate,
+    plan.due_date,
+    plan.dueDate,
+    plan.appointment_at,
+    plan.appointmentAt,
+  ];
+  for (const c of cands) {
+    const t = c != null ? Date.parse(String(c)) : NaN;
+    if (Number.isFinite(t)) return t;
+  }
+  return NaN;
+}
+
+/**
+ * encounter.clinic_id doluysa doktor kliniği ile eşleşmeli; NULL ise (çoğu ortam) plan zaten hekime bağlı — dahil et.
+ */
+function encounterPassesClinicForDashboard(enc, clinicIdRaw) {
+  const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
+  if (!cid) return true;
+  const eCl = String(enc?.clinic_id ?? "").trim();
+  if (!eCl) return true;
+  return eCl === cid;
+}
+
+function resolveDashboardPlanDayInstantMs(plan, enc, dayYmd, startMs, endMs) {
+  const encMs = encounterScheduleInstantMs(enc);
+  if (Number.isFinite(encMs) && encMs >= startMs && encMs < endMs) return encMs;
+  const planMs = planScheduleInstantMs(plan);
+  if (Number.isFinite(planMs) && planMs >= startMs && planMs < endMs) return planMs;
+  const ad = String(plan?.appointment_date ?? plan?.appointmentDate ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ad) && ad === dayYmd) return startMs + 10 * 3600 * 1000;
+  return NaN;
+}
+
+async function fetchDoctorDashboardTreatmentPlansForDay(
+  supabaseClient,
+  dayYmd,
+  doctorKeysUuidFk,
+  clinicIdRaw,
+  doctorKeysRawForTeam
+) {
   const planDayTz = "Asia/Tbilisi";
   const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
   const docKeys = (doctorKeysUuidFk || []).map((x) => String(x || "").trim()).filter(Boolean);
-  if (!cid || docKeys.length === 0) return [];
+  if (docKeys.length === 0) return [];
   const { startMs, endMs } = zonedCivilDayRangeMs(dayYmd, planDayTz);
 
+  const planById = new Map();
+  const mergePlans = (rows) => {
+    for (const p of rows || []) {
+      const id = String(p?.id || "").trim();
+      if (id) planById.set(id, p);
+    }
+  };
+
   const planSelectAttempts = [
-    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id",
-    "id, encounter_id, patient_id, status, name, notes, assigned_doctor_id",
-    "id, encounter_id, patient_id, status, assigned_doctor_id",
-    "id, encounter_id, patient_id, assigned_doctor_id",
+    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id, created_by_doctor_id, scheduled_at, due_date, appointment_date, appointment_at",
+    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id, created_by_doctor_id, scheduled_at, due_date",
+    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id, created_by_doctor_id",
+    "id, encounter_id, patient_id, status, name, notes, assigned_doctor_id, created_by_doctor_id",
+    "id, encounter_id, patient_id, status, assigned_doctor_id, created_by_doctor_id",
+    "id, encounter_id, patient_id, assigned_doctor_id, created_by_doctor_id",
   ];
-  let plans = null;
+
+  let workingPlanSel = null;
   for (const sel of planSelectAttempts) {
-    const { data, error } = await supabaseClient
+    const { data: d1, error: e1 } = await supabaseClient
       .from("treatment_plans")
       .select(sel)
       .in("assigned_doctor_id", docKeys)
       .not("encounter_id", "is", null)
       .limit(500);
-    const code = String(error?.code || "");
-    if (!error && Array.isArray(data)) {
-      plans = data;
-      break;
-    }
-    if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+    const { data: d2, error: e2 } = await supabaseClient
+      .from("treatment_plans")
+      .select(sel)
+      .in("created_by_doctor_id", docKeys)
+      .not("encounter_id", "is", null)
+      .limit(500);
+    const c1 = String(e1?.code || "");
+    const c2 = String(e2?.code || "");
+    const schemaMiss =
+      [e1, e2].every((e) => e && ["42703", "PGRST204", "42P01"].includes(String(e?.code || "")));
+    if (schemaMiss) continue;
+    workingPlanSel = sel;
+    if (!e1 && Array.isArray(d1)) mergePlans(d1);
+    if (!e2 && Array.isArray(d2)) mergePlans(d2);
     break;
   }
-  if (!plans || plans.length === 0) return [];
+
+  const teamKeySource =
+    doctorKeysRawForTeam && doctorKeysRawForTeam.length
+      ? doctorKeysRawForTeam
+      : docKeys;
+  try {
+    const fromTd = await collectTreatmentIdsFromTreatmentDoctorsTable(teamKeySource);
+    const fromTpd = await collectPlanIdsFromTreatmentPlanDoctorsTable(teamKeySource);
+    const extraIds = [...new Set([...fromTd, ...fromTpd])].filter((id) => id && !planById.has(id)).slice(0, 400);
+    if (extraIds.length > 0 && workingPlanSel) {
+      for (let i = 0; i < extraIds.length; i += 80) {
+        const chunk = extraIds.slice(i, i + 80);
+        const { data, error } = await supabaseClient
+          .from("treatment_plans")
+          .select(workingPlanSel)
+          .in("id", chunk)
+          .not("encounter_id", "is", null);
+        if (!error && Array.isArray(data)) mergePlans(data);
+      }
+    }
+  } catch (teamEx) {
+    console.warn("[DOCTOR DASHBOARD] treatment team plan ids:", teamEx?.message || teamEx);
+  }
+
+  const plans = [...planById.values()];
+  if (plans.length === 0) return [];
 
   const encIds = [...new Set(plans.map((p) => String(p.encounter_id || "").trim()).filter(Boolean))];
   if (encIds.length === 0) return [];
 
   const encSelectAttempts = [
-    "id, patient_id, clinic_id, scheduled_at, created_at, updated_at",
-    "id, patient_id, clinic_id, encounter_date, created_at, updated_at",
-    "id, patient_id, clinic_id, visit_date, created_at, updated_at",
-    "id, patient_id, clinic_id, created_at, updated_at",
+    "id, patient_id, clinic_id, created_by_doctor_id, scheduled_at, encounter_date, visit_date, created_at, updated_at",
+    "id, patient_id, clinic_id, created_by_doctor_id, scheduled_at, created_at, updated_at",
+    "id, patient_id, clinic_id, created_by_doctor_id, encounter_date, created_at, updated_at",
+    "id, patient_id, clinic_id, created_by_doctor_id, visit_date, created_at, updated_at",
+    "id, patient_id, clinic_id, created_by_doctor_id, created_at, updated_at",
   ];
   let workingEncSel = null;
-  const probe = encIds.slice(0, 80);
+  const probe = encIds.slice(0, 40);
   for (const sel of encSelectAttempts) {
-    const { data, error } = await supabaseClient.from("patient_encounters").select(sel).in("id", probe).eq("clinic_id", cid);
+    const { data, error } = await supabaseClient.from("patient_encounters").select(sel).in("id", probe);
     const code = String(error?.code || "");
     if (!error && Array.isArray(data)) {
       workingEncSel = sel;
@@ -32615,11 +32709,7 @@ async function fetchDoctorDashboardTreatmentPlansForDay(supabaseClient, dayYmd, 
   const encMap = new Map();
   for (let i = 0; i < encIds.length; i += 80) {
     const chunk = encIds.slice(i, i + 80);
-    const { data, error } = await supabaseClient
-      .from("patient_encounters")
-      .select(workingEncSel)
-      .in("id", chunk)
-      .eq("clinic_id", cid);
+    const { data, error } = await supabaseClient.from("patient_encounters").select(workingEncSel).in("id", chunk);
     if (error || !Array.isArray(data)) continue;
     for (const e of data) {
       const id = String(e?.id || "").trim();
@@ -32634,7 +32724,9 @@ async function fetchDoctorDashboardTreatmentPlansForDay(supabaseClient, dayYmd, 
     if (!eid) continue;
     const enc = encMap.get(eid);
     if (!enc) continue;
-    const tMs = encounterScheduleInstantMs(enc);
+    if (!encounterPassesClinicForDashboard(enc, cid)) continue;
+
+    const tMs = resolveDashboardPlanDayInstantMs(plan, enc, dayYmd, startMs, endMs);
     if (!Number.isFinite(tMs) || tMs < startMs || tMs >= endMs) continue;
     const pst = String(plan.status || "").toLowerCase();
     if (pst === "cancelled" || pst === "canceled" || pst === "rejected") continue;
@@ -34171,8 +34263,8 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
     let tomorrowRaw = [];
     try {
       [todayRaw, tomorrowRaw] = await Promise.all([
-        fetchDoctorDashboardTreatmentPlansForDay(supabase, todayStr, doctorKeysUuidFk, clinicId),
-        fetchDoctorDashboardTreatmentPlansForDay(supabase, tomorrowStr, doctorKeysUuidFk, clinicId),
+        fetchDoctorDashboardTreatmentPlansForDay(supabase, todayStr, doctorKeysUuidFk, clinicId, doctorKeysRaw),
+        fetchDoctorDashboardTreatmentPlansForDay(supabase, tomorrowStr, doctorKeysUuidFk, clinicId, doctorKeysRaw),
       ]);
     } catch (e) {
       console.warn("[DOCTOR DASHBOARD] treatment_plans + encounters fetch:", e?.message || e);
