@@ -32581,9 +32581,10 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
   const tomorrowR = zonedCivilDayRangeMs(tomorrowStr, planDayTz);
 
   const planSelectAttempts = [
+    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id, scheduled_at, due_date, appointment_date, appointment_at",
+    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id, scheduled_at, due_date",
     "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id",
     "id, encounter_id, patient_id, status, assigned_doctor_id",
-    "id, encounter_id, patient_id, assigned_doctor_id",
   ];
   let plans = [];
   for (const sel of planSelectAttempts) {
@@ -32642,23 +32643,24 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     if (!eid) continue;
     const enc = encMap.get(eid);
     if (!enc) continue;
-    const tMs = encounterScheduleInstantMs(enc);
-    if (!Number.isFinite(tMs)) continue;
+    let tMs = resolveDashboardPlanDayInstantMs(plan, enc, todayStr, todayR.startMs, todayR.endMs);
+    let dayKey = null;
+    let dateYmd = null;
+    if (Number.isFinite(tMs)) {
+      dayKey = "today";
+      dateYmd = todayStr;
+    } else {
+      tMs = resolveDashboardPlanDayInstantMs(plan, enc, tomorrowStr, tomorrowR.startMs, tomorrowR.endMs);
+      if (Number.isFinite(tMs)) {
+        dayKey = "tomorrow";
+        dateYmd = tomorrowStr;
+      }
+    }
+    if (!Number.isFinite(tMs) || !dayKey) continue;
     const pst = String(plan.status || "").toLowerCase();
     if (pst === "cancelled" || pst === "canceled" || pst === "rejected") continue;
     const pid = String(enc.patient_id || plan.patient_id || "").trim();
     if (!pid) continue;
-
-    let dayKey = null;
-    let dateYmd = null;
-    if (tMs >= todayR.startMs && tMs < todayR.endMs) {
-      dayKey = "today";
-      dateYmd = todayStr;
-    } else if (tMs >= tomorrowR.startMs && tMs < tomorrowR.endMs) {
-      dayKey = "tomorrow";
-      dateYmd = tomorrowStr;
-    }
-    if (!dayKey) continue;
 
     patientIdSet.add(pid);
     const timeStr = formatTimeHmInZone(tMs, planDayTz);
