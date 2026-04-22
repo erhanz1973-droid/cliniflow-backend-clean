@@ -32556,9 +32556,8 @@ function encounterScheduleInstantMs(enc) {
 }
 
 /**
- * İzole doktor randevu listesi: treatment_plans ⊳ patient_encounters, yalnızca assigned_doctor_id.
- * Takvim günü Asia/Tbilisi (Postgres DATE(ts AT TIME ZONE 'Asia/Tbilisi') ile aynı pencere).
- * /api/doctor/dashboard veya admin endpointlerini kullanmaz.
+ * İzole doktor randevu listesi: treatment_plans ⊳ patient_encounters + encounter_treatments.scheduled_at
+ * (çoğu randevu zamanı ET satırında). Yalnızca assigned_doctor_id. Takvim günü Asia/Tbilisi.
  */
 async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
   const empty = { todayAppointments: [], tomorrowAppointments: [] };
@@ -32602,9 +32601,9 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     if (["42703", "PGRST204", "42P01"].includes(code)) continue;
     break;
   }
-  if (!plans.length) return empty;
 
-  const encIds = [...new Set(plans.map((p) => String(p.encounter_id || "").trim()).filter(Boolean))];
+  const encIdsFromPlans = [...new Set(plans.map((p) => String(p.encounter_id || "").trim()).filter(Boolean))];
+  const encMap = new Map();
   const encSelectAttempts = [
     "id, patient_id, scheduled_at, encounter_date, visit_date, created_at, updated_at",
     "id, patient_id, scheduled_at, created_at, updated_at",
@@ -32612,27 +32611,28 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     "id, patient_id, created_at, updated_at",
   ];
   let encSel = null;
-  const probe = encIds.slice(0, 40);
-  for (const sel of encSelectAttempts) {
-    const { data, error } = await supabaseClient.from("patient_encounters").select(sel).in("id", probe);
-    const code = String(error?.code || "");
-    if (!error && Array.isArray(data)) {
-      encSel = sel;
+  if (encIdsFromPlans.length > 0) {
+    const probe = encIdsFromPlans.slice(0, 40);
+    for (const sel of encSelectAttempts) {
+      const { data, error } = await supabaseClient.from("patient_encounters").select(sel).in("id", probe);
+      const code = String(error?.code || "");
+      if (!error && Array.isArray(data)) {
+        encSel = sel;
+        break;
+      }
+      if (["42703", "PGRST204", "42P01"].includes(code)) continue;
       break;
     }
-    if (["42703", "PGRST204", "42P01"].includes(code)) continue;
-    break;
-  }
-  if (!encSel) return empty;
-
-  const encMap = new Map();
-  for (let i = 0; i < encIds.length; i += 80) {
-    const chunk = encIds.slice(i, i + 80);
-    const { data, error } = await supabaseClient.from("patient_encounters").select(encSel).in("id", chunk);
-    if (error || !Array.isArray(data)) continue;
-    for (const e of data) {
-      const id = String(e?.id || "").trim();
-      if (id) encMap.set(id, e);
+    if (encSel) {
+      for (let i = 0; i < encIdsFromPlans.length; i += 80) {
+        const chunk = encIdsFromPlans.slice(i, i + 80);
+        const { data, error } = await supabaseClient.from("patient_encounters").select(encSel).in("id", chunk);
+        if (error || !Array.isArray(data)) continue;
+        for (const e of data) {
+          const id = String(e?.id || "").trim();
+          if (id) encMap.set(id, e);
+        }
+      }
     }
   }
 
@@ -32693,6 +32693,100 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     });
   }
 
+  /** encounter_treatments — randevu zamanı genelde burada (treatment_plans tarihsiz olsa bile) */
+  const etSelectAttempts = [
+    "id, encounter_id, scheduled_at, status, procedure_type, tooth_number, chair, assigned_doctor_id",
+    "id, encounter_id, scheduled_at, status, procedure_type, tooth_number, assigned_doctor_id",
+  ];
+  let etRows = [];
+  for (const sel of etSelectAttempts) {
+    const { data, error } = await supabaseClient
+      .from("encounter_treatments")
+      .select(sel)
+      .in("assigned_doctor_id", doctorKeysUuidFk)
+      .not("scheduled_at", "is", null)
+      .limit(400);
+    const code = String(error?.code || "");
+    if (!error && Array.isArray(data)) {
+      etRows = data;
+      break;
+    }
+    if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+    break;
+  }
+
+  const etEncIds = [...new Set(etRows.map((r) => String(r.encounter_id || "").trim()).filter(Boolean))];
+  const needEncIds = etEncIds.filter((id) => id && !encMap.has(id));
+  if (needEncIds.length > 0) {
+    const peSel = "id, patient_id";
+    for (let i = 0; i < needEncIds.length; i += 80) {
+      const chunk = needEncIds.slice(i, i + 80);
+      const { data, error } = await supabaseClient.from("patient_encounters").select(peSel).in("id", chunk);
+      if (error || !Array.isArray(data)) continue;
+      for (const e of data) {
+        const id = String(e?.id || "").trim();
+        if (id) {
+          const prev = encMap.get(id);
+          encMap.set(id, prev ? { ...prev, ...e, patient_id: e.patient_id ?? prev.patient_id } : e);
+        }
+      }
+    }
+  }
+
+  for (const et of etRows) {
+    const eid = String(et.encounter_id || "").trim();
+    if (!eid) continue;
+    const tMs = et.scheduled_at ? Date.parse(String(et.scheduled_at)) : NaN;
+    if (!Number.isFinite(tMs)) continue;
+    const est = String(et.status || "").toLowerCase();
+    if (est === "cancelled" || est === "canceled") continue;
+
+    let dayKey = null;
+    let dateYmd = null;
+    if (tMs >= todayR.startMs && tMs < todayR.endMs) {
+      dayKey = "today";
+      dateYmd = todayStr;
+    } else if (tMs >= tomorrowR.startMs && tMs < tomorrowR.endMs) {
+      dayKey = "tomorrow";
+      dateYmd = tomorrowStr;
+    }
+    if (!dayKey) continue;
+
+    const enc = encMap.get(eid);
+    if (!enc) continue;
+    const pid = String(enc.patient_id || "").trim();
+    if (!pid) continue;
+
+    patientIdSet.add(pid);
+    const timeStr = formatTimeHmInZone(tMs, planDayTz);
+    const proc = String(et.procedure_type || "TREATMENT").trim();
+    const tooth = et.tooth_number != null ? ` · 🦷 ${et.tooth_number}` : "";
+    const chair = et.chair != null && String(et.chair).trim() !== "" ? String(et.chair) : "";
+    const statusOut =
+      est === "completed" || est === "done"
+        ? "completed"
+        : est === "in_progress" || est === "active"
+          ? "in_progress"
+          : "scheduled";
+
+    slots.push({
+      dayKey,
+      sortKey: timeStr,
+      row: {
+        appointmentId: `et-${et.id}`,
+        date: dateYmd,
+        time: timeStr,
+        chairNumber: chair,
+        patientId: pid,
+        patientName: "Hasta",
+        procedureSummary: `${proc}${tooth}`,
+        planId: eid,
+        status: statusOut,
+        start_at: new Date(tMs).toISOString(),
+      },
+    });
+  }
+
   const pmap = new Map();
   const pArr = [...patientIdSet].slice(0, 150);
   if (pArr.length > 0) {
@@ -32708,11 +32802,20 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     if (nm) s.row.patientName = nm;
   }
 
-  const todayAppointments = slots
+  const dedupe = new Set();
+  const uniqueSlots = [];
+  for (const s of slots) {
+    const k = `${s.row.appointmentId}|${s.row.date}|${s.row.time}`;
+    if (dedupe.has(k)) continue;
+    dedupe.add(k);
+    uniqueSlots.push(s);
+  }
+
+  const todayAppointments = uniqueSlots
     .filter((s) => s.dayKey === "today")
     .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
     .map((s) => s.row);
-  const tomorrowAppointments = slots
+  const tomorrowAppointments = uniqueSlots
     .filter((s) => s.dayKey === "tomorrow")
     .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
     .map((s) => s.row);
