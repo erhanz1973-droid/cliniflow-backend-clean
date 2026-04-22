@@ -36801,7 +36801,7 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
     const doctorUuid = String(req?.doctor?.id || req.doctorId || '').trim();
     const clinicId = String(req?.doctor?.clinic_id || '').trim();
 
-    const procType = String(procedure_type || procedure_id || '').toUpperCase().trim();
+    const procType = procedures.normalizeEncounterProcedureTypeCode(procedure_type, procedure_id);
     if (typeof tooth_number === 'string') tooth_number = Number(tooth_number);
     if (typeof tooth_number !== 'number' || tooth_number < 11 || tooth_number > 48) {
       return res.status(400).json({ ok: false, error: 'invalid_tooth_number' });
@@ -36810,7 +36810,7 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
       return res.status(400).json({
         ok: false,
         error: 'invalid_procedure_type',
-        valid_types: [..._validProcedureTypeSet].slice(0, 30),
+        valid_types: [..._validProcedureTypeSet].sort(),
       });
     }
 

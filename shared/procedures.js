@@ -52,6 +52,10 @@ const PROCEDURE_TYPES = [
   { type: "IMPLANT", label: "Implant", category: "IMPLANT" },
   { type: "HEALING_ABUTMENT", label: "Healing Abutment", category: "IMPLANT" },
   { type: "IMPLANT_CROWN", label: "Implant Crown", category: "IMPLANT" },
+  { type: "WHITENING", label: "Whitening (Beyazlatma)", category: "EVENTS" },
+  { type: "ALL_ON_4", label: "All-on-4", category: "IMPLANT" },
+  { type: "ALL_ON_6", label: "All-on-6", category: "IMPLANT" },
+  { type: "OTHER", label: "Other", category: "EVENTS" },
 ];
 
 /** @type {Record<string, ProcedureTypeDef>} */
@@ -86,6 +90,25 @@ function normalizeDate(v) {
 /** @param {any} type */
 function normalizeType(type) {
   return String(type || "").trim().toUpperCase();
+}
+
+/** procedure_id UUID iken procedure_type gibi kullanılmamalı; mobil/legacy kısa kodlar → kanonik tip */
+function normalizeEncounterProcedureTypeCode(procedure_type, procedure_id) {
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let code = String(procedure_type ?? "").trim().toUpperCase();
+  if (!code && procedure_id != null && procedure_id !== "") {
+    const pid = String(procedure_id).trim();
+    if (pid && !uuidRe.test(pid)) code = pid.toUpperCase();
+  }
+  const aliases = {
+    BRIDGE: "BRIDGE_UNIT",
+    ROOT_CANAL: "ROOT_CANAL_TREATMENT",
+    RCT: "ROOT_CANAL_TREATMENT",
+    TEMP_BRIDGE: "TEMP_BRIDGE_UNIT",
+    ENDO: "ROOT_CANAL_TREATMENT",
+    RCT_TX: "ROOT_CANAL_TREATMENT",
+  };
+  return aliases[code] || code;
 }
 
 /**
@@ -150,6 +173,7 @@ module.exports = {
   normalizeStatus,
   normalizeType,
   normalizeDate,
+  normalizeEncounterProcedureTypeCode,
   categoryForType,
   isToothLocked,
   validateToothUpsert,
