@@ -32767,106 +32767,95 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
  * Dashboard'daki bugün/yarın takvimiyle aynı hasta kümesi — randevu satırında doktor_id boş olsa bile
  * klinik takviminde görünen hasta, Patients listesinde de görünsün (Serap vb.).
  */
-async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw) {
+/**
+ * Bugün/yarın takviminde görünen hasta id’leri — sadece patient_id çekilir (fetchAppointmentsForDayMerged değil;
+ * /api/doctor/patients zaman aşımını önler). clinic_code + clinic_id + start_* aralıkları.
+ */
+async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCodeRaw) {
+  void doctorKeysRaw;
   const out = new Set();
   const cid = clinicId ? String(clinicId).trim() : "";
-  if (!cid) return out;
+  const clinicCode = clinicCodeRaw ? String(clinicCodeRaw).trim() : "";
+  if (!cid && !clinicCode) return out;
 
   const calTz = getCliniflowDashboardCalendarTZ();
   const todayStr = ymdInTimeZone(new Date(), calTz);
   const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
 
-  async function fetchAppointmentsForDay(dayYmd) {
-    return fetchAppointmentsForDayMerged(dayYmd, cid);
-  }
+  const rangesForDay = (dayYmd) => {
+    const z = zonedCivilDayRangeIso(dayYmd, calTz);
+    const u = adminUtcDayRangeIsoForYmd(dayYmd);
+    if (u.startIso === z.startIso && u.endIso === z.endIso) return [z];
+    return [z, u];
+  };
 
-  const doctorKeys = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
-
-  async function fetchEncounterTreatmentSlots(dayYmd) {
-    try {
-      const encById = new Map();
-      const addEnc = (rows) => {
-        for (const e of rows || []) {
-          const id = String(e?.id || "").trim();
-          if (!id || encById.has(id)) continue;
-          encById.set(id, { id, patient_id: e.patient_id });
-        }
-      };
-      const { data: byClinic } = await supabase
-        .from("patient_encounters")
-        .select("id, patient_id")
-        .eq("clinic_id", cid)
-        .limit(400);
-      addEnc(byClinic);
-      for (const key of doctorKeys) {
-        try {
-          const { data: byDoc } = await supabase
-            .from("patient_encounters")
-            .select("id, patient_id")
-            .eq("created_by_doctor_id", key)
-            .limit(200);
-          addEnc(byDoc);
-        } catch (_) {}
-      }
-      const encRows = Array.from(encById.values()).slice(0, 500);
-      if (encRows.length === 0) return [];
-      const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
-      const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
-      const { startMs, endMs } = zonedCivilDayRangeMs(dayYmd, getCliniflowDashboardCalendarTZ());
-      const slotOut = [];
-      for (let i = 0; i < encIds.length; i += 80) {
-        const chunk = encIds.slice(i, i + 80);
-        const { data: etRows, error: etErr } = await supabase
-          .from("encounter_treatments")
-          .select("id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number")
-          .in("encounter_id", chunk)
-          .not("scheduled_at", "is", null);
-        if (etErr) continue;
-        for (const row of etRows || []) {
-          const t = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
-          if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
-          const st = String(row.status || "").toLowerCase();
-          if (st === "cancelled" || st === "canceled") continue;
-          const eid = String(row.encounter_id || "");
-          const pid = encToPatient.get(eid);
-          if (!pid) continue;
-          const timeStr = formatTimeHmInZone(t, getCliniflowDashboardCalendarTZ());
-          const proc = String(row.procedure_type || "TREATMENT").trim();
-          const tooth = row.tooth_number != null ? ` · 🦷 ${row.tooth_number}` : "";
-          slotOut.push({
-            id: `et-${row.id}`,
-            patient_id: pid,
-            appointment_date: dayYmd,
-            appointment_time: timeStr,
-            status: row.status,
-            chair_number: row.chair != null && String(row.chair).trim() !== "" ? String(row.chair) : "",
-            notes: `${proc}${tooth}`,
-            _planId: eid,
-            _fromEt: true,
-          });
-        }
-      }
-      slotOut.sort((x, y) => String(x.appointment_time || "").localeCompare(String(y.appointment_time || "")));
-      return slotOut;
-    } catch (e) {
-      console.warn("[calendar_patient_ids] encounter_treatments slots:", e?.message || e);
-      return [];
+  const pushRows = (data) => {
+    for (const r of data || []) {
+      const p = r?.patient_id;
+      if (p != null && String(p).trim()) out.add(String(p).trim());
     }
-  }
+  };
+
+  const run = async (fn) => {
+    try {
+      const { data, error } = await fn();
+      if (!error) pushRows(data);
+    } catch (_) {}
+  };
+
+  const scanTableDay = async (tableName, dayYmd) => {
+    const ranges = rangesForDay(dayYmd);
+    const tasks = [];
+    if (cid) {
+      tasks.push(() => supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("date", dayYmd).limit(500));
+      tasks.push(() =>
+        supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("appointment_date", dayYmd).limit(500)
+      );
+      for (const { startIso, endIso } of ranges) {
+        for (const col of ["start_at", "start_time", "startAt", "startTime"]) {
+          tasks.push(() =>
+            supabase.from(tableName).select("patient_id").eq("clinic_id", cid).gte(col, startIso).lt(col, endIso).limit(500)
+          );
+        }
+      }
+    }
+    if (clinicCode) {
+      tasks.push(() =>
+        supabase.from(tableName).select("patient_id").eq("clinic_code", clinicCode).eq("date", dayYmd).limit(500)
+      );
+      tasks.push(() =>
+        supabase
+          .from(tableName)
+          .select("patient_id")
+          .eq("clinic_code", clinicCode)
+          .eq("appointment_date", dayYmd)
+          .limit(500)
+      );
+      for (const { startIso, endIso } of ranges) {
+        for (const col of ["start_at", "start_time", "startAt", "startTime"]) {
+          tasks.push(() =>
+            supabase
+              .from(tableName)
+              .select("patient_id")
+              .eq("clinic_code", clinicCode)
+              .gte(col, startIso)
+              .lt(col, endIso)
+              .limit(500)
+          );
+        }
+      }
+    }
+    await Promise.all(tasks.map((t) => run(t)));
+  };
 
   try {
-    let todayRaw = await fetchAppointmentsForDay(todayStr);
-    let tomorrowRaw = await fetchAppointmentsForDay(tomorrowStr);
-    if ((!todayRaw || todayRaw.length === 0) || (!tomorrowRaw || tomorrowRaw.length === 0)) {
-      const etToday = await fetchEncounterTreatmentSlots(todayStr);
-      const etTomorrow = await fetchEncounterTreatmentSlots(tomorrowStr);
-      if ((!todayRaw || todayRaw.length === 0) && etToday.length) todayRaw = etToday;
-      if ((!tomorrowRaw || tomorrowRaw.length === 0) && etTomorrow.length) tomorrowRaw = etTomorrow;
-    }
-    for (const r of [...(todayRaw || []), ...(tomorrowRaw || [])]) {
-      const pid = String(r?.patient_id || "").trim();
-      if (pid) out.add(pid);
-    }
+    const tables = ["appointments", "appointment_requests"];
+    await Promise.all(
+      tables.flatMap((tableName) => [
+        scanTableDay(tableName, todayStr),
+        scanTableDay(tableName, tomorrowStr),
+      ])
+    );
   } catch (e) {
     console.warn("[calendar_patient_ids] aggregate:", e?.message || e);
   }
@@ -33380,7 +33369,7 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
       collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
       collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-      collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw),
+      collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
     ]);
     const visiblePatientIds = new Set(teamPatientIds);
     for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
@@ -33989,7 +33978,11 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
           collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
           collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
           collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-          collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw),
+          collectPatientIdsFromClinicCalendarTodayTomorrow(
+            clinicId,
+            doctorKeysRaw,
+            String(doctorRecord.clinic_code || doctorRecord.clinicCode || "").trim()
+          ),
         ]);
         for (const pid of fromTeam) patientIdSet.add(pid);
         for (const pid of fromAssign) patientIdSet.add(pid);
@@ -36292,11 +36285,12 @@ async function buildVisiblePatientIdSetForDoctor(req) {
   const out = new Set();
   if (!doctorKeysRaw.length) return out;
   const clinicId = req?.doctor?.clinic_id || req?.clinicId || null;
+  const clinicCodeVis = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim();
   const [team, fromAssign, fromProcess, fromCal] = await Promise.all([
     collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
     collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
     collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-    collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw),
+    collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCodeVis),
   ]);
   for (const x of team) out.add(x);
   for (const x of fromAssign) out.add(x);
