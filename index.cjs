@@ -32780,7 +32780,7 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
         patientId: pid,
         patientName: "Hasta",
         procedureSummary: `${proc}${tooth}`,
-        planId: eid,
+        planId: null,
         status: statusOut,
         start_at: new Date(tMs).toISOString(),
       },
