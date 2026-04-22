@@ -32558,6 +32558,169 @@ function encounterScheduleInstantMs(enc) {
   return NaN;
 }
 
+/**
+ * İzole doktor randevu listesi: treatment_plans ⊳ patient_encounters, yalnızca assigned_doctor_id.
+ * Takvim günü Asia/Tbilisi (Postgres DATE(ts AT TIME ZONE 'Asia/Tbilisi') ile aynı pencere).
+ * /api/doctor/dashboard veya admin endpointlerini kullanmaz.
+ */
+async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
+  const empty = { todayAppointments: [], tomorrowAppointments: [] };
+  const doctorRecord = req.doctor || {};
+  const doctorId = req.doctorId || doctorRecord.id || doctorRecord.doctor_id;
+  const doctorKeysRaw = [
+    ...new Set(
+      [String(doctorId || "").trim(), String(doctorRecord.id || "").trim(), String(doctorRecord.doctor_id || "").trim()].filter(
+        Boolean
+      )
+    ),
+  ];
+  const doctorKeysUuidFk = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
+  if (!doctorKeysUuidFk.length) return empty;
+
+  const planDayTz = "Asia/Tbilisi";
+  const todayStr = ymdInTimeZone(new Date(), planDayTz);
+  const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
+  const todayR = zonedCivilDayRangeMs(todayStr, planDayTz);
+  const tomorrowR = zonedCivilDayRangeMs(tomorrowStr, planDayTz);
+
+  const planSelectAttempts = [
+    "id, encounter_id, patient_id, status, title, notes, assigned_doctor_id",
+    "id, encounter_id, patient_id, status, assigned_doctor_id",
+    "id, encounter_id, patient_id, assigned_doctor_id",
+  ];
+  let plans = [];
+  for (const sel of planSelectAttempts) {
+    const { data, error } = await supabaseClient
+      .from("treatment_plans")
+      .select(sel)
+      .in("assigned_doctor_id", doctorKeysUuidFk)
+      .not("encounter_id", "is", null)
+      .limit(400);
+    const code = String(error?.code || "");
+    if (!error && Array.isArray(data)) {
+      plans = data;
+      break;
+    }
+    if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+    break;
+  }
+  if (!plans.length) return empty;
+
+  const encIds = [...new Set(plans.map((p) => String(p.encounter_id || "").trim()).filter(Boolean))];
+  const encSelectAttempts = [
+    "id, patient_id, scheduled_at, encounter_date, visit_date, created_at, updated_at",
+    "id, patient_id, scheduled_at, created_at, updated_at",
+    "id, patient_id, encounter_date, visit_date, created_at, updated_at",
+    "id, patient_id, created_at, updated_at",
+  ];
+  let encSel = null;
+  const probe = encIds.slice(0, 40);
+  for (const sel of encSelectAttempts) {
+    const { data, error } = await supabaseClient.from("patient_encounters").select(sel).in("id", probe);
+    const code = String(error?.code || "");
+    if (!error && Array.isArray(data)) {
+      encSel = sel;
+      break;
+    }
+    if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+    break;
+  }
+  if (!encSel) return empty;
+
+  const encMap = new Map();
+  for (let i = 0; i < encIds.length; i += 80) {
+    const chunk = encIds.slice(i, i + 80);
+    const { data, error } = await supabaseClient.from("patient_encounters").select(encSel).in("id", chunk);
+    if (error || !Array.isArray(data)) continue;
+    for (const e of data) {
+      const id = String(e?.id || "").trim();
+      if (id) encMap.set(id, e);
+    }
+  }
+
+  const slots = [];
+  const patientIdSet = new Set();
+  for (const plan of plans) {
+    const eid = String(plan.encounter_id || "").trim();
+    if (!eid) continue;
+    const enc = encMap.get(eid);
+    if (!enc) continue;
+    const tMs = encounterScheduleInstantMs(enc);
+    if (!Number.isFinite(tMs)) continue;
+    const pst = String(plan.status || "").toLowerCase();
+    if (pst === "cancelled" || pst === "canceled" || pst === "rejected") continue;
+    const pid = String(enc.patient_id || plan.patient_id || "").trim();
+    if (!pid) continue;
+
+    let dayKey = null;
+    let dateYmd = null;
+    if (tMs >= todayR.startMs && tMs < todayR.endMs) {
+      dayKey = "today";
+      dateYmd = todayStr;
+    } else if (tMs >= tomorrowR.startMs && tMs < tomorrowR.endMs) {
+      dayKey = "tomorrow";
+      dateYmd = tomorrowStr;
+    }
+    if (!dayKey) continue;
+
+    patientIdSet.add(pid);
+    const timeStr = formatTimeHmInZone(tMs, planDayTz);
+    const title = String(plan.title || plan.name || "").trim();
+    const notes = String(plan.notes || "").trim();
+    const proc = title || notes || "Tedavi planı";
+    const st = String(plan.status || "").toLowerCase();
+    const statusOut =
+      st === "completed" || st === "done"
+        ? "completed"
+        : st === "in_progress" || st === "active"
+          ? "in_progress"
+          : "scheduled";
+
+    slots.push({
+      dayKey,
+      sortKey: timeStr,
+      row: {
+        appointmentId: `tp-${plan.id}`,
+        date: dateYmd,
+        time: timeStr,
+        chairNumber: "",
+        patientId: pid,
+        patientName: "Hasta",
+        procedureSummary: proc,
+        planId: String(plan.id),
+        status: statusOut,
+        start_at: new Date(tMs).toISOString(),
+      },
+    });
+  }
+
+  const pmap = new Map();
+  const pArr = [...patientIdSet].slice(0, 150);
+  if (pArr.length > 0) {
+    try {
+      const { data: pts } = await supabaseClient.from("patients").select("id, name").in("id", pArr);
+      (pts || []).forEach((p) => {
+        if (p?.id) pmap.set(String(p.id), String(p.name || "Hasta"));
+      });
+    } catch (_) {}
+  }
+  for (const s of slots) {
+    const nm = pmap.get(s.row.patientId);
+    if (nm) s.row.patientName = nm;
+  }
+
+  const todayAppointments = slots
+    .filter((s) => s.dayKey === "today")
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .map((s) => s.row);
+  const tomorrowAppointments = slots
+    .filter((s) => s.dayKey === "tomorrow")
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .map((s) => s.row);
+
+  return { todayAppointments, tomorrowAppointments };
+}
+
 /** treatment_plans üzerindeki zaman alanları (encounter tarihi boş / eski olabilir) */
 function planScheduleInstantMs(plan) {
   if (!plan || typeof plan !== "object") return NaN;
@@ -34426,6 +34589,25 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
   } catch (err) {
     console.error('[DOCTOR DASHBOARD] exception:', err.message);
     return res.status(500).json({ ok: false, error: 'internal_error', details: err.message });
+  }
+});
+
+/** Doktor uygulaması — sadece treatment_plans.assigned_doctor_id + patient_encounters zamanı (admin / eski dashboard logic yok). */
+app.get("/api/doctor/dashboard-appointments", requireDoctorAuth, async (req, res) => {
+  try {
+    const { todayAppointments, tomorrowAppointments } = await fetchDoctorDashboardAppointmentsIsolated(supabase, req);
+    return res.json({
+      ok: true,
+      todayAppointments,
+      tomorrowAppointments,
+      stats: {
+        today: todayAppointments.length,
+        tomorrow: tomorrowAppointments.length,
+      },
+    });
+  } catch (err) {
+    console.error("[DOCTOR DASHBOARD APPOINTMENTS] exception:", err?.message || err);
+    return res.status(500).json({ ok: false, error: "internal_error", details: err?.message || String(err) });
   }
 });
 
