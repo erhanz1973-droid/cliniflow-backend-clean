@@ -28,6 +28,7 @@ const PROCEDURE_TYPES = [
   { type: "BRIDGE_REPLACEMENT_OR_REMOVAL", label: "Bridge Replacement / Removal", category: "PROSTHETIC" },
   { type: "INLAY", label: "Inlay", category: "PROSTHETIC" },
   { type: "ONLAY", label: "Onlay", category: "PROSTHETIC" },
+  { type: "VENEER", label: "Veneer (Vinir)", category: "PROSTHETIC" },
   { type: "OVERLAY", label: "Overlay", category: "PROSTHETIC" },
   { type: "POST_AND_CORE", label: "Post & Core", category: "PROSTHETIC" },
 
