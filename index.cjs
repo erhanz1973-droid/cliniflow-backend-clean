@@ -32438,6 +32438,185 @@ async function collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysR
 }
 
 /**
+ * GET /api/admin/appointments ile uyum: date / appointment_date eşleşmesi, start_at UTC penceresi,
+ * clinic_id + hasta listesi (satırda clinic_id boş olsa bile).
+ * Tek sorguda boş dönse bile diğer stratejileri dener; sonuçları id ile birleştirir.
+ */
+async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw) {
+  const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
+  const clinicCode = clinicCodeRaw ? String(clinicCodeRaw).trim() : "";
+  const dayStartIso = `${dayYmd}T00:00:00.000Z`;
+  const dayEndAnchor = new Date(dayStartIso);
+  dayEndAnchor.setUTCDate(dayEndAnchor.getUTCDate() + 1);
+  const dayEndIso = dayEndAnchor.toISOString();
+
+  const seen = new Set();
+  const merged = [];
+  const pushRows = (rows) => {
+    for (const r of rows || []) {
+      const id = String(r?.id ?? "").trim();
+      if (!id) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      merged.push(r);
+    }
+  };
+
+  const tryQuery = async (label, fn) => {
+    try {
+      const { data, error } = await fn();
+      const code = String(error?.code || "");
+      if (error && !["42703", "PGRST204", "42P01"].includes(code)) {
+        console.warn("[APPOINTMENTS DAY MERGED]", label, error.message);
+        return;
+      }
+      if (error) return;
+      pushRows(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.warn("[APPOINTMENTS DAY MERGED]", label, e?.message || e);
+    }
+  };
+
+  let clinicPatientIds = [];
+  if (cid) {
+    try {
+      const { data: pts } = await supabase.from("patients").select("id").eq("clinic_id", cid).limit(1000);
+      clinicPatientIds = (pts || []).map((p) => String(p.id)).filter(Boolean);
+    } catch (_) {}
+  }
+  if (clinicPatientIds.length === 0 && clinicCode) {
+    try {
+      const { data: pts2 } = await supabase.from("patients").select("id").eq("clinic_code", clinicCode).limit(1000);
+      clinicPatientIds = (pts2 || []).map((p) => String(p.id)).filter(Boolean);
+    } catch (_) {}
+  }
+  const pidSlice = clinicPatientIds.slice(0, 500);
+
+  const attempts = [
+    {
+      sel: "id, patient_id, date, time, status, chair_number, notes, doctor_id, procedure",
+      dateCol: "date",
+      timeOrder: "time",
+    },
+    {
+      sel: "id, patient_id, appointment_date, appointment_time, status, chair_number, notes, doctor_id",
+      dateCol: "appointment_date",
+      timeOrder: "appointment_time",
+    },
+    {
+      sel: "id, patient_id, date, appointment_time, status, chair_number, notes, doctor_id",
+      dateCol: "date",
+      timeOrder: "appointment_time",
+    },
+  ];
+
+  for (const a of attempts) {
+    await tryQuery(`${a.dateCol}+cid`, () => {
+      let q = supabase.from("appointments").select(a.sel).eq(a.dateCol, dayYmd).order(a.timeOrder, { ascending: true }).limit(80);
+      if (cid) q = q.eq("clinic_id", cid);
+      return q;
+    });
+  }
+
+  if (clinicCode) {
+    for (const a of attempts) {
+      await tryQuery(`${a.dateCol}+clinic_code`, () =>
+        supabase
+          .from("appointments")
+          .select(a.sel)
+          .eq("clinic_code", clinicCode)
+          .eq(a.dateCol, dayYmd)
+          .order(a.timeOrder, { ascending: true })
+          .limit(80)
+      );
+    }
+  }
+
+  const selStart =
+    "id, patient_id, start_at, date, time, appointment_date, appointment_time, status, chair_number, notes, doctor_id, procedure";
+  if (cid) {
+    await tryQuery("start_at+cid", () =>
+      supabase
+        .from("appointments")
+        .select(selStart)
+        .eq("clinic_id", cid)
+        .gte("start_at", dayStartIso)
+        .lt("start_at", dayEndIso)
+        .order("start_at", { ascending: true })
+        .limit(80)
+    );
+    await tryQuery("startAt+cid", () =>
+      supabase
+        .from("appointments")
+        .select(selStart.replace("start_at", "startAt"))
+        .eq("clinic_id", cid)
+        .gte("startAt", dayStartIso)
+        .lt("startAt", dayEndIso)
+        .order("startAt", { ascending: true })
+        .limit(80)
+    );
+  } else {
+    await tryQuery("start_at", () =>
+      supabase
+        .from("appointments")
+        .select(selStart)
+        .gte("start_at", dayStartIso)
+        .lt("start_at", dayEndIso)
+        .order("start_at", { ascending: true })
+        .limit(80)
+    );
+  }
+
+  if (clinicCode) {
+    await tryQuery("start_at+clinic_code", () =>
+      supabase
+        .from("appointments")
+        .select(selStart)
+        .eq("clinic_code", clinicCode)
+        .gte("start_at", dayStartIso)
+        .lt("start_at", dayEndIso)
+        .order("start_at", { ascending: true })
+        .limit(80)
+    );
+  }
+
+  if (pidSlice.length) {
+    for (const a of attempts) {
+      await tryQuery(`${a.dateCol}+patients`, () =>
+        supabase
+          .from("appointments")
+          .select(a.sel)
+          .in("patient_id", pidSlice)
+          .eq(a.dateCol, dayYmd)
+          .order(a.timeOrder, { ascending: true })
+          .limit(80)
+      );
+    }
+    await tryQuery("start_at+patients", () =>
+      supabase
+        .from("appointments")
+        .select(selStart)
+        .in("patient_id", pidSlice)
+        .gte("start_at", dayStartIso)
+        .lt("start_at", dayEndIso)
+        .order("start_at", { ascending: true })
+        .limit(80)
+    );
+  }
+
+  merged.sort((a, b) => {
+    const ta = String(a.time || a.appointment_time || "").slice(0, 5);
+    const tb = String(b.time || b.appointment_time || "").slice(0, 5);
+    if (ta && tb) return ta.localeCompare(tb);
+    const sa = a.start_at || a.startAt;
+    const sb = b.start_at || b.startAt;
+    if (sa && sb) return String(sa).localeCompare(String(sb));
+    return 0;
+  });
+  return merged;
+}
+
+/**
  * Dashboard'daki bugün/yarın takvimiyle aynı hasta kümesi — randevu satırında doktor_id boş olsa bile
  * klinik takviminde görünen hasta, Patients listesinde de görünsün (Serap vb.).
  */
@@ -32459,33 +32638,7 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
   const tomorrowStr = localYmd(tomorrowD);
 
   async function fetchAppointmentsForDay(dayYmd) {
-    const attempts = [
-      {
-        sel: "id, patient_id, date, time, status, chair_number, notes, doctor_id, procedure",
-        dateCol: "date",
-        timeOrder: "time",
-      },
-      {
-        sel: "id, patient_id, appointment_date, appointment_time, status, chair_number, notes, doctor_id",
-        dateCol: "appointment_date",
-        timeOrder: "appointment_time",
-      },
-      {
-        sel: "id, patient_id, date, appointment_time, status, chair_number, notes, doctor_id",
-        dateCol: "date",
-        timeOrder: "appointment_time",
-      },
-    ];
-    for (const a of attempts) {
-      let q = supabase.from("appointments").select(a.sel).eq(a.dateCol, dayYmd).order(a.timeOrder, { ascending: true }).limit(80);
-      q = q.eq("clinic_id", cid);
-      const { data, error } = await q;
-      const code = String(error?.code || "");
-      if (!error && Array.isArray(data)) return data;
-      if (["42703", "PGRST204", "42P01"].includes(code)) continue;
-      break;
-    }
-    return [];
+    return fetchAppointmentsForDayMerged(dayYmd, cid);
   }
 
   const doctorKeys = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
@@ -33750,37 +33903,11 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
     tomorrowD.setDate(tomorrowD.getDate() + 1);
     const tomorrowStr = localYmd(tomorrowD);
 
-    /** appointments tablosu: kurulumlar date/time veya appointment_date/time veya start_at kullanır */
+    /** appointments: admin takvimiyle aynı kaynaklar (date / appointment_date / start_at / clinic hastaları) */
     async function fetchAppointmentsForDay(dayYmd) {
       const cid = clinicId ? String(clinicId).trim() : "";
-      const attempts = [
-        {
-          sel: "id, patient_id, date, time, status, chair_number, notes, doctor_id, procedure",
-          dateCol: "date",
-          timeOrder: "time",
-        },
-        {
-          sel: "id, patient_id, appointment_date, appointment_time, status, chair_number, notes, doctor_id",
-          dateCol: "appointment_date",
-          timeOrder: "appointment_time",
-        },
-        {
-          sel: "id, patient_id, date, appointment_time, status, chair_number, notes, doctor_id",
-          dateCol: "date",
-          timeOrder: "appointment_time",
-        },
-      ];
-      for (const a of attempts) {
-        let q = supabase.from("appointments").select(a.sel).eq(a.dateCol, dayYmd).order(a.timeOrder, { ascending: true }).limit(80);
-        if (cid) q = q.eq("clinic_id", cid);
-        const { data, error } = await q;
-        const code = String(error?.code || "");
-        if (!error && Array.isArray(data)) return data;
-        if (["42703", "PGRST204", "42P01"].includes(code)) continue;
-        if (error) console.warn("[DOCTOR DASHBOARD] appointments try", a.dateCol, error.message);
-        break;
-      }
-      return [];
+      const clinicCode = String(doctorRecord.clinic_code || doctorRecord.clinicCode || "").trim();
+      return fetchAppointmentsForDayMerged(dayYmd, cid, clinicCode);
     }
 
     let todayRaw = [];
