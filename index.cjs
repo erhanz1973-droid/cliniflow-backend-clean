@@ -10235,7 +10235,7 @@ async function attachDoctorNamesToEncounterTreatmentsList(treatments, supabaseCl
 /** appointments satırından tek ISO zaman (admin takvimindeki güncel randevu) */
 function appointmentRowStartIso(row) {
   if (!row || typeof row !== "object") return null;
-  const s = row.start_at ?? row.startAt ?? row.starts_at;
+  const s = row.start_at ?? row.startAt ?? row.starts_at ?? row.start_time ?? row.startTime;
   if (s) {
     const t = Date.parse(String(s));
     if (Number.isFinite(t)) return new Date(t).toISOString();
@@ -27363,6 +27363,8 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
       const pushStartAtRangeAttempts = (builder) => {
         attempts.push(() => builder().gte("start_at", dayStartIso).lt("start_at", dayEndIso));
         attempts.push(() => builder().gte("startAt", dayStartIso).lt("startAt", dayEndIso));
+        attempts.push(() => builder().gte("start_time", dayStartIso).lt("start_time", dayEndIso));
+        attempts.push(() => builder().gte("startTime", dayStartIso).lt("startTime", dayEndIso));
       };
 
       if (isSingleDate) {
@@ -32538,7 +32540,7 @@ function formatTimeHmInZone(ms, timeZone) {
 
 /**
  * GET /api/admin/appointments ile uyum: appointments + appointment_requests,
- * date / appointment_date, start_at (bölgesel gün + admin’in UTC günü birleşik),
+ * date / appointment_date, start_at | start_time (bölgesel gün + admin’in UTC günü birleşik),
  * clinic_id + hasta listesi.
  */
 async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw) {
@@ -32614,9 +32616,8 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
   ];
 
   const selRange =
-    "id, patient_id, date, appointment_date, start_at, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
-  const selStart =
-    "id, patient_id, start_at, date, time, appointment_date, appointment_time, status, chair_number, notes, doctor_id, procedure";
+    "id, patient_id, date, appointment_date, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
+  const apptStartInstantCols = ["start_at", "startAt", "start_time", "startTime"];
 
   for (const tableName of ["appointments", "appointment_requests"]) {
     for (const a of attempts) {
@@ -32672,50 +32673,54 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
     }
 
     for (const dr of tsRanges) {
-      if (cid) {
-        await tryQuery(`${tableName}:start_at+cid`, tableName, () =>
-          supabase
-            .from(tableName)
-            .select(selStart)
-            .eq("clinic_id", cid)
-            .gte("start_at", dr.startIso)
-            .lt("start_at", dr.endIso)
-            .order("start_at", { ascending: true })
-            .limit(80)
-        );
-        await tryQuery(`${tableName}:startAt+cid`, tableName, () =>
-          supabase
-            .from(tableName)
-            .select(selStart.replace("start_at", "startAt"))
-            .eq("clinic_id", cid)
-            .gte("startAt", dr.startIso)
-            .lt("startAt", dr.endIso)
-            .order("startAt", { ascending: true })
-            .limit(80)
-        );
-      } else {
-        await tryQuery(`${tableName}:start_at`, tableName, () =>
-          supabase
-            .from(tableName)
-            .select(selStart)
-            .gte("start_at", dr.startIso)
-            .lt("start_at", dr.endIso)
-            .order("start_at", { ascending: true })
-            .limit(80)
-        );
-      }
-
-      if (clinicCode) {
-        await tryQuery(`${tableName}:start_at+clinic_code`, tableName, () =>
-          supabase
-            .from(tableName)
-            .select(selStart)
-            .eq("clinic_code", clinicCode)
-            .gte("start_at", dr.startIso)
-            .lt("start_at", dr.endIso)
-            .order("start_at", { ascending: true })
-            .limit(80)
-        );
+      for (const sc of apptStartInstantCols) {
+        const selStartCol = `id, patient_id, ${sc}, date, time, appointment_date, appointment_time, status, chair_number, notes, doctor_id, procedure`;
+        if (cid) {
+          await tryQuery(`${tableName}:${sc}+cid`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(selStartCol)
+              .eq("clinic_id", cid)
+              .gte(sc, dr.startIso)
+              .lt(sc, dr.endIso)
+              .order(sc, { ascending: true })
+              .limit(80)
+          );
+        } else {
+          await tryQuery(`${tableName}:${sc}`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(selStartCol)
+              .gte(sc, dr.startIso)
+              .lt(sc, dr.endIso)
+              .order(sc, { ascending: true })
+              .limit(80)
+          );
+        }
+        if (clinicCode) {
+          await tryQuery(`${tableName}:${sc}+clinic_code`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(selStartCol)
+              .eq("clinic_code", clinicCode)
+              .gte(sc, dr.startIso)
+              .lt(sc, dr.endIso)
+              .order(sc, { ascending: true })
+              .limit(80)
+          );
+        }
+        if (pidSlice.length) {
+          await tryQuery(`${tableName}:${sc}+patients`, tableName, () =>
+            supabase
+              .from(tableName)
+              .select(selStartCol)
+              .in("patient_id", pidSlice)
+              .gte(sc, dr.startIso)
+              .lt(sc, dr.endIso)
+              .order(sc, { ascending: true })
+              .limit(80)
+          );
+        }
       }
 
       if (pidSlice.length) {
@@ -32742,16 +32747,6 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
               .limit(80)
           );
         }
-        await tryQuery(`${tableName}:start_at+patients`, tableName, () =>
-          supabase
-            .from(tableName)
-            .select(selStart)
-            .in("patient_id", pidSlice)
-            .gte("start_at", dr.startIso)
-            .lt("start_at", dr.endIso)
-            .order("start_at", { ascending: true })
-            .limit(80)
-        );
       }
     }
   }
@@ -32760,8 +32755,8 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
     const ta = String(a.time || a.appointment_time || "").slice(0, 5);
     const tb = String(b.time || b.appointment_time || "").slice(0, 5);
     if (ta && tb) return ta.localeCompare(tb);
-    const sa = a.start_at || a.startAt;
-    const sb = b.start_at || b.startAt;
+    const sa = a.start_at || a.startAt || a.start_time || a.startTime;
+    const sb = b.start_at || b.startAt || b.start_time || b.startTime;
     if (sa && sb) return String(sa).localeCompare(String(sb));
     return 0;
   });
@@ -34351,10 +34346,11 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
     }
 
     const mapAppointment = (a, fallbackDay) => {
-      const dateVal = a.date || a.appointment_date || (a.start_at ? String(a.start_at).slice(0, 10) : fallbackDay);
+      const startInst = a.start_at || a.startAt || a.start_time || a.startTime;
+      const dateVal = a.date || a.appointment_date || (startInst ? String(startInst).slice(0, 10) : fallbackDay);
       let timeVal = a.time || a.appointment_time || "09:00";
-      if (a.start_at && !a.time && !a.appointment_time) {
-        const d = new Date(String(a.start_at));
+      if (startInst && !a.time && !a.appointment_time) {
+        const d = new Date(String(startInst));
         if (Number.isFinite(d.getTime())) timeVal = d.toTimeString().slice(0, 5);
       }
       if (timeVal && String(timeVal).length > 5) timeVal = String(timeVal).slice(0, 5);
@@ -34616,6 +34612,7 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
 
     const fetchAppointments = async () => {
       const selectCandidates = [
+        'id, date, time, status, patient_id, doctor_id, doctorId, assigned_doctor_id, assignedDoctorId, plan_id, treatment_plan_id, encounter_id, procedure, procedure_summary, chair_no, chair, chairNumber, start_at, startAt, start_time, startTime',
         'id, date, time, status, patient_id, doctor_id, doctorId, assigned_doctor_id, assignedDoctorId, plan_id, treatment_plan_id, encounter_id, procedure, procedure_summary, chair_no, chair, chairNumber, start_at, startAt',
         'id, date, time, status, patient_id, doctor_id, assigned_doctor_id, plan_id, treatment_plan_id, encounter_id, procedure, chair_no, chair, start_at',
         'id, date, time, status, patient_id, doctor_id, plan_id, treatment_plan_id, encounter_id, procedure, chair_no, chair',
@@ -34631,6 +34628,8 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
           });
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
+          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
         }
         if (req.clinicCode) {
           dateAliases.forEach((dayValue) => {
@@ -34639,6 +34638,8 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
           });
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
+          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
         }
         dateAliases.forEach((dayValue) => {
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('date', dayValue));
