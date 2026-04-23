@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clinifly — Plan usage</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+    body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; font-weight: 600; }
+    .card { background: #1e293b; border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; border: 1px solid #334155; }
+    .row { margin: 0.75rem 0; }
+    .label { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; }
+    .bar { height: 8px; background: #334155; border-radius: 4px; overflow: hidden; margin-top: 0.35rem; }
+    .fill { height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8); border-radius: 4px; transition: width 0.3s; }
+    .fill.warn { background: linear-gradient(90deg, #fbbf24, #f97316); }
+    .fill.crit { background: linear-gradient(90deg, #f87171, #dc2626); }
+    .meta { font-size: 0.9rem; color: #cbd5e1; }
+    .pill { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; background: #334155; }
+    .err { color: #fca5a5; font-size: 0.9rem; }
+    button { background: #3b82f6; color: white; border: none; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: 500; }
+    button:hover { background: #2563eb; }
+    .hint { font-size: 0.85rem; color: #64748b; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Subscription usage</h1>
+  <p class="meta">Pulled from <code>/api/admin/billing/usage</code> — use your admin JWT (same as other admin tools).</p>
+  <div class="card">
+    <div class="row">
+      <span class="label">Bearer token</span><br />
+      <input id="token" type="password" placeholder="Paste admin token" style="width:100%;margin-top:0.35rem;padding:0.5rem;border-radius:8px;border:1px solid #475569;background:#0f172a;color:#e2e8f0" />
+    </div>
+    <button type="button" id="load">Load usage</button>
+    <p id="msg" class="err"></p>
+  </div>
+  <div id="out"></div>
+  <p class="hint">Embed this page behind your admin shell, or call the API from React/Next and render the same <code>dimensions</code> object.</p>
+  <script>
+    function barClass(ratio) {
+      if (ratio == null) return "";
+      if (ratio >= 1) return "crit";
+      if (ratio >= 0.85) return "warn";
+      return "";
+    }
+    function renderDim(name, title, d) {
+      if (!d) return "";
+      const pct = d.unlimited ? "Unlimited" : `${d.used} / ${d.limit}`;
+      const width = d.unlimited ? 0 : Math.min(100, (d.ratio != null ? d.ratio : 0) * 100);
+      const bc = d.unlimited ? "" : barClass(d.ratio);
+      return `<div class="card">
+        <div class="label">${title}</div>
+        <div class="meta">${pct}</div>
+        ${d.unlimited ? "" : `<div class="bar"><div class="fill ${bc}" style="width:${width}%"></div></div>`}
+      </div>`;
+    }
+    document.getElementById("load").onclick = async () => {
+      const token = document.getElementById("token").value.trim();
+      const msg = document.getElementById("msg");
+      const out = document.getElementById("out");
+      msg.textContent = "";
+      out.innerHTML = "";
+      if (!token) {
+        msg.textContent = "Token required";
+        return;
+      }
+      try {
+        const r = await fetch("/api/admin/billing/usage", {
+          headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+        });
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || r.status);
+        const snap = data.snapshot;
+        const plan = snap ? snap.plan : "?";
+        const le = data.limitsEnabled ? "On" : "Off";
+        let html = `<div class="card"><span class="pill">Plan: ${plan}</span> <span class="pill">Enforcement: ${le}</span>`;
+        if (snap && snap.period) html += `<div class="meta" style="margin-top:0.5rem">Period: ${snap.period.label} (UTC month)</div>`;
+        html += `</div>`;
+        if (snap && snap.dimensions) {
+          const m = snap.dimensions;
+          html += renderDim("t", "Active treatments", m.active_treatments);
+          html += renderDim("u", "Monthly uploads (patient_files)", m.monthly_uploads);
+          html += renderDim("r", "Referral invites (this month)", m.referral_invites);
+          html += `<div class="card"><div class="label">Branding</div>
+            <div class="meta">Custom branding (logo / hide powered-by): ${m.branding && m.branding.customAllowed ? "Allowed" : "Not on your plan — Pro only"}</div></div>`;
+        }
+        out.innerHTML = html;
+      } catch (e) {
+        msg.textContent = String(e.message || e);
+      }
+    };
+  </script>
+</body>
+</html>

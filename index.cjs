@@ -220,6 +220,8 @@ const multer = require("multer");
 const nodemailer = require("nodemailer");
 const { randomUUID } = require("crypto");
 const procedures = require("./shared/procedures");
+const saasPlans = require("./shared/saasPlans");
+const saasEnforcement = require("./lib/saasEnforcement.cjs");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
 const { fillIcdRowFromStatic, searchStaticDentalIcd } = require("./lib/icd10StaticLabels.cjs");
 const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileReferenceSeeds");
@@ -8278,6 +8280,41 @@ app.get("/api/patient/price-estimate", requireToken, async (req, res) => {
       error: "price_estimate_failed",
       message: "Fiyat tahmini alınamadı. Lütfen daha sonra tekrar deneyin.",
     });
+  }
+});
+
+// ================== SAAS BILLING (Clinifly plans / usage) ==================
+app.get("/api/admin/billing/plans", requireAdminAuth, (req, res) => {
+  try {
+    res.json({ ok: true, catalog: saasPlans.getPublicPlanCatalog(), limitsEnabled: saasEnforcement.limitsEnabled() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message || "internal_error" });
+  }
+});
+
+app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
+  try {
+    if (!req.clinic) {
+      return res.status(404).json({ ok: false, error: "clinic_not_found" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.json({
+        ok: true,
+        limitsEnabled: saasEnforcement.limitsEnabled(),
+        snapshot: null,
+        catalog: saasPlans.getPublicPlanCatalog(),
+      });
+    }
+    const snapshot = await saasEnforcement.getBillingSnapshot(supabase, req.clinic, req.clinicCode);
+    res.json({
+      ok: true,
+      limitsEnabled: saasEnforcement.limitsEnabled(),
+      snapshot,
+      catalog: saasPlans.getPublicPlanCatalog(),
+    });
+  } catch (e) {
+    console.error("[BILLING USAGE]", e);
+    res.status(500).json({ ok: false, error: e?.message || "internal_error" });
   }
 });
 
@@ -16805,6 +16842,23 @@ app.post('/api/patient/upload-intraoral-photos', chatUpload.array('photos', 5), 
       return res.status(400).json({ ok: false, error: 'no_files', message: 'No photos uploaded' });
     }
 
+    if (saasEnforcement.limitsEnabled() && isSupabaseEnabled()) {
+      try {
+        const pUuid = await resolvePatientUUID(patientId);
+        const { data: pr } = await supabase.from('patients').select('clinic_id').eq('id', pUuid).maybeSingle();
+        const cid = pr?.clinic_id ? String(pr.clinic_id).trim() : '';
+        if (cid) {
+          const clinicRow = await getClinicById(cid);
+          if (clinicRow) {
+            const gate = await saasEnforcement.assertCanUploadFiles(supabase, clinicRow, files.length);
+            if (!gate.ok && gate.response) return res.status(403).json(gate.response);
+          }
+        }
+      } catch (e) {
+        console.warn('[SAAS] intraoral upload gate:', e?.message || e);
+      }
+    }
+
     const allowedImageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif']);
     const maxFileSize = 10 * 1024 * 1024; // 10MB per image
 
@@ -17313,6 +17367,17 @@ async function handlePatientChatUpload(req, res) {
       } catch (_) {}
 
       if (clinicIdForFile) {
+        if (saasEnforcement.limitsEnabled() && isSupabaseEnabled()) {
+          try {
+            const clinicRow = await getClinicById(clinicIdForFile);
+            if (clinicRow) {
+              const gate = await saasEnforcement.assertCanUploadFiles(supabase, clinicRow, 1);
+              if (!gate.ok && gate.response) return res.status(403).json(gate.response);
+            }
+          } catch (e) {
+            console.warn('[SAAS] upload gate:', e?.message || e);
+          }
+        }
         const { data: pfRow } = await supabase.from('patient_files').insert({
           patient_id: patientUUID,
           clinic_id: clinicIdForFile,
@@ -24986,7 +25051,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       {};
     const bodyBranding = body.branding || {};
     const existingMapsFallback = pickGoogleMapsUrlFromClinicRow(existing);
-    const updatedBranding = {
+    let updatedBranding = {
       clinicName: bodyBranding.clinicName || existingBranding.clinicName || existing.name || "",
       clinicLogoUrl: bodyBranding.clinicLogoUrl || existingBranding.clinicLogoUrl || existing.logoUrl || "",
       address: bodyBranding.address || existingBranding.address || existing.address || "",
@@ -24996,6 +25061,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       welcomeMessage: bodyBranding.welcomeMessage || existingBranding.welcomeMessage || "",
       showPoweredBy: bodyBranding.showPoweredBy !== undefined ? bodyBranding.showPoweredBy : (existingBranding.showPoweredBy !== undefined ? existingBranding.showPoweredBy : true),
     };
+    updatedBranding = saasEnforcement.clampBrandingForPlan(rawPlan, updatedBranding);
     
     const updated = {
       ...existing,
@@ -26090,15 +26156,19 @@ app.post("/api/referral/invite", requireToken, async (req, res) => {
 
     const clinicId = req.clinicId || (await getPatientClinicIdForReferral(patientId));
     let clinicCode = null;
+    let clinicRowForSaas = null;
     if (clinicId) {
       try {
         const { data: clinicRow, error: clinicErr } = await supabase
           .from("clinics")
-          .select("clinic_code")
+          .select("id, plan, clinic_code")
           .eq("id", clinicId)
           .single();
-        if (!clinicErr && clinicRow?.clinic_code) {
-          clinicCode = String(clinicRow.clinic_code).trim().toUpperCase();
+        if (!clinicErr && clinicRow) {
+          clinicRowForSaas = clinicRow;
+          if (clinicRow.clinic_code) {
+            clinicCode = String(clinicRow.clinic_code).trim().toUpperCase();
+          }
         } else if (clinicErr && String(clinicErr.code || "") !== "PGRST116") {
           console.warn("[REFERRAL] clinic_code lookup failed", {
             message: clinicErr.message,
@@ -26108,6 +26178,15 @@ app.post("/api/referral/invite", requireToken, async (req, res) => {
         }
       } catch (e) {
 
+      }
+    }
+
+    if (clinicRowForSaas && saasEnforcement.limitsEnabled() && isSupabaseEnabled()) {
+      try {
+        const gate = await saasEnforcement.assertCanCreateReferralInvite(supabase, clinicRowForSaas);
+        if (!gate.ok && gate.response) return res.status(403).json(gate.response);
+      } catch (e) {
+        console.warn("[SAAS] referral invite gate:", e?.message || e);
       }
     }
 
@@ -36800,6 +36879,23 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
     let { tooth_number, procedure_type, procedure_id, scheduled_at, chair, assigned_doctor_id } = req.body || {};
     const doctorUuid = String(req?.doctor?.id || req.doctorId || '').trim();
     const clinicId = String(req?.doctor?.clinic_id || '').trim();
+
+    if (
+      saasEnforcement.limitsEnabled() &&
+      isSupabaseEnabled() &&
+      clinicId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clinicId)
+    ) {
+      try {
+        const clinicRow = await getClinicById(clinicId);
+        if (clinicRow) {
+          const gate = await saasEnforcement.assertCanAddActiveTreatment(supabase, clinicRow);
+          if (!gate.ok && gate.response) return res.status(403).json(gate.response);
+        }
+      } catch (e) {
+        console.warn('[SAAS] active treatment gate:', e?.message || e);
+      }
+    }
 
     const procType = procedures.normalizeEncounterProcedureTypeCode(procedure_type, procedure_id);
     if (typeof tooth_number === 'string') tooth_number = Number(tooth_number);
