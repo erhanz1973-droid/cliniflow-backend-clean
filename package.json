@@ -8,7 +8,8 @@
     "start": "node index.cjs",
     "dev": "node index.cjs",
     "migrate:clinic-coords": "node scripts/migrate-clinic-coordinates.cjs",
-    "migrate:clinic-coords:dry": "node scripts/migrate-clinic-coordinates.cjs --dry-run"
+    "migrate:clinic-coords:dry": "node scripts/migrate-clinic-coordinates.cjs --dry-run",
+    "netlify:deploy": "netlify deploy --dir=public --prod"
   },
   "engines": {
     "node": "20.x"

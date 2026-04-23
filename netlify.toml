@@ -1,0 +1,29 @@
+# Clinifly admin static UI → https://docs.netlify.com/configure-builds/overview/
+# API stays on Railway (Node). This site only publishes /public.
+#
+# Netlify UI (recommended):
+#   Build command:    (leave empty or use below)
+#   Publish directory: public
+#
+# CLI (no repo npm build):
+#   npx netlify-cli deploy --dir=public --prod
+#
+# Custom API host: set before api-base.js in HTML:
+#   <script>window.CLINIFLOW_API_BASE_URL="https://your-api.up.railway.app"</script>
+
+[build]
+  publish = "public"
+  command = "echo 'Static admin — publish public/'"
+
+# Optional: same-origin /api proxy (uncomment and set your Railway URL)
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://cliniflow-backend-clean-production.up.railway.app/api/:splat"
+#   status = 200
+#   force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

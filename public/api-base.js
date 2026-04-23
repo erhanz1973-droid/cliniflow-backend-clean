@@ -13,6 +13,7 @@
  *   localhost / 127.0.0.1 → http://<host>:10000
  *   cliniflow-admin.onrender.com → DEFAULT_BACKEND_API (Railway production API)
  *   cliniflow-backend-*.onrender.com → https://cliniflow-admin.onrender.com (static HTML on legacy Render backend → admin API on admin service)
+ *   *.netlify.app → DEFAULT_BACKEND_API (admin UI on Netlify → API on Railway)
  */
 (function () {
   'use strict';
@@ -32,6 +33,10 @@
     var h = String(hostname || '');
     if (h === 'cliniflow-backend-dg8a.onrender.com') return true;
     return /^cliniflow-backend[a-z0-9-]*\.onrender\.com$/i.test(h);
+  }
+
+  function isNetlifyUiHost(hostname) {
+    return /\.netlify\.app$/i.test(String(hostname || ''));
   }
 
   function resolveOnce() {
@@ -55,6 +60,9 @@
       return stripTrailingSlash(DEFAULT_ADMIN_API_RENDER);
     }
     if (h === RENDER_ADMIN_HOST) {
+      return stripTrailingSlash(DEFAULT_BACKEND_API);
+    }
+    if (isNetlifyUiHost(h)) {
       return stripTrailingSlash(DEFAULT_BACKEND_API);
     }
     return '';
