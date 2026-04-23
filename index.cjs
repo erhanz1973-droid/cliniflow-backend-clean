@@ -1977,6 +1977,7 @@ const corsOptions = {
     "http://localhost:8082",
     "http://localhost:8083",
     "https://clinic.clinifly.net",
+    "https://shiny-buttercream-dbf655.netlify.app",
     "https://cliniflow-admin.onrender.com",
     "https://cliniflow-backend-dg8a.onrender.com",
     "https://cliniflow-backend-clean-production.up.railway.app",
