@@ -321,6 +321,91 @@
     }
     body.al-ready .al-lang span { color: #94A3B8; }
     body.al-ready .al-lang span.active { background: var(--p); color: #fff; }
+    /* Plan & usage widget */
+    .plan-usage-widget {
+      background: var(--card);
+      border: 0.5px solid rgba(55, 65, 81, 0.5);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+    .plan-usage-widget h2 {
+      margin: 0 0 4px 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #e6eaf2;
+    }
+    .plan-usage-widget .plan-pill {
+      display: inline-block;
+      margin-bottom: 14px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      background: rgba(37, 99, 235, 0.2);
+      color: #93c5fd;
+      border: 1px solid rgba(37, 99, 235, 0.35);
+    }
+    .plan-usage-widget .plan-alert {
+      font-size: 13px;
+      margin: 0 0 14px 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      line-height: 1.4;
+    }
+    .plan-usage-widget .plan-alert.warn {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #fcd34d;
+    }
+    .plan-usage-widget .plan-alert.crit {
+      background: rgba(220, 38, 38, 0.12);
+      border: 1px solid rgba(220, 38, 38, 0.35);
+      color: #fca5a5;
+    }
+    .plan-usage-widget .plan-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .plan-usage-widget .plan-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      background: rgba(31, 41, 55, 0.5);
+      border-radius: 10px;
+      border: 0.5px solid rgba(55, 65, 81, 0.4);
+    }
+    .plan-usage-widget .plan-row-label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .plan-usage-widget .plan-row-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: #f1f5f9;
+      font-variant-numeric: tabular-nums;
+    }
+    .plan-usage-widget .plan-upgrade {
+      padding: 10px 16px;
+      border-radius: 10px;
+      border: none;
+      background: var(--p);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      max-width: 280px;
+    }
+    .plan-usage-widget .plan-upgrade:hover {
+      filter: brightness(1.08);
+    }
   </style>
 </head>
 <body>
@@ -408,6 +493,8 @@
         </div>
       </div>
     </div>
+
+    <div id="planUsageWidgetMount" aria-live="polite"></div>
 
     <div id="overdueBanner" style="display:none;"></div>
 
@@ -593,6 +680,117 @@
   }
 
   const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+
+  // ── Plan & usage (mock until /api/admin/billing/usage is wired) ─────────────
+  const PLAN_USAGE_MOCK = {
+    plan: "free",
+    usage: {
+      activeTreatments: 3,
+      uploads: 12,
+      referrals: 2,
+    },
+    limits: {
+      free: { activeTreatments: 5, uploads: 30, referrals: 5 },
+      basic: { activeTreatments: 30, uploads: 300, referrals: 50 },
+      pro: { activeTreatments: null, uploads: null, referrals: null },
+    },
+  };
+
+  function planUsageIsUnlimited(limit) {
+    return limit == null || limit === -1;
+  }
+
+  function planUsageFormatPair(used, limit) {
+    const u = Number(used) || 0;
+    if (planUsageIsUnlimited(limit)) return u + " / Unlimited";
+    return u + " / " + limit;
+  }
+
+  /** @returns { 'ok' | 'warn' | 'crit' } */
+  function planUsageRowLevel(used, limit) {
+    if (planUsageIsUnlimited(limit)) return "ok";
+    const cap = Number(limit);
+    const val = Number(used) || 0;
+    if (!Number.isFinite(cap) || cap <= 0) return "ok";
+    if (val >= cap) return "crit";
+    if (val / cap >= 0.8) return "warn";
+    return "ok";
+  }
+
+  /**
+   * Renders plan + usage into #containerId. Uses mock data from PLAN_USAGE_MOCK unless overridden.
+   * @param {string} containerId
+   * @param {{ plan?: string, usage?: object, limits?: object }} [override]
+   */
+  function renderPlanWidget(containerId, override) {
+    const root = document.getElementById(containerId);
+    if (!root) return;
+
+    const plan = String((override && override.plan) || PLAN_USAGE_MOCK.plan || "free").toLowerCase();
+    const usage = Object.assign({}, PLAN_USAGE_MOCK.usage, (override && override.usage) || {});
+    const limits = Object.assign({}, PLAN_USAGE_MOCK.limits, (override && override.limits) || {});
+    const tierLimits = limits[plan] || limits.free || {};
+
+    const rows = [
+      { key: "activeTreatments", label: "Active treatments", used: usage.activeTreatments, limit: tierLimits.activeTreatments },
+      { key: "uploads", label: "Monthly uploads", used: usage.uploads, limit: tierLimits.uploads },
+      { key: "referrals", label: "Referral invites", used: usage.referrals, limit: tierLimits.referrals },
+    ];
+
+    let worst = "ok";
+    rows.forEach((r) => {
+      const lv = planUsageRowLevel(r.used, r.limit);
+      if (lv === "crit") worst = "crit";
+      else if (lv === "warn" && worst !== "crit") worst = "warn";
+    });
+
+    let alertHtml = "";
+    if (worst === "crit") {
+      alertHtml =
+        '<p class="plan-alert crit">Limit reached. Upgrade to continue.</p>';
+    } else if (worst === "warn") {
+      alertHtml =
+        '<p class="plan-alert warn">You are close to your limit</p>';
+    }
+
+    const planTitle = plan.toUpperCase();
+
+    root.innerHTML =
+      '<section class="plan-usage-widget">' +
+      '<h2>Plan &amp; usage</h2>' +
+      '<div class="plan-pill" title="Current subscription tier">' +
+      planTitle +
+      "</div>" +
+      alertHtml +
+      '<div class="plan-rows">' +
+      rows
+        .map(function (r) {
+          return (
+            '<div class="plan-row">' +
+            '<span class="plan-row-label">' +
+            r.label +
+            "</span>" +
+            '<span class="plan-row-value">' +
+            planUsageFormatPair(r.used, r.limit) +
+            "</span>" +
+            "</div>"
+          );
+        })
+        .join("") +
+      "</div>" +
+      '<button type="button" class="plan-upgrade" id="planUsageUpgradeBtn">Upgrade</button>' +
+      "</section>";
+
+    const btn = document.getElementById("planUsageUpgradeBtn");
+    if (btn) {
+      btn.onclick = function () {
+        const pricingUrl = "https://clinifly.net/pricing";
+        if (window.confirm("Open pricing page?\n\n" + pricingUrl)) {
+          window.location.href = pricingUrl;
+        }
+      };
+    }
+  }
 
   // ── Procedure code → multilingual labels ────────────────────────────────────
   const PROC_LABELS = {
@@ -1312,6 +1510,7 @@
   };
 
   function initializeDashboard() {
+    renderPlanWidget("planUsageWidgetMount");
     loadClinicInfo();
     loadEvents();
 
