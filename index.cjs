@@ -29657,7 +29657,7 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
     let supabasePatients = [];
     let supabaseMessages = [];
     let supabaseReferrals = [];
-    if (isSupabaseEnabled) {
+    if (isSupabaseEnabled()) {
       try {
         // Get patients
         const { data: patientsData, error: patientsError } = await supabase
@@ -29715,32 +29715,23 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
     let clinicsList = [];
     
     // Add clinics from Supabase
-    if (isSupabaseEnabled) {
+    if (isSupabaseEnabled()) {
       try {
+        console.log("SUPABASE URL:", process.env.SUPABASE_URL);
         const { data: supabaseClinics, error } = await supabase
           .from("clinics")
-          .select(`
-            id,
-            name,
-            email,
-            clinic_code,
-            phone,
-            address,
-            created_at,
-            updated_at,
-            plan,
-            enabled_modules,
-            contact_name,
-            city,
-            country,
-            notes,
-            last_contact_at,
-            crm_status
-          `)
+          .select("*")
           .order("created_at", { ascending: false });
-        
-        if (!error && supabaseClinics) {
-          for (const clinic of supabaseClinics) {
+
+        console.log("CLINICS DATA:", supabaseClinics);
+        console.log("CLINICS ERROR:", error);
+
+        if (error) {
+          return res.status(500).json({ error });
+        }
+
+        const clinicRows = Array.isArray(supabaseClinics) ? supabaseClinics : [];
+        for (const clinic of clinicRows) {
             const clinicCode = (clinic.clinic_code || "").toUpperCase();
             
             // Debug: Log each clinic from Supabase
@@ -29800,7 +29791,6 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
                 activeReferralCount: clinicReferrals.filter(r => (r.status || "").toUpperCase() === "APPROVED" || (r.status || "").toUpperCase() === "ACTIVE").length
               }
             });
-          }
         }
       } catch (supabaseError) {
 
