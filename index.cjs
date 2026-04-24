@@ -29774,6 +29774,8 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
               address: clinic.address,
               status: "ACTIVE", // All Supabase clinics are considered active
               plan: clinic.plan,
+              planExpiry: clinic.plan_expiry || null,
+              planSource: clinic.plan_source || null,
               enabledModules: clinic.enabled_modules,
               createdAt: clinic.created_at,
               updatedAt: clinic.updated_at,
