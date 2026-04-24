@@ -2808,7 +2808,15 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
   });
 
 } else {
-  console.error("[EMAIL] ❌ SMTP NOT configured - missing HOST, USER, or PASS");
+  if (String(process.env.BREVO_API_KEY || "").trim()) {
+    console.log(
+      "[EMAIL] Brevo REST (BREVO_API_KEY) is set — nodemailer SMTP is optional; skipping SMTP transporter.",
+    );
+  } else {
+    console.warn(
+      "[EMAIL] SMTP not configured: missing HOST, USER, or PASS (or set BREVO_API_KEY for Brevo REST).",
+    );
+  }
 }
 
 if (!process.env.BREVO_API_KEY && !emailTransporter) {
