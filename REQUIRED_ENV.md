@@ -29,6 +29,14 @@ Many `SIM_*`, `SIM_MERGE_*`, `SIM_SMILE_*`, `SMILE_CROP_*`, `REPLICATE_*` — op
 
 `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `BREVO_API_KEY`, `BREVO_FROM_NAME`, `OTP_DEV_BYPASS`, `OTP_ENABLED_FOR_ADMINS`, `OTP_REQUIRED_FOR_NEW_ADMINS`, `SUPERADMIN_*`, `SUPER_ADMIN_*`, `ADMIN_AUTH_DEBUG`
 
+### Super admin (`POST /api/super-admin/login`)
+
+| Mode | What to set |
+|------|-------------|
+| **Env (optional)** | `SUPER_ADMIN_EMAIL` (or `SUPERADMIN_EMAIL`) + `SUPER_ADMIN_PASSWORD` (or `SUPERADMIN_PASSWORD`) — compared in **plain text** when both are non-empty. |
+| **Database** | If those env vars are **not** both set: uses Supabase table `public.super_admin_users` (`email`, `password_hash` bcrypt, `role` = `super_admin`). Seed + migration: `supabase/migrations/20260420150000_super_admin_users.sql`. |
+| **JWT** | Always: `SUPER_ADMIN_JWT_SECRET` (or `SUPERADMIN_JWT_SECRET`) — required to sign the super-admin token (set a strong value in production). |
+
 ## Maps / geo
 
 `GOOGLE_PLACES_API_KEY`, `GOOGLE_GEOCODING_API_KEY`
