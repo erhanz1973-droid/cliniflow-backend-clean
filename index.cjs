@@ -278,10 +278,17 @@ const {
 } = require("./lib/phoneIdentity.cjs");
 
 const app = express();
+console.log("🔥 BACKEND CLEAN NEW VERSION DEPLOYED");
+console.log("🚀 build:", new Date().toISOString());
 console.log("🚀 BACKEND CLEAN RUNNING");
 // Avoid 304 Not Modified on JSON APIs — clients that always JSON.parse() break on empty 304 bodies
 app.set("etag", false);
 console.log("SERVER ENTRY:", __filename);
+
+// Liveness: register first, no async/DB — Railway healthchecks must get 200 even if later init fails
+app.get("/health", (_req, res) => {
+  res.status(200).set("Cache-Control", "no-store").json({ ok: true, status: "ok" });
+});
 
 process.on("unhandledRejection", (reason) => {
   const msg =
@@ -292,14 +299,27 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (err) => {
   console.error("[PROCESS] uncaughtException", err && err.stack ? err.stack : err);
+  if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+    process.exit(1);
+  }
 });
 
 const server = http.createServer(app);
-const _portEnv = process.env.PORT;
-const PORT =
-  _portEnv != null && String(_portEnv).trim() !== ""
-    ? Number.parseInt(String(_portEnv), 10) || 10000
-    : 10000;
+/** Railway/Render set PORT; must be 1–65535. */
+function resolveListenPort() {
+  const raw = process.env.PORT;
+  if (raw == null || String(raw).trim() === "") {
+    return 8080;
+  }
+  const n = Number.parseInt(String(raw), 10);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    console.error("[PORT] invalid process.env.PORT:", JSON.stringify(raw), "— falling back to 8080");
+    return 8080;
+  }
+  return n;
+}
+const PORT = resolveListenPort();
+console.log("[STARTUP] effective PORT =", PORT, "from env =", process.env.PORT != null ? String(process.env.PORT) : "(unset)");
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const JWT_SECRET =
   typeof process.env.JWT_SECRET === "string" && process.env.JWT_SECRET.trim().length >= 8
@@ -378,8 +398,10 @@ function buildRegisterOtpSuccessJson({
       : REGISTER_USER_MSG.otpStoredEmailSendFailed;
   return {
     ok: true,
-    message,
+    success: true,
     patientId,
+    patient_id: patientId,
+    message,
     email: emailNormalized,
     language: patientLanguage,
     requestId,
@@ -3631,14 +3653,7 @@ async function requireAdminToken(req, res, next) {
 }
 
 // ================== HEALTH ==================
-// Ultra simple - no DB, no async - for Render / Railway / mobile “is the process up?” checks
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    ok: true,
-    status: "ok",
-    emailConfigured: isTransactionalEmailConfigured(),
-  });
-});
+// GET /health — liveness: registered at top of file (no DB). Do not add a second /health here.
 
 // Diagnostic entrypoint check - verifies this file is the running entry
 app.get('/api/_entry-check', (req, res) => {
@@ -4044,6 +4059,7 @@ async function augmentRegisterClinicFromBody(body) {
 // ================== REGISTER (shared: /api/register + /api/patient/register + /api/register/patient) ==================
 async function runPatientRegister(req, res, route, otpMode) {
   try {
+  console.log("🔥 REGISTER ENDPOINT HIT:", req.path);
   console.log("🔥 NEW REGISTER FLOW ACTIVE - NO UPSERT", { route });
   const body = req.body || {};
   const {
@@ -4877,6 +4893,9 @@ async function runPatientRegister(req, res, route, otpMode) {
       }
       return res.status(201).json({
         ok: true,
+        success: true,
+        patientId,
+        patient_id: patientId,
         clinicId: reviewClinic?.id || supabaseClinicId || null,
         clinicCode: reviewClinic?.clinic_code || validatedClinicCode || null,
         hasClinic: Boolean(reviewClinic?.id || supabaseClinicId),
@@ -5007,11 +5026,30 @@ app.post("/api/register", async (req, res) => {
     }
   }
 });
-app.post(["/api/patient/register", "/api/register/patient"], async (req, res) => {
+/** Hashed-OTP register — same handler for both mobile URL shapes (backward compatible). */
+async function postRegisterPatientWithHashedOtp(req, res) {
+  const tracePath = String(req.path || "/api/register/patient");
+  await runPatientRegister(req, res, tracePath, "hashedOTP");
+}
+app.post("/api/register/patient", async (req, res) => {
   try {
-    await runPatientRegister(req, res, "/api/register/patient", "hashedOTP");
+    await postRegisterPatientWithHashedOtp(req, res);
   } catch (regErr) {
-    console.error("[REGISTER] unhandled (alias):", regErr?.stack || regErr?.message || regErr);
+    console.error("[REGISTER] unhandled (/api/register/patient):", regErr?.stack || regErr?.message || regErr);
+    if (!res.headersSent) {
+      res.status(500).json({
+        ok: false,
+        error: "internal_error",
+        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+      });
+    }
+  }
+});
+app.post("/api/patient/register", async (req, res) => {
+  try {
+    await postRegisterPatientWithHashedOtp(req, res);
+  } catch (regErr) {
+    console.error("[REGISTER] unhandled (/api/patient/register):", regErr?.stack || regErr?.message || regErr);
     if (!res.headersSent) {
       res.status(500).json({
         ok: false,
@@ -9358,7 +9396,12 @@ app.get("/api/admin/patients/:patientId/full-record", requireAdminAuth, async (r
     try {
       const internalPatientId = String(patRow?.id || "").trim() || patientId;
       const encPidCandidates = await encounterPatientIdMatchSet(internalPatientId, patientId);
-      const pidIn = encPidCandidates.length ? encPidCandidates : [internalPatientId];
+      const pidIn = cleanUuids(
+        encPidCandidates.length ? encPidCandidates : [internalPatientId]
+      );
+      if (pidIn.length === 0) {
+        // patient_encounters.patient_id is uuid — avoid 22P02 on p_… literals
+      } else {
       const { data: encListEt, error: encListEtErr } = await supabase
         .from("patient_encounters")
         .select("id")
@@ -9408,6 +9451,7 @@ app.get("/api/admin/patients/:patientId/full-record", requireAdminAuth, async (r
           }
         }
       }
+      }
     } catch (etMergeErr) {
       console.warn("[FULL-RECORD] encounter_treatments merge:", etMergeErr?.message || etMergeErr);
     }
@@ -9416,7 +9460,12 @@ app.get("/api/admin/patients/:patientId/full-record", requireAdminAuth, async (r
     try {
       const internalPatientId = String(patRow?.id || "").trim() || patientId;
       const encPidCandidates = await encounterPatientIdMatchSet(internalPatientId, patientId);
-      const pidIn = encPidCandidates.length ? encPidCandidates : [internalPatientId];
+      const pidIn = cleanUuids(
+        encPidCandidates.length ? encPidCandidates : [internalPatientId]
+      );
+      if (pidIn.length === 0) {
+        // skip — no valid UUIDs for patient_encounters.patient_id
+      } else {
       const { data: encList, error: encListErr } = await supabase
         .from("patient_encounters")
         .select("id")
@@ -9445,6 +9494,7 @@ app.get("/api/admin/patients/:patientId/full-record", requireAdminAuth, async (r
             });
           }
         }
+      }
       }
     } catch (encDiagErr) {
       console.warn("[FULL-RECORD] encounter_diagnoses merge:", encDiagErr?.message || encDiagErr);
@@ -9529,6 +9579,7 @@ app.get('/api/admin/patients/:patientId/treatment-plans', requireAdminAuth, asyn
       String(patient?.patient_id || '').trim(),
       rawPatientId,
     ].filter(Boolean))];
+    const pePatientIds = cleanUuids(patientIds);
 
     const encounterSelects = [
       'id, patient_id, clinic_id, created_at',
@@ -9539,10 +9590,11 @@ app.get('/api/admin/patients/:patientId/treatment-plans', requireAdminAuth, asyn
 
     let encounters = [];
     for (const selectClause of encounterSelects) {
+      if (pePatientIds.length === 0) break;
       const withClinic = await supabase
         .from('patient_encounters')
         .select(selectClause)
-        .in('patient_id', patientIds)
+        .in('patient_id', pePatientIds)
         .eq('clinic_id', clinicId)
         .order('created_at', { ascending: false });
 
@@ -9553,7 +9605,7 @@ app.get('/api/admin/patients/:patientId/treatment-plans', requireAdminAuth, asyn
         const withoutClinic = await supabase
           .from('patient_encounters')
           .select(selectClause)
-          .in('patient_id', patientIds)
+          .in('patient_id', pePatientIds)
           .order('created_at', { ascending: false });
 
         if (!withoutClinic.error) {
@@ -9878,7 +9930,7 @@ async function encounterPatientIdMatchSet(internalPatientUuid, rawParamFromReque
       }
     } catch (_) {}
   }
-  return Array.from(set).filter(Boolean);
+  return cleanUuids(Array.from(set));
 }
 
 /** encounter_treatments.id — legacy patient-json satırlarından ayırt için */
@@ -10009,7 +10061,7 @@ async function attachDoctorNamesToEncounterTreatmentsList(treatments, supabaseCl
 /** appointments satırından tek ISO zaman (admin takvimindeki güncel randevu) */
 function appointmentRowStartIso(row) {
   if (!row || typeof row !== "object") return null;
-  const s = row.start_at ?? row.startAt ?? row.starts_at ?? row.start_time ?? row.startTime;
+  const s = row.start_time ?? row.startTime ?? row.start_at ?? row.startAt ?? row.starts_at;
   if (s) {
     const t = Date.parse(String(s));
     if (Number.isFinite(t)) return new Date(t).toISOString();
@@ -10122,9 +10174,9 @@ async function fetchAppointmentsRowsForPatientOverlay(supabaseClient, patientId,
   const pid = String(patientId || "").trim();
   if (!pid) return [];
   const selFull =
-    "id, patient_id, clinic_id, start_at, date, time, appointment_date, appointment_time, procedure, notes, treatment, type, service, status, tooth_number, tooth, doctor_id, chair, chair_no";
+    "id, patient_id, clinic_id, start_at, start_time, date, time, appointment_time, procedure, notes, treatment, type, service, status, tooth_number, tooth, doctor_id, chair, chair_no";
   const sel =
-    "id, patient_id, clinic_id, start_at, date, time, appointment_date, appointment_time, procedure, notes, treatment, type, service, status, tooth_number, tooth";
+    "id, patient_id, clinic_id, start_at, start_time, date, time, appointment_time, procedure, notes, treatment, type, service, status, tooth_number, tooth";
   const attempts = [];
   if (clinicId) {
     attempts.push(() =>
@@ -14255,6 +14307,8 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
     }
   }
 
+  const pePatientIdIn = cleanUuids(patientLookupIds);
+
   if (isSupabaseEnabled()) {
     try {
       const clinicFilter = null;
@@ -14292,10 +14346,14 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
         console.log(`[TREATMENTS GET] Fast path: legacy teeth present (${legacyTeeth.length}), skipping encounter lookup`);
         // Still need encounterIds for diagnosis lookup — do a lightweight fetch only
         try {
+          if (pePatientIdIn.length === 0) {
+            // patient_encounters.patient_id is uuid; skip rather than .in(…, [])
+            throw new Error("skip_enc_no_uuid");
+          }
           const encResult = await supabase
             .from("patient_encounters")
             .select("id, patient_id, created_at")
-            .in("patient_id", patientLookupIds)
+            .in("patient_id", pePatientIdIn)
             .order("created_at", { ascending: false });
 
           if (!encResult.error) {
@@ -14307,7 +14365,9 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
               encounterRows.push({ id: mappedVisitId, patient_id: patientId, created_at: row.created_at, encounter_id: rowId });
             }
           }
-        } catch (_) { /* ignore */ }
+        } catch (e) {
+          if (String(e?.message || e) !== "skip_enc_no_uuid") { /* ignore */ }
+        }
       } else {
         // ── Full encounter probe — run all 3 table attempts in PARALLEL ──────────────
         const encounterSources = [
@@ -14319,8 +14379,13 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
         const encounterResults = await Promise.all(
           encounterSources.map(async (source) => {
             try {
+              const inIds =
+                source.table === "patient_encounters" ? pePatientIdIn : patientLookupIds;
+              if (source.table === "patient_encounters" && inIds.length === 0) {
+                return { source, result: { error: null, data: [] } };
+              }
               let q = supabase.from(source.table).select(source.select)
-                .in("patient_id", patientLookupIds)
+                .in("patient_id", inIds)
                 .order("created_at", { ascending: false });
               if (clinicFilter) q = q.or(`clinic_id.eq.${clinicFilter},clinic_id.is.null`);
               const result = await q;
@@ -14363,10 +14428,13 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
       // Without encounter ids, encounter_diagnoses are never merged — diagnoses "vanish" on refresh.
       if (encounterIdMap.size === 0) {
         try {
+          if (pePatientIdIn.length === 0) {
+            throw new Error("skip_enc_refill");
+          }
           const refill = await supabase
             .from("patient_encounters")
             .select("id, patient_id, encounter_type, status, created_at, updated_at")
-            .in("patient_id", patientLookupIds)
+            .in("patient_id", pePatientIdIn)
             .order("created_at", { ascending: false });
           if (!refill.error && Array.isArray(refill.data)) {
             for (const row of refill.data) {
@@ -14392,7 +14460,9 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
             }
           }
         } catch (e) {
-          console.warn("[TREATMENTS GET] patient_encounters refill failed:", e?.message || e);
+          if (String(e?.message || e) !== "skip_enc_refill") {
+            console.warn("[TREATMENTS GET] patient_encounters refill failed:", e?.message || e);
+          }
         }
       }
 
@@ -27176,41 +27246,59 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
       const idList = Array.from(clinicPatientIds);
       const safePatientList = idList.slice(0, 1000);
       const attempts = [];
+      const isAppt = String(tableName) === "appointments";
       const pushStartAtRangeAttempts = (builder) => {
-        attempts.push(() => builder().gte("start_at", dayStartIso).lt("start_at", dayEndIso));
-        attempts.push(() => builder().gte("startAt", dayStartIso).lt("startAt", dayEndIso));
-        attempts.push(() => builder().gte("start_time", dayStartIso).lt("start_time", dayEndIso));
-        attempts.push(() => builder().gte("startTime", dayStartIso).lt("startTime", dayEndIso));
+        if (isAppt) {
+          attempts.push(() => builder().gte("start_time", dayStartIso).lt("start_time", dayEndIso));
+          attempts.push(() => builder().gte("startTime", dayStartIso).lt("startTime", dayEndIso));
+        } else {
+          attempts.push(() => builder().gte("start_at", dayStartIso).lt("start_at", dayEndIso));
+          attempts.push(() => builder().gte("startAt", dayStartIso).lt("startAt", dayEndIso));
+          attempts.push(() => builder().gte("start_time", dayStartIso).lt("start_time", dayEndIso));
+          attempts.push(() => builder().gte("startTime", dayStartIso).lt("startTime", dayEndIso));
+        }
       };
 
-      if (isSingleDate) {
-        attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).eq("date", rangeStartDate));
-        attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).eq("appointment_date", rangeStartDate));
-      } else {
-        attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("date", rangeStartDate).lte("date", rangeEndDate));
-        attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("appointment_date", rangeStartDate).lte("appointment_date", rangeEndDate));
+      if (!isAppt) {
+        if (isSingleDate) {
+          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).eq("date", rangeStartDate));
+          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).eq("appointment_date", rangeStartDate));
+        } else {
+          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("date", rangeStartDate).lte("date", rangeEndDate));
+          attempts.push(() =>
+            supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("appointment_date", rangeStartDate).lte("appointment_date", rangeEndDate)
+          );
+        }
       }
 
       pushStartAtRangeAttempts(() => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId));
 
       if (req.clinicCode) {
-        if (isSingleDate) {
-          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).eq("date", rangeStartDate));
-          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).eq("appointment_date", rangeStartDate));
-        } else {
-          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).gte("date", rangeStartDate).lte("date", rangeEndDate));
-          attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).gte("appointment_date", rangeStartDate).lte("appointment_date", rangeEndDate));
+        if (!isAppt) {
+          if (isSingleDate) {
+            attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).eq("date", rangeStartDate));
+            attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).eq("appointment_date", rangeStartDate));
+          } else {
+            attempts.push(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).gte("date", rangeStartDate).lte("date", rangeEndDate));
+            attempts.push(() =>
+              supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode).gte("appointment_date", rangeStartDate).lte("appointment_date", rangeEndDate)
+            );
+          }
         }
         pushStartAtRangeAttempts(() => supabase.from(tableName).select("*").eq("clinic_code", req.clinicCode));
       }
 
       if (safePatientList.length) {
-        if (isSingleDate) {
-          attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).eq("date", rangeStartDate));
-          attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).eq("appointment_date", rangeStartDate));
-        } else {
-          attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).gte("date", rangeStartDate).lte("date", rangeEndDate));
-          attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).gte("appointment_date", rangeStartDate).lte("appointment_date", rangeEndDate));
+        if (!isAppt) {
+          if (isSingleDate) {
+            attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).eq("date", rangeStartDate));
+            attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).eq("appointment_date", rangeStartDate));
+          } else {
+            attempts.push(() => supabase.from(tableName).select("*").in("patient_id", safePatientList).gte("date", rangeStartDate).lte("date", rangeEndDate));
+            attempts.push(() =>
+              supabase.from(tableName).select("*").in("patient_id", safePatientList).gte("appointment_date", rangeStartDate).lte("appointment_date", rangeEndDate)
+            );
+          }
         }
 
         pushStartAtRangeAttempts(() => supabase.from(tableName).select("*").in("patient_id", safePatientList));
@@ -32924,9 +33012,8 @@ async function fetchDoctorDashboardTreatmentPlansForDay(
 }
 
 /**
- * GET /api/admin/appointments ile uyum: appointments + appointment_requests,
- * date / appointment_date, start_at | start_time (bölgesel gün + admin’in UTC günü birleşik),
- * clinic_id + hasta listesi.
+ * GET /api/admin/appointments ile uyum: `appointments` — `start_time` [startIso, endIso);
+ * `appointment_requests` — date / appointment_date eşiği; start_* aralıkları; clinic_id + hasta listesi.
  */
 async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw) {
   const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
@@ -33003,8 +33090,92 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
   const selRange =
     "id, patient_id, date, appointment_date, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
   const apptStartInstantCols = ["start_at", "startAt", "start_time", "startTime"];
+  const apptSelSt =
+    "id, patient_id, start_time, date, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
+  const apptSelStCamel =
+    "id, patient_id, startTime, date, time, appointment_time, status, chair_number, notes, doctor_id, procedure";
 
-  for (const tableName of ["appointments", "appointment_requests"]) {
+  /** appointments: canonical `start_time` (timestamptz) — [startIso, endIso), no appointment_date / date equality. */
+  for (const dr of tsRanges) {
+    if (cid) {
+      await tryQuery("appointments:start_time+cid", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelSt)
+          .eq("clinic_id", cid)
+          .gte("start_time", dr.startIso)
+          .lt("start_time", dr.endIso)
+          .order("start_time", { ascending: true })
+          .limit(80)
+      );
+      await tryQuery("appointments:startTime+cid", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelStCamel)
+          .eq("clinic_id", cid)
+          .gte("startTime", dr.startIso)
+          .lt("startTime", dr.endIso)
+          .order("startTime", { ascending: true })
+          .limit(80)
+      );
+    } else {
+      await tryQuery("appointments:start_time", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelSt)
+          .gte("start_time", dr.startIso)
+          .lt("start_time", dr.endIso)
+          .order("start_time", { ascending: true })
+          .limit(80)
+      );
+    }
+    if (clinicCode) {
+      await tryQuery("appointments:start_time+clinic_code", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelSt)
+          .eq("clinic_code", clinicCode)
+          .gte("start_time", dr.startIso)
+          .lt("start_time", dr.endIso)
+          .order("start_time", { ascending: true })
+          .limit(80)
+      );
+      await tryQuery("appointments:startTime+clinic_code", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelStCamel)
+          .eq("clinic_code", clinicCode)
+          .gte("startTime", dr.startIso)
+          .lt("startTime", dr.endIso)
+          .order("startTime", { ascending: true })
+          .limit(80)
+      );
+    }
+    if (pidSlice.length) {
+      await tryQuery("appointments:start_time+patients", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelSt)
+          .in("patient_id", pidSlice)
+          .gte("start_time", dr.startIso)
+          .lt("start_time", dr.endIso)
+          .order("start_time", { ascending: true })
+          .limit(80)
+      );
+      await tryQuery("appointments:startTime+patients", "appointments", () =>
+        supabase
+          .from("appointments")
+          .select(apptSelStCamel)
+          .in("patient_id", pidSlice)
+          .gte("startTime", dr.startIso)
+          .lt("startTime", dr.endIso)
+          .order("startTime", { ascending: true })
+          .limit(80)
+      );
+    }
+  }
+
+  for (const tableName of ["appointment_requests"]) {
     for (const a of attempts) {
       await tryQuery(`${tableName}:${a.dateCol}+cid`, tableName, () => {
         let q = supabase.from(tableName).select(a.sel).eq(a.dateCol, dayYmd).order(a.timeOrder, { ascending: true }).limit(80);
@@ -33191,13 +33362,17 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
   const scanTableDay = async (tableName, dayYmd) => {
     const ranges = rangesForDay(dayYmd);
     const tasks = [];
+    const isAppt = tableName === "appointments";
+    const timeCols = isAppt ? ["start_time", "startTime"] : ["start_at", "start_time", "startAt", "startTime"];
     if (cid) {
-      tasks.push(() => supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("date", dayYmd).limit(500));
-      tasks.push(() =>
-        supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("appointment_date", dayYmd).limit(500)
-      );
+      if (!isAppt) {
+        tasks.push(() => supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("date", dayYmd).limit(500));
+        tasks.push(() =>
+          supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("appointment_date", dayYmd).limit(500)
+        );
+      }
       for (const { startIso, endIso } of ranges) {
-        for (const col of ["start_at", "start_time", "startAt", "startTime"]) {
+        for (const col of timeCols) {
           tasks.push(() =>
             supabase.from(tableName).select("patient_id").eq("clinic_id", cid).gte(col, startIso).lt(col, endIso).limit(500)
           );
@@ -33205,19 +33380,21 @@ async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctor
       }
     }
     if (clinicCode) {
-      tasks.push(() =>
-        supabase.from(tableName).select("patient_id").eq("clinic_code", clinicCode).eq("date", dayYmd).limit(500)
-      );
-      tasks.push(() =>
-        supabase
-          .from(tableName)
-          .select("patient_id")
-          .eq("clinic_code", clinicCode)
-          .eq("appointment_date", dayYmd)
-          .limit(500)
-      );
+      if (!isAppt) {
+        tasks.push(() =>
+          supabase.from(tableName).select("patient_id").eq("clinic_code", clinicCode).eq("date", dayYmd).limit(500)
+        );
+        tasks.push(() =>
+          supabase
+            .from(tableName)
+            .select("patient_id")
+            .eq("clinic_code", clinicCode)
+            .eq("appointment_date", dayYmd)
+            .limit(500)
+        );
+      }
       for (const { startIso, endIso } of ranges) {
-        for (const col of ["start_at", "start_time", "startAt", "startTime"]) {
+        for (const col of timeCols) {
           tasks.push(() =>
             supabase
               .from(tableName)
@@ -34462,7 +34639,7 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
     }
 
     const mapAppointment = (a, fallbackDay) => {
-      const startInst = a.start_at || a.startAt || a.start_time || a.startTime;
+      const startInst = a.start_time || a.startTime || a.start_at || a.startAt;
       const dateVal = a.date || a.appointment_date || (startInst ? String(startInst).slice(0, 10) : fallbackDay);
       let timeVal = a.time || a.appointment_time || "09:00";
       if (startInst && !a.time && !a.appointment_time) {
@@ -34738,16 +34915,12 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
       return res.status(403).json({ ok: false, error: 'doctor_mismatch' });
     }
 
-    const nowDate = new Date();
-    const todayUtc = nowDate.toISOString().slice(0, 10);
-    const todayLocal = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, '0')}-${String(nowDate.getDate()).padStart(2, '0')}`;
-    const dateAliases = [...new Set([todayUtc, todayLocal].filter(Boolean))];
-    const dateAliasSet = new Set(dateAliases);
-
-    const dayStartIso = `${todayUtc}T00:00:00.000Z`;
-    const dayEndDate = new Date(dayStartIso);
-    dayEndDate.setUTCDate(dayEndDate.getUTCDate() + 1);
-    const dayEndIso = dayEndDate.toISOString();
+    /** Same civil calendar as doctor dashboard (treatment plan list): Asia/Tbilisi; appointments filtered by `start_time` in [dayStart, dayEnd). */
+    const planDayTz = "Asia/Tbilisi";
+    const todayYmd = ymdInTimeZone(new Date(), planDayTz);
+    const { startIso: dayStartIso, endIso: dayEndIso } = zonedCivilDayRangeIso(todayYmd, planDayTz);
+    const todayLocal = todayYmd;
+    const dateAliasSet = new Set([todayYmd]);
 
     const fetchAppointments = async () => {
       const selectCandidates = [
@@ -34761,29 +34934,13 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
       const queryAttempts = [];
       for (const selectClause of selectCandidates) {
         if (req.clinicId) {
-          dateAliases.forEach((dayValue) => {
-            queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).eq('date', dayValue));
-            queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).eq('appointment_date', dayValue));
-          });
-          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
-          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_id', req.clinicId).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
         }
         if (req.clinicCode) {
-          dateAliases.forEach((dayValue) => {
-            queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).eq('date', dayValue));
-            queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).eq('appointment_date', dayValue));
-          });
-          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
-          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
           queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('clinic_code', req.clinicCode).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
         }
-        dateAliases.forEach((dayValue) => {
-          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('date', dayValue));
-          queryAttempts.push(() => supabase.from('appointments').select(selectClause).eq('appointment_date', dayValue));
-        });
       }
 
       for (const run of queryAttempts) {
@@ -34978,9 +35135,15 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
         const directPlanId = String(row?.plan_id || row?.treatment_plan_id || '').trim();
         const planId = directPlanId || planMapByEncounter.get(encounterId) || '';
 
-        const dateValue = String(row?.date || row?.appointment_date || '').trim() || todayLocal;
-        const time = formatTime(row?.time, row?.start_at || row?.startAt);
-        const dateIso = toIso(dateValue, time, row?.start_at || row?.startAt) || `${todayLocal}T${time}:00.000Z`;
+        const startInst = row?.start_at || row?.startAt || row?.start_time || row?.startTime;
+        let dateValue = String(row?.date || row?.appointment_date || "").trim();
+        if (!dateValue && startInst) {
+          const d = new Date(String(startInst));
+          if (Number.isFinite(d.getTime())) dateValue = d.toISOString().slice(0, 10);
+        }
+        if (!dateValue) dateValue = todayLocal;
+        const time = formatTime(row?.time, startInst);
+        const dateIso = toIso(dateValue, time, startInst) || `${todayLocal}T${time}:00.000Z`;
         const chairNumber = String(row?.chair_no || row?.chairNumber || row?.chair || '').trim() || '-';
         const patientInfo = patientMap.get(patientId) || { patientName: 'Unknown Patient', hasMedicalRisk: false };
 
@@ -35869,7 +36032,8 @@ app.get('/api/doctor/encounters', requireDoctorAuth, async (req, res) => {
       const visible = await buildVisiblePatientIdSetForDoctor(req);
       const patientKeys = [...visible].map((x) => String(x || "").trim()).filter(Boolean);
       for (let i = 0; i < patientKeys.length; i += 50) {
-        const chunk = patientKeys.slice(i, i + 50);
+        const chunk = cleanUuids(patientKeys.slice(i, i + 50));
+        if (!chunk.length) continue;
         await runSelect((selectClause) =>
           supabase
             .from("patient_encounters")
@@ -36332,7 +36496,7 @@ async function doctorOwnsAnyEncounterForPatient(patient, req) {
   if (!keys.length) return false;
   const pidA = String(patient?.id || "").trim();
   const pidB = patient?.patient_id != null ? String(patient.patient_id).trim() : "";
-  const patientKeys = [...new Set([pidA, pidB].filter(Boolean))];
+  const patientKeys = cleanUuids([pidA, pidB].filter(Boolean));
   if (!patientKeys.length) return false;
   try {
     const { data, error } = await supabase
@@ -36348,7 +36512,7 @@ async function doctorOwnsAnyEncounterForPatient(patient, req) {
   }
 }
 
-/** patient_encounters.patient_id may be patients.id (UUID) or legacy patients.patient_id (e.g. p_…) */
+/** Resolve a patient row by id or patients.patient_id (text, e.g. p_…). */
 async function resolvePatientRowForEncounterPatientId(encounterPatientId) {
   const raw = String(encounterPatientId || '').trim();
   if (!raw) return null;
@@ -37002,11 +37166,19 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
     const patientId = String(req.params.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
 
-    // Hastanın tüm encounter ID'lerini bul
+    const patRow = await getPatientById(patientId).catch(() => null);
+    const internalUuid = String(patRow?.id || "").trim();
+    const encounterPidKeys = internalUuid
+      ? await encounterPatientIdMatchSet(internalUuid, patientId)
+      : cleanUuids([patientId]);
+    if (!encounterPidKeys.length) {
+      return res.json({ ok: true, treatments: [] });
+    }
+
     const { data: encounters, error: encErr } = await supabase
       .from('patient_encounters')
       .select('id')
-      .eq('patient_id', patientId);
+      .in('patient_id', encounterPidKeys);
 
     if (encErr) {
       console.error('[DOCTOR PATIENT TREATMENTS] encounters fetch error:', encErr);
@@ -40900,10 +41072,10 @@ async function syncAssignedDoctorOnPatientTreatmentPlans(patientUuid, doctorIdRa
   }
 
   const { data: patientRow } = await supabase.from("patients").select("id, patient_id").eq("id", pid).maybeSingle();
-  const patientIdKeys = [pid];
-  if (patientRow?.patient_id != null && String(patientRow.patient_id).trim()) {
-    patientIdKeys.push(String(patientRow.patient_id).trim());
-  }
+  const patientIdKeys = cleanUuids([
+    pid,
+    patientRow?.patient_id != null ? String(patientRow.patient_id).trim() : "",
+  ]);
 
   const { data: encs, error: encErr } = await supabase
     .from("patient_encounters")
@@ -41582,19 +41754,32 @@ app.get('/api/doctor/chair-availability', requireDoctorAuth, async (req, res) =>
 
     const fetchDayRows = async (tableName) => {
       const attempts = [];
+      const isAppt = String(tableName) === "appointments";
 
       if (req.clinicId) {
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('date', date));
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('appointment_date', date));
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+        if (!isAppt) {
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('date', date));
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('appointment_date', date));
+        }
+        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
+        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
+        if (!isAppt) {
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+        }
       }
 
       if (req.clinicCode) {
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('date', date));
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('appointment_date', date));
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
-        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+        if (!isAppt) {
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('date', date));
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('appointment_date', date));
+        }
+        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
+        attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
+        if (!isAppt) {
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+        }
       }
 
       for (const run of attempts) {
@@ -41643,6 +41828,8 @@ app.get('/api/doctor/chair-availability', requireDoctorAuth, async (req, res) =>
       const startIso =
         toIso(row?.start_at) ||
         toIso(row?.startAt) ||
+        toIso(row?.start_time) ||
+        toIso(row?.startTime) ||
         dateTimeToIsoSafe(row?.date || row?.appointment_date, row?.time);
       if (!startIso) return;
 
@@ -41860,19 +42047,32 @@ app.post('/api/treatment/plans/:id/items', requireDoctorAuth, async (req, res) =
 
       const fetchDayRows = async (tableName) => {
         const attempts = [];
+        const isAppt = String(tableName) === "appointments";
 
         if (req.clinicId) {
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('date', dateOnly));
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('appointment_date', dateOnly));
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+          if (!isAppt) {
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('date', dateOnly));
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).eq('appointment_date', dateOnly));
+          }
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
+          if (!isAppt) {
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_id', req.clinicId).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+          }
         }
 
         if (req.clinicCode) {
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('date', dateOnly));
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('appointment_date', dateOnly));
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
-          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+          if (!isAppt) {
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('date', dateOnly));
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).eq('appointment_date', dateOnly));
+          }
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('start_time', dayStartIso).lt('start_time', dayEndIso));
+          attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('startTime', dayStartIso).lt('startTime', dayEndIso));
+          if (!isAppt) {
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('start_at', dayStartIso).lt('start_at', dayEndIso));
+            attempts.push(() => supabase.from(tableName).select('*').eq('clinic_code', req.clinicCode).gte('startAt', dayStartIso).lt('startAt', dayEndIso));
+          }
         }
 
         for (const run of attempts) {
@@ -41909,7 +42109,12 @@ app.post('/api/treatment/plans/:id/items', requireDoctorAuth, async (req, res) =
         );
         if (parsed > 0) return parsed;
         const endIso = toIso(row?.end_at) || toIso(row?.endAt) || null;
-        const startIso = toIso(row?.start_at) || toIso(row?.startAt) || dateTimeToIsoSafe(row?.date || row?.appointment_date, row?.time);
+        const startIso =
+          toIso(row?.start_at) ||
+          toIso(row?.startAt) ||
+          toIso(row?.start_time) ||
+          toIso(row?.startTime) ||
+          dateTimeToIsoSafe(row?.date || row?.appointment_date, row?.time);
         if (startIso && endIso) {
           const diff = Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000);
           if (Number.isFinite(diff) && diff > 0) return Math.max(10, Math.min(240, diff));
@@ -41937,6 +42142,8 @@ app.post('/api/treatment/plans/:id/items', requireDoctorAuth, async (req, res) =
           const startIso =
             toIso(row?.start_at) ||
             toIso(row?.startAt) ||
+            toIso(row?.start_time) ||
+            toIso(row?.startTime) ||
             dateTimeToIsoSafe(row?.date || row?.appointment_date, row?.time);
           if (!startIso) continue;
 
@@ -41966,6 +42173,8 @@ app.post('/api/treatment/plans/:id/items', requireDoctorAuth, async (req, res) =
           const startIso =
             toIso(row?.start_at) ||
             toIso(row?.startAt) ||
+            toIso(row?.start_time) ||
+            toIso(row?.startTime) ||
             dateTimeToIsoSafe(row?.date || row?.appointment_date, row?.time);
           if (!startIso) continue;
 
@@ -43245,18 +43454,8 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   return res.status(status).json({ ok: false, error: msg });
 });
 
-// ================== GLOBAL ERROR HANDLING ==================
-process.on("uncaughtException", (error) => {
-  console.error("[UNCAUGHT EXCEPTION]", error);
-  process.exit(1);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[UNHANDLED REJECTION]", reason);
-  console.error("[PROMISE]", promise);
-});
-
 // ================== START ==================
+// (uncaughtException / unhandledRejection handlers are registered near app bootstrap)
 // Railway / Render: bind the same http.Server instance; handle listen errors (avoid silent uncaughtException).
 server.on("error", (err) => {
   console.error("[SERVER] listen/bind error:", err && err.message ? err.message : err);
@@ -43271,8 +43470,17 @@ app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.path });
 });
 
+console.log("[STARTUP] http.Server.listen", {
+  port: PORT,
+  host: "0.0.0.0",
+  pid: process.pid,
+  node: process.version,
+  cwd: process.cwd(),
+  env: process.env.NODE_ENV || "(unset)",
+});
+
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ Server listening on 0.0.0.0:${PORT} (process.env.PORT=${JSON.stringify(process.env.PORT ?? null)})`);
   console.log(
     "STATIC files:",
     "admin-login.html=" + fs.existsSync(path.join(publicDir, "admin-login.html")),
@@ -43297,6 +43505,8 @@ server.listen(PORT, "0.0.0.0", () => {
 
 
 
-  postBootInit();
+  postBootInit().catch((e) => {
+    console.error("[POST-BOOT] postBootInit() failed (server keeps running):", e?.message || e);
+  });
 });
 // Deployment trigger - Mon Feb 16 22:01:03 +04 2026
