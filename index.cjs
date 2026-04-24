@@ -12451,6 +12451,40 @@ function mapTreatmentEventsForCalendar(rawEvents) {
   });
 }
 
+/** Doctor dashboard: slot start_time = new Date(sourceMs).toISOString() (never return raw DB timestamps). */
+function toDashboardStartIso(primaryMs, createdFallbackMs, updatedFallbackMs) {
+  const a = Number.isFinite(primaryMs) && primaryMs > 0 ? primaryMs : null;
+  const b = Number.isFinite(createdFallbackMs) && createdFallbackMs > 0 ? createdFallbackMs : null;
+  const c = Number.isFinite(updatedFallbackMs) && updatedFallbackMs > 0 ? updatedFallbackMs : null;
+  const ms = a ?? b ?? c;
+  if (ms == null) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * One local calendar day: interpret `ymd` in local TZ, return [start, nextDay) in ms
+ * (compare slot instant t with t >= startMs && t < endMsExclusive).
+ */
+function getLocalDayWindowBoundsMsFromYmd(ymd) {
+  const dayStart = new Date(`${ymd}T00:00:00`);
+  const endExclusive = new Date(dayStart);
+  endExclusive.setDate(dayStart.getDate() + 1);
+  const startMs = dayStart.getTime();
+  const endMsExclusive = endExclusive.getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMsExclusive) || startMs >= endMsExclusive) {
+    const recoveredStart = Number.isFinite(startMs) && !Number.isNaN(startMs) ? startMs : Date.now();
+    const endRec = recoveredStart + 86400000;
+    console.error("[DOCTOR INBOX-SUMMARY] invalid day window; using 24h recovery", {
+      ymd: String(ymd || "").trim() || null,
+      startMs,
+      endMsExclusive,
+      recovery: { startMs: recoveredStart, endMsExclusive: endRec },
+    });
+    return { startMs: recoveredStart, endMsExclusive: endRec, _dayWindowRecovered: true };
+  }
+  return { startMs, endMsExclusive, _dayWindowRecovered: false };
+}
+
 function resolveMissingDatePolicy(rawValue) {
   const normalized = String(rawValue || "").trim().toUpperCase();
   return normalized === "AUTO" ? "AUTO" : "MANUAL";
@@ -32322,9 +32356,7 @@ async function collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw)
 }
 
 /**
- * İşlem / randevu satırı ataması: encounter_treatments.assigned_doctor_id, appointments.doctor_id,
- * patient_encounters.assigned_doctor_id — sadece plan "tedavi ekibi" veya patients.primary_ataması değil,
- * muayenedeki işleme atanmış doktorun da hastayı görmesi için.
+ * İşlem ataması: encounter_treatments, patient_encounters (appointments tablosu kullanılmaz).
  */
 async function collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId) {
   const out = new Set();
@@ -32402,30 +32434,8 @@ async function collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysR
     await runKeys(allKeys);
   };
 
-  const fromAppointmentsTable = async () => {
-    const cid = clinicId ? String(clinicId).trim() : "";
-    const runCol = async (keyList, doctorCol) => {
-      if (!keyList.length) return;
-      let q = supabase.from("appointments").select("patient_id").in(doctorCol, keyList).limit(500);
-      if (cid) q = q.eq("clinic_id", cid);
-      let { data, error } = await q;
-      if (error && cid) {
-        const r2 = await supabase.from("appointments").select("patient_id").in(doctorCol, keyList).limit(500);
-        data = r2.data;
-        error = r2.error;
-      }
-      if (error) return;
-      for (const r of data || []) {
-        const pid = String(r?.patient_id || "").trim();
-        if (pid) out.add(pid);
-      }
-    };
-    await runCol(allKeys, "doctor_id");
-    await runCol(allKeys, "assigned_doctor_id");
-  };
-
   try {
-    await Promise.all([fromEncounterTreatments(), fromPatientEncountersAssigned(), fromAppointmentsTable()]);
+    await Promise.all([fromEncounterTreatments(), fromPatientEncountersAssigned()]);
   } catch (e) {
     console.warn("[process_assign] aggregate:", e?.message || e);
   }
@@ -33320,104 +33330,252 @@ async function fetchAppointmentsForDayMerged(dayYmd, clinicIdRaw, clinicCodeRaw)
 }
 
 /**
- * Dashboard'daki bugün/yarın takvimiyle aynı hasta kümesi — randevu satırında doktor_id boş olsa bile
- * klinik takviminde görünen hasta, Patients listesinde de görünsün (Serap vb.).
+ * Bugün / yarın için, doctor inbox + dashboard ile aynı kaynaklardan (tev + encounter + plan items)
+ * hasta id'leri; appointments tablosu yok.
  */
-/**
- * Bugün/yarın takviminde görünen hasta id’leri — sadece patient_id çekilir (fetchAppointmentsForDayMerged değil;
- * /api/doctor/patients zaman aşımını önler). clinic_code + clinic_id + start_* aralıkları.
- */
-async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCodeRaw) {
-  void doctorKeysRaw;
+async function collectPatientIdsForClinicDayFromTimeline(clinicId, dayYmd, doctorKeysUuidFk) {
   const out = new Set();
   const cid = clinicId ? String(clinicId).trim() : "";
-  const clinicCode = clinicCodeRaw ? String(clinicCodeRaw).trim() : "";
-  if (!cid && !clinicCode) return out;
+  if (!cid) return out;
 
-  const calTz = getCliniflowDashboardCalendarTZ();
-  const todayStr = ymdInTimeZone(new Date(), calTz);
-  const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
+  const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
 
-  const rangesForDay = (dayYmd) => {
-    const z = zonedCivilDayRangeIso(dayYmd, calTz);
-    const u = adminUtcDayRangeIsoForYmd(dayYmd);
-    if (u.startIso === z.startIso && u.endIso === z.endIso) return [z];
-    return [z, u];
-  };
+  // --- TEV (patients.treatment_events)
+  const selectTries = [
+    "id, treatment_events, primary_doctor_id, doctor_id",
+    "id, treatment_events, doctor_id",
+    "id, treatment_events",
+  ];
+  let list = [];
+  for (const sel of selectTries) {
+    const { data, error } = await supabase.from("patients").select(sel).eq("clinic_id", cid).limit(400);
+    if (!error && Array.isArray(data)) {
+      list = data;
+      break;
+    }
+    const code = String(error?.code || "");
+    if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
+  }
+  for (const p of list || []) {
+    const pid = String(p.id || "").trim();
+    if (!pid) continue;
+    const evs = mapTreatmentEventsForCalendar(p.treatment_events);
+    for (const evt of evs) {
+      const primaryMs =
+        Number(evt.startAt) ||
+        (evt.date
+          ? new Date(
+              `${String(evt.date).trim()}T${String(evt.time != null && evt.time !== "" ? evt.time : "00:00").trim()}`
+            ).getTime()
+          : NaN);
+      const createdMs = evt.created_at
+        ? Date.parse(String(evt.created_at))
+        : evt.createdAt
+          ? Date.parse(String(evt.createdAt))
+          : NaN;
+      const updatedMs = evt.updated_at
+        ? Date.parse(String(evt.updated_at))
+        : evt.updatedAt
+          ? Date.parse(String(evt.updatedAt))
+          : NaN;
+      const startIso = toDashboardStartIso(
+        Number.isFinite(primaryMs) ? primaryMs : NaN,
+        Number.isFinite(createdMs) ? createdMs : NaN,
+        Number.isFinite(updatedMs) ? updatedMs : NaN
+      );
+      if (!startIso) continue;
+      const tSlot = Date.parse(startIso);
+      if (!Number.isFinite(tSlot) || tSlot < startMs || tSlot >= endMsExclusive) continue;
+      out.add(pid);
+    }
+  }
 
-  const pushRows = (data) => {
-    for (const r of data || []) {
-      const p = r?.patient_id;
-      if (p != null && String(p).trim()) out.add(String(p).trim());
+  // --- encounter_treatments
+  const encById = new Map();
+  const addEnc = (rows) => {
+    for (const e of rows || []) {
+      const id = String(e?.id || "").trim();
+      if (!id) continue;
+      const prev = encById.get(id);
+      const next = {
+        id,
+        patient_id: e.patient_id,
+        created_by_doctor_id: e.created_by_doctor_id,
+      };
+      if (!prev) {
+        encById.set(id, next);
+      } else if (!prev.created_by_doctor_id && next.created_by_doctor_id) {
+        encById.set(id, { ...prev, created_by_doctor_id: next.created_by_doctor_id });
+      }
     }
   };
-
-  const run = async (fn) => {
+  {
+    const { data: byClinic } = await supabase
+      .from("patient_encounters")
+      .select("id, patient_id, created_by_doctor_id")
+      .eq("clinic_id", cid)
+      .limit(400);
+    addEnc(byClinic);
+  }
+  for (const key of doctorKeysUuidFk || []) {
     try {
-      const { data, error } = await fn();
-      if (!error) pushRows(data);
+      const { data: byDoc } = await supabase
+        .from("patient_encounters")
+        .select("id, patient_id, created_by_doctor_id")
+        .eq("created_by_doctor_id", key)
+        .limit(200);
+      addEnc(byDoc);
     } catch (_) {}
-  };
+  }
+  const encRows = Array.from(encById.values()).slice(0, 500);
+  if (encRows.length > 0) {
+    const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
+    const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
+    for (let i = 0; i < encIds.length; i += 80) {
+      const chunk = encIds.slice(i, i + 80);
+      let etList = null;
+      for (const sel of [
+        "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, created_at, updated_at, doctor_id",
+        "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, created_at, updated_at",
+        "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number",
+      ]) {
+        const { data: etRows, error: etErr } = await supabase
+          .from("encounter_treatments")
+          .select(sel)
+          .in("encounter_id", chunk)
+          .not("scheduled_at", "is", null);
+        const ec = String(etErr?.code || "");
+        if (!etErr && Array.isArray(etRows)) {
+          etList = etRows;
+          break;
+        }
+        if (["42703", "PGRST204", "PGRST205", "42P01"].includes(ec)) continue;
+        break;
+      }
+      for (const row of etList || []) {
+        const primaryMs = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
+        const createdMs = row.created_at ? Date.parse(String(row.created_at)) : NaN;
+        const updatedMs = row.updated_at ? Date.parse(String(row.updated_at)) : NaN;
+        const startIso = toDashboardStartIso(primaryMs, createdMs, updatedMs);
+        if (!startIso) continue;
+        const t = Date.parse(startIso);
+        if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) continue;
+        const st = String(row.status || "").toLowerCase();
+        if (st === "cancelled" || st === "canceled") continue;
+        const eid = String(row.encounter_id || "");
+        const pid = encToPatient.get(eid);
+        if (pid) out.add(pid);
+      }
+    }
+  }
 
-  const scanTableDay = async (tableName, dayYmd) => {
-    const ranges = rangesForDay(dayYmd);
-    const tasks = [];
-    const isAppt = tableName === "appointments";
-    const timeCols = isAppt ? ["start_time", "startTime"] : ["start_at", "start_time", "startAt", "startTime"];
-    if (cid) {
-      if (!isAppt) {
-        tasks.push(() => supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("date", dayYmd).limit(500));
-        tasks.push(() =>
-          supabase.from(tableName).select("patient_id").eq("clinic_id", cid).eq("appointment_date", dayYmd).limit(500)
-        );
+  // --- treatment_plan_items / treatment_items
+  if (encRows.length > 0) {
+    const encIds2 = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
+    const encToPatient2 = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
+    const patientIdsFromEnc = [...new Set(encRows.map((e) => String(e.patient_id || "").trim()).filter(Boolean))].slice(0, 200);
+
+    const planById = new Map();
+    const mergePlans = (rows) => {
+      for (const p of rows || []) {
+        const id = String(p?.id || "").trim();
+        if (id) planById.set(id, p);
       }
-      for (const { startIso, endIso } of ranges) {
-        for (const col of timeCols) {
-          tasks.push(() =>
-            supabase.from(tableName).select("patient_id").eq("clinic_id", cid).gte(col, startIso).lt(col, endIso).limit(500)
-          );
+    };
+    const { data: plansByEnc, error: plansEncErr } = await supabase
+      .from("treatment_plans")
+      .select("id, encounter_id, patient_id")
+      .in("encounter_id", encIds2)
+      .limit(800);
+    if (!plansEncErr && Array.isArray(plansByEnc)) mergePlans(plansByEnc);
+    if (patientIdsFromEnc.length > 0) {
+      const { data: plansByPat, error: plansPatErr } = await supabase
+        .from("treatment_plans")
+        .select("id, encounter_id, patient_id")
+        .in("patient_id", patientIdsFromEnc)
+        .limit(800);
+      if (!plansPatErr && Array.isArray(plansByPat)) mergePlans(plansByPat);
+    }
+    if (planById.size > 0) {
+      const planIds = [...planById.keys()];
+      const trySelects = [
+        "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, tooth_fdi_code, status, scheduled_at, chair_no, chair, created_at, updated_at",
+        "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair, created_at, updated_at",
+        "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair",
+        "id, treatment_plan_id, procedure_name, tooth_number, status, scheduled_at, created_at, updated_at",
+        "id, treatment_plan_id, procedure_name, tooth_number, status, scheduled_at",
+      ];
+      for (const table of ["treatment_plan_items", "treatment_items"]) {
+        for (let i = 0; i < planIds.length; i += 80) {
+          const chunk = planIds.slice(i, i + 80);
+          let rows = null;
+          for (const sel of trySelects) {
+            const { data, error } = await supabase
+              .from(table)
+              .select(sel)
+              .in("treatment_plan_id", chunk)
+              .not("scheduled_at", "is", null);
+            const code = String(error?.code || "");
+            if (!error && Array.isArray(data)) {
+              rows = data;
+              break;
+            }
+            if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+            break;
+          }
+          for (const row of rows || []) {
+            const primaryMs = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
+            const createdMs = row.created_at ? Date.parse(String(row.created_at)) : NaN;
+            const updatedMs = row.updated_at ? Date.parse(String(row.updated_at)) : NaN;
+            const startIso = toDashboardStartIso(primaryMs, createdMs, updatedMs);
+            if (!startIso) continue;
+            const t = Date.parse(startIso);
+            if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) continue;
+            const st = String(row.status || "").toLowerCase();
+            if (st === "cancelled" || st === "canceled") continue;
+            const planId = String(row.treatment_plan_id || "").trim();
+            const plan = planById.get(planId);
+            if (!plan) continue;
+            const eid = String(plan.encounter_id || "").trim();
+            let pid = (eid && encToPatient2.get(eid)) || String(plan.patient_id || "").trim();
+            if (pid) out.add(String(pid).trim());
+          }
         }
       }
     }
-    if (clinicCode) {
-      if (!isAppt) {
-        tasks.push(() =>
-          supabase.from(tableName).select("patient_id").eq("clinic_code", clinicCode).eq("date", dayYmd).limit(500)
-        );
-        tasks.push(() =>
-          supabase
-            .from(tableName)
-            .select("patient_id")
-            .eq("clinic_code", clinicCode)
-            .eq("appointment_date", dayYmd)
-            .limit(500)
-        );
-      }
-      for (const { startIso, endIso } of ranges) {
-        for (const col of timeCols) {
-          tasks.push(() =>
-            supabase
-              .from(tableName)
-              .select("patient_id")
-              .eq("clinic_code", clinicCode)
-              .gte(col, startIso)
-              .lt(col, endIso)
-              .limit(500)
-          );
-        }
-      }
-    }
-    await Promise.all(tasks.map((t) => run(t)));
+  }
+
+  return out;
+}
+
+/**
+ * Dashboard / doctor patients ile aynı hasta kümesi (timeline; clinicCodeRaw sadece imza uyumu için).
+ */
+async function collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCodeRaw) {
+  void clinicCodeRaw;
+  const out = new Set();
+  const cid = clinicId ? String(clinicId).trim() : "";
+  if (!cid) return out;
+
+  const localYmd = (d) => {
+    const x = d instanceof Date ? d : new Date(d);
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, "0");
+    const day = String(x.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
   };
+  const todayStr = localYmd(new Date());
+  const tomorrowD = new Date();
+  tomorrowD.setDate(tomorrowD.getDate() + 1);
+  const tomorrowStr = localYmd(tomorrowD);
+
+  const doctorKeys = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
 
   try {
-    const tables = ["appointments", "appointment_requests"];
-    await Promise.all(
-      tables.flatMap((tableName) => [
-        scanTableDay(tableName, todayStr),
-        scanTableDay(tableName, tomorrowStr),
-      ])
-    );
+    for (const dayYmd of [todayStr, tomorrowStr]) {
+      const fromDay = await collectPatientIdsForClinicDayFromTimeline(cid, dayYmd, doctorKeys);
+      for (const pid of fromDay) out.add(pid);
+    }
   } catch (e) {
     console.warn("[calendar_patient_ids] aggregate:", e?.message || e);
   }
@@ -34519,9 +34677,10 @@ function buildDashboardRiskFlagsFromHealth(healthRaw) {
   return flags;
 }
 
-// GET /api/doctor/dashboard — main dashboard endpoint for doctor mobile app
-app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
+// GET /api/doctor/inbox-summary & /api/doctor/dashboard — same handler (mobile uses inbox-summary; /dashboard is alias)
+async function handleDoctorInboxSummary(req, res) {
   try {
+    console.log("🔥 DOCTOR INBOX-SUMMARY (timeline) ENDPOINT HIT");
     // Use doctor from middleware (already verified)
     const doctorRecord = req.doctor || {};
     const doctorId = req.doctorId || doctorRecord.id || doctorRecord.doctor_id;
@@ -34590,34 +34749,555 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
       }
     }
 
-    /** Bugün / yarın — treatment_plans + patient_encounters; takvim günü Asia/Tbilisi (appointments tablosu kullanılmaz). */
-    const planDayTz = "Asia/Tbilisi";
-    const todayStr = ymdInTimeZone(new Date(), planDayTz);
-    const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
-    if (process.env.CLINIFLOW_DEBUG_DASHBOARD_CALENDAR === "1") {
-      const { startIso, endIso } = zonedCivilDayRangeIso(todayStr, planDayTz);
-      console.log(
-        "[DOCTOR DASHBOARD] planDayTz:",
-        planDayTz,
-        "todayYmd:",
-        todayStr,
-        "range:",
-        startIso,
-        endIso,
-        "doctorId:",
-        doctorId
+    // Bugün / yarın — yerel takvim (toISOString UTC kayması yüzünden yanlış güne düşmesin)
+    const localYmd = (d) => {
+      const x = d instanceof Date ? d : new Date(d);
+      const y = x.getFullYear();
+      const m = String(x.getMonth() + 1).padStart(2, "0");
+      const day = String(x.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
+    const todayStr = localYmd(new Date());
+    const tomorrowD = new Date();
+    tomorrowD.setDate(tomorrowD.getDate() + 1);
+    const tomorrowStr = localYmd(tomorrowD);
+
+    const normalize = (id) => String(id || "").replace(/^p_/i, "").trim().toLowerCase();
+    const currentDoctor = normalize(doctorId);
+
+    function applyUnifiedSlotDoctor(r) {
+      const norm = (x) => {
+        if (x == null) return null;
+        const s = String(x).trim();
+        return s ? s : null;
+      };
+      // created_by_doctor_id is kept for filter fallback only; not merged into doctor_id
+      const doctor_id = norm(r.assigned_doctor_id) ?? norm(r._midDoctor) ?? null;
+      r.doctor_id = doctor_id;
+      delete r._midDoctor;
+      if (!doctor_id && !norm(r.created_by_doctor_id)) {
+        console.error("[DOCTOR INBOX-SUMMARY] slot missing doctor_id and created_by_doctor_id", {
+          id: r.id,
+          source: r.source,
+          sourceId: r.sourceId,
+          patient_id: r.patient_id,
+        });
+      }
+    }
+
+    function matchesDoctor(row) {
+      const slotDoctorIds = [row?.doctor_id, row?.assigned_doctor_id, row?.assignedDoctorId, row?.doctorId].map(
+        normalize
       );
+      const hasAnyAssignment = slotDoctorIds.some((v) => v);
+      if (hasAnyAssignment) {
+        return slotDoctorIds.includes(currentDoctor);
+      }
+      return normalize(row?.created_by_doctor_id) === currentDoctor;
+    }
+
+    /**
+     * patients.treatment_events (JSON) — same source family as admin schedule / timeline.
+     * Maps into dashboard appointment rows: start_time, patient_id, doctor_id.
+     */
+    async function collectDashboardTreatmentEventSlotsForDay(dayYmd) {
+      const cid = clinicId ? String(clinicId).trim() : "";
+      if (!cid) return [];
+      const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
+      const out = [];
+      const selectTries = [
+        "id, treatment_events, primary_doctor_id, doctor_id",
+        "id, treatment_events, doctor_id",
+        "id, treatment_events",
+      ];
+      let list = [];
+      for (const sel of selectTries) {
+        const { data, error } = await supabase
+          .from("patients")
+          .select(sel)
+          .eq("clinic_id", cid)
+          .limit(400);
+        if (!error && Array.isArray(data)) {
+          list = data;
+          break;
+        }
+        const code = String(error?.code || "");
+        if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
+      }
+      for (const p of list || []) {
+        const pid = String(p.id || "").trim();
+        if (!pid) continue;
+        const evs = mapTreatmentEventsForCalendar(p.treatment_events);
+        for (const evt of evs) {
+          const primaryMs =
+            Number(evt.startAt) ||
+            (evt.date
+              ? new Date(
+                  `${String(evt.date).trim()}T${String(evt.time != null && evt.time !== "" ? evt.time : "00:00").trim()}`
+                ).getTime()
+              : NaN);
+          const createdMs = evt.created_at
+            ? Date.parse(String(evt.created_at))
+            : evt.createdAt
+              ? Date.parse(String(evt.createdAt))
+              : NaN;
+          const updatedMs = evt.updated_at
+            ? Date.parse(String(evt.updated_at))
+            : evt.updatedAt
+              ? Date.parse(String(evt.updatedAt))
+              : NaN;
+          const startIso = toDashboardStartIso(
+            Number.isFinite(primaryMs) ? primaryMs : NaN,
+            Number.isFinite(createdMs) ? createdMs : NaN,
+            Number.isFinite(updatedMs) ? updatedMs : NaN
+          );
+          if (!startIso) continue;
+          const tSlot = Date.parse(startIso);
+          if (!Number.isFinite(tSlot) || tSlot < startMs || tSlot >= endMsExclusive) continue;
+          const eid = String(evt.id || "").trim() || `t-${tSlot}`;
+          const row = {
+            id: `tev-${pid}-${eid}`.replace(/\s/g, "_").slice(0, 200),
+            patient_id: pid,
+            start_time: startIso,
+            assigned_doctor_id: evt.assigned_doctor_id ?? evt.assignedDoctorId ?? null,
+            assignedDoctorId: evt.assignedDoctorId,
+            doctorId: evt.doctorId,
+            _midDoctor: evt.doctorId ?? evt.doctor_id,
+            created_by_doctor_id: null,
+            appointment_time: new Date(tSlot).toTimeString().slice(0, 5),
+            status: String(evt.status || "scheduled"),
+            chair_number: String(evt.chair || evt.chairNo || evt.chair_no || "").trim(),
+            notes: String(evt.title || evt.type || "TREATMENT"),
+            source: "tev",
+            sourceId: eid,
+          };
+          applyUnifiedSlotDoctor(row);
+          out.push(row);
+        }
+      }
+      return out;
+    }
+
+    /** today/tomorrow: treatment_events (patients) + patient_encounters / encounter_treatments + plan items (admin-aligned). */
+    async function fetchAppointmentsForDay(dayYmd) {
+      const cid = clinicId ? String(clinicId).trim() : "";
+      if (!cid) {
+        return {
+          rows: [],
+          pipeline: {
+            dayYmd,
+            preMergeBySource: { tev: 0, encounter: 0, tpi: 0 },
+            preMergeTotal: 0,
+            postMerge: 0,
+            mergeDropped: 0,
+            invalidRow: 0,
+            postDoctor: 0,
+            doctorFilteredOut: 0,
+          },
+        };
+      }
+
+      const [teRows, etRows, tpiRows] = await Promise.all([
+        collectDashboardTreatmentEventSlotsForDay(dayYmd),
+        fetchEncounterTreatmentSlots(dayYmd),
+        fetchTreatmentPlanItemSlots(dayYmd),
+      ]);
+      const preMergeBySource = { tev: teRows.length, encounter: etRows.length, tpi: tpiRows.length };
+      const preMergeTotal = teRows.length + etRows.length + tpiRows.length;
+      const { out: slots, mergeDroppedCount, invalidRowCount } = mergeAppointmentDaySlots([], teRows, etRows, tpiRows);
+      const postMerge = slots.length;
+      const expectAfterMerge = preMergeTotal - mergeDroppedCount - invalidRowCount;
+      if (postMerge !== expectAfterMerge) {
+        console.error("[DOCTOR INBOX-SUMMARY] merge accounting mismatch (possible silent loss)", {
+          dayYmd,
+          preMergeTotal,
+          mergeDropped: mergeDroppedCount,
+          invalidRow: invalidRowCount,
+          postMerge,
+          expectAfterMerge,
+        });
+      }
+      if (invalidRowCount > 0) {
+        console.error("[DOCTOR INBOX-SUMMARY] merge skipped null rows", { dayYmd, invalidRowCount });
+      }
+      if (mergeDroppedCount > 0) {
+        console.log("[DOCTOR INBOX-SUMMARY] merge deduplicated duplicate keys", { dayYmd, mergeDropped: mergeDroppedCount, preMergeTotal, postMerge });
+      }
+      const filtered = slots.filter((row) => matchesDoctor(row));
+      const doctorFilteredOut = postMerge - filtered.length;
+      if (doctorFilteredOut > 0) {
+        console.log("[DOCTOR INBOX-SUMMARY] doctor filter excluded slots", { dayYmd, doctorFilteredOut, postDoctor: filtered.length });
+      }
+      console.log("🧪 DASHBOARD SLOTS MERGED (pre-doctor):", postMerge);
+      console.log("🧪 DASHBOARD SLOTS AFTER DOCTOR:", filtered.length);
+      console.log("🧪 FINAL DASHBOARD COUNT:", filtered.length);
+      return {
+        rows: filtered,
+        pipeline: {
+          dayYmd,
+          preMergeBySource: preMergeBySource,
+          preMergeTotal,
+          postMerge,
+          mergeDropped: mergeDroppedCount,
+          invalidRow: invalidRowCount,
+          postDoctor: filtered.length,
+          doctorFilteredOut,
+        },
+      };
     }
 
     let todayRaw = [];
     let tomorrowRaw = [];
+    let dashboardSlotPipeline = { today: null, tomorrow: null };
     try {
-      [todayRaw, tomorrowRaw] = await Promise.all([
-        fetchDoctorDashboardTreatmentPlansForDay(supabase, todayStr, doctorKeysUuidFk, clinicId, doctorKeysRaw),
-        fetchDoctorDashboardTreatmentPlansForDay(supabase, tomorrowStr, doctorKeysUuidFk, clinicId, doctorKeysRaw),
-      ]);
+      const [tDay, tTom] = await Promise.all([fetchAppointmentsForDay(todayStr), fetchAppointmentsForDay(tomorrowStr)]);
+      todayRaw = tDay.rows;
+      tomorrowRaw = tTom.rows;
+      dashboardSlotPipeline = { today: tDay.pipeline, tomorrow: tTom.pipeline };
     } catch (e) {
-      console.warn("[DOCTOR DASHBOARD] treatment_plans + encounters fetch:", e?.message || e);
+      console.warn("[DOCTOR INBOX-SUMMARY] timeline slots fetch:", e?.message || e);
+    }
+
+    console.log("🔥 INBOX SUMMARY HIT");
+    console.log("🧪 TODAY RAW:", todayRaw.length);
+    console.log("🧪 TOMORROW RAW:", tomorrowRaw.length);
+    console.log("🧪 SAMPLE TODAY:", todayRaw[0]);
+
+    /** encounter_treatments.scheduled_at + patient_encounters (clinic + created_by for doctor match) */
+    async function fetchEncounterTreatmentSlots(dayYmd) {
+      try {
+        const encById = new Map();
+        const addEnc = (rows) => {
+          for (const e of rows || []) {
+            const id = String(e?.id || "").trim();
+            if (!id) continue;
+            const prev = encById.get(id);
+            const next = {
+              id,
+              patient_id: e.patient_id,
+              created_by_doctor_id: e.created_by_doctor_id,
+            };
+            if (!prev) {
+              encById.set(id, next);
+            } else if (!prev.created_by_doctor_id && next.created_by_doctor_id) {
+              encById.set(id, { ...prev, created_by_doctor_id: next.created_by_doctor_id });
+            }
+          }
+        };
+        if (clinicId) {
+          const { data: byClinic } = await supabase
+            .from("patient_encounters")
+            .select("id, patient_id, created_by_doctor_id")
+            .eq("clinic_id", clinicId)
+            .limit(400);
+          addEnc(byClinic);
+        }
+        for (const key of doctorKeysUuidFk) {
+          try {
+            const { data: byDoc } = await supabase
+              .from("patient_encounters")
+              .select("id, patient_id, created_by_doctor_id")
+              .eq("created_by_doctor_id", key)
+              .limit(200);
+            addEnc(byDoc);
+          } catch (_) {}
+        }
+        const encRows = Array.from(encById.values()).slice(0, 500);
+        if (encRows.length === 0) return [];
+        const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
+        const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
+        const encToEncounterDoctor = new Map(
+          encRows.map((e) => [String(e.id), e.created_by_doctor_id != null ? String(e.created_by_doctor_id).trim() : ""])
+        );
+        const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
+        const out = [];
+        for (let i = 0; i < encIds.length; i += 80) {
+          const chunk = encIds.slice(i, i + 80);
+          let etList = null;
+          for (const sel of [
+            "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_at, updated_at, doctor_id",
+            "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_at, updated_at",
+            "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, created_at, updated_at",
+            "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number",
+          ]) {
+            const { data: etRows, error: etErr } = await supabase
+              .from("encounter_treatments")
+              .select(sel)
+              .in("encounter_id", chunk)
+              .not("scheduled_at", "is", null);
+            const ec = String(etErr?.code || "");
+            if (!etErr && Array.isArray(etRows)) {
+              etList = etRows;
+              break;
+            }
+            if (["42703", "PGRST204", "PGRST205", "42P01"].includes(ec)) continue;
+            break;
+          }
+          for (const row of etList || []) {
+            const primaryMs = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
+            const createdMs = row.created_at ? Date.parse(String(row.created_at)) : NaN;
+            const updatedMs = row.updated_at ? Date.parse(String(row.updated_at)) : NaN;
+            const startIso = toDashboardStartIso(primaryMs, createdMs, updatedMs);
+            if (!startIso) continue;
+            const t = Date.parse(startIso);
+            if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) continue;
+            const st = String(row.status || "").toLowerCase();
+            if (st === "cancelled" || st === "canceled") continue;
+            const eid = String(row.encounter_id || "");
+            const pid = encToPatient.get(eid);
+            if (!pid) continue;
+            const timeStr = new Date(t).toTimeString().slice(0, 5);
+            const proc = String(row.procedure_type || "TREATMENT").trim();
+            const tooth = row.tooth_number != null ? ` · 🦷 ${row.tooth_number}` : "";
+            const encDoc = encToEncounterDoctor.get(eid) || null;
+            const adoc = row.assigned_doctor_id != null ? String(row.assigned_doctor_id).trim() : null;
+            const midDoc = row.doctor_id != null && String(row.doctor_id).trim() !== "" ? String(row.doctor_id).trim() : null;
+            const slot = {
+              id: `et-${row.id}`,
+              patient_id: pid,
+              start_time: startIso,
+              assigned_doctor_id: adoc,
+              _midDoctor: midDoc,
+              created_by_doctor_id: encDoc,
+              doctorId: row.doctorId,
+              appointment_time: timeStr,
+              status: row.status,
+              chair_number: row.chair != null && String(row.chair).trim() !== "" ? String(row.chair) : "",
+              notes: `${proc}${tooth}`,
+              _planId: eid,
+              source: "encounter",
+              sourceId: String(row.id || ""),
+            };
+            applyUnifiedSlotDoctor(slot);
+            out.push(slot);
+          }
+        }
+        out.sort((x, y) => String(x.appointment_time || "").localeCompare(String(y.appointment_time || "")));
+        return out;
+      } catch (e) {
+        console.warn("[DOCTOR INBOX-SUMMARY] encounter_treatments slots:", e?.message || e);
+        return [];
+      }
+    }
+
+    /**
+     * Admin takvimi treatment_plan_items / treatment_items.scheduled_at kullanır; encounter_treatments
+     * güncellenmemiş olsa bile doktor home aynı satırları görsün.
+     */
+    async function fetchTreatmentPlanItemSlots(dayYmd) {
+      try {
+        const encById = new Map();
+        const addEnc = (rows) => {
+          for (const e of rows || []) {
+            const id = String(e?.id || "").trim();
+            if (!id) continue;
+            const prev = encById.get(id);
+            const next = {
+              id,
+              patient_id: e.patient_id,
+              created_by_doctor_id: e.created_by_doctor_id,
+            };
+            if (!prev) {
+              encById.set(id, next);
+            } else if (!prev.created_by_doctor_id && next.created_by_doctor_id) {
+              encById.set(id, { ...prev, created_by_doctor_id: next.created_by_doctor_id });
+            }
+          }
+        };
+        if (clinicId) {
+          const { data: byClinic } = await supabase
+            .from("patient_encounters")
+            .select("id, patient_id, created_by_doctor_id")
+            .eq("clinic_id", clinicId)
+            .limit(400);
+          addEnc(byClinic);
+        }
+        for (const key of doctorKeysUuidFk) {
+          try {
+            const { data: byDoc } = await supabase
+              .from("patient_encounters")
+              .select("id, patient_id, created_by_doctor_id")
+              .eq("created_by_doctor_id", key)
+              .limit(200);
+            addEnc(byDoc);
+          } catch (_) {}
+        }
+        const encRows = Array.from(encById.values()).slice(0, 500);
+        if (encRows.length === 0) return [];
+        const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
+        const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
+        const encToEncounterDoctor = new Map(
+          encRows.map((e) => [String(e.id), e.created_by_doctor_id != null ? String(e.created_by_doctor_id).trim() : ""])
+        );
+
+        const patientIdsFromEnc = [
+          ...new Set(encRows.map((e) => String(e.patient_id || "").trim()).filter(Boolean)),
+        ].slice(0, 200);
+
+        const planById = new Map();
+        const mergePlans = (rows) => {
+          for (const p of rows || []) {
+            const id = String(p?.id || "").trim();
+            if (id) planById.set(id, p);
+          }
+        };
+
+        const { data: plansByEnc, error: plansEncErr } = await supabase
+          .from("treatment_plans")
+          .select("id, encounter_id, patient_id")
+          .in("encounter_id", encIds)
+          .limit(800);
+        if (!plansEncErr && Array.isArray(plansByEnc)) mergePlans(plansByEnc);
+
+        if (patientIdsFromEnc.length > 0) {
+          const { data: plansByPat, error: plansPatErr } = await supabase
+            .from("treatment_plans")
+            .select("id, encounter_id, patient_id")
+            .in("patient_id", patientIdsFromEnc)
+            .limit(800);
+          if (!plansPatErr && Array.isArray(plansByPat)) mergePlans(plansByPat);
+        }
+
+        if (planById.size === 0) return [];
+
+        const planIds = [...planById.keys()];
+        const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
+        const out = [];
+
+        const trySelects = [
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, tooth_fdi_code, status, scheduled_at, chair_no, chair, unit_price, total_price, currency, doctor_id, assigned_doctor_id, created_at, updated_at",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair, doctor_id, assigned_doctor_id, created_at, updated_at",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair, created_at, updated_at",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair",
+          "id, treatment_plan_id, procedure_name, tooth_number, status, scheduled_at, created_at, updated_at",
+          "id, treatment_plan_id, procedure_name, tooth_number, status, scheduled_at",
+        ];
+
+        for (const table of ["treatment_plan_items", "treatment_items"]) {
+          for (let i = 0; i < planIds.length; i += 80) {
+            const chunk = planIds.slice(i, i + 80);
+            let rows = null;
+            for (const sel of trySelects) {
+              const { data, error } = await supabase
+                .from(table)
+                .select(sel)
+                .in("treatment_plan_id", chunk)
+                .not("scheduled_at", "is", null);
+              const code = String(error?.code || "");
+              if (!error && Array.isArray(data)) {
+                rows = data;
+                break;
+              }
+              if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+              break;
+            }
+            for (const row of rows || []) {
+              const primaryMs = row.scheduled_at ? Date.parse(String(row.scheduled_at)) : NaN;
+              const createdMs = row.created_at ? Date.parse(String(row.created_at)) : NaN;
+              const updatedMs = row.updated_at ? Date.parse(String(row.updated_at)) : NaN;
+              const startIso = toDashboardStartIso(primaryMs, createdMs, updatedMs);
+              if (!startIso) continue;
+              const t = Date.parse(startIso);
+              if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) continue;
+              const st = String(row.status || "").toLowerCase();
+              if (st === "cancelled" || st === "canceled") continue;
+              const planId = String(row.treatment_plan_id || "").trim();
+              const plan = planById.get(planId);
+              if (!plan) continue;
+              const eid = String(plan.encounter_id || "").trim();
+              let pid = (eid && encToPatient.get(eid)) || String(plan.patient_id || "").trim();
+              if (!pid) continue;
+              const timeStr = new Date(t).toTimeString().slice(0, 5);
+              const proc = String(row.procedure_name || row.procedure_code || "TREATMENT").trim();
+              const toothRaw = row.tooth_number != null ? row.tooth_number : row.tooth_fdi_code;
+              const tooth =
+                toothRaw != null && String(toothRaw).trim() !== ""
+                  ? ` · 🦷 ${String(toothRaw).trim()}`
+                  : "";
+              let priceSuffix = "";
+              const cur = row.currency != null ? String(row.currency).trim() : "";
+              const pu = row.unit_price;
+              const pt = row.total_price;
+              if (pu != null || pt != null) {
+                const amt = pt != null ? pt : pu;
+                priceSuffix = ` · 💰 ${amt}${cur ? ` ${cur}` : ""}`;
+              }
+              const adoc = row.assigned_doctor_id != null ? String(row.assigned_doctor_id).trim() : null;
+              const midDoc = row.doctor_id != null && String(row.doctor_id).trim() !== "" ? String(row.doctor_id).trim() : null;
+              const edoc = eid ? encToEncounterDoctor.get(eid) || null : null;
+              const slot = {
+                id: `tpi-${table}-${row.id}`,
+                patient_id: pid,
+                start_time: startIso,
+                assigned_doctor_id: adoc,
+                _midDoctor: midDoc,
+                created_by_doctor_id: edoc,
+                assignedDoctorId: row.assignedDoctorId,
+                doctorId: row.doctorId,
+                appointment_time: timeStr,
+                status: row.status || "scheduled",
+                chair_number:
+                  row.chair != null && String(row.chair).trim() !== ""
+                    ? String(row.chair)
+                    : row.chair_no != null && String(row.chair_no).trim() !== ""
+                      ? String(row.chair_no)
+                      : "",
+                notes: `${proc}${tooth}${priceSuffix}`,
+                _planId: eid || null,
+                source: "tpi",
+                sourceId: String(row.id || ""),
+              };
+              applyUnifiedSlotDoctor(slot);
+              out.push(slot);
+            }
+          }
+        }
+        out.sort((x, y) => String(x.appointment_time || "").localeCompare(String(y.appointment_time || "")));
+        return out;
+      } catch (e) {
+        console.warn("[DOCTOR INBOX-SUMMARY] treatment_plan_items slots:", e?.message || e);
+        return [];
+      }
+    }
+
+    function mergeAppointmentDaySlots(baseRows, ...extraLists) {
+      const keys = new Set();
+      const keyOf = (r) => {
+        const pid = String(r?.patient_id ?? "").trim();
+        const st = String(r?.start_time || r?.startTime || "");
+        const typ = String(r?.source || "unknown");
+        const sid = String(r?.sourceId ?? r?.id ?? "").trim();
+        return `${pid}_${st}_${typ}_${sid}`;
+      };
+      const out = [];
+      let mergeDroppedCount = 0;
+      let invalidRowCount = 0;
+      const pushRows = (rows) => {
+        for (const r of rows || []) {
+          if (!r) {
+            invalidRowCount += 1;
+            continue;
+          }
+          const k = keyOf(r);
+          if (keys.has(k)) {
+            mergeDroppedCount += 1;
+            continue;
+          }
+          keys.add(k);
+          out.push(r);
+        }
+      };
+      pushRows(baseRows);
+      for (const list of extraLists) pushRows(list);
+      out.sort((a, b) => {
+        const ta = Date.parse(String(a.start_time || a.startTime || ""));
+        const tb = Date.parse(String(b.start_time || b.startTime || ""));
+        if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+        return String(a.appointment_time || a.time || "").localeCompare(
+          String(b.appointment_time || b.time || "")
+        );
+      });
+      return { out, mergeDroppedCount, invalidRowCount };
     }
 
     const patientMap = new Map(patients.map((p) => [p.id, p]));
@@ -34639,16 +35319,15 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
     }
 
     const mapAppointment = (a, fallbackDay) => {
-      const startInst = a.start_time || a.startTime || a.start_at || a.startAt;
-      const dateVal = a.date || a.appointment_date || (startInst ? String(startInst).slice(0, 10) : fallbackDay);
+      const startInst = a.start_time || a.startTime || a.start_at;
+      const dateVal =
+        (startInst ? String(startInst).slice(0, 10) : null) ||
+        (a.date ? String(a.date).trim() : null) ||
+        fallbackDay;
       let timeVal = a.time || a.appointment_time || "09:00";
       if (startInst && !a.time && !a.appointment_time) {
         const d = new Date(String(startInst));
-        if (Number.isFinite(d.getTime())) {
-          timeVal = a._fromTreatmentPlan
-            ? formatTimeHmInZone(d.getTime(), planDayTz)
-            : d.toTimeString().slice(0, 5);
-        }
+        if (Number.isFinite(d.getTime())) timeVal = d.toTimeString().slice(0, 5);
       }
       if (timeVal && String(timeVal).length > 5) timeVal = String(timeVal).slice(0, 5);
       const patient = patientMap.get(a.patient_id) || null;
@@ -34662,6 +35341,7 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
         patientName: patient?.name || "Hasta",
         procedureSummary: a.notes || a.procedure || "",
         planId: a._planId || null,
+        source: a.source,
         status:
           st === "completed" || st === "done"
             ? "completed"
@@ -34673,6 +35353,23 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
 
     const todayAppointments = (todayRaw || []).map((r) => mapAppointment(r, todayStr));
     const tomorrowAppointments = (tomorrowRaw || []).map((r) => mapAppointment(r, tomorrowStr));
+
+    const countTimelineBySource = (rows) => {
+      const b = { tev: 0, encounter: 0, tpi: 0, total: 0 };
+      for (const r of rows || []) {
+        const s = r?.source;
+        if (s === "tev" || s === "encounter" || s === "tpi") b[s] += 1;
+      }
+      b.total = b.tev + b.encounter + b.tpi;
+      return b;
+    };
+    const todayTs = countTimelineBySource(todayRaw);
+    const tomorrowTs = countTimelineBySource(tomorrowRaw);
+    const timelineBySource = {
+      today: todayTs,
+      tomorrow: tomorrowTs,
+      total: (todayTs.total || 0) + (tomorrowTs.total || 0),
+    };
 
     // Treatment stats for assigned patients
     const patientIds = patients.map((p) => p.id);
@@ -34734,19 +35431,19 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
         } else {
           const nc = String(nRes.error.code || "");
           if (!["42P01", "42703", "PGRST204", "PGRST205"].includes(nc)) {
-            console.warn("[DOCTOR DASHBOARD] notifications:", nRes.error.message);
+            console.warn("[DOCTOR INBOX-SUMMARY] notifications:", nRes.error.message);
           }
         }
       }
     } catch (nErr) {
-      console.warn("[DOCTOR DASHBOARD] notifications fetch:", nErr?.message || nErr);
+      console.warn("[DOCTOR INBOX-SUMMARY] notifications fetch:", nErr?.message || nErr);
     }
 
     let taskAlerts = [];
     try {
       taskAlerts = await fetchDoctorDashboardPendingTaskAlerts(doctorKeysRaw);
     } catch (taErr) {
-      console.warn("[DOCTOR DASHBOARD] task alerts:", taErr?.message || taErr);
+      console.warn("[DOCTOR INBOX-SUMMARY] task alerts:", taErr?.message || taErr);
     }
 
     notifications = [...notifications, ...taskAlerts]
@@ -34768,17 +35465,21 @@ app.get('/api/doctor/dashboard', requireDoctorAuth, async (req, res) => {
         done,
         today: todayAppointments.length,
         waiting: patients.length,
+        timelineBySource,
+        dashboardSlotPipeline,
       },
       recentPatients,
       todayAppointments,
       tomorrowAppointments,
     });
   } catch (err) {
-    console.error('[DOCTOR DASHBOARD] exception:', err.message);
-    return res.status(500).json({ ok: false, error: 'internal_error', details: err.message });
+    console.error("[DOCTOR INBOX-SUMMARY] exception:", err.message);
+    return res.status(500).json({ ok: false, error: "internal_error", details: err.message });
   }
-});
+}
 
+app.get("/api/doctor/inbox-summary", requireDoctorAuth, handleDoctorInboxSummary);
+app.get("/api/doctor/dashboard", requireDoctorAuth, handleDoctorInboxSummary);
 /** Doktor uygulaması — sadece treatment_plans.assigned_doctor_id + patient_encounters zamanı (admin / eski dashboard logic yok). */
 app.get("/api/doctor/dashboard-appointments", requireDoctorAuth, async (req, res) => {
   try {
@@ -40287,56 +40988,7 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
   }
 });
 
-// ── Doctor marketplace (mobile: doctor/index.tsx, doctor/requests.tsx) ───────
-// GET /api/doctor/inbox-summary — badge counts (Authorization: Bearer doctor JWT)
-app.get("/api/doctor/inbox-summary", requireDoctorAuth, async (req, res) => {
-  try {
-    if (!isSupabaseEnabled()) {
-      return res.json({ ok: true, patient_messages: 0, pending_requests: 0 });
-    }
-    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
-    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
-    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
-    const doctorKey = doctorKeys[0] || rawDoctor;
-    if (!doctorKey) {
-      return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
-    }
-
-    let pending_requests = 0;
-    if (clinicId && UUID_RE.test(clinicId)) {
-      const { count, error: cErr } = await supabase
-        .from("treatment_requests")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .eq("status", "pending");
-      if (!cErr) pending_requests = count || 0;
-    }
-
-    let patient_messages = 0;
-    try {
-      const { data: myOffers, error: oErr } = await supabase
-        .from("treatment_offers")
-        .select("id")
-        .eq("doctor_id", doctorKey);
-      const offerIds = (myOffers || []).map((o) => o.id).filter(Boolean);
-      if (!oErr && offerIds.length > 0) {
-        patient_messages = await countOfferMessagesByRoleForInbox(offerIds, "patient");
-      }
-    } catch (e2) {
-      console.warn("[DOCTOR inbox-summary] messages", e2?.message);
-    }
-
-    return res.json({
-      ok: true,
-      patient_messages,
-      pending_requests,
-    });
-  } catch (e) {
-    console.error("[DOCTOR inbox-summary]", e);
-    return res.status(500).json({ ok: false, error: "internal_error" });
-  }
-});
-
+// ── Doctor marketplace (mobile: doctor/index.tsx, doctor/requests.tsx) — inbox-summary = handleDoctorInboxSummary (index.cjs)
 // GET /api/doctor/inbox — threads assigned to this doctor (not limited to is_lead; patients may graduate)
 app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
   try {
