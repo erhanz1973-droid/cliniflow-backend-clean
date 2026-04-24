@@ -30331,94 +30331,55 @@ app.patch("/api/super-admin/clinics/:clinicId/activate", superAdminGuard, async 
   }
 });
 
-// POST /api/super-admin/clinics/:clinicId/assign-plan
-// Body: { plan, days } — plan: FREE|BASIC|PRO|PREMIUM; days: non-negative number
+// POST /api/super-admin/clinics/:clinicId/assign-plan — direct Supabase update (service role)
 app.post("/api/super-admin/clinics/:clinicId/assign-plan", superAdminGuard, async (req, res) => {
   try {
     const { clinicId } = req.params;
     const { plan, days } = req.body || {};
-    const allowed = new Set(["FREE", "BASIC", "PRO", "PREMIUM"]);
-    const planU = String(plan || "").toUpperCase().trim();
-    const daysN = Number(days);
+    console.log("ASSIGN INPUT:", clinicId, plan, days, "body:", req.body);
 
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_not_configured" });
+    }
     if (!clinicId) {
       return res.status(400).json({ ok: false, error: "clinic_id_required" });
     }
-    if (!allowed.has(planU)) {
-      return res.status(400).json({ ok: false, error: "invalid_plan" });
-    }
+    const daysN = Number(days);
     if (!Number.isFinite(daysN) || daysN < 0) {
       return res.status(400).json({ ok: false, error: "invalid_days" });
+    }
+    const planVal = String(plan || "").trim();
+    if (!planVal) {
+      return res.status(400).json({ ok: false, error: "plan_required" });
     }
 
     const expiry = new Date();
     expiry.setDate(expiry.getDate() + Math.floor(daysN));
     const planExpiryIso = expiry.toISOString();
 
-    const clinics = readJson(CLINICS_FILE, {});
-    const singleClinic = readJson(CLINIC_FILE, {});
+    const { data, error } = await supabase
+      .from("clinics")
+      .update({
+        plan: planVal,
+        plan_expiry: planExpiryIso,
+        plan_source: "ADMIN",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", clinicId)
+      .select();
 
-    let clinic = null;
-    let isSingleClinic = false;
-    let isSupabaseClinic = false;
+    console.log("PLAN UPDATE RESULT:", data);
+    console.log("PLAN UPDATE ERROR:", error);
 
-    if (clinics[clinicId]) {
-      clinic = clinics[clinicId];
-    } else if (singleClinic && (singleClinic.clinicId === clinicId || clinicId === "single")) {
-      clinic = singleClinic;
-      isSingleClinic = true;
-    } else if (isSupabaseEnabled()) {
-      try {
-        const { data: supabaseClinic, error } = await supabase
-          .from("clinics")
-          .select("id, name, plan")
-          .eq("id", clinicId)
-          .maybeSingle();
-        if (!error && supabaseClinic) {
-          clinic = supabaseClinic;
-          isSupabaseClinic = true;
-        }
-      } catch (e) {
-        console.error("[assign-plan] supabase lookup", e);
-      }
+    if (error) {
+      return res.status(500).json({ ok: false, error });
+    }
+    if (!data || data.length === 0) {
+      console.warn("[assign-plan] no rows updated clinicId=", clinicId);
+      return res.status(404).json({ ok: false, error: "no_row_updated", clinicId });
     }
 
-    if (!clinic) {
-      return res.status(404).json({ ok: false, error: "clinic_not_found" });
-    }
-
-    if (isSupabaseClinic) {
-      const { error: upErr } = await supabase
-        .from("clinics")
-        .update({
-          plan: planU,
-          plan_expiry: planExpiryIso,
-          plan_source: "ADMIN",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", clinicId);
-      if (upErr) {
-        console.error("[assign-plan] update", upErr);
-        return res.status(500).json({
-          ok: false,
-          error: "update_failed",
-          message: upErr.message || "Failed to update clinic",
-        });
-      }
-    } else {
-      clinic.plan = planU;
-      clinic.planExpiry = planExpiryIso;
-      clinic.planSource = "ADMIN";
-      clinic.updatedAt = Date.now();
-      if (isSingleClinic) {
-        writeJson(CLINIC_FILE, clinic);
-      } else {
-        clinics[clinicId] = clinic;
-        writeJson(CLINICS_FILE, clinics);
-      }
-    }
-
-    return res.json({ ok: true, plan: planU, planExpiry: planExpiryIso, planSource: "ADMIN" });
+    return res.json({ ok: true, updated: data });
   } catch (err) {
     console.error("[assign-plan]", err);
     return res.status(500).json({ ok: false, error: "internal_error", message: err?.message || "Error" });
