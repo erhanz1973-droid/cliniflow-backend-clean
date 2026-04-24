@@ -4044,6 +4044,7 @@ async function augmentRegisterClinicFromBody(body) {
 // ================== REGISTER (shared: /api/register + /api/patient/register + /api/register/patient) ==================
 async function runPatientRegister(req, res, route, otpMode) {
   try {
+  console.log("🔥 NEW REGISTER FLOW ACTIVE - NO UPSERT", { route });
   const body = req.body || {};
   const {
     name = "",
@@ -4369,9 +4370,9 @@ async function runPatientRegister(req, res, route, otpMode) {
 
     const detailBlob = (err) => `${err?.details || ""} ${err?.message || ""}`.toLowerCase();
 
-    let patientUpsertRow = null;
+    let patientPersistRow = null;
     const applyRow = (row) => {
-      patientUpsertRow = row;
+      patientPersistRow = row;
       if (row && (row.patient_id || row.id)) {
         patientId = String(row.patient_id || row.id);
       }
@@ -4580,9 +4581,9 @@ async function runPatientRegister(req, res, route, otpMode) {
       }
     }
 
-    if (patientUpsertRow) supabasePatientRow = patientUpsertRow;
+    if (patientPersistRow) supabasePatientRow = patientPersistRow;
     logRegisterTrace(route, "STEP_AFTER_DB_PERSIST", {
-      patientRowId: patientUpsertRow?.id || supabasePatientRow?.id || null,
+      patientRowId: patientPersistRow?.id || supabasePatientRow?.id || null,
     });
   }
 
