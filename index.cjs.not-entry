@@ -8046,6 +8046,8 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
     if (!req.clinic) {
       return res.status(404).json({ ok: false, error: "clinic_not_found" });
     }
+    const clinicId = (req.user && req.user.clinicId) != null ? req.user.clinicId : req.clinicId;
+    console.log("USAGE CLINIC:", clinicId);
     if (!isSupabaseEnabled()) {
       return res.json({
         ok: true,
@@ -8054,7 +8056,12 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
         catalog: saasPlans.getPublicPlanCatalog(),
       });
     }
-    const snapshot = await saasEnforcement.getBillingSnapshot(supabase, req.clinic, req.clinicCode);
+    const snapshot = await saasEnforcement.getBillingSnapshot(
+      supabase,
+      req.clinic,
+      req.clinicCode,
+      clinicId
+    );
     res.json({
       ok: true,
       limitsEnabled: saasEnforcement.limitsEnabled(),

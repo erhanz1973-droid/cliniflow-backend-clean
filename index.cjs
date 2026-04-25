@@ -1915,6 +1915,14 @@ async function insertMessageToSupabase(opts) {
   return _insertMessageToSupabaseCore(opts);
 }
 
+/** Tolerant: letters (all scripts), numbers, space, dash, apostrophe; max 100 chars. */
+const DISPLAY_NAME_UNICODE_RE = /^[\p{L}\p{M}\p{N}\s'’.\-]{1,100}$/u;
+function isAcceptablePersonName(value) {
+  const s = String(value || "").trim();
+  if (!s) return true;
+  return DISPLAY_NAME_UNICODE_RE.test(s);
+}
+
 /**
  * Public lead contact: creates a minimal patient row, lead thread (unassigned), and first patient message.
  * Requires migration patient_chat_threads + patients.is_lead.
@@ -1936,6 +1944,11 @@ async function createLeadFromPublicContact({ clinicCode, name, email, phone, tex
   }
   const clinicId = String(clinic.id);
   const displayName = String(name || "").trim() || "Lead";
+  let safeName = displayName;
+  if (displayName && displayName !== "Lead" && !isAcceptablePersonName(displayName)) {
+    console.warn("Invalid name, fallback:", displayName);
+    safeName = String(displayName).slice(0, 100) || "Lead";
+  }
   const emailNorm = email ? String(email).trim().toLowerCase() : null;
   const phoneTrim = phone ? String(phone).trim() : null;
   if (!emailNorm && !phoneTrim) {
@@ -1947,7 +1960,7 @@ async function createLeadFromPublicContact({ clinicCode, name, email, phone, tex
     clinic_id: clinicId,
     clinic_code: code,
     patient_id: legacyPatientId,
-    name: displayName,
+    name: safeName,
     ...(emailNorm ? { email: emailNorm } : {}),
     ...(phoneTrim ? { phone: phoneTrim } : {}),
     status: "LEAD",
@@ -2040,7 +2053,8 @@ app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   next();
 });
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 if (!IS_PROD) {
   app.use((req, res, next) => {
@@ -4071,6 +4085,12 @@ async function runPatientRegister(req, res, route, otpMode) {
   } = body;
   const referralCode = String(body.referralCode || body.inviterReferralCode || "").trim();
   const displayName = String(bodyPatientName || fullName || name || "").trim();
+  console.log("INPUT NAME:", req.body?.name, "patientName:", req.body?.patientName, "fullName:", req.body?.fullName, "resolved:", displayName);
+  let safeName = displayName;
+  if (displayName && !isAcceptablePersonName(displayName)) {
+    console.warn("Invalid name, fallback:", displayName);
+    safeName = String(displayName).slice(0, 100);
+  }
 
   let clinicCode = "";
   try {
@@ -4352,8 +4372,8 @@ async function runPatientRegister(req, res, route, otpMode) {
     const roleUp = (req.body?.role || "PATIENT").toUpperCase();
     const nowIso = new Date().toISOString();
     const buildUpdatePayload = () => ({
-      name: displayName,
-      full_name: displayName,
+      name: safeName,
+      full_name: safeName,
       first_name: "",
       last_name: "",
       email: emailNormalized,
@@ -4368,8 +4388,8 @@ async function runPatientRegister(req, res, route, otpMode) {
     const buildInsertPayload = () => ({
       id: crypto.randomUUID(),
       patient_id: patientId,
-      name: displayName,
-      full_name: displayName,
+      name: safeName,
+      full_name: safeName,
       first_name: "",
       last_name: "",
       email: emailNormalized,
@@ -4429,19 +4449,35 @@ async function runPatientRegister(req, res, route, otpMode) {
       applyRow(data);
       console.log("[SUPABASE] ✅ patient updated:", data?.id);
     } else {
-      let { data, error: insErr } = await supabase
-        .from("patients")
-        .insert(buildInsertPayload())
-        .select()
-        .single();
+      let data;
+      let insErr;
+      try {
+        const ins = await supabase
+          .from("patients")
+          .insert(buildInsertPayload())
+          .select()
+          .single();
+        data = ins.data;
+        insErr = ins.error;
+      } catch (e) {
+        console.error("INSERT ERROR:", e);
+        console.error("PATIENT INSERT:", e);
+        return res.status(500).json({ ok: false, error: "db_insert_failed" });
+      }
       if (insErr) {
         const isSchema = /is_lead|42703|pgrst204|column/i.test(detailBlob(insErr));
         if (isSchema) {
           const p = buildInsertPayload();
           delete p.is_lead;
-          const r2 = await supabase.from("patients").insert(p).select().single();
-          data = r2.data;
-          insErr = r2.error;
+          try {
+            const r2 = await supabase.from("patients").insert(p).select().single();
+            data = r2.data;
+            insErr = r2.error;
+          } catch (e2) {
+            console.error("INSERT ERROR:", e2);
+            console.error("PATIENT INSERT:", e2);
+            return res.status(500).json({ ok: false, error: "db_insert_failed" });
+          }
         }
         const is23505 = insErr && (String(insErr.code) === "23505" || detailBlob(insErr).includes("duplicate key"));
         if (insErr && is23505) {
@@ -4573,6 +4609,7 @@ async function runPatientRegister(req, res, route, otpMode) {
           );
         }
         if (insErr) {
+          console.error("PATIENT INSERT:", insErr);
           console.error("[SUPABASE] PATIENT INSERT FAILED", {
             message: insErr.message,
             code: insErr.code,
@@ -4607,7 +4644,7 @@ async function runPatientRegister(req, res, route, otpMode) {
   const existingFile = patients[patientId] || null;
   patients[patientId] = {
     patientId,
-    name: displayName,
+    name: safeName,
     ...(phoneNormalized ? { phone: phoneNormalized } : {}),
     email: emailNormalized,
     language: patientLanguage,
@@ -4623,7 +4660,7 @@ async function runPatientRegister(req, res, route, otpMode) {
   const row = {
     requestId,
     patientId,
-    name: displayName,
+    name: safeName,
     phone: phoneNormalized, // Use normalized phone
     email: emailNormalized,
     status: "PENDING",
@@ -4792,7 +4829,7 @@ async function runPatientRegister(req, res, route, otpMode) {
                 invited_discount_percent: null,
                 discount_percent: null,
                 inviter_patient_name: inviter?.name || null,
-                invited_patient_name: displayName || null,
+                invited_patient_name: safeName || null,
               };
               created = await createReferralInDBFlexible(referralData);
               break;
@@ -4859,7 +4896,7 @@ async function runPatientRegister(req, res, route, otpMode) {
             inviterPatientId,
             inviterPatientName,
             invitedPatientId: patientId,
-            invitedPatientName: displayName,
+            invitedPatientName: safeName,
             status: "PENDING",
             createdAt: now(),
             inviterDiscountPercent: null,
@@ -8047,6 +8084,8 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
     if (!req.clinic) {
       return res.status(404).json({ ok: false, error: "clinic_not_found" });
     }
+    const clinicId = (req.user && req.user.clinicId) != null ? req.user.clinicId : req.clinicId;
+    console.log("USAGE CLINIC:", clinicId);
     if (!isSupabaseEnabled()) {
       return res.json({
         ok: true,
@@ -8055,7 +8094,12 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
         catalog: saasPlans.getPublicPlanCatalog(),
       });
     }
-    const snapshot = await saasEnforcement.getBillingSnapshot(supabase, req.clinic, req.clinicCode);
+    const snapshot = await saasEnforcement.getBillingSnapshot(
+      supabase,
+      req.clinic,
+      req.clinicCode,
+      clinicId
+    );
     res.json({
       ok: true,
       limitsEnabled: saasEnforcement.limitsEnabled(),
