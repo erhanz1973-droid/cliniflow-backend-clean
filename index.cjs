@@ -1915,6 +1915,19 @@ async function insertMessageToSupabase(opts) {
   return _insertMessageToSupabaseCore(opts);
 }
 
+function normalize(value) {
+  if (value === null || value === undefined) return null;
+  return String(value).trim();
+}
+
+function emptyStringsToNull(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+  Object.keys(obj).forEach((k) => {
+    if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] === "") obj[k] = null;
+  });
+  return obj;
+}
+
 /** Tolerant: letters (all scripts), numbers, space, dash, apostrophe; max 100 chars. */
 const DISPLAY_NAME_UNICODE_RE = /^[\p{L}\p{M}\p{N}\s'’.\-]{1,100}$/u;
 function isAcceptablePersonName(value) {
@@ -4072,6 +4085,7 @@ async function augmentRegisterClinicFromBody(body) {
 // ================== REGISTER (shared: /api/register + /api/patient/register + /api/register/patient) ==================
 async function runPatientRegister(req, res, route, otpMode) {
   try {
+  console.log("RAW BODY:", req.body);
   console.log("🔥 REGISTER ENDPOINT HIT:", req.path);
   console.log("🔥 NEW REGISTER FLOW ACTIVE - NO UPSERT", { route });
   const body = req.body || {};
@@ -4369,39 +4383,44 @@ async function runPatientRegister(req, res, route, otpMode) {
 
   // === SUPABASE: update by id, or insert — no upsert (phone identity is not upserted) ===
   if (isSupabaseEnabled()) {
-    const roleUp = (req.body?.role || "PATIENT").toUpperCase();
+    try {
+    const roleUp = (normalize(req.body?.role) || "PATIENT").toUpperCase();
     const nowIso = new Date().toISOString();
-    const buildUpdatePayload = () => ({
-      name: safeName,
-      full_name: safeName,
-      first_name: "",
-      last_name: "",
-      email: emailNormalized,
-      clinic_id: supabaseClinicId,
-      status: "PENDING",
-      language: patientLanguage,
-      role: roleUp,
-      is_lead: isGlobalLead,
-      updated_at: nowIso,
-      ...(phoneDigits ? { phone: phoneDigits } : {}),
-    });
-    const buildInsertPayload = () => ({
-      id: crypto.randomUUID(),
-      patient_id: patientId,
-      name: safeName,
-      full_name: safeName,
-      first_name: "",
-      last_name: "",
-      email: emailNormalized,
-      clinic_id: supabaseClinicId,
-      status: "PENDING",
-      language: patientLanguage,
-      role: roleUp,
-      is_lead: isGlobalLead,
-      created_at: nowIso,
-      updated_at: nowIso,
-      ...(phoneDigits ? { phone: phoneDigits } : {}),
-    });
+    const nameForRow = (() => {
+      const n = normalize(safeName);
+      return n || "Patient";
+    })();
+    const notesForRow = normalize(body.notes);
+    const buildCoreFields = (forInsert) => {
+      const p = {
+        name: nameForRow,
+        full_name: nameForRow,
+        first_name: "",
+        last_name: "",
+        email: emailNormalized,
+        clinic_id: supabaseClinicId,
+        status: "PENDING",
+        language: patientLanguage,
+        role: roleUp,
+        is_lead: isGlobalLead,
+        updated_at: nowIso,
+        ...(phoneDigits ? { phone: phoneDigits } : {}),
+        ...(forInsert
+          ? {
+              id: crypto.randomUUID(),
+              patient_id: patientId,
+              created_at: nowIso,
+            }
+          : {}),
+      };
+      if (notesForRow) p.notes = notesForRow;
+      emptyStringsToNull(p);
+      if (!p.name) p.name = "Patient";
+      if (!p.full_name) p.full_name = p.name;
+      return p;
+    };
+    const buildUpdatePayload = () => buildCoreFields(false);
+    const buildInsertPayload = () => buildCoreFields(true);
 
     const detailBlob = (err) => `${err?.details || ""} ${err?.message || ""}`.toLowerCase();
 
@@ -4414,12 +4433,23 @@ async function runPatientRegister(req, res, route, otpMode) {
     };
 
     if (existingPatientUuid) {
-      const { data, error: upErr } = await supabase
-        .from("patients")
-        .update(buildUpdatePayload())
-        .eq("id", existingPatientUuid)
-        .select()
-        .single();
+      let upData, upErr;
+      try {
+        const up = await supabase
+          .from("patients")
+          .update(buildUpdatePayload())
+          .eq("id", existingPatientUuid)
+          .select()
+          .single();
+        upData = up.data;
+        upErr = up.error;
+      } catch (eUp) {
+        console.error("PATIENT UPDATE THROW:", eUp);
+        if (!res.headersSent) {
+          return res.status(500).json({ ok: false, error: "db_update_failed", details: String(eUp?.message || eUp) });
+        }
+        throw eUp;
+      }
       if (upErr) {
         console.error("[SUPABASE] PATIENT UPDATE FAILED", {
           message: upErr.message,
@@ -4442,12 +4472,12 @@ async function runPatientRegister(req, res, route, otpMode) {
         }
         return res.status(500).json({
           ok: false,
-          error: "register_failed",
-          message: REGISTER_USER_MSG.registerFailed,
+          error: "db_update_failed",
+          details: upErr.message,
         });
       }
-      applyRow(data);
-      console.log("[SUPABASE] ✅ patient updated:", data?.id);
+      applyRow(upData);
+      console.log("[SUPABASE] ✅ patient updated:", upData?.id);
     } else {
       let data;
       let insErr;
@@ -4462,21 +4492,42 @@ async function runPatientRegister(req, res, route, otpMode) {
       } catch (e) {
         console.error("INSERT ERROR:", e);
         console.error("PATIENT INSERT:", e);
-        return res.status(500).json({ ok: false, error: "db_insert_failed" });
+        if (!res.headersSent) {
+          return res.status(500).json({
+            ok: false,
+            error: "db_insert_failed",
+            details: String(e?.message || e).slice(0, 500),
+          });
+        }
+        throw e;
       }
       if (insErr) {
-        const isSchema = /is_lead|42703|pgrst204|column/i.test(detailBlob(insErr));
+        const isSchema = /is_lead|42703|pgrst204|column|notes/i.test(detailBlob(insErr));
         if (isSchema) {
-          const p = buildInsertPayload();
-          delete p.is_lead;
+          const p1 = { ...buildInsertPayload() };
+          delete p1.is_lead;
           try {
-            const r2 = await supabase.from("patients").insert(p).select().single();
+            const r2 = await supabase.from("patients").insert(p1).select().single();
             data = r2.data;
             insErr = r2.error;
+            if (insErr && /notes|42703|pgrst204|column/i.test(detailBlob(insErr))) {
+              const p2 = { ...p1 };
+              delete p2.notes;
+              const r3 = await supabase.from("patients").insert(p2).select().single();
+              data = r3.data;
+              insErr = r3.error;
+            }
           } catch (e2) {
             console.error("INSERT ERROR:", e2);
             console.error("PATIENT INSERT:", e2);
-            return res.status(500).json({ ok: false, error: "db_insert_failed" });
+            if (!res.headersSent) {
+              return res.status(500).json({
+                ok: false,
+                error: "db_insert_failed",
+                details: String(e2?.message || e2).slice(0, 500),
+              });
+            }
+            throw e2;
           }
         }
         const is23505 = insErr && (String(insErr.code) === "23505" || detailBlob(insErr).includes("duplicate key"));
@@ -4620,7 +4671,8 @@ async function runPatientRegister(req, res, route, otpMode) {
             !supabaseClinicId && String(insErr.message || "").toLowerCase().includes("clinic_id");
           return res.status(500).json({
             ok: false,
-            error: "register_failed",
+            error: "db_insert_failed",
+            details: insErr.message,
             message: REGISTER_USER_MSG.registerFailed,
             ...(hintNull ? { hint: REGISTER_USER_MSG.clinicIdNullableHint } : {}),
           });
@@ -4637,6 +4689,12 @@ async function runPatientRegister(req, res, route, otpMode) {
     logRegisterTrace(route, "STEP_AFTER_DB_PERSIST", {
       patientRowId: patientPersistRow?.id || supabasePatientRow?.id || null,
     });
+  } catch (persistCrash) {
+    console.error("CRASH:", persistCrash);
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, error: "server_crash" });
+    }
+  }
   }
 
   // FILE-BASED: Fallback storage (for backward compatibility)
@@ -18174,13 +18232,150 @@ async function getRecommendedClinics({ insights = [], patientId, userLocation, p
 
 // ─── AI Dental Analysis Helpers ──────────────────────────────────────────────
 
-/** Safe fallback returned whenever AI output is invalid or unrecoverable. */
-const DENTAL_AI_FALLBACK = {
-  insights:       ['Görüntü analiz edilemedi, lütfen tekrar deneyin.'],
-  confidence:     'low',
-  summary:        'Net bir değerlendirme yapılamadı.',
-  recommendation: 'Farklı açılardan fotoğraf ekleyebilir veya diş hekiminize danışabilirsiniz.',
+/** tr | en | ka | ru — OpenAI must respond in this display language. */
+const DENTAL_AI_LANG_MAP = {
+  tr: "Turkish",
+  en: "English",
+  ka: "Georgian",
+  ru: "Russian",
 };
+
+function normalizeAiDentalLang(input) {
+  const raw = String(input || "en")
+    .trim()
+    .toLowerCase();
+  const key = raw.slice(0, 2);
+  return DENTAL_AI_LANG_MAP[key] ? key : "en";
+}
+
+function dentalLangNameFor(key) {
+  return DENTAL_AI_LANG_MAP[normalizeAiDentalLang(key)] || "English";
+}
+
+/** Safe fallback when AI output is invalid (localized). */
+const DENTAL_AI_FALLBACK_I18N = {
+  tr: {
+    insights: ["Görüntü analiz edilemedi, lütfen tekrar deneyin."],
+    summary: "Net bir değerlendirme yapılamadı.",
+    recommendation: "Farklı açılardan fotoğraf ekleyebilir veya diş hekiminize danışabilirsiniz.",
+  },
+  en: {
+    insights: ["The image could not be fully analyzed. Please try again."],
+    summary: "A clear assessment could not be made.",
+    recommendation: "Add photos from different angles or consult your dentist.",
+  },
+  ka: {
+    insights: ["ფოტოს სრულად ვერ გაიარა ანალიზი, სცადეთ ხელახლა."],
+    summary: "შეფასება ცხადი ვერ იყო.",
+    recommendation: "გთხოვთ გადაიღოთ უფრო ნათელი ფოტო ან მიმართოთ ექიმ-სტომატოლოგს.",
+  },
+  ru: {
+    insights: ["Изображение не удалось полностью проанализировать. Попробуйте снова."],
+    summary: "Невозможно дать чёткую оценку.",
+    recommendation: "Сделайте снимок с другого ракурса или проконсультируйтесь с дантистом.",
+  },
+};
+
+function getDentalAiFallback(langKey) {
+  const k = normalizeAiDentalLang(langKey);
+  const row = DENTAL_AI_FALLBACK_I18N[k] || DENTAL_AI_FALLBACK_I18N.en;
+  return { ...row, confidence: "low" };
+}
+
+/** Model kept wrong script/language after language-correction prompt. */
+const DENTAL_AI_LANGUAGE_ERROR_I18N = {
+  tr: {
+    insights: ["Dil hatası oluştu. Lütfen tekrar deneyin."],
+    summary: "Dil hatası oluştu. Lütfen tekrar deneyin.",
+    recommendation: "Dil hatası oluştu. Lütfen tekrar deneyin.",
+  },
+  en: {
+    insights: ["A language error occurred. Please try again."],
+    summary: "A language error occurred. Please try again.",
+    recommendation: "A language error occurred. Please try again.",
+  },
+  ka: {
+    insights: ["ენის შეცდომა. გთხოვთ, სცადოთ ხელახლა."],
+    summary: "ენის შეცდომა. გთხოვთ, სცადოთ ხელახლა.",
+    recommendation: "ენის შეცდომა. გთხოვთ, სცადოთ ხელახლა.",
+  },
+  ru: {
+    insights: ["Ошибка языка. Пожалуйста, попробуйте снова."],
+    summary: "Ошибка языка. Пожалуйста, попробуйте снова.",
+    recommendation: "Ошибка языка. Пожалуйста, попробуйте снова.",
+  },
+};
+
+function getDentalLanguageErrorFallback(langKey) {
+  const k = normalizeAiDentalLang(langKey);
+  const row = DENTAL_AI_LANGUAGE_ERROR_I18N[k] || DENTAL_AI_LANGUAGE_ERROR_I18N.tr;
+  return { ...row, confidence: "low" };
+}
+
+function buildDentalAnalysisTextForLangCheck(parsed) {
+  const ins = Array.isArray(parsed?.insights) ? parsed.insights : [];
+  return [
+    ...ins.map((s) => String(s || "")),
+    String(parsed?.summary || ""),
+    String(parsed?.recommendation || ""),
+  ].join(" ");
+}
+
+/**
+ * @returns {boolean} true if the response is likely the wrong language for langKey
+ */
+function detectWrongLanguage(text, langKey) {
+  const t = String(text || "");
+  const k = normalizeAiDentalLang(langKey);
+  if (k === "ka") {
+    return /[a-zA-Z]/.test(t);
+  }
+  if (k === "tr") {
+    return false;
+  }
+  if (k === "en") {
+    if (t.length < 12) {
+      return false;
+    }
+    if (/[а-яё]/i.test(t) && !/[a-zA-Z]/.test(t)) {
+      return true;
+    }
+    return false;
+  }
+  if (k === "ru") {
+    if (t.length < 10) {
+      return false;
+    }
+    if (/[a-zA-Z]/.test(t) && !/[а-яёЁё]/i.test(t)) {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+function getAiAnalyzeRequestLanguage(req) {
+  const body = req.body || {};
+  if (body.lang != null && String(body.lang).trim() !== "") {
+    return body.lang;
+  }
+  if (req.user && req.user.lang) {
+    return req.user.lang;
+  }
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : (req.headers["x-patient-token"] || "");
+  if (token && String(token).startsWith("eyJ")) {
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.language) {
+        return decoded.language;
+      }
+    } catch (e) {
+      /* non-fatal */
+    }
+  }
+  return "en";
+}
 
 // ── Vague / generic phrases to reject (Turkish + English, case-insensitive) ──
 // HARD RULES: any insight matching these is treated as invalid.
@@ -18338,20 +18533,56 @@ const PHOTO_TYPE_CONTEXT = {
   },
 };
 
+const PHOTO_TYPE_CONTEXT_EN = {
+  front: {
+    label: "Front view",
+    focus: "Focus on front teeth alignment, color changes, and gum recession.",
+  },
+  left: {
+    label: "Left side",
+    focus: "Focus on caries signs, missing teeth, and occlusal plane on the left.",
+  },
+  right: {
+    label: "Right side",
+    focus: "Focus on caries signs, missing teeth, and occlusal plane on the right.",
+  },
+  upper: {
+    label: "Upper arch",
+    focus: "Focus on caries stains, gum condition, and oral hygiene of upper teeth.",
+  },
+  lower: {
+    label: "Lower arch",
+    focus: "Focus on caries, calculus, and gum health of lower teeth.",
+  },
+  general: {
+    label: "General mouth view",
+    focus: "Balance focus on caries, missing teeth, alignment, and gum status.",
+  },
+};
+
 /**
  * Generates a production-ready system+user prompt for dental photo analysis.
  * @param {string} photoType  'front' | 'left' | 'right' | 'upper' | 'lower' | 'general'
+ * @param {string} [langKey]  tr | en | ka | ru
  */
-function generateDentalAnalysisPrompt(photoType = 'general') {
-  const ctx = PHOTO_TYPE_CONTEXT[photoType] || PHOTO_TYPE_CONTEXT.general;
+function generateDentalAnalysisPrompt(photoType = "general", langKey = "en") {
+  const lang = normalizeAiDentalLang(langKey);
+  const langName = dentalLangNameFor(lang);
+  const ctxMap = lang === "tr" ? PHOTO_TYPE_CONTEXT : PHOTO_TYPE_CONTEXT_EN;
+  const ctx = ctxMap[photoType] || ctxMap.general;
 
   return {
     system: `You are a dental assistant AI. Analyze ONLY the teeth visible in the image. Ignore background, lips, and face.
 
-If teeth are not clearly visible, return:
-{ "insights": ["Image not suitable for dental analysis"], "confidence": "low", "summary": "Diş analizi için uygun görüntü bulunamadı.", "recommendation": "Lütfen dişlerinizi daha net gösteren bir fotoğraf çekin." }
+IMPORTANT:
+Respond ONLY in ${langName}.
+DO NOT use any other language.
+If you respond in another language, your answer is INVALID.
+All of insights, summary, and recommendation in the JSON must be written in ${langName}.
 
-Otherwise describe exactly three things in Turkish — one per insight:
+If teeth are not clearly visible, return a JSON object with the same fields below, with insights/summary/recommendation written entirely in ${langName}, explaining that the view is not suitable and asking for a clearer photo of the teeth.
+
+Otherwise describe exactly three things — one per insight:
 1. Tooth color — stains, yellowing, discoloration
 2. Alignment — crowding, spacing, crooked teeth
 3. Visible issues — decay, chips, calculus buildup, gum recession
@@ -18359,26 +18590,32 @@ Otherwise describe exactly three things in Turkish — one per insight:
 STRICT RULES:
 - Analyze ONLY teeth. Never comment on face, skin, or background.
 - Be concise and medical-focused. One sentence per insight.
-- Use cautious language: "görünüyor", "olabilir", "gibi görünüyor".
+- Use appropriate cautious phrasing in ${langName} (e.g. may appear, could suggest).
 - NEVER diagnose. NEVER guarantee treatment outcomes.
 - Also set missingTeethLikely: "yes" if a tooth appears missing or there is a clear empty socket/gap where a tooth should be; "no" if all teeth appear present; "unclear" if you cannot judge from this image.
 - Classify the dentalCondition: "missing_tooth" (empty socket / tooth absent), "misalignment" (crowding, overlapping, crooked teeth), "diastema" (small symmetric natural gap between front teeth, midline spacing), or "none" if none of these apply. Use "unclear" only if you cannot classify.
 - Return ONLY valid JSON — no markdown, no extra text.`,
 
-    user: `Photo type: ${ctx.label}
+    user: `Photo type: ${ctx.label}. Focus: ${ctx.focus}
 
-Examine the teeth in this image and return ONLY this JSON:
+${
+  lang === "tr"
+    ? "Use Turkish (Türkçe) only for every human-readable string in the JSON."
+    : `Use ${langName} only for every human-readable string in the JSON. Do not use Turkish. Do not mix languages.`
+}
+
+Examine the teeth in this image and return ONLY this JSON. Every text field must be in ${langName}:
 {
-  "insights": ["tooth color observation in Turkish", "alignment observation in Turkish", "visible issue in Turkish"],
+  "insights": ["${langName} observation 1 (color)", "${langName} observation 2 (alignment)", "${langName} observation 3 (visible issues)"],
   "confidence": "low" | "medium" | "high",
-  "summary": "1-sentence overall dental assessment in Turkish",
-  "recommendation": "1 concrete next step for the patient in Turkish",
+  "summary": "1-sentence overall dental assessment in ${langName}",
+  "recommendation": "1 concrete next step for the patient in ${langName}",
   "missingTeethLikely": "yes" | "no" | "unclear",
   "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
   "dentalConditionConfidence": "low" | "medium" | "high"
 }
 
-Classify this dental condition: missing tooth (gap from absent tooth), misalignment (overlap/crowding), or natural front gap (diastema). Set dentalConditionConfidence to match how sure you are.
+Classify this dental condition: missing tooth, misalignment, or natural front gap (diastema). Set dentalConditionConfidence to match how sure you are.
 
 confidence guide: "low" = blurry or teeth barely visible | "medium" = partially visible | "high" = clear, well-lit photo`,
   };
@@ -18387,36 +18624,66 @@ confidence guide: "low" = blurry or teeth barely visible | "medium" = partially 
 /**
  * Stronger retry prompt — used when the first response is vague or refused.
  */
-function generateRetryPrompt(photoType = 'general') {
-  const ctx = PHOTO_TYPE_CONTEXT[photoType] || PHOTO_TYPE_CONTEXT.general;
+function generateRetryPrompt(photoType = "general", langKey = "en") {
+  const lang = normalizeAiDentalLang(langKey);
+  const langName = dentalLangNameFor(lang);
+  const ctxMap = lang === "tr" ? PHOTO_TYPE_CONTEXT : PHOTO_TYPE_CONTEXT_EN;
+  const ctx = ctxMap[photoType] || ctxMap.general;
   return {
     system: `You are a dental assistant AI. Your ONLY job is to describe what you see in the teeth.
+
+IMPORTANT:
+Respond ONLY in ${langName}.
+DO NOT use any other language.
+If you respond in another language, your answer is INVALID.
+All JSON text must be in ${langName}.
 
 MANDATORY — you MUST return exactly 2–3 observations about:
 - Tooth color (yellowing, staining, whiteness)
 - Tooth alignment (straight, crowded, gaps)
 - Any visible problems (decay, chips, tartar, gum line)
 
-FORBIDDEN: "analiz edilemedi", "net değil", "tekrar deneyin", empty insights.
-Even a blurry photo has visible tooth shapes, approximate color, and a gum line — describe those.
+FORBIDDEN: empty insights, or refusal with no real observation. Even a blurry photo has visible tooth shapes, approximate color, and a gum line — describe those in ${langName}.
 Include missingTeethLikely: "yes" | "no" | "unclear" (missing tooth / empty socket vs all teeth present).
 Include dentalCondition: "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear" and dentalConditionConfidence.
 Return ONLY valid JSON — no markdown, no extra text.`,
 
-    user: `Photo type: ${ctx.label}
+    user: `Photo type: ${ctx.label}. Focus: ${ctx.focus}
 
 Your previous response lacked sufficient observations. Look again at the teeth only.
 
-Return ONLY this JSON with 2–3 real dental observations in Turkish:
+${
+  lang === "tr"
+    ? "Use Turkish (Türkçe) only for every human-readable string in the JSON."
+    : `Use ${langName} only for every human-readable string in the JSON. Do not use Turkish. Do not mix languages.`
+}
+
+Return ONLY this JSON with 2–3 real dental observations, all in ${langName}:
 {
-  "insights": ["renk gözlemi", "dizilim gözlemi", "görünür sorun (varsa)"],
+  "insights": ["${langName} color observation", "${langName} alignment observation", "${langName} visible issue (if any)"],
   "confidence": "low",
-  "summary": "1-sentence honest summary in Turkish",
-  "recommendation": "1-sentence next step for the patient",
+  "summary": "1-sentence honest summary in ${langName}",
+  "recommendation": "1-sentence next step for the patient in ${langName}",
   "missingTeethLikely": "yes" | "no" | "unclear",
   "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
   "dentalConditionConfidence": "low" | "medium" | "high"
 }`,
+  };
+}
+
+/**
+ * Re-asks with explicit correction after a language-mismatch.
+ */
+function generateLanguageViolationRetryPrompt(photoType = "general", langKey = "en") {
+  const langName = dentalLangNameFor(normalizeAiDentalLang(langKey));
+  const { system, user } = generateDentalAnalysisPrompt(photoType, langKey);
+  return {
+    system: `You responded in the wrong language.
+You MUST respond ONLY in ${langName}.
+Retry now.
+
+${system}`,
+    user,
   };
 }
 
@@ -18591,82 +18858,135 @@ async function callOpenAIVision(system, user, imageDataUrl, { apiKey, timeoutMs 
  * Calls OpenAI Vision with automatic retry on weak/refusal responses.
  *
  * Flow:
- *   1. First call with normal prompt
- *   2. If quality validation fails → retry ONCE with a stronger "must observe" prompt
- *   3. If retry also fails → return DENTAL_AI_FALLBACK (never throws on content issues)
+ *   1) First call — language check → if wrong, one language-violation retry; if still wrong → language-error fallback
+ *   2) Quality validation
+ *   3) If quality fails → one stronger "must observe" prompt (+ language check on that response)
+ *   4) If still bad → DENTAL_AI fallback
  *
  * Still throws on HTTP / network errors so the caller can return 502/504.
  */
-async function processDentalAI(imageDataUrl, photoType = 'general', { apiKey, timeoutMs = 30000 } = {}) {
-  // ── First attempt ────────────────────────────────────────────────────
-  const { system: sys1, user: usr1 } = generateDentalAnalysisPrompt(photoType);
-  const attempt1 = await callOpenAIVision(sys1, usr1, imageDataUrl, { apiKey, timeoutMs });
+async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, timeoutMs = 30000, langKey = "en" } = {}) {
+  const { system: sys1, user: usr1 } = generateDentalAnalysisPrompt(photoType, langKey);
+  let a = await callOpenAIVision(sys1, usr1, imageDataUrl, { apiKey, timeoutMs });
+  let t = buildDentalAnalysisTextForLangCheck(a.parsed);
+  let wrong = detectWrongLanguage(t, langKey);
+  let didLangRetry = false;
+  if (wrong) {
+    didLangRetry = true;
+    console.warn("[AI] wrong language, retrying...", { photoType, langKey });
+    const { system: sL, user: uL } = generateLanguageViolationRetryPrompt(photoType, langKey);
+    a = await callOpenAIVision(sL, uL, imageDataUrl, { apiKey, timeoutMs: Math.min(timeoutMs, 25_000) });
+    t = buildDentalAnalysisTextForLangCheck(a.parsed);
+    wrong = detectWrongLanguage(t, langKey);
+    if (wrong) {
+      const le = getDentalLanguageErrorFallback(langKey);
+      return {
+        insights: le.insights,
+        confidence: le.confidence,
+        summary: le.summary,
+        recommendation: le.recommendation,
+        missingTeethLikely: null,
+        dentalConditionParsed: null,
+        _usage: a.usage,
+        _model: a.model,
+        _fallback: true,
+        _langError: true,
+        _retried: true,
+        _qualityScore: 0,
+        _qualityReasons: ["language_mismatch"],
+      };
+    }
+  }
 
-  const q1 = validateDentalAIQuality(attempt1.parsed);
+  const q1 = validateDentalAIQuality(a.parsed);
   if (q1.ok) {
     return {
-      insights:       attempt1.parsed.insights,
-      confidence:     attempt1.parsed.confidence,
-      summary:        attempt1.parsed.summary,
-      recommendation: attempt1.parsed.recommendation,
-      missingTeethLikely: attempt1.parsed.missingTeethLikely ?? null,
-      dentalConditionParsed: attempt1.parsed.dentalConditionParsed ?? null,
-      _usage:          attempt1.usage,
-      _model:          attempt1.model,
-      _fallback:       false,
-      _retried:        false,
-      _qualityScore:   q1.score,
+      insights: a.parsed.insights,
+      confidence: a.parsed.confidence,
+      summary: a.parsed.summary,
+      recommendation: a.parsed.recommendation,
+      missingTeethLikely: a.parsed.missingTeethLikely ?? null,
+      dentalConditionParsed: a.parsed.dentalConditionParsed ?? null,
+      _usage: a.usage,
+      _model: a.model,
+      _fallback: false,
+      _retried: didLangRetry,
+      _qualityScore: q1.score,
       _qualityReasons: [],
     };
   }
 
-  // ── Retry with stronger prompt ───────────────────────────────────────
-  console.warn('[AI] First attempt weak — retrying with stronger prompt.', {
+  console.warn("[AI] First attempt weak — retrying with stronger prompt.", {
     photoType, score: q1.score, reasons: q1.reasons,
-    insights: attempt1.parsed.insights,
+    insights: a.parsed.insights,
   });
 
-  const { system: sys2, user: usr2 } = generateRetryPrompt(photoType);
-  const attempt2 = await callOpenAIVision(sys2, usr2, imageDataUrl, {
+  const { system: sys2, user: usr2 } = generateRetryPrompt(photoType, langKey);
+  let a2 = await callOpenAIVision(sys2, usr2, imageDataUrl, {
     apiKey,
-    timeoutMs: Math.min(timeoutMs, 20_000), // shorter budget for retry
+    timeoutMs: Math.min(timeoutMs, 20_000),
   });
+  t = buildDentalAnalysisTextForLangCheck(a2.parsed);
+  wrong = detectWrongLanguage(t, langKey);
+  if (wrong) {
+    console.warn("[AI] wrong language after quality retry, correcting...", { photoType, langKey });
+    const { system: sL2, user: uL2 } = generateLanguageViolationRetryPrompt(photoType, langKey);
+    a2 = await callOpenAIVision(sL2, uL2, imageDataUrl, { apiKey, timeoutMs: Math.min(timeoutMs, 20_000) });
+    t = buildDentalAnalysisTextForLangCheck(a2.parsed);
+    wrong = detectWrongLanguage(t, langKey);
+    if (wrong) {
+      const le = getDentalLanguageErrorFallback(langKey);
+      return {
+        insights: le.insights,
+        confidence: le.confidence,
+        summary: le.summary,
+        recommendation: le.recommendation,
+        missingTeethLikely: null,
+        dentalConditionParsed: null,
+        _usage: a2.usage,
+        _model: a2.model,
+        _fallback: true,
+        _langError: true,
+        _retried: true,
+        _qualityScore: 0,
+        _qualityReasons: ["language_mismatch"],
+      };
+    }
+  }
 
-  const q2 = validateDentalAIQuality(attempt2.parsed);
+  const q2 = validateDentalAIQuality(a2.parsed);
   if (q2.ok) {
-    console.log('[AI] Retry succeeded.', { photoType, score: q2.score });
     return {
-      insights:       attempt2.parsed.insights,
-      confidence:     attempt2.parsed.confidence,
-      summary:        attempt2.parsed.summary,
-      recommendation: attempt2.parsed.recommendation,
-      missingTeethLikely: attempt2.parsed.missingTeethLikely ?? null,
-      dentalConditionParsed: attempt2.parsed.dentalConditionParsed ?? null,
-      _usage:          attempt2.usage,
-      _model:          attempt2.model,
-      _fallback:       false,
-      _retried:        true,
-      _qualityScore:   q2.score,
+      insights: a2.parsed.insights,
+      confidence: a2.parsed.confidence,
+      summary: a2.parsed.summary,
+      recommendation: a2.parsed.recommendation,
+      missingTeethLikely: a2.parsed.missingTeethLikely ?? null,
+      dentalConditionParsed: a2.parsed.dentalConditionParsed ?? null,
+      _usage: a2.usage,
+      _model: a2.model,
+      _fallback: false,
+      _retried: true,
+      _qualityScore: q2.score,
       _qualityReasons: [],
     };
   }
 
-  // ── Both calls failed validation ─────────────────────────────────────
-  console.error('[AI] Both attempts failed quality validation.', {
+  console.error("[AI] Both attempts failed quality validation.", {
     photoType,
-    attempt1: { score: q1.score, reasons: q1.reasons },
-    attempt2: { score: q2.score, reasons: q2.reasons },
+    q1: { score: q1.score, reasons: q1.reasons },
+    q2: { score: q2.score, reasons: q2.reasons },
   });
 
   return {
-    ...DENTAL_AI_FALLBACK,
+    ...getDentalAiFallback(langKey),
     missingTeethLikely: null,
     dentalConditionParsed: null,
-    _usage:          attempt2.usage,
-    _model:          attempt2.model,
-    _fallback:       true,
-    _retried:        true,
-    _qualityScore:   q2.score,
+    _usage: a2.usage,
+    _model: a2.model,
+    _fallback: true,
+    _retried: true,
+    _qualityScore: q2.score,
     _qualityReasons: q2.reasons,
   };
 }
@@ -23284,25 +23604,65 @@ app.post('/api/chat/merge-teeth-strips', requireToken, async (req, res) => {
   }
 });
 
-const DENTAL_CONDITION_UI_TR = {
-  missing_tooth: 'Eksik diş olabilir',
-  misalignment: 'Dişlerde çapraşıklık görülüyor',
-  diastema: 'Doğal diş aralığı bulunuyor',
+const DENTAL_CONDITION_UI = {
+  tr: {
+    missing_tooth: "Eksik diş olabilir",
+    misalignment: "Dişlerde çapraşıklık görülüyor",
+    diastema: "Doğal diş aralığı bulunuyor",
+  },
+  en: {
+    missing_tooth: "Possible missing tooth",
+    misalignment: "Teeth show crowding or misalignment",
+    diastema: "Natural space between front teeth (diastema)",
+  },
+  ka: {
+    missing_tooth: "შესაძლოა ნაკლებობა კბილის",
+    misalignment: "ფრონტალურ კბილებზე ხილაკი/დაუწესრიგებლობა",
+    diastema: "ბუნებრივი ხარვეზი წინა კბილებში (დიასტემა)",
+  },
+  ru: {
+    missing_tooth: "Возможно отсутствие зуба",
+    misalignment: "Скученность / неправильное расположение зубов",
+    diastema: "Естественный промежуток между передними зубами (диастема)",
+  },
+};
+
+const DENTAL_CONF_LABEL = {
+  tr: { low: "Düşük güven", medium: "Orta güven", high: "Yüksek güven" },
+  en: { low: "Low confidence", medium: "Medium confidence", high: "High confidence" },
+  ka: { low: "დაბალი ნდობა", medium: "საშუალო", high: "მაღალი ნდობა" },
+  ru: { low: "низкая уверенность", medium: "средняя уверенность", high: "высокая уверенность" },
 };
 
 function formatConditionHeadlineTr(condition, confidence) {
-  const base = DENTAL_CONDITION_UI_TR[condition];
-  if (!base) return '';
-  const confTr = { low: 'Düşük güven', medium: 'Orta güven', high: 'Yüksek güven' };
-  const c = confTr[confidence] || '';
+  const base = (DENTAL_CONDITION_UI.tr || {})[condition];
+  if (!base) {
+    return "";
+  }
+  const c = (DENTAL_CONF_LABEL.tr || {})[confidence] || "";
   return c ? `${base} (${c})` : base;
 }
 
-function dentalConditionToPayload(dc) {
-  if (!dc || !dc.condition) return null;
+function formatConditionHeadline(condition, confidence, langKey) {
+  const l = normalizeAiDentalLang(langKey);
+  const condMap = DENTAL_CONDITION_UI[l] || DENTAL_CONDITION_UI.en;
+  const confMap = DENTAL_CONF_LABEL[l] || DENTAL_CONF_LABEL.en;
+  const base = condMap[condition];
+  if (!base) {
+    return "";
+  }
+  const c = confMap[confidence] || "";
+  return c ? `${base} (${c})` : base;
+}
+
+function dentalConditionToPayload(dc, langKey) {
+  if (!dc || !dc.condition) {
+    return null;
+  }
   return {
     condition: dc.condition,
     confidence: dc.confidence,
+    label: formatConditionHeadline(dc.condition, dc.confidence, langKey),
     labelTr: formatConditionHeadlineTr(dc.condition, dc.confidence),
   };
 }
@@ -23359,13 +23719,150 @@ function analyzeMissingToothHybrid(fullText, visionLikely) {
   };
 }
 
+function getAiAnalysisDisclaimer(langKey) {
+  const m = {
+    tr: "Bu sonuçlar AI tarafından oluşturulmuştur ve tıbbi teşhis değildir.",
+    en: "These results are generated by AI and are not a medical diagnosis.",
+    ka: "ეს შედეგები ხელოვნური ინტელექტის მიერია და არ არის სამედიცინო დიაგნოზი.",
+    ru: "Эти результаты сгенерированы ИИ и не являются медицинским диагнозом.",
+  };
+  return m[normalizeAiDentalLang(langKey)] || m.en;
+}
+
+function getAiPreviewInboxMessage(langKey) {
+  const m = {
+    tr: "AI Önizleme",
+    en: "AI preview",
+    ka: "AI გადახედვა",
+    ru: "Превью ИИ",
+  };
+  return m[normalizeAiDentalLang(langKey)] || m.en;
+}
+
+function getDentalPlanCopy(langKey) {
+  const k = normalizeAiDentalLang(langKey);
+  return DENTAL_TREATMENT_PLAN_COPY[k] || DENTAL_TREATMENT_PLAN_COPY.en;
+}
+
+const DENTAL_TREATMENT_PLAN_COPY = {
+  tr: {
+    tImplant: "İmplant",
+    tBridge: "Köprü (bridge)",
+    tImplDent: "İmplant üstü protez",
+    mImplExp: "Komşu dişlere zarar vermeden uygulanır",
+    mBridgeExp: "Komşu dişler destek olarak kullanılır",
+    mImplDentExp: "İmplantlarla desteklenen sabit protez; komşu dişlere zarar vermeden planlanabilir",
+    mDisc: "Kesin tedavi planı için klinik muayenesi gereklidir",
+    stainI: "Diş yüzeyinde renk / leke farkı",
+    stainT: "Diş beyazlatma (ofis veya ev tipi)",
+    tartarI: "Yüzey birikimi / tartar riski",
+    tartarT: "Profesyonel diş temizliği (scaling & polishing)",
+    alignI: "Hafif dizilim / çapraşıklık",
+    alignT: "Ortodontik değerlendirme (plak / tel)",
+    cariesI: "Çürük / mine kaybı riski",
+    cariesT: "Kompozit dolgu / restorasyon",
+    venI: "Estetik görünüm beklentisi",
+    venT: "Lamina / veneer veya zirkonyum planlaması",
+    gumI: "Diş eti hassasiyeti / inflamasyon riski",
+    gumT: "Diş eti bakımı ve kontrol",
+    implRefI: "Eksik diş alanı (varsa)",
+    implRefT: "İmplant değerlendirmesi",
+    emptyI: "Klinik muayenesi ile netleştirilmesi gereken bulgular",
+    emptyT: "Detaylı ağız içi muayene ve gerekiyorsa röntgen",
+    consult: "Ücretsiz–75$",
+  },
+  en: {
+    tImplant: "Implant",
+    tBridge: "Bridge",
+    tImplDent: "Implant-supported prosthesis",
+    mImplExp: "Placed without cutting neighboring teeth in many cases",
+    mBridgeExp: "Uses neighbor teeth as support",
+    mImplDentExp: "Fixed bridge supported on implants, planned to spare natural teeth when possible",
+    mDisc: "A clinical exam is required for a definitive treatment plan",
+    stainI: "Color / surface stain difference on teeth",
+    stainT: "Teeth whitening (in-office or take-home)",
+    tartarI: "Surface buildup / tartar risk",
+    tartarT: "Professional cleaning (scaling & polishing)",
+    alignI: "Mild crowding or misalignment",
+    alignT: "Orthodontic assessment (aligners / braces)",
+    cariesI: "Cavity / enamel loss risk",
+    cariesT: "Composite filling / restoration",
+    venI: "Aesthetic expectations",
+    venT: "Laminate / veneer or zirconia planning",
+    gumI: "Gum sensitivity / inflammation risk",
+    gumT: "Gum care and follow-up",
+    implRefI: "Missing tooth area (if any)",
+    implRefT: "Implant evaluation",
+    emptyI: "Findings to be clarified with a clinical exam",
+    emptyT: "Detailed intraoral exam and X-ray if needed",
+    consult: "Free–$75",
+  },
+  ka: {
+    tImplant: "იმპლანტი",
+    tBridge: "წიფი (ბრიჯი)",
+    tImplDent: "იმპლანტზე დაფუძნებული პროთეზი",
+    mImplExp: "შესაძლოა უარყოფა მეზობელი ჯანსაღი კბილებისთვის",
+    mBridgeExp: "Uses adjacent teeth as supports (abutments)",
+    mImplDentExp: "ფიქსირებული პროთეზი იმპლანტებზე, გეგმა ინდივიდუალურად",
+    mDisc: " საბოლოო გეგმისთვის საჭიროა კლინიკური გამოკვლევა",
+    stainI: "ფერის/ლაქის განსხვავება ემალზე",
+    stainT: "გათეთრება (კაბინეტში ან ბინაზე)",
+    tartarI: "ნადების/ქვის/surface buildup რისკი",
+    tartarT: "პროფ. გაწმენდა (გაწმენდა და პოლირირება)",
+    alignI: "მცირე ხილაკი / არეულობა",
+    alignT: "ორთოდონთია (ჩარჩო/პირბადე)",
+    cariesI: "ფუტური / ემალის ზიანის რისკი",
+    cariesT: "კომპოზიტი / აღდგენა",
+    venI: "ესთეტიკის მოთხოვნა",
+    venT: "ვინირი/ცირკონი, გეგმა",
+    gumI: "ღრძილის ანთება/რისკი",
+    gumT: "ღრძილის მოვლა, კონტროლი",
+    implRefI: "ნაკლებობა (თუ აქვს თავზე)",
+    implRefT: "იმპლანტაციის მიზნით შეფასება",
+    emptyI: "გამოსაკვეთია კლინიკურად",
+    emptyT: "ღრძილ-პირის დეტალური გამოკვლევა და პ.რ. სურათი",
+    consult: "უფასო–$75",
+  },
+  ru: {
+    tImplant: "Имплант",
+    tBridge: "Мост (bridge)",
+    tImplDent: "Протез на имплантах",
+    mImplExp: "Часто без обточки соседних зубов",
+    mBridgeExp: "Соседние зубы используются как опоры",
+    mImplDentExp: "Несъёмный протез на имплантах; план по ситуации",
+    mDisc: "Нужен клинический осмотр для окончательного плана",
+    stainI: "Разница в цвете / пигментация эмали",
+    stainT: "Отбеливание (в клинике или дома)",
+    tartarI: "Налёт / риск зубного камня",
+    tartarT: "Профессиональная чистка (скалинг, полировка)",
+    alignI: "Скученность / неровности",
+    alignT: "Ортодонтическая оценка (брекеты, элайнеры)",
+    cariesI: "Риск кариеса / потери эмали",
+    cariesT: "Композитная пломба / реставрация",
+    venI: "Эстетические ожидания",
+    venT: "План: виниры, цирконий",
+    gumI: "Чувствительность/воспаление дёсен",
+    gumT: "Уход и контроль дёсен",
+    implRefI: "Область отсутствия зуба (если есть)",
+    implRefT: "Оценка под имплант",
+    emptyI: "Нужны уточнения на приёме",
+    emptyT: "Осмотр полости рта и при необходимости рентген",
+    consult: "Бесплатно–$75",
+  },
+};
+
 /**
  * Heuristic treatment + indicative price ranges from AI insight text (not a diagnosis).
- * Feeds patient UX only; clinicians set real quotes.
- * @param {boolean|null} visionLikely  from vision JSON missingTeethLikely
- * @param {{ condition: string, confidence: string } | null} visionDentalCondition  from vision JSON dentalCondition
+ * @param {string} [langKey] tr|en|ka|ru localizes server-built issues/treatments list
  */
-function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = null, visionDentalCondition = null) {
+function buildDentalTreatmentPlan(
+  insights = [],
+  summary = '',
+  visionLikely = null,
+  visionDentalCondition = null,
+  langKey = 'en',
+) {
+  const P = getDentalPlanCopy(langKey);
   const parts = Array.isArray(insights) ? insights : [];
   const text = [...parts, String(summary || '')].join(' ').toLowerCase();
 
@@ -23374,11 +23871,11 @@ function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = nu
   const priceEstimate = {};
   const seenTreat = new Set();
 
-  const add = (issueTr, treatTr, priceKey, range) => {
-    if (issueTr && !issues.includes(issueTr)) issues.push(issueTr);
-    if (treatTr && !seenTreat.has(treatTr)) {
-      seenTreat.add(treatTr);
-      treatments.push(treatTr);
+  const add = (issueLine, treatLine, priceKey, range) => {
+    if (issueLine && !issues.includes(issueLine)) issues.push(issueLine);
+    if (treatLine && !seenTreat.has(treatLine)) {
+      seenTreat.add(treatLine);
+      treatments.push(treatLine);
     }
     if (priceKey && range && priceEstimate[priceKey] === undefined) {
       priceEstimate[priceKey] = range;
@@ -23392,22 +23889,24 @@ function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = nu
     dc = { condition: 'missing_tooth', confidence: miss.confidence };
   }
 
-  const dentalCondition = dentalConditionToPayload(dc);
+  const dentalCondition = dentalConditionToPayload(dc, langKey);
 
   let missingTooth = null;
   if (dc && dc.condition === 'missing_tooth') {
-    const headline = formatConditionHeadlineTr('missing_tooth', dc.confidence);
-    if (!issues.some((line) => String(line).startsWith('Eksik diş olabilir'))) issues.unshift(headline);
+    const headline = formatConditionHeadline('missing_tooth', dc.confidence, langKey);
+    if (!issues.includes(headline)) {
+      issues.unshift(headline);
+    }
     priceEstimate.implant = '500-1500$';
     priceEstimate.bridge = '300-1000$';
     if (miss.singleMissing) {
-      if (!seenTreat.has('İmplant')) {
-        seenTreat.add('İmplant');
-        treatments.push('İmplant');
+      if (!seenTreat.has(P.tImplant)) {
+        seenTreat.add(P.tImplant);
+        treatments.push(P.tImplant);
       }
-      if (!seenTreat.has('Köprü (bridge)')) {
-        seenTreat.add('Köprü (bridge)');
-        treatments.push('Köprü (bridge)');
+      if (!seenTreat.has(P.tBridge)) {
+        seenTreat.add(P.tBridge);
+        treatments.push(P.tBridge);
       }
       missingTooth = {
         headline,
@@ -23415,27 +23914,19 @@ function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = nu
         sources: miss.sources,
         singleMissing: true,
         options: [
-          {
-            title: 'İmplant',
-            explanation: 'Komşu dişlere zarar vermeden uygulanır',
-            price: '500-1500$',
-          },
-          {
-            title: 'Köprü (bridge)',
-            explanation: 'Komşu dişler destek olarak kullanılır',
-            price: '300-1000$',
-          },
+          { title: P.tImplant, explanation: P.mImplExp, price: '500-1500$' },
+          { title: P.tBridge, explanation: P.mBridgeExp, price: '300-1000$' },
         ],
-        disclaimer: 'Kesin tedavi planı için klinik muayenesi gereklidir',
+        disclaimer: P.mDisc,
       };
     } else {
-      if (!seenTreat.has('İmplant üstü protez')) {
-        seenTreat.add('İmplant üstü protez');
-        treatments.push('İmplant üstü protez');
+      if (!seenTreat.has(P.tImplDent)) {
+        seenTreat.add(P.tImplDent);
+        treatments.push(P.tImplDent);
       }
-      if (!seenTreat.has('Köprü (bridge)')) {
-        seenTreat.add('Köprü (bridge)');
-        treatments.push('Köprü (bridge)');
+      if (!seenTreat.has(P.tBridge)) {
+        seenTreat.add(P.tBridge);
+        treatments.push(P.tBridge);
       }
       missingTooth = {
         headline,
@@ -23443,76 +23934,52 @@ function buildDentalTreatmentPlan(insights = [], summary = '', visionLikely = nu
         sources: miss.sources,
         singleMissing: false,
         options: [
-          {
-            title: 'İmplant üstü protez',
-            explanation: 'İmplantlarla desteklenen sabit protez; komşu dişlere zarar vermeden planlanabilir',
-            price: '500-1500$',
-          },
-          {
-            title: 'Köprü (bridge)',
-            explanation: 'Komşu dişler destek olarak kullanılır',
-            price: '300-1000$',
-          },
+          { title: P.tImplDent, explanation: P.mImplDentExp, price: '500-1500$' },
+          { title: P.tBridge, explanation: P.mBridgeExp, price: '300-1000$' },
         ],
-        disclaimer: 'Kesin tedavi planı için klinik muayenesi gereklidir',
+        disclaimer: P.mDisc,
       };
     }
   } else if (dc && dc.condition === 'misalignment') {
-    const headline = formatConditionHeadlineTr('misalignment', dc.confidence);
-    if (!issues.some((line) => String(line).includes('çapraşık'))) issues.unshift(headline);
+    const headline = formatConditionHeadline('misalignment', dc.confidence, langKey);
+    if (!issues.includes(headline)) {
+      issues.unshift(headline);
+    }
   } else if (dc && dc.condition === 'diastema') {
-    const headline = formatConditionHeadlineTr('diastema', dc.confidence);
-    if (!issues.some((line) => String(line).includes('Doğal diş aralığı'))) issues.unshift(headline);
+    const headline = formatConditionHeadline('diastema', dc.confidence, langKey);
+    if (!issues.includes(headline)) {
+      issues.unshift(headline);
+    }
   }
 
   if (/sarı|discolor|renk|yellow|stain|lek|beyazlat|whiten|renk tonu|color|surface stain/i.test(text)) {
-    add(
-      'Diş yüzeyinde renk / leke farkı',
-      'Diş beyazlatma (ofis veya ev tipi)',
-      'whitening',
-      '150-400$'
-    );
+    add(P.stainI, P.stainT, 'whitening', '150-400$');
   }
   if (/tartar|plak|calculus|temizlik|cleaning|scaling|polish|birikim|taş/i.test(text)) {
-    add(
-      'Yüzey birikimi / tartar riski',
-      'Profesyonel diş temizliği (scaling & polishing)',
-      'cleaning',
-      '50-150$'
-    );
+    add(P.tartarI, P.tartarT, 'cleaning', '50-150$');
   }
   if (/çapra|crowding|düzensiz|misalignment|alignment|ortodont|braces|invisalign|şeffaf plak|tel/i.test(text)) {
-    add(
-      'Hafif dizilim / çapraşıklık',
-      'Ortodontik değerlendirme (plak / tel)',
-      'orthodontics',
-      '1.500-4.000$'
-    );
+    add(P.alignI, P.alignT, 'orthodontics', '1.500-4.000$');
   }
   if (/çürük|cavity|caries|dolgu|filling|mine/i.test(text)) {
-    add('Çürük / mine kaybı riski', 'Kompozit dolgu / restorasyon', 'filling', '80-250$');
+    add(P.cariesI, P.cariesT, 'filling', '80-250$');
   }
   if (/veneer|kaplama|porselen|zirkon|laminate|estetik gülüş/i.test(text)) {
-    add(
-      'Estetik görünüm beklentisi',
-      'Lamina / veneer veya zirkonyum planlaması',
-      'veneer',
-      '2.500-6.000$'
-    );
+    add(P.venI, P.venT, 'veneer', '2.500-6.000$');
   }
   if (/eti|gingiv|kanama|inflam|periodont|diş eti/i.test(text)) {
-    add('Diş eti hassasiyeti / inflamasyon riski', 'Diş eti bakımı ve kontrol', 'gum', '80-200$');
+    add(P.gumI, P.gumT, 'gum', '80-200$');
   }
   if (dc?.condition !== 'missing_tooth' && !miss.detected && /implant/i.test(text)) {
-    add('Eksik diş alanı (varsa)', 'İmplant değerlendirmesi', 'implant', '800-2.500$');
+    add(P.implRefI, P.implRefT, 'implant', '800-2.500$');
   }
 
   if (issues.length === 0) {
-    issues.push('Klinik muayenesi ile netleştirilmesi gereken bulgular');
+    issues.push(P.emptyI);
   }
   if (treatments.length === 0) {
-    treatments.push('Detaylı ağız içi muayene ve gerekiyorsa röntgen');
-    priceEstimate.consultation = 'Ücretsiz–75$';
+    treatments.push(P.emptyT);
+    priceEstimate.consultation = P.consult;
   }
 
   return {
@@ -23545,6 +24012,9 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       preferredCountry = null,
       userCountry = null,
     } = req.body || {};
+
+    const rawLang = getAiAnalyzeRequestLanguage(req);
+    const langKey = normalizeAiDentalLang(rawLang);
 
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
     if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
@@ -23579,7 +24049,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       }
     }
 
-    logAI('info', 'analyze_start', { patientId, imageUrl });
+    logAI('info', 'analyze_start', { patientId, imageUrl, lang: langKey });
 
     // ── Load image — from remote URL (Supabase) or local disk ───────────
     let imageBuffer;
@@ -23702,6 +24172,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       aiAnalysis = await processDentalAI(imageDataUrl, photoType, {
         apiKey:    OPENAI_KEY,
         timeoutMs: AI_TIMEOUT_MS,
+        langKey,
       });
     } catch (openaiErr) {
       logAI('error', 'openai_error', {
@@ -23741,13 +24212,14 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     // imageDataUrl no longer needed — release before writing to Supabase
     // (GC hint; avoids keeping a large string alive through async I/O)
 
-    const disclaimer = 'Bu sonuçlar AI tarafından oluşturulmuştur ve tıbbi teşhis değildir.';
+    const disclaimer = getAiAnalysisDisclaimer(langKey);
 
     const treatmentPlan = buildDentalTreatmentPlan(
       insights,
       summary,
       missingTeethLikely ?? null,
-      dentalConditionParsed ?? null
+      dentalConditionParsed ?? null,
+      langKey
     );
 
     const missingToothDetected = Boolean(treatmentPlan.missingTooth);
@@ -23766,7 +24238,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     await insertMessageToSupabase({
       patientId,
       sender: 'clinic',
-      message: 'AI Önizleme',
+      message: getAiPreviewInboxMessage(langKey),
       attachments: {
         aiResult: {
           insights,
@@ -23805,6 +24277,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
 
     return res.json({
       ok: true,
+      lang: langKey,
       insights,
       confidence,
       summary,
