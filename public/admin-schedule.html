@@ -148,7 +148,13 @@
     const summaryText = document.getElementById('summaryText');
     const gridEl = document.getElementById('calendarGrid');
 
-    const DAY_NAMES = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+    // Date.getDay(): 0 = Sunday … 6 = Saturday. Do not subtract 1 from getDay().
+    // Week columns: Sun → Sat (Sunday in range: weekStart + 0 .. +6).
+    const WEEKDAY_HEADERS = {
+      en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+      tr: ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'],
+    };
+    const DAY_NAMES = WEEKDAY_HEADERS.tr;
     const SLOT_MINUTES = 10;
     const START_HOUR = 8;
     const END_HOUR = 20;
@@ -220,13 +226,18 @@
       return d;
     }
 
+    /** Start of local week: Sunday 00:00 (getDay() === 0). */
     function getStartOfWeek(value) {
       const d = new Date(value);
       d.setHours(0, 0, 0, 0);
-      const day = d.getDay();
-      const diff = day === 0 ? -6 : (1 - day);
-      d.setDate(d.getDate() + diff);
+      d.setDate(d.getDate() - d.getDay());
       return d;
+    }
+
+    /** Monday-first column index 0..6: Mon=0 … Sun=6. Use when converting getDay() to ISO-style week UI. */
+    function mondayFirstColumnIndex(dateObj) {
+      const day = new Date(dateObj).getDay();
+      return (day + 6) % 7;
     }
 
     function buildWeekDays(startDate) {
