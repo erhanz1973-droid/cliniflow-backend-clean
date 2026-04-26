@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
+  <script src="/admin-i18n.js?v=17"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
   <title>Dashboard - Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css"/>
-  <script src="/admin-i18n.js?v=202604110"></script>
   <style>
     :root { 
       --bg:#111827; 
@@ -563,7 +563,7 @@
           </div>
           <div class="summary-badge summary-badge-today" style="padding:8px 14px; background:rgba(37, 99, 235, 0.15); border:1px solid rgba(37, 99, 235, 0.3); border-radius:8px; display:flex; align-items:center; gap:6px;">
             <span style="font-size:14px;">📅</span>
-            <span id="todayLabel" style="font-size:13px; font-weight:600; color:#93c5fd;" data-i18n="dashboard.upcoming.summary.today">Bugün:</span>
+            <span id="todayLabel" style="font-size:13px; font-weight:600; color:#93c5fd;" data-i18n="dashboard.upcoming.summary.today">Today:</span>
             <span id="todayPatients" style="font-size:13px; font-weight:700; color:#fff;">0</span>
             <span id="todayPatientsLabel" style="font-size:11px; color:var(--muted);" data-i18n="dashboard.upcoming.summary.patients">hasta</span>
             <span style="font-size:11px; color:var(--muted); margin:0 2px;">•</span>
@@ -700,9 +700,17 @@
     return limit == null || limit === -1;
   }
 
-  function planUsageFormatPair(used, limit) {
+  function planUsageT(key) {
+    if (window.i18n && window.i18n.t) {
+      const v = window.i18n.t(key);
+      if (v && !String(v).startsWith("dashboard.")) return v;
+    }
+    return key;
+  }
+
+  function planUsageFormatPair(used, limit, unlimitedLabel) {
     const u = Number(used) || 0;
-    if (planUsageIsUnlimited(limit)) return u + " / Unlimited";
+    if (planUsageIsUnlimited(limit)) return u + " / " + unlimitedLabel;
     return u + " / " + limit;
   }
 
@@ -726,15 +734,18 @@
     const root = document.getElementById(containerId);
     if (!root) return;
 
+    const t = planUsageT;
+    const unlimitedLabel = t("dashboard.unlimited");
+
     const plan = String((override && override.plan) || PLAN_USAGE_MOCK.plan || "free").toLowerCase();
     const usage = Object.assign({}, PLAN_USAGE_MOCK.usage, (override && override.usage) || {});
     const limits = Object.assign({}, PLAN_USAGE_MOCK.limits, (override && override.limits) || {});
     const tierLimits = limits[plan] || limits.free || {};
 
     const rows = [
-      { key: "activeTreatments", label: "Active treatments", used: usage.activeTreatments, limit: tierLimits.activeTreatments },
-      { key: "uploads", label: "Monthly uploads", used: usage.uploads, limit: tierLimits.uploads },
-      { key: "referrals", label: "Referral invites", used: usage.referrals, limit: tierLimits.referrals },
+      { key: "activeTreatments", label: t("dashboard.activeTreatments"), used: usage.activeTreatments, limit: tierLimits.activeTreatments },
+      { key: "uploads", label: t("dashboard.monthlyUploads"), used: usage.uploads, limit: tierLimits.uploads },
+      { key: "referrals", label: t("dashboard.referralInvites"), used: usage.referrals, limit: tierLimits.referrals },
     ];
 
     let worst = "ok";
@@ -747,18 +758,18 @@
     let alertHtml = "";
     if (worst === "crit") {
       alertHtml =
-        '<p class="plan-alert crit">Limit reached. Upgrade to continue.</p>';
+        '<p class="plan-alert crit">' + t("dashboard.planAlertCrit") + "</p>";
     } else if (worst === "warn") {
       alertHtml =
-        '<p class="plan-alert warn">You are close to your limit</p>';
+        '<p class="plan-alert warn">' + t("dashboard.planAlertWarn") + "</p>";
     }
 
     const planTitle = plan.toUpperCase();
 
     root.innerHTML =
       '<section class="plan-usage-widget">' +
-      '<h2>Plan &amp; usage</h2>' +
-      '<div class="plan-pill" title="Current subscription tier">' +
+      "<h2>" + t("dashboard.planUsage") + "</h2>" +
+      '<div class="plan-pill" title="' + t("dashboard.planTierTitle") + '">' +
       planTitle +
       "</div>" +
       alertHtml +
@@ -771,66 +782,84 @@
             r.label +
             "</span>" +
             '<span class="plan-row-value">' +
-            planUsageFormatPair(r.used, r.limit) +
+            planUsageFormatPair(r.used, r.limit, unlimitedLabel) +
             "</span>" +
             "</div>"
           );
         })
         .join("") +
       "</div>" +
-      '<button type="button" class="plan-upgrade" id="planUsageUpgradeBtn">Upgrade</button>' +
+      '<button type="button" class="plan-upgrade" id="planUsageUpgradeBtn">' + t("dashboard.upgrade") + "</button>" +
       "</section>";
 
     const btn = document.getElementById("planUsageUpgradeBtn");
     if (btn) {
+      if (btn.textContent === "Upgrade") {
+        console.warn("Hardcoded English detected");
+      }
       btn.onclick = function () {
         const pricingUrl = "https://clinifly.net/pricing";
-        if (window.confirm("Open pricing page?\n\n" + pricingUrl)) {
+        const msg = t("dashboard.confirmOpenPricing").replace(/\{url\}/g, pricingUrl);
+        if (window.confirm(msg)) {
           window.location.href = pricingUrl;
         }
       };
     }
   }
 
-  // ── Procedure code → multilingual labels ────────────────────────────────────
-  const PROC_LABELS = {
-    FILLING:        { tr: "Dolgu",             en: "Filling",          ru: "Пломба",                 ka: "პლომბი" },
-    BRIDGE_UNIT:    { tr: "Köprü Ünitesi",     en: "Bridge Unit",      ru: "Единица моста",          ka: "ხიდის ერთეული" },
-    BRIDGE:         { tr: "Köprü",             en: "Bridge",           ru: "Мост",                   ka: "ხიდი" },
-    CROWN:          { tr: "Kuron",             en: "Crown",            ru: "Коронка",                ka: "გვირგვინი" },
-    EXTRACTION:     { tr: "Çekim",             en: "Extraction",       ru: "Удаление",               ka: "ამოძრავება" },
-    IMPLANT:        { tr: "İmplant",           en: "Implant",          ru: "Имплант",                ka: "იმპლანტი" },
-    ROOT_CANAL:     { tr: "Kanal Tedavisi",    en: "Root Canal",       ru: "Лечение канала",         ka: "ფესვის არხი" },
+  // tooth/clinical procedure display names: loaded from /api/procedures; legacy-only codes below
+  window._PROC_LABELS_CATALOG = window._PROC_LABELS_CATALOG || {};
+  const PROC_LABELS_LEGACY = {
     SCALING:        { tr: "Diş Taşı",          en: "Scaling",          ru: "Снятие камня",           ka: "ქვის გაწმენდა" },
-    WHITENING:      { tr: "Beyazlatma",        en: "Whitening",        ru: "Отбеливание",            ka: "გათეთრება" },
-    BLEACHING:      { tr: "Beyazlatma",        en: "Bleaching",        ru: "Отбеливание",            ka: "გათეთრება" },
-    VENEER:         { tr: "Veneer",            en: "Veneer",           ru: "Виниры",                 ka: "ვინირი" },
-    INLAY:          { tr: "İnley",             en: "Inlay",            ru: "Вкладка",                ka: "ინლეი" },
-    ONLAY:          { tr: "Onley",             en: "Onlay",            ru: "Накладка",               ka: "ონლეი" },
     DENTURE:        { tr: "Protez",            en: "Denture",          ru: "Протез",                 ka: "პროთეზი" },
     CONSULTATION:   { tr: "Konsültasyon",      en: "Consultation",     ru: "Консультация",           ka: "კონსულტაცია" },
     CLEANING:       { tr: "Temizlik",          en: "Cleaning",         ru: "Чистка",                 ka: "გაწმენდა" },
     X_RAY:          { tr: "Röntgen",           en: "X-Ray",            ru: "Рентген",                ka: "რენტგენი" },
     COMPOSITE:      { tr: "Kompozit",          en: "Composite",        ru: "Композит",               ka: "კომპოზიტი" },
     TEMPORARY:      { tr: "Geçici Dolgu",      en: "Temporary",        ru: "Врем. пломба",           ka: "დროებითი პლომბი" },
-    POST_CORE:      { tr: "Post ve Kor",       en: "Post & Core",      ru: "Штифт",                  ka: "პოსტი" },
     ZIRCONIA:       { tr: "Zirkonyum",         en: "Zirconia",         ru: "Цирконий",               ka: "ცირკონიუმი" },
     SINUS_LIFT:     { tr: "Sinüs Lifting",     en: "Sinus Lift",       ru: "Синус-лифтинг",          ka: "სინუს-ლიფტი" },
     BONE_GRAFT:     { tr: "Kemik Grefti",      en: "Bone Graft",       ru: "Костный трансплантат",   ka: "ძვლის გრაფტი" },
     GINGIVECTOMY:   { tr: "Dişeti Op.",        en: "Gingivectomy",     ru: "Гингивэктомия",          ka: "გინგივექტომია" },
-    NIGHT_GUARD:    { tr: "Gece Plağı",        en: "Night Guard",      ru: "Каппа",                  ka: "ღამის დაფა" },
-    IMPLANT_CROWN:  { tr: "İmplant Kuron",     en: "Implant Crown",    ru: "Коронка на имплант",     ka: "იმპლანტის გვირგვინი" },
     CEREC:          { tr: "CEREC",             en: "CEREC",            ru: "CEREC",                  ka: "CEREC" },
     APICOECTOMY:    { tr: "Apikoektomi",       en: "Apicoectomy",      ru: "Апикоэктомия",           ka: "აპიკოექტომია" },
-    TREATMENT:      { tr: "Tedavi",            en: "Treatment",        ru: "Лечение",                ka: "მკურნალობა" },
   };
+
+  function loadProcedureLabelCache() {
+    const APIx = typeof cliniflowApiBase === "function" ? cliniflowApiBase() : "";
+    if (!APIx) return;
+    const lang = (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : "en";
+    fetch(`${APIx}/api/procedures?lang=${encodeURIComponent(lang)}`, { headers: { Accept: "application/json" } })
+      .then((r) => r.json())
+      .then((data) => {
+        const list = data.procedures || data.data || data.types || [];
+        list.forEach((p) => {
+          if (p && p.type && typeof p.name === "string" && p.name) {
+            window._PROC_LABELS_CATALOG[String(p.type).toUpperCase().replace(/[-\s]+/g, "_")] = p.name;
+            window._PROC_LABELS_CATALOG[String(p.type).toUpperCase()] = p.name;
+          }
+        });
+      })
+      .catch(function () {});
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", loadProcedureLabelCache);
+  } else {
+    loadProcedureLabelCache();
+  }
 
   function localizeProcCode(rawCode) {
     if (!rawCode) return rawCode || "";
-    const lang = (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : 'tr';
-    const code = String(rawCode).trim().toUpperCase().replace(/[-\s]+/g, '_');
-    const labels = PROC_LABELS[code];
-    return (labels && (labels[lang] || labels['en'])) || rawCode;
+    const lang = (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : "tr";
+    const code = String(rawCode).trim().toUpperCase().replace(/[-\s]+/g, "_");
+    if (window._PROC_LABELS_CATALOG && window._PROC_LABELS_CATALOG[code]) {
+      if (window.assertProcedureNameNotMixed) {
+        window.assertProcedureNameNotMixed({ name: window._PROC_LABELS_CATALOG[code] });
+      }
+      return window._PROC_LABELS_CATALOG[code];
+    }
+    const labels = PROC_LABELS_LEGACY[code];
+    return (labels && (labels[lang] || labels.en)) || rawCode;
   }
 
   // Tooth words in all supported languages for pattern matching
@@ -1442,73 +1471,28 @@
           <strong>${(window.i18n && window.i18n.t) ? window.i18n.t("common.error") : "Error"}:</strong> ${error.message || ((window.i18n && window.i18n.t) ? window.i18n.t("common.loading") : "Loading...")}
         </div>
         <div style="margin-top: 8px; font-size: 12px; color: var(--muted);">
-          Check browser console (F12) for details
+          ${(window.i18n && window.i18n.t) ? window.i18n.t("dashboard.metricsErrorHint") : "Check browser console (F12) for details"}
         </div>
       `;
     } finally {
       eventsLoading = false;
     }
   }
-  
-  // Language change handler
-  window.onI18nUpdated = function(lang) {
-    // Update page title
-    const titleEl = document.getElementById("pageTitle");
-    const headingEl = document.getElementById("pageHeading");
-    const upcomingTitleEl = document.getElementById("upcomingTitle");
-    const upcomingSubtitleEl = document.getElementById("upcomingSubtitle");
-    const activePatientsTitleEl = document.getElementById("activePatientsTitle");
-    const proceduresTitleEl = document.getElementById("proceduresTitle");
-    
-    if (titleEl) titleEl.textContent = (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.title") : "Dashboard";
-    if (headingEl) headingEl.textContent = (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.title") : "Dashboard";
-    if (upcomingTitleEl) upcomingTitleEl.textContent = (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.upcoming.title") : "Upcoming Events";
-    if (upcomingSubtitleEl) upcomingSubtitleEl.textContent = (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.upcoming.subtitle") : "Timeline of upcoming events";
-    if (activePatientsTitleEl) activePatientsTitleEl.textContent = (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.charts.activePatients") : "Active Patients";
-    if (proceduresTitleEl) proceduresTitleEl.textContent = (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.charts.procedures") : "Procedures";
-    
-    // Reload clinic info and events (this will re-render timeline with new language)
+
+  window.renderDashboard = function() {
+    if (!document.getElementById("upcomingList")) return;
+    renderPlanWidget("planUsageWidgetMount");
     loadClinicInfo();
     loadEvents();
-    // Force-translate summary badge labels immediately on language change
-    const _itl = (window.i18n && window.i18n.t) ? (k) => window.i18n.t(k) : null;
-    if (_itl) {
-      const _setById2 = (id, key) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        const v = _itl(key);
-        if (v && !v.startsWith("dashboard.")) el.textContent = v;
-      };
-      _setById2("tomorrowLabel",         "dashboard.upcoming.summary.tomorrow");
-      _setById2("tomorrowPatientsLabel", "dashboard.upcoming.summary.patients");
-      _setById2("tomorrowEventsLabel",   "dashboard.upcoming.summary.events");
-      _setById2("todayLabel",            "dashboard.upcoming.summary.today");
-      _setById2("todayPatientsLabel",    "dashboard.upcoming.summary.patients");
-      _setById2("todayEventsLabel",      "dashboard.upcoming.summary.events");
-      [
-        ["dashboard.upcoming.summary.overdue",  '[data-i18n="dashboard.upcoming.summary.overdue"]'],
-        ["dashboard.upcoming.summary.patients", '[data-i18n="dashboard.upcoming.summary.patients"]'],
-        ["dashboard.upcoming.summary.events",   '[data-i18n="dashboard.upcoming.summary.events"]'],
-      ].forEach(([key, sel]) => {
-        const v = _itl(key);
-        if (v && !v.startsWith("dashboard.")) {
-          document.querySelectorAll(sel).forEach(el => { el.textContent = v; });
-        }
-      });
-    }
-
-    // Reload badges after i18n update (in case badges were removed during translation)
-    setTimeout(() => {
-      loadAllBadges();
+    setTimeout(function() {
+      if (typeof loadAllBadges === "function") loadAllBadges();
     }, 100);
-    
-    // Reload charts with new language
-    setTimeout(() => {
-      loadMonthlyActivePatients();
-      loadMonthlyProcedures();
+    setTimeout(function() {
+      if (typeof loadMonthlyActivePatients === "function") loadMonthlyActivePatients();
+      if (typeof loadMonthlyProcedures === "function") loadMonthlyProcedures();
     }, 200);
   };
-
+  
   function initializeDashboard() {
     renderPlanWidget("planUsageWidgetMount");
     loadClinicInfo();
@@ -2117,6 +2101,6 @@ function updateActivePatientsUI(data) {
   // Refresh badges every 30 seconds (independent of events)
   setInterval(loadAllBadges, 30000);
 </script>
-<script src="/admin-layout.js?v=202604171"></script>
+<script src="/admin-layout.js?v=202604277"></script>
 </body>
 </html>

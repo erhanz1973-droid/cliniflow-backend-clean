@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
   <title id="pageTitle">Clinifly Doctor – Login</title>
-  <script src="/admin-i18n.js?v=202502011445"></script>
+  <script src="/admin-i18n.js?v=17"></script>
   <style>
     :root { 
       --bg:#0f172a; 
@@ -273,10 +273,8 @@
       });
     }
 
-    // Initialize i18n
     if (typeof i18n !== 'undefined') {
-      i18n.init().then(updateUI);
-      window.onI18nUpdated = updateUI;
+      window.rerenderDoctorLoginPage = updateUI;
     } else {
       updateUI();
     }

@@ -220,6 +220,7 @@ const multer = require("multer");
 const nodemailer = require("nodemailer");
 const { randomUUID } = require("crypto");
 const procedures = require("./shared/procedures");
+console.log("🌍 I18N PROCEDURES ACTIVE");
 const saasPlans = require("./shared/saasPlans");
 const saasEnforcement = require("./lib/saasEnforcement.cjs");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
@@ -24250,26 +24251,31 @@ app.get("/api/clinic/:code", (req, res) => {
 });
 
 // ================== PROCEDURE DEFINITIONS (shared) ==================
-// Canonical list for pickers (id = procedure type code, name = human label).
-// `lang` = tr | en | ru | ka — display labels only (stable API codes stay English).
+// Single source: shared/procedures.js (PROCEDURE_TYPES + PROCEDURE_I18N). API returns string labels only.
+function safeLang(obj, lang) {
+  return obj?.[lang] || obj?.en || Object.values(obj || {})[0] || "";
+}
+function assertNoMixedLanguage(text) {
+  if (typeof text !== "string") return;
+  if (text.includes("(") && text.includes(")")) {
+    console.warn("⚠️ Mixed language detected:", text);
+  }
+}
 function buildProceduresCatalogPayload(lang) {
-  const L = procedures.normalizeProcedureLang ? procedures.normalizeProcedureLang(lang) : "en";
-  const safe = procedures.safeLang;
+  const langKey = (String((lang != null && lang !== "" ? lang : "en") || "en") || "en")
+    .toLowerCase()
+    .slice(0, 2);
+  const L = procedures.normalizeProcedureLang ? procedures.normalizeProcedureLang(langKey) : "en";
   const list = (procedures.PROCEDURE_TYPES || []).map((p) => {
     const nameObj = procedures.getMultilingualTypeName
       ? procedures.getMultilingualTypeName(p.type)
       : { en: p.type, tr: p.type, ru: p.type, ka: p.type };
-    const single = safe ? safe(nameObj, L) : nameObj.en || p.type;
-    return {
-      id: p.type,
-      name: single,
-      type: p.type,
-      label: single,
-      category: p.category,
-    };
+    const name = safeLang(nameObj, L);
+    assertNoMixedLanguage(name);
+    return { id: p.type, type: p.type, category: p.category, name };
   });
   const categoryLabels =
-    procedures.getLocalizedCategoryLabels ? procedures.getLocalizedCategoryLabels(lang) : {};
+    procedures.getLocalizedCategoryLabels ? procedures.getLocalizedCategoryLabels(L) : {};
   const categoryLabelsI18n = procedures.getCategoryLabelsI18n
     ? procedures.getCategoryLabelsI18n()
     : {};
@@ -24319,11 +24325,12 @@ function doctorProfileProcedureItemsFromIds(profileProcedureIds) {
       ids = [];
     }
   }
-  const safe = procedures.safeLang;
-  const catalog = (procedures.PROCEDURE_TYPES || []).map((t) => ({
-    id: t.type,
-    name: safe(procedures.getMultilingualTypeName(t.type), "en"),
-  }));
+  const en = "en";
+  const catalog = (procedures.PROCEDURE_TYPES || []).map((t) => {
+    const n = safeLang(procedures.getMultilingualTypeName(t.type), en);
+    assertNoMixedLanguage(n);
+    return { id: t.type, name: n };
+  });
   const byId = new Map(catalog.map((p) => [p.id, p]));
   return ids
     .map((x) => String(x || "").trim())
@@ -24333,24 +24340,32 @@ function doctorProfileProcedureItemsFromIds(profileProcedureIds) {
 
 // Public + doctor-app: same catalog (doctor routes require auth)
 app.get("/api/procedures", (req, res) => {
-  const lang = req.query && req.query.lang != null ? req.query.lang : "";
+  const lang = (req.query && req.query.lang != null ? req.query.lang : "en")
+    .toString()
+    .slice(0, 2);
   res.json(buildProceduresCatalogPayload(lang));
 });
 
 app.get("/api/doctor/procedures", requireDoctorAuth, (req, res) => {
-  const lang = req.query && req.query.lang != null ? req.query.lang : "";
+  const lang = (req.query && req.query.lang != null ? req.query.lang : "en")
+    .toString()
+    .slice(0, 2);
   res.json(buildProceduresCatalogPayload(lang));
+});
+
+app.get("/api/debug/procedures", (req, res) => {
+  res.json(procedures.PROCEDURES || []);
 });
 
 // Profile settings multi-select (expects { ok, procedures: [{ id, name }] })
 app.get("/api/doctor/procedures-list", requireDoctorAuth, (req, res) => {
-  const L = procedures.normalizeProcedureLang(req.query && req.query.lang);
-  const safe = procedures.safeLang;
-  const proceduresOnly = (procedures.PROCEDURE_TYPES || []).map((t) => ({
-    id: t.type,
-    name: safe(procedures.getMultilingualTypeName(t.type), L),
-    category: t.category,
-  }));
+  const Lk = (req.query && req.query.lang != null ? req.query.lang : "en").toString().slice(0, 2);
+  const L = procedures.normalizeProcedureLang(Lk);
+  const proceduresOnly = (procedures.PROCEDURE_TYPES || []).map((t) => {
+    const n = safeLang(procedures.getMultilingualTypeName(t.type), L);
+    assertNoMixedLanguage(n);
+    return { id: t.type, name: n, category: t.category };
+  });
   res.json({ ok: true, procedures: proceduresOnly });
 });
 
@@ -37388,10 +37403,11 @@ app.get('/api/doctor/encounters/:id/plan', requireDoctorAuth, async (req, res) =
 
 // ── Encounter treatments (doctor app: diagnosis → treatment) — table: encounter_treatments
 const _procedureTypeToLabel = Object.fromEntries(
-  (procedures.PROCEDURE_TYPES || []).map((p) => [
-    p.type,
-    procedures.safeLang(procedures.getMultilingualTypeName(p.type), "en"),
-  ])
+  (procedures.PROCEDURE_TYPES || []).map((p) => {
+    const lab = safeLang(procedures.getMultilingualTypeName(p.type), "en");
+    assertNoMixedLanguage(lab);
+    return [p.type, lab];
+  })
 );
 const _validProcedureTypeSet = new Set((procedures.PROCEDURE_TYPES || []).map((p) => p.type));
 

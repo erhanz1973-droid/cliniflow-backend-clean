@@ -14,6 +14,8 @@
       }
     })();
   </script>
+  <script src="/admin-i18n.js?v=17"></script>
+  <link rel="stylesheet" href="/admin-layout.css"/>
   <script>
     let allDoctors = [];
     let filteredDoctors = [];
@@ -503,14 +505,14 @@
         <div class="navbar-logo">
           🏥 Clinifly Admin
         </div>
-        <a href="/admin.html" class="nav-link">Dashboard</a>
-        <a href="/admin-patients.html" class="nav-link">Hastalar</a>
-        <a href="/admin-doctor-applications.html" class="nav-link active">Doktorlar</a>
-        <a href="/admin-treatment-groups.html" class="nav-link">Treatment Groups</a>
+        <a href="/admin.html" class="nav-link" data-i18n="dashboard.nav.dashboard"></a>
+        <a href="/admin-patients.html" class="nav-link" data-i18n="dashboard.nav.patients"></a>
+        <a href="/admin-doctor-applications.html" class="nav-link active" data-i18n="dashboard.nav.doctors"></a>
+        <a href="/admin-treatment-groups.html" class="nav-link" data-i18n="dashboard.nav.treatment"></a>
       </div>
       <div class="navbar-right">
-        <a href="/admin-settings.html" class="nav-link secondary">Clinic Settings</a>
-        <a href="#" onclick="logout(); return false;" class="nav-link secondary">Logout</a>
+        <a href="/admin-settings.html" class="nav-link secondary" data-i18n="chat.navClinicSettings"></a>
+        <a href="#" onclick="logout(); return false;" class="nav-link secondary" data-i18n="dashboard.sidebar.logout"></a>
       </div>
     </nav>
 
@@ -551,5 +553,6 @@
       <p>Doktor başvurusu henüz yapılmadı.</p>
     </div>
   </div>
+<script src="/admin-layout.js?v=202604277"></script>
 </body>
 </html>

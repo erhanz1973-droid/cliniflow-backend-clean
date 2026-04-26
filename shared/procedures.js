@@ -249,8 +249,8 @@ const PROCEDURE_I18N = {
       PANORAMIC_XRAY: "Panoramik röntgen",
       CROWN: "Kuron",
       TEMP_CROWN: "Geçici kuron",
-      BRIDGE_UNIT: "Köprü (diş ünitesi)",
-      TEMP_BRIDGE_UNIT: "Geçici köprü (diş ünitesi)",
+      BRIDGE_UNIT: "Köprü – diş ünitesi",
+      TEMP_BRIDGE_UNIT: "Geçici köprü – diş ünitesi",
       CROWN_REPLACEMENT: "Kuron yenileme / değişim",
       BRIDGE_REPLACEMENT_OR_REMOVAL: "Köprü yenileme / söküm",
       INLAY: "İnley",
@@ -292,8 +292,8 @@ const PROCEDURE_I18N = {
       PANORAMIC_XRAY: "Панорамный снимок",
       CROWN: "Коронка",
       TEMP_CROWN: "Временная коронка",
-      BRIDGE_UNIT: "Мост (единица зуба)",
-      TEMP_BRIDGE_UNIT: "Временный мост (единица зуба)",
+      BRIDGE_UNIT: "Мост – единица зуба",
+      TEMP_BRIDGE_UNIT: "Временный мост – единица зуба",
       CROWN_REPLACEMENT: "Замена коронки / обновление",
       BRIDGE_REPLACEMENT_OR_REMOVAL: "Замена / снятие моста",
       INLAY: "Вкладка",
@@ -367,7 +367,7 @@ const PROCEDURE_I18N = {
 
 /**
  * @param {string} [lang]
- * @returns {{ type: string, label: string, category: ProcedureCategory }[]}
+ * @returns {{ type: string, name: string, category: ProcedureCategory }[]}
  */
 function getLocalizedProcedureTypes(lang) {
   const L = normalizeProcedureLang(lang);
@@ -379,7 +379,7 @@ function getLocalizedProcedureTypes(lang) {
     const type = p.type;
     return {
       type,
-      label: tLoc[type] || tEn[type] || type,
+      name: tLoc[type] || tEn[type] || type,
       category: p.category,
     };
   });
@@ -409,6 +409,14 @@ function getMultilingualTypeName(type) {
     ka: PROCEDURE_I18N.ka.type[t] || en,
   };
 }
+
+/** Backend + `/api/debug/procedures` — one row per type; `name` is the multilingual object (not a mixed string). */
+const PROCEDURES = PROCEDURE_TYPES.map((p) => ({
+  id: p.type,
+  type: p.type,
+  category: p.category,
+  name: getMultilingualTypeName(p.type),
+}));
 
 /**
  * @returns {Record<string, { en: string, tr: string, ru: string, ka: string }>}
@@ -446,6 +454,7 @@ module.exports = {
   getMultilingualTypeName,
   getCategoryLabelsI18n,
   PROCEDURE_I18N,
+  PROCEDURES,
 };
 
 

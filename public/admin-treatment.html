@@ -2,11 +2,11 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <script src="/admin-i18n.js?v=17"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"/>
   <title data-i18n="treatment.pageTitle">Tedaviler - Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css"/>
-  <script src="/api-base.js?v=202603301"></script>
-  <script src="/admin-i18n.js"></script>
   <style>
     body { font-family: system-ui; }
     /* Treatment page has its own dark UI — override the layout background for this page */
@@ -469,9 +469,9 @@
           </div>
 
           <div style="flex:1; min-width:200px;">
-            <label data-i18n="treatment.doctorLabel">Doktor</label>
+            <label data-i18n="common.doctor">Doctor</label>
             <select id="procDoctor" style="width:100%">
-              <option value="" data-i18n="treatment.doctorSelectOptional">-- Doktor Seç (ops.) --</option>
+              <option value="" data-i18n="treatment.doctorSelectOptional">-- select doctor (optional) --</option>
             </select>
           </div>
 
@@ -512,7 +512,7 @@
           </div>
           <div class="row" style="gap:8px; margin-top:10px; justify-content:flex-end;">
             <button class="ghost" style="width:auto; padding:6px 14px;" onclick="toggleDiagForm()" data-i18n="common.cancel">İptal</button>
-            <button style="width:auto; padding:6px 14px; background:var(--b, #2563eb); color:#fff; border:none; border-radius:6px; cursor:pointer;" onclick="saveDiagnosis()" data-i18n="common.save">Kaydet</button>
+            <button style="width:auto; padding:6px 14px; background:var(--b, #2563eb); color:#fff; border:none; border-radius:6px; cursor:pointer;" onclick="saveDiagnosis()" data-i18n="common.save"></button>
           </div>
         </div>
 
@@ -659,65 +659,12 @@
     "abrasion of teeth": ICD10_LABEL_FALLBACK["K03.1"],
   };
 
-  // Category labels — mirrors CATEGORY_LABELS_I18N in packages/procedures/index.js
-  const CATEGORY_LABELS_FALLBACK = {
-    EVENTS:      { tr: "Olaylar",   en: "Events",      ru: "События",    ka: "მოვლენები" },
-    PROSTHETIC:  { tr: "Protetik",  en: "Prosthetic",  ru: "Ортопедия",  ka: "პროთეტიკა" },
-    RESTORATIVE: { tr: "Restoratif",en: "Restorative", ru: "Терапия",    ka: "რესტავრაცია" },
-    ENDODONTIC:  { tr: "Endodonti", en: "Endodontic",  ru: "Эндодонтия", ka: "ენდოდონტია" },
-    SURGICAL:    { tr: "Cerrahi",   en: "Surgical",    ru: "Хирургия",   ka: "ქირურგია" },
-    IMPLANT:     { tr: "İmplant",   en: "Implant",     ru: "Имплантация",ka: "იმპლანტაცია" },
-    OTHER:       { tr: "Diğer",     en: "Other",       ru: "Другое",     ka: "სხვა" },
-  };
-
-  // Complete client-side procedure label table — mirrors packages/procedures/index.js labels.
-  // Used as primary source so labels are always correct regardless of API cache/language state.
-  const PROCEDURE_CODE_LABEL_FALLBACK = {
-    // EVENTS
-    TREATMENT:                    { tr: "Tedavi kaydı",                    en: "Treatment event",              ru: "Запись лечения",                       ka: "მკურნალობის ჩანაწერი" },
-    CONSULT:                      { tr: "Muayene",                         en: "Consultation",                 ru: "Консультация",                         ka: "კონსულტაცია" },
-    FOLLOWUP:                     { tr: "Kontrol",                         en: "Follow-up",                    ru: "Контрольный приём",                    ka: "განმეორებითი ვიზიტი" },
-    LAB:                          { tr: "Laboratuvar / görüntüleme",       en: "Lab / imaging",                ru: "Лаборатория / визуализация",           ka: "ლაბორატორია / გამოსახულება" },
-    XRAY:                         { tr: "Röntgen",                         en: "X-ray",                        ru: "Рентген",                              ka: "რენტგენი" },
-    PANORAMIC_XRAY:               { tr: "Panoramik röntgen",               en: "Panoramic X-ray",              ru: "Панорамный снимок",                    ka: "პანორამული რენტგენი" },
-    // PROSTHETIC
-    CROWN:                        { tr: "Kuron",                           en: "Crown",                        ru: "Коронка",                              ka: "კორონა" },
-    TEMP_CROWN:                   { tr: "Geçici kuron",                    en: "Temporary crown",              ru: "Временная коронка",                    ka: "დროებითი კორონა" },
-    BRIDGE_UNIT:                  { tr: "Köprü",                           en: "Bridge unit",                  ru: "Мост",                                 ka: "ხიდი" },
-    TEMP_BRIDGE_UNIT:             { tr: "Geçici köprü",                    en: "Temporary bridge unit",        ru: "Временный мост",                       ka: "დროებითი ხიდი" },
-    CROWN_REPLACEMENT:            { tr: "Kuron değişimi",                  en: "Crown replacement",            ru: "Замена коронки",                       ka: "კორონის შეცვლა" },
-    BRIDGE_REPLACEMENT_OR_REMOVAL:{ tr: "Köprü değişimi / çıkarılması",   en: "Bridge replacement / removal", ru: "Замена / снятие моста",                ka: "ხიდის შეცვლა / ამოღება" },
-    INLAY:                        { tr: "İnley",                           en: "Inlay",                        ru: "Инлей",                                ka: "ინლეი" },
-    ONLAY:                        { tr: "Onley",                           en: "Onlay",                        ru: "Онлей",                                ka: "ონლეი" },
-    OVERLAY:                      { tr: "Örtü",                            en: "Overlay",                      ru: "Оверлей",                              ka: "ოვერლეი" },
-    POST_AND_CORE:                { tr: "Post ve çekirdek",                en: "Post and core",                ru: "Пост и коронковая часть",              ka: "პოსტი და ბირთვი" },
-    // RESTORATIVE
-    FILLING:                      { tr: "Dolgu",                           en: "Filling",                      ru: "Пломба",                               ka: "პლომბა" },
-    TEMP_FILLING:                 { tr: "Geçici dolgu",                    en: "Temporary filling",            ru: "Временная пломба",                     ka: "დროებითი პლომბა" },
-    FILLING_REPLACEMENT_OR_REMOVAL:{ tr: "Dolgu değişimi / çıkarılması",  en: "Filling replacement / removal",ru: "Замена / удаление пломбы",             ka: "პლომბის შეცვლა / ამოღება" },
-    // ENDODONTIC
-    ROOT_CANAL_TREATMENT:         { tr: "Kanal tedavisi",                  en: "Root canal treatment",         ru: "Лечение каналов",                      ka: "არხების მკურნალობა" },
-    ROOT_CANAL_RETREATMENT:       { tr: "Kanal tedavisi tekrarı",          en: "Root canal retreatment",       ru: "Повторное лечение каналов",            ka: "არხების მკურნალობის გამეორება" },
-    CANAL_OPENING:                { tr: "Kanal açılması",                  en: "Canal opening",                ru: "Открытие канала",                      ka: "არხის გახსნა" },
-    CANAL_FILLING:                { tr: "Kanal dolgusu",                   en: "Canal filling",                ru: "Пломбирование канала",                 ka: "არხის პლომბირება" },
-    // SURGICAL
-    EXTRACTION:                   { tr: "Çekim",                           en: "Extraction",                   ru: "Удаление зуба",                        ka: "კბილის ამოღება" },
-    SURGICAL_EXTRACTION:          { tr: "Cerrahi çekim",                   en: "Surgical extraction",          ru: "Хирургическое удаление",               ka: "ქირურგიული ამოღება" },
-    APICAL_RESECTION:             { tr: "Apikal rezeksiyon",               en: "Apical resection",             ru: "Апикальная резекция",                  ka: "აპიკალური რეზექცია" },
-    // IMPLANT
-    IMPLANT:                      { tr: "İmplant",                         en: "Implant",                      ru: "Имплантат",                            ka: "იმპლანტატი" },
-    HEALING_ABUTMENT:             { tr: "İyileşme abutmanı",               en: "Healing abutment",             ru: "Формирователь десны",                  ka: "გამკურნებელი აბუტმენტი" },
-    IMPLANT_CROWN:                { tr: "İmplant üstü kuron",              en: "Implant crown",                ru: "Коронка на имплантате",                ka: "კორონა იმპლანტატზე" },
-    // Common legacy / alias codes
-    ROOT_CANAL:                   { tr: "Kanal tedavisi",                  en: "Root canal",                   ru: "Лечение каналов",                      ka: "არხების მკურნალობა" },
-    VENEER:                       { tr: "Veneer",                          en: "Veneer",                       ru: "Виниры",                               ka: "ვინირი" },
-    SCALING:                      { tr: "Diş taşı temizliği",              en: "Scaling",                      ru: "Снятие зубного камня",                 ka: "ქვის გაწმენდა" },
-    WHITENING:                    { tr: "Beyazlatma",                      en: "Whitening",                    ru: "Отбеливание",                          ka: "გათეთრება" },
-    BLEACHING:                    { tr: "Beyazlatma",                      en: "Bleaching",                    ru: "Отбеливание",                          ka: "გათეთრება" },
-    DENTURE:                      { tr: "Protez",                          en: "Denture",                      ru: "Протез",                               ka: "პროთეზი" },
-    POST_CORE:                    { tr: "Post ve kor",                     en: "Post & core",                  ru: "Штифт",                                ka: "პოსტი" },
-    ZIRCONIA:                     { tr: "Zirkonyum",                       en: "Zirconia",                     ru: "Цирконий",                             ka: "ცირკონიუმი" },
-    NIGHT_GUARD:                  { tr: "Gece plağı",                      en: "Night guard",                  ru: "Каппа",                                ka: "ღამის დაფა" },
+  /** Filled from GET /api/debug/procedures (shared/procedures.js); + non-tooth event types only. */
+  let PROCEDURE_CODE_LABEL_FALLBACK = {};
+  const EVENT_OR_LEGACY_TYPE_LABELS = {
+    TREATMENT: { tr: "Tedavi kaydı", en: "Treatment event", ru: "Запись лечения", ka: "მკურნალობის ჩანაწერი" },
+    FOLLOWUP: { tr: "Kontrol", en: "Follow-up", ru: "Контрольный приём", ka: "განმეორებითი ვიზიტი" },
+    LAB: { tr: "Laboratuvar / görüntüleme", en: "Lab / imaging", ru: "Лаборатория / визуализация", ka: "ლაბორატორია / გამოსახულება" },
   };
 
   function currentLangCode() {
@@ -753,8 +700,7 @@
   function rebuildProcedureAliasMap() {
     PROCEDURE_ALIAS_MAP = new Map();
 
-    // Register all labels from the complete client-side table (all 4 languages)
-    // This handles stored values like "Consultation (Muayene)", "Filling (Dolgu)" etc.
+    // Register labels from /api/debug/procedures + event/legacy-only types (all 4 langs per code).
     Object.entries(PROCEDURE_CODE_LABEL_FALLBACK).forEach(([code, labels]) => {
       registerProcedureAlias(code, code);
       registerProcedureAlias(code.replace(/_/g, " "), code);
@@ -768,13 +714,12 @@
       const code = String(d?.type || "").toUpperCase();
       if (!code) return;
       registerProcedureAlias(code, code);
-      registerProcedureAlias(String(d?.label || ""), code);
-      if (d?.name && typeof d.name === "object") {
+      if (typeof d?.name === "string") {
+        registerProcedureAlias(d.name, code);
+      } else if (d?.name && typeof d.name === "object") {
         Object.values(d.name).forEach((label) => {
           if (label) registerProcedureAlias(String(label), code);
         });
-      } else {
-        registerProcedureAlias(String(d?.name || ""), code);
       }
       registerProcedureAlias(code.replace(/_/g, " "), code);
     });
@@ -789,7 +734,7 @@
     if (PROCEDURE_CODE_LABEL_FALLBACK[upperRaw]) return upperRaw;
     if (TYPE_TO_CATEGORY[upperRaw]) return upperRaw;
 
-    // 2. Strip parenthetical additions: "Filling (Dolgu)" → "Filling", "Consultation (Muayene)" → "Consultation"
+    // 2. Strip parenthetical noise from legacy stored labels
     const stripped = rawStr.replace(/\s*\([^)]+\)/g, "").trim();
     if (stripped && stripped !== rawStr) {
       const upperStripped = stripped.toUpperCase();
@@ -1203,6 +1148,17 @@
   async function loadProcedureDefs(){
     try {
       const lang = window.i18n?.getLang() || 'en';
+      const rd = await fetch(`${API_BASE}/api/debug/procedures`, { headers: { Accept: "application/json" } });
+      const dbg = await rd.json().catch(() => []);
+      PROCEDURE_CODE_LABEL_FALLBACK = {};
+      (Array.isArray(dbg) ? dbg : []).forEach((p) => {
+        const code = String(p.type || p.id || "").toUpperCase();
+        if (code && p.name && typeof p.name === "object") {
+          PROCEDURE_CODE_LABEL_FALLBACK[code] = p.name;
+        }
+      });
+      Object.assign(PROCEDURE_CODE_LABEL_FALLBACK, EVENT_OR_LEGACY_TYPE_LABELS);
+
       const r = await fetch(`${API_BASE}/api/procedures?lang=${encodeURIComponent(lang)}`, { headers: { Accept: "application/json" } });
       const j = await r.json().catch(()=>null);
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
@@ -1229,18 +1185,16 @@
           const og = document.createElement("optgroup");
           const catLang = currentLangCode();
           og.label = safeLang(PROCEDURE_CATEGORY_LABELS_I18N[cat], catLang)
-                  || CATEGORY_LABELS_FALLBACK[cat]?.[catLang]
-                  || CATEGORY_LABELS_FALLBACK[cat]?.en
                   || categoryLabels[cat] || cat;
           byCat[cat].forEach((d) => {
             const opt = document.createElement("option");
             const typeUpper = String(d.type).toUpperCase();
             const lang = currentLangCode();
             opt.value = typeUpper;
-            opt.textContent = safeLang(d.name, lang)
+            opt.textContent = (typeof d.name === "string" ? d.name : safeLang(d.name, lang))
                            || PROCEDURE_CODE_LABEL_FALLBACK[typeUpper]?.[lang]
                            || PROCEDURE_CODE_LABEL_FALLBACK[typeUpper]?.en
-                           || d.label || typeUpper;
+                           || typeUpper;
             og.appendChild(opt);
           });
           sel.appendChild(og);
@@ -1268,10 +1222,9 @@
     }
   }
 
-  // Reload procedure dropdown + form labels when admin changes language
-  window.onI18nUpdated = function () {
+  window.rerenderTreatment = function () {
     applyTreatmentFormI18n();
-    loadProcedureDefs().then(() => {
+    return loadProcedureDefs().then(() => {
       renderSelectedToothList();
       renderDiagnoses();
       renderToothDiagnosisSummary();
@@ -3001,7 +2954,7 @@
   }
 </script>
 
-<script src="/admin-layout.js?v=202603301"></script>
+<script src="/admin-layout.js?v=202604277"></script>
 </body>
 </html>
 

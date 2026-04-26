@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
+  <script src="/admin-i18n.js?v=17"></script>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Takvim - Clinifly Admin</title>
+  <title data-i18n="calendar.documentTitle">Calendar - Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css"/>
   <style>
     /* Calendar-specific overrides */
@@ -41,6 +42,10 @@
     .head-day span { font-size:11px; color:#64748b; font-weight:600; }
     .time-cell { font-size:12px; color:#475569; background:#fcfdff; font-weight:600; }
     .slot-cell { padding:4px; }
+    .view-tog { font-weight: 600; }
+    .view-tog.is-active { background: var(--blue, #2563eb); color: #fff; border-color: var(--blue, #2563eb); }
+    .cal-month-block { margin-bottom: 24px; }
+    .cal-month-block + .cal-month-block { border-top: 1px solid var(--border); padding-top: 16px; }
 
     .appt-card {
       border: 1px solid var(--border); border-radius: 8px; padding: 6px;
@@ -64,13 +69,17 @@
     <!-- Page Header -->
     <div class="page-hdr">
       <div class="page-hdr-left">
-        <h1 class="pg-title">Randevu Takvimi</h1>
+        <h1 class="pg-title" data-i18n="calendar.title">Appointments</h1>
         <p class="pg-sub" id="weekRange">—</p>
       </div>
-      <div class="page-hdr-actions">
-        <button id="prevWeekBtn">← Önceki</button>
-        <button id="todayBtn">Bugün</button>
-        <button id="nextWeekBtn">Sonraki →</button>
+      <div class="page-hdr-actions" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;" id="viewModeToggles" role="group">
+          <button type="button" class="view-tog is-active" id="viewModeWeekBtn" data-i18n="calendar.week"></button>
+          <button type="button" class="view-tog" id="viewModeMonthBtn" data-i18n="calendar.month"></button>
+        </div>
+        <button type="button" id="prevWeekBtn" data-i18n="calendar.prev">←</button>
+        <button type="button" id="todayBtn" data-i18n="calendar.today"></button>
+        <button type="button" id="nextWeekBtn" data-i18n="calendar.next">→</button>
       </div>
     </div>
 
@@ -79,15 +88,15 @@
       <div class="card-body" style="padding:12px 18px;">
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:8px;">
-            <label for="doctorSelect" style="margin:0;white-space:nowrap;">Doktor</label>
+            <label for="doctorSelect" style="margin:0;white-space:nowrap;" data-i18n="calendar.doctor">Doctor</label>
             <select id="doctorSelect" style="min-width:180px;">
-              <option value="">Tüm Doktorlar</option>
+              <option value="" data-i18n="calendar.allDoctors">All doctors</option>
             </select>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
-            <label for="chairSelect" style="margin:0;white-space:nowrap;">Koltuk</label>
+            <label for="chairSelect" style="margin:0;white-space:nowrap;" data-i18n="calendar.chair">Chair</label>
             <select id="chairSelect" style="min-width:140px;">
-              <option value="">Tüm Koltuklar</option>
+              <option value="" data-i18n="calendar.allChairs">All chairs</option>
             </select>
           </div>
           <span class="muted" id="summaryText" style="margin-left:auto;"></span>
@@ -100,61 +109,45 @@
     </div>
   </div>
 
-    <div class="controls">
-      <div>
-        <label>&nbsp;</label>
-        <button id="prevWeekBtn">◀ Önceki</button>
-      </div>
-      <div>
-        <label>&nbsp;</label>
-        <button id="todayBtn">Bugün</button>
-      </div>
-      <div>
-        <label>&nbsp;</label>
-        <button id="nextWeekBtn">Sonraki ▶</button>
-      </div>
-      <div>
-        <label for="doctorSelect">Doktor</label>
-        <select id="doctorSelect">
-          <option value="">Tüm Doktorlar</option>
-        </select>
-      </div>
-      <div>
-        <label for="chairSelect">Chair</label>
-        <select id="chairSelect">
-          <option value="">Tüm Chair'lar</option>
-        </select>
-      </div>
-      <div>
-        <label>Hafta</label>
-        <div id="weekRange" class="muted" style="padding:10px 0;"></div>
-      </div>
-    </div>
-
-    <div class="muted" id="summaryText" style="margin-bottom:10px;"></div>
-
-    <div id="calendar-container">
-      <div id="calendarGrid" class="calendar-grid"></div>
-    </div>
-  </div>
-
   <script>
     const prevWeekBtn = document.getElementById('prevWeekBtn');
     const nextWeekBtn = document.getElementById('nextWeekBtn');
     const todayBtn = document.getElementById('todayBtn');
+    const viewModeWeekBtn = document.getElementById('viewModeWeekBtn');
+    const viewModeMonthBtn = document.getElementById('viewModeMonthBtn');
     const doctorSelect = document.getElementById('doctorSelect');
     const chairSelect = document.getElementById('chairSelect');
     const weekRangeEl = document.getElementById('weekRange');
     const summaryText = document.getElementById('summaryText');
     const gridEl = document.getElementById('calendarGrid');
 
+    const localeMap = { en: 'en-US', tr: 'tr-TR', ru: 'ru-RU', ka: 'ka-GE' };
+    function currentLanguage() {
+      return (window.i18n && typeof i18n.getLang === 'function') ? i18n.getLang() : 'tr';
+    }
+    function getCalLocale() {
+      return localeMap[currentLanguage()] || 'en-US';
+    }
+    function t(key, params) {
+      if (window.i18n && typeof i18n.t === 'function') return i18n.t(key, params || {});
+      return key;
+    }
+
+    const WEEKDAY_MAP = {
+      en: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+      tr: ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'],
+      ru: ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'],
+      ka: ['კვირა', 'ორშაბათი', 'სამშაბათი', 'ოთხშაბათი', 'ხუთშაბათი', 'პარასკევი', 'შაბათი'],
+    };
+    const MONTH_MAP = {
+      en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+      tr: ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'],
+      ru: ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'],
+      ka: ['იანვარი', 'თებერვალი', 'მარტი', 'აპრილი', 'მაისი', 'ივნისი', 'ივლისი', 'აგვისტო', 'სექტემბერი', 'ოქტომბერი', 'ნოემბერი', 'დეკემბერი'],
+    };
+
     // Date.getDay(): 0 = Sunday … 6 = Saturday. Do not subtract 1 from getDay().
     // Week columns: Sun → Sat (Sunday in range: weekStart + 0 .. +6).
-    const WEEKDAY_HEADERS = {
-      en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
-      tr: ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'],
-    };
-    const DAY_NAMES = WEEKDAY_HEADERS.tr;
     const SLOT_MINUTES = 10;
     const START_HOUR = 8;
     const END_HOUR = 20;
@@ -192,10 +185,37 @@
     };
 
     let weekStart = getStartOfWeek(new Date());
+    let viewMode = 'week';
+    let monthY = new Date().getFullYear();
+    let monthM = new Date().getMonth();
     let allAppointments = [];
     let treatmentTimingMap = {};
     let configuredChairCount = 3;
     let activeLoadRequestId = 0;
+
+    function getWeekStartsInMonth(y, m) {
+      const first = new Date(y, m, 1);
+      const lastDay = new Date(y, m + 1, 0);
+      const endWeekStart = getStartOfWeek(lastDay);
+      const out = [];
+      for (let d = getStartOfWeek(first); d <= endWeekStart; d = addDays(d, 7)) {
+        out.push(new Date(d));
+      }
+      return out;
+    }
+
+    function getWeekRangeLabel(lang) {
+      const L = lang !== undefined ? lang : currentLanguage();
+      if (viewMode === 'month') return formatMonthTitle(monthY, monthM, L);
+      return formatWeekRange(weekStart, L);
+    }
+
+    function setViewToggles() {
+      if (viewModeWeekBtn && viewModeMonthBtn) {
+        viewModeWeekBtn.classList.toggle('is-active', viewMode === 'week');
+        viewModeMonthBtn.classList.toggle('is-active', viewMode === 'month');
+      }
+    }
 
     function getToken() {
       const direct = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || localStorage.getItem('token') || '';
@@ -244,22 +264,29 @@
       return Array.from({ length: 7 }, (_, idx) => addDays(startDate, idx));
     }
 
-    function formatDateLabel(dateObj) {
-      return `${String(dateObj.getDate()).padStart(2, '0')}.${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
+    function formatMonthTitle(year, month, lang) {
+      const d = new Date(year, month);
+      const M = MONTH_MAP[lang] || MONTH_MAP.en;
+      return `${M[d.getMonth()]} ${d.getFullYear()}`;
     }
 
-    function formatWeekRange(startDate) {
-      const end = addDays(startDate, 6);
-      return `${formatDateLabel(startDate)} - ${formatDateLabel(end)}`;
+    function formatWeekRange(ws, lang) {
+      const M = MONTH_MAP[lang] || MONTH_MAP.en;
+      const start = new Date(ws);
+      const end = new Date(ws);
+      end.setDate(end.getDate() + 6);
+      return `${M[start.getMonth()]} ${start.getDate()} - ${M[end.getMonth()]} ${end.getDate()}`;
     }
 
-    function fmtTime(startAt, endAt) {
+    function fmtTime(startAt, endAt, lang) {
+      const L = lang !== undefined ? lang : currentLanguage();
+      const loc = localeMap[L] || 'en-US';
       const s = startAt ? new Date(startAt) : null;
       const e = endAt ? new Date(endAt) : null;
       if (!s || Number.isNaN(s.getTime())) return '-';
-      const sText = s.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      const sText = s.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
       if (!e || Number.isNaN(e.getTime())) return sText;
-      const eText = e.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      const eText = e.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
       return `${sText} - ${eText}`;
     }
 
@@ -376,9 +403,15 @@
     }
 
     function renderDoctors(items) {
-      const doctors = [...new Set(items.map((i) => i.doctor).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'tr'));
+      const loc = getCalLocale();
+      const collator = (a, b) => String(a).localeCompare(String(b), loc);
+      const doctors = [...new Set(items.map((i) => i.doctor).filter(Boolean))].sort(collator);
       const current = doctorSelect.value;
-      doctorSelect.innerHTML = '<option value="">Tüm Doktorlar</option>';
+      doctorSelect.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = t('calendar.allDoctors');
+      doctorSelect.appendChild(opt0);
       doctors.forEach((doctorName) => {
         const opt = document.createElement('option');
         opt.value = String(doctorName);
@@ -400,16 +433,21 @@
     function renderChairs(items) {
       const fromData = [...new Set((items || []).map((i) => normalizeChairText(i?.chair)).filter(Boolean))];
       const fromConfig = Array.from({ length: Math.max(1, Math.min(50, Number(configuredChairCount) || 3)) }, (_, idx) => String(idx + 1));
+      const loc = getCalLocale();
       const chairs = [...new Set([...fromConfig, ...fromData])]
-        .sort((a, b) => String(a).localeCompare(String(b), 'tr'));
+        .sort((a, b) => String(a).localeCompare(String(b), loc));
       const current = String(chairSelect?.value || '');
       if (!chairSelect) return;
 
-      chairSelect.innerHTML = '<option value="">Tüm Chair\'lar</option>';
+      chairSelect.innerHTML = '';
+      const c0 = document.createElement('option');
+      c0.value = '';
+      c0.textContent = t('calendar.allChairs');
+      chairSelect.appendChild(c0);
       chairs.forEach((chairName) => {
         const opt = document.createElement('option');
         opt.value = String(chairName);
-        opt.textContent = /^\d+$/.test(String(chairName)) ? `Chair ${chairName}` : String(chairName);
+        opt.textContent = /^\d+$/.test(String(chairName)) ? t('calendar.chairWithNumber', { n: chairName }) : String(chairName);
         chairSelect.appendChild(opt);
       });
 
@@ -557,9 +595,14 @@
           .filter(Boolean)
           .map((v) => String(v));
 
-        const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b, 'tr'));
+        const loc = getCalLocale();
+        const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b, loc));
         const current = doctorSelect.value;
-        doctorSelect.innerHTML = '<option value="">Tüm Doktorlar</option>';
+        doctorSelect.innerHTML = '';
+        const o0 = document.createElement('option');
+        o0.value = '';
+        o0.textContent = t('calendar.allDoctors');
+        doctorSelect.appendChild(o0);
         unique.forEach((name) => {
           const opt = document.createElement('option');
           opt.value = name;
@@ -616,33 +659,23 @@
       }
     }
 
-    function renderGrid(items) {
-      const weekDays = buildWeekDays(weekStart);
-      const slots = CACHED_SLOTS;
+    function buildOneWeekGrid(weekRef, filtered, doctorFilter, lang) {
+      const weekDays = buildWeekDays(weekRef);
       const weekDayKeys = weekDays.map((d) => toDateOnly(d));
       const dayIndexByDate = {};
       weekDayKeys.forEach((key, idx) => {
         dayIndexByDate[key] = idx;
       });
-      const doctorFilter = doctorSelect.value;
-      const chairFilter = chairSelect ? String(chairSelect.value || '') : '';
-      const normalizedDoctorFilter = normalizeDoctorName(doctorFilter);
-      const normalizedChairFilter = normalizeChairText(chairFilter);
-
-      const byDoctor = normalizedDoctorFilter
-        ? items.filter((i) => {
-            const itemNorm = i?._doctorNorm || normalizeDoctorName(i?.doctor);
-            return doctorNormMatches(normalizedDoctorFilter, itemNorm);
-          })
-        : items;
-      const filtered = normalizedChairFilter
-        ? byDoctor.filter((i) => (i?._chairNorm || normalizeChairText(i?.chair)) === normalizedChairFilter)
-        : byDoctor;
-
+      const slots = CACHED_SLOTS;
+      const weekFiltered = filtered.filter((item) => {
+        const k = toDateOnly(item.startAt);
+        return dayIndexByDate[k] !== undefined;
+      });
       const columnsStyle = '130px repeat(7, minmax(150px, 1fr))';
       const map = {};
+      const timeHead = t('calendar.timeColumn');
 
-      filtered.forEach((item) => {
+      weekFiltered.forEach((item) => {
         const start = item.startAt ? new Date(item.startAt) : null;
         if (!start || Number.isNaN(start.getTime())) return;
         const exactIdx = slotIndexFromDate(start, slots);
@@ -664,7 +697,15 @@
         }
       });
 
-      const headHtml = `<div class="grid-head" style="grid-template-columns:${columnsStyle}"><div class="cell head-cell">Saat</div>${weekDays.map((day, idx) => `<div class="cell head-cell"><div class="head-day"><strong>${DAY_NAMES[idx]}</strong><span>${formatDateLabel(day)}</span></div></div>`).join('')}</div>`;
+      const Wmap = WEEKDAY_MAP[lang] || WEEKDAY_MAP.en;
+      const Mmap = MONTH_MAP[lang] || MONTH_MAP.en;
+      const headCells = weekDays.map((day) => {
+        const d = new Date(day);
+        const w = Wmap[d.getDay()];
+        const sub = `${Mmap[d.getMonth()]} ${d.getDate()}`;
+        return `<div class="cell head-cell"><div class="head-day"><strong>${w}</strong><span>${sub}</span></div></div>`;
+      });
+      const headHtml = `<div class="grid-head" style="grid-template-columns:${columnsStyle}"><div class="cell head-cell">${timeHead}</div>${headCells.join('')}</div>`;
       let rowsHtml = '';
 
       slots.forEach((slotLabel, slotIdx) => {
@@ -679,7 +720,7 @@
             return `
             <div class="appt-card">
               <div class="appt-patient">${item.patient || '-'}</div>
-              <div class="appt-meta">${doctorFilter ? '' : `${item.doctor || '-'} • `}${item.tooth ? `🦷 ${item.tooth} • ` : ''}${normalizeChairText(item.chair) || '-'} • ${fmtTime(item.startAt, item.endAt)}${item.treatment ? ` • ${item.treatment}` : ''}</div>
+              <div class="appt-meta">${doctorFilter ? '' : `${item.doctor || '-'} • `}${item.tooth ? `🦷 ${item.tooth} • ` : ''}${normalizeChairText(item.chair) || '-'} • ${fmtTime(item.startAt, item.endAt, lang)}${item.treatment ? ` • ${item.treatment}` : ''}</div>
               <div><span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span></div>
             </div>
           `;
@@ -690,14 +731,51 @@
         rowsHtml += html;
       });
 
+      return headHtml + rowsHtml;
+    }
+
+    function renderGrid(items, lang) {
+      document.getElementById('calendarGrid').innerHTML = '';
+      console.log('LANG USED IN GRID:', lang);
+      const doctorFilter = doctorSelect.value;
+      const chairFilter = chairSelect ? String(chairSelect.value || '') : '';
+      const normalizedDoctorFilter = normalizeDoctorName(doctorFilter);
+      const normalizedChairFilter = normalizeChairText(chairFilter);
+
+      const byDoctor = normalizedDoctorFilter
+        ? items.filter((i) => {
+            const itemNorm = i?._doctorNorm || normalizeDoctorName(i?.doctor);
+            return doctorNormMatches(normalizedDoctorFilter, itemNorm);
+          })
+        : items;
+      const filtered = normalizedChairFilter
+        ? byDoctor.filter((i) => (i?._chairNorm || normalizeChairText(i?.chair)) === normalizedChairFilter)
+        : byDoctor;
+
+      const weekBlocks = viewMode === 'week'
+        ? [weekStart]
+        : getWeekStartsInMonth(monthY, monthM);
+
+      const gridParts = weekBlocks.map((ws) => {
+        if (viewMode === 'month') {
+          const label = formatWeekRange(ws, lang);
+          return `<div class="cal-month-block"><div class="muted" style="padding:0 0 8px;font-weight:600;">${label}</div>${buildOneWeekGrid(ws, filtered, doctorFilter, lang)}</div>`;
+        }
+        return buildOneWeekGrid(ws, filtered, doctorFilter, lang);
+      });
+      const emptyKey = viewMode === 'week' ? 'calendar.noAppointmentsForWeek' : 'calendar.noAppointmentsForRange';
       const emptyHtml = !filtered.length
-        ? '<div class="muted" style="padding:10px;">Seçili hafta için randevu bulunamadı.</div>'
+        ? `<div class="muted" style="padding:10px;">${t('calendar.noEvents')}. ${t(emptyKey)}</div>`
         : '';
-      gridEl.innerHTML = headHtml + rowsHtml + emptyHtml;
+      gridEl.innerHTML = gridParts.join('') + emptyHtml;
 
       const doctorCount = [...new Set(filtered.map((i) => String(i.doctor || '')).filter(Boolean))].length;
       const chairCount = [...new Set(filtered.map((i) => i?._chairNorm || normalizeChairText(i.chair)).filter(Boolean))].length;
-      summaryText.textContent = `${filtered.length} randevu • ${doctorCount} doktor • ${chairCount} chair`;
+      summaryText.textContent = t('calendar.summaryLine', { count: filtered.length, doctorCount, chairCount });
+      console.log('FULL TEXT:', document.body.innerText);
+      if (lang !== 'en' && document.body.innerText.match(/Monday|Tuesday|January/)) {
+        throw new Error('❌ English leakage detected');
+      }
     }
 
     async function fetchDayAppointments(date) {
@@ -732,10 +810,21 @@
       return Array.isArray(data.appointments) ? data.appointments : [];
     }
 
-    async function fetchWeekTimelineEvents(weekDays) {
+    function daySetFromRange(startDate, endDate) {
+      const out = new Set();
+      let d = new Date(`${startDate}T12:00:00`);
+      for (;;) {
+        const k = toDateOnly(d);
+        if (k > endDate) break;
+        out.add(k);
+        if (k === endDate) break;
+        d = addDays(d, 1);
+      }
+      return out;
+    }
+
+    async function fetchRangeTimelineEvents(startDate, endDate) {
       const token = getToken();
-      const startDate = toDateOnly(weekDays[0]);
-      const endDate = toDateOnly(weekDays[6]);
       const response = await fetch((typeof apiUrl === 'function' ? apiUrl(`/api/admin/events?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`) : `/api/admin/events?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`), {
         headers: {
           Accept: 'application/json',
@@ -755,7 +844,7 @@
       if (Array.isArray(data.today)) all.push(...data.today);
       if (Array.isArray(data.upcoming)) all.push(...data.upcoming);
 
-      const daySet = new Set(weekDays.map((d) => toDateOnly(d)));
+      const daySet = daySetFromRange(startDate, endDate);
 
       const toAppointmentLike = (evt) => {
         const startRaw = evt?.timelineAt || (evt?.date ? `${evt.date}T${String(evt.time || '00:00')}:00` : null);
@@ -783,9 +872,7 @@
       return all.map(toAppointmentLike).filter(Boolean);
     }
 
-    async function fetchWeekAppointments(weekDays) {
-      const startDate = toDateOnly(weekDays[0]);
-      const endDate = toDateOnly(weekDays[6]);
+    async function fetchAppointmentsForRange(startDate, endDate) {
       return fetchRangeAppointments(startDate, endDate);
     }
 
@@ -819,22 +906,41 @@
       return Array.from(map.values());
     }
 
+    function applyScheduleStaticI18n(optionalLang) {
+      setViewToggles();
+      if (weekRangeEl) weekRangeEl.textContent = getWeekRangeLabel(optionalLang !== undefined ? optionalLang : currentLanguage());
+    }
+
     async function loadAppointments() {
       const requestId = ++activeLoadRequestId;
       const token = getToken();
       if (!token) {
-        gridEl.innerHTML = '<div class="muted" style="padding:10px;">Admin token bulunamadı. Tekrar giriş yapın.</div>';
+        gridEl.innerHTML = `<div class="muted" style="padding:10px;">${t('calendar.tokenMissing')}</div>`;
         return;
       }
 
-      const weekDays = buildWeekDays(weekStart);
-      weekRangeEl.textContent = formatWeekRange(weekStart);
-      gridEl.innerHTML = '<div class="muted" style="padding:10px;">Yükleniyor...</div>';
+      const lang = currentLanguage();
+      let rangeStart;
+      let rangeEnd;
+      if (viewMode === 'week') {
+        const wd = buildWeekDays(weekStart);
+        rangeStart = toDateOnly(wd[0]);
+        rangeEnd = toDateOnly(wd[6]);
+        weekRangeEl.textContent = formatWeekRange(weekStart, lang);
+      } else {
+        const weeksM = getWeekStartsInMonth(monthY, monthM);
+        rangeStart = toDateOnly(weeksM[0]);
+        rangeEnd = toDateOnly(addDays(weeksM[weeksM.length - 1], 6));
+        weekRangeEl.textContent = formatMonthTitle(monthY, monthM, lang);
+      }
+
+      setViewToggles();
+      gridEl.innerHTML = `<div class="muted" style="padding:10px;">${t('calendar.loading')}</div>`;
 
       try {
         let weeklyAppointments = [];
         try {
-          weeklyAppointments = await fetchWeekAppointments(weekDays);
+          weeklyAppointments = await fetchAppointmentsForRange(rangeStart, rangeEnd);
         } catch {
           weeklyAppointments = [];
         }
@@ -850,14 +956,18 @@
         if (doctorSelect.options.length <= 1) {
           const fallback = document.createElement('option');
           fallback.value = '';
-          fallback.textContent = 'Doktor bulunamadı';
+          fallback.textContent = t('calendar.doctorNotFound');
           doctorSelect.appendChild(fallback);
           doctorSelect.value = '';
         }
         renderChairs(allAppointments);
-        renderGrid(allAppointments);
+        {
+          const container = document.getElementById('calendarGrid');
+          if (container) container.innerHTML = '';
+          renderGrid(allAppointments, lang);
+        }
 
-        fetchWeekTimelineEvents(weekDays)
+        fetchRangeTimelineEvents(rangeStart, rangeEnd)
           .then((weeklyTimelineEvents) => {
             if (requestId !== activeLoadRequestId) return;
             const merged = mergeUniqueAppointments(allAppointments, weeklyTimelineEvents)
@@ -867,7 +977,11 @@
             const hasDoctorsAfterMerge = doctorSelect.options.length > 1;
             if (!hasDoctorsAfterMerge) renderDoctors(allAppointments);
             renderChairs(allAppointments);
-            renderGrid(allAppointments);
+            {
+              const container = document.getElementById('calendarGrid');
+              if (container) container.innerHTML = '';
+              renderGrid(allAppointments, lang);
+            }
           })
           .catch(() => {});
       } catch (error) {
@@ -876,30 +990,78 @@
           localStorage.removeItem('adminToken');
           localStorage.removeItem('admin_token');
           localStorage.removeItem('token');
-          gridEl.innerHTML = '<div class="muted" style="padding:10px;">Oturum süresi doldu. Giriş sayfasına yönlendiriliyorsunuz...</div>';
+          gridEl.innerHTML = `<div class="muted" style="padding:10px;">${t('calendar.sessionExpired')}</div>`;
           setTimeout(() => {
             window.location.href = '/admin-login.html';
           }, 700);
           return;
         }
-        gridEl.innerHTML = `<div class="muted" style="padding:10px;">Randevular alınamadı: ${String(error?.message || error)}</div>`;
+        gridEl.innerHTML = `<div class="muted" style="padding:10px;">${t('calendar.fetchFailed', { message: String(error?.message || error) })}</div>`;
       }
     }
 
-    doctorSelect.addEventListener('change', () => renderGrid(allAppointments));
+    doctorSelect.addEventListener('change', () => {
+      const container = document.getElementById('calendarGrid');
+      if (container) container.innerHTML = '';
+      const lang = currentLanguage();
+      renderGrid(allAppointments, lang);
+    });
     if (chairSelect) {
-      chairSelect.addEventListener('change', () => renderGrid(allAppointments));
+      chairSelect.addEventListener('change', () => {
+        const container = document.getElementById('calendarGrid');
+        if (container) container.innerHTML = '';
+        const lang = currentLanguage();
+        renderGrid(allAppointments, lang);
+      });
+    }
+    if (viewModeWeekBtn) {
+      viewModeWeekBtn.addEventListener('click', () => {
+        viewMode = 'week';
+        setViewToggles();
+        loadAppointments();
+      });
+    }
+    if (viewModeMonthBtn) {
+      viewModeMonthBtn.addEventListener('click', () => {
+        viewMode = 'month';
+        monthY = weekStart.getFullYear();
+        monthM = weekStart.getMonth();
+        setViewToggles();
+        loadAppointments();
+      });
     }
     prevWeekBtn.addEventListener('click', () => {
-      weekStart = addDays(weekStart, -7);
+      if (viewMode === 'month') {
+        monthM -= 1;
+        if (monthM < 0) {
+          monthM = 11;
+          monthY -= 1;
+        }
+      } else {
+        weekStart = addDays(weekStart, -7);
+      }
       loadAppointments();
     });
     nextWeekBtn.addEventListener('click', () => {
-      weekStart = addDays(weekStart, 7);
+      if (viewMode === 'month') {
+        monthM += 1;
+        if (monthM > 11) {
+          monthM = 0;
+          monthY += 1;
+        }
+      } else {
+        weekStart = addDays(weekStart, 7);
+      }
       loadAppointments();
     });
     todayBtn.addEventListener('click', () => {
-      weekStart = getStartOfWeek(new Date());
+      const n = new Date();
+      if (viewMode === 'month') {
+        monthY = n.getFullYear();
+        monthM = n.getMonth();
+      } else {
+        weekStart = getStartOfWeek(n);
+      }
       loadAppointments();
     });
 
@@ -912,8 +1074,15 @@
       loadAppointments();
     }
 
+    Object.defineProperty(window, "allAppointments", {
+      get: function () { return allAppointments; },
+      configurable: true
+    });
+    window.renderGrid = renderGrid;
+    window.applyScheduleStaticI18n = applyScheduleStaticI18n;
+
     bootstrapSchedule();
   </script>
-  <script src="/admin-layout.js?v=202603301"></script>
+  <script src="/admin-layout.js?v=202604277"></script>
 </body>
 </html>

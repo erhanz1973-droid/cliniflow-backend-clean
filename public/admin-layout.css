@@ -73,7 +73,7 @@ body.al-ready {
   left: 0; top: 0;
   display: flex;
   flex-direction: column;
-  z-index: 100;
+  z-index: 200;
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -171,6 +171,8 @@ body.al-ready {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
+  z-index: 0;
 }
 
 /* Topbar */
@@ -180,12 +182,17 @@ body.al-ready {
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 24px;
-  position: sticky; top: 0; z-index: 40;
+  position: sticky; top: 0; z-index: 10000;
   gap: 16px;
+  isolation: isolate;
 }
 .al-topbar-left { display: flex; align-items: center; gap: 12px; }
 .al-page-title { font-size: 15px; font-weight: 700; color: var(--text); }
-.al-topbar-right { display: flex; align-items: center; gap: 8px; }
+.al-topbar-right {
+  display: flex; align-items: center; gap: 8px;
+  position: relative; z-index: 10001;
+  pointer-events: auto;
+}
 
 .al-topbar-btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -199,6 +206,22 @@ body.al-ready {
 .al-topbar-btn.primary { background: var(--blue); color: #fff; border-color: var(--blue-d); }
 .al-topbar-btn.primary:hover { background: var(--blue-d); }
 
+.lang-switcher,
+#lang-switcher,
+#alLang.al-lang {
+  position: relative;
+  z-index: 9999;
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+.lang-switcher .lang-btn,
+#lang-switcher .lang-btn,
+#alLang .lang-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .al-lang {
   display: flex; background: var(--page-bg);
   border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
@@ -209,6 +232,10 @@ body.al-ready {
   transition: all .15s;
 }
 .al-lang span.active { background: var(--blue); color: #fff; }
+
+/* Overlays: do not eat clicks when not active */
+.modal:not([open]) { pointer-events: none; }
+.overlay:not(.active) { pointer-events: none; }
 
 /* Page Content */
 .al-content { padding: 24px; flex: 1; }

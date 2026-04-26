@@ -221,6 +221,7 @@ const multer = require("multer");
 const nodemailer = require("nodemailer");
 const { randomUUID } = require("crypto");
 const procedures = require("./shared/procedures");
+console.log("🌍 I18N PROCEDURES ACTIVE");
 const saasPlans = require("./shared/saasPlans");
 const saasEnforcement = require("./lib/saasEnforcement.cjs");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
@@ -4227,9 +4228,37 @@ async function runPatientRegister(req, res, route, otpMode) {
 
   }
   
+  // Target clinic first — patient identity is scoped per clinic (separate row per tenant).
+  let supabaseClinicId = null;
+  if (isSupabaseEnabled() && validatedClinicCode) {
+    try {
+      const clinic = await getClinicByCode(validatedClinicCode);
+      if (clinic?.id) supabaseClinicId = clinic.id;
+    } catch (_) {}
+  }
+  let defaultClinicApplied = false;
+  if (isSupabaseEnabled() && !supabaseClinicId) {
+    const defId = String(process.env.DEFAULT_CLINIC_ID || "").trim();
+    if (UUID_RE.test(defId)) {
+      try {
+        const cdef = await getClinicById(defId);
+        if (cdef?.id) {
+          supabaseClinicId = cdef.id;
+          defaultClinicApplied = true;
+        }
+      } catch (_e) {}
+    }
+  }
+  const isGlobalLead = !supabaseClinicId;
+  if (isSupabaseEnabled() && !supabaseClinicId) {
+    console.log(
+      "[REGISTER] open signup / global lead — no clinic (clinic_id null). Set DEFAULT_CLINIC_ID to assign, or is_lead marks global lead.",
+    );
+  } else if (defaultClinicApplied) {
+    console.log("[REGISTER] applied DEFAULT_CLINIC_ID →", String(supabaseClinicId).slice(0, 8) + "…");
+  }
 
-
-  // Identity: phone-first (E.164 + legacy storage variants), then email, then new id. No upsert.
+  // Identity: phone-first (E.164 + legacy storage variants), then email, then new id. No cross-clinic reuse.
   let existingUser = false;
   let patientId = null;
   /** @type {string|null} Supabase `patients.id` (UUID) when an existing row is found */
@@ -4239,22 +4268,23 @@ async function runPatientRegister(req, res, route, otpMode) {
       let phoneRows = null;
       let phErr = null;
       if (phoneDigits) {
-        const r = await supabase
+        let pq = supabase
           .from("patients")
-          .select("id, patient_id, email")
-          .eq("phone", phoneDigits)
-          .limit(3);
+          .select("id, patient_id, email, clinic_id")
+          .eq("phone", phoneDigits);
+        if (supabaseClinicId) pq = pq.eq("clinic_id", supabaseClinicId);
+        else pq = pq.is("clinic_id", null);
+        const r = await pq.limit(3);
         phoneRows = r.data;
         phErr = r.error;
       }
       if (!phErr && (!phoneRows || phoneRows.length === 0) && phoneNormalized) {
         const variants = phoneSearchVariants(phoneNormalized);
         if (variants.length) {
-          const r2 = await supabase
-            .from("patients")
-            .select("id, patient_id, email")
-            .in("phone", variants)
-            .limit(3);
+          let pqv = supabase.from("patients").select("id, patient_id, email, clinic_id").in("phone", variants);
+          if (supabaseClinicId) pqv = pqv.eq("clinic_id", supabaseClinicId);
+          else pqv = pqv.is("clinic_id", null);
+          const r2 = await pqv.limit(3);
           phoneRows = r2.data;
           phErr = r2.error;
         }
@@ -4291,11 +4321,13 @@ async function runPatientRegister(req, res, route, otpMode) {
   }
   if (!existingPatientUuid && isSupabaseEnabled()) {
     try {
-      const { data: existing, error: e } = await supabase
+      let emQ = supabase
         .from("patients")
-        .select("id, patient_id, email")
-        .eq("email", emailNormalized)
-        .maybeSingle();
+        .select("id, patient_id, email, clinic_id")
+        .eq("email", emailNormalized);
+      if (supabaseClinicId) emQ = emQ.eq("clinic_id", supabaseClinicId);
+      else emQ = emQ.is("clinic_id", null);
+      const { data: existing, error: e } = await emQ.maybeSingle();
       if (!e && existing) {
         existingPatientUuid = String(existing.id || "").trim() || null;
         patientId = existing.patient_id || existing.id;
@@ -4311,7 +4343,7 @@ async function runPatientRegister(req, res, route, otpMode) {
       // ignore
     }
   }
-  if (!patientId) {
+  if (!patientId && !isSupabaseEnabled()) {
     const patientsByFile = readJson(PAT_FILE, {});
     for (const pid in patientsByFile) {
       const em = String(patientsByFile[pid]?.email || "").trim().toLowerCase();
@@ -4327,45 +4359,7 @@ async function runPatientRegister(req, res, route, otpMode) {
   const token = makeToken();
 
   // SUPABASE: Insert patient (PRIMARY - production source of truth)
-  let supabaseClinicId = null;
   let supabasePatientRow = null;
-  if (isSupabaseEnabled() && validatedClinicCode) {
-    try {
-      const clinic = await getClinicByCode(validatedClinicCode);
-      if (clinic) {
-        supabaseClinicId = clinic.id;
-
-      } else {
-
-      }
-    } catch (err) {
-
-    }
-  }
-
-  let defaultClinicApplied = false;
-  if (isSupabaseEnabled() && !supabaseClinicId) {
-    const defId = String(process.env.DEFAULT_CLINIC_ID || "").trim();
-    if (UUID_RE.test(defId)) {
-      try {
-        const cdef = await getClinicById(defId);
-        if (cdef?.id) {
-          supabaseClinicId = cdef.id;
-          defaultClinicApplied = true;
-        }
-      } catch (_e) {
-        /* ignore */
-      }
-    }
-  }
-  const isGlobalLead = !supabaseClinicId;
-  if (isSupabaseEnabled() && !supabaseClinicId) {
-    console.log(
-      "[REGISTER] open signup / global lead — no clinic (clinic_id null). Set DEFAULT_CLINIC_ID to assign, or is_lead marks global lead.",
-    );
-  } else if (defaultClinicApplied) {
-    console.log("[REGISTER] applied DEFAULT_CLINIC_ID →", String(supabaseClinicId).slice(0, 8) + "…");
-  }
 
   console.log("[REGISTER_FLOW]", {
     route,
@@ -4435,12 +4429,13 @@ async function runPatientRegister(req, res, route, otpMode) {
     if (existingPatientUuid) {
       let upData, upErr;
       try {
-        const up = await supabase
+        let uq = supabase
           .from("patients")
           .update(buildUpdatePayload())
-          .eq("id", existingPatientUuid)
-          .select()
-          .single();
+          .eq("id", existingPatientUuid);
+        if (supabaseClinicId) uq = uq.eq("clinic_id", supabaseClinicId);
+        else uq = uq.is("clinic_id", null);
+        const up = await uq.select().single();
         upData = up.data;
         upErr = up.error;
       } catch (eUp) {
@@ -4539,11 +4534,13 @@ async function runPatientRegister(req, res, route, otpMode) {
               details: insErr.details,
             });
             if (phoneDigits) {
-              const { data: d1, error: q0 } = await supabase
+              let ph235 = supabase
                 .from("patients")
                 .select("id, patient_id, email, language, name, full_name, clinic_id, referral_code")
-                .eq("phone", phoneDigits)
-                .limit(2);
+                .eq("phone", phoneDigits);
+              if (supabaseClinicId) ph235 = ph235.eq("clinic_id", supabaseClinicId);
+              else ph235 = ph235.is("clinic_id", null);
+              const { data: d1, error: q0 } = await ph235.limit(2);
               if (q0) {
                 console.error("[SUPABASE] PATIENT 23505 phone re-fetch (digits) failed", q0);
                 return res.status(500).json({
@@ -4564,11 +4561,13 @@ async function runPatientRegister(req, res, route, otpMode) {
               }
             }
             if (!found && phoneNormalized) {
-              const { data: rows, error: qe } = await supabase
+              let ph235v = supabase
                 .from("patients")
                 .select("id, patient_id, email, language, name, full_name, clinic_id, referral_code")
-                .in("phone", phoneSearchVariants(phoneNormalized))
-                .limit(2);
+                .in("phone", phoneSearchVariants(phoneNormalized));
+              if (supabaseClinicId) ph235v = ph235v.eq("clinic_id", supabaseClinicId);
+              else ph235v = ph235v.is("clinic_id", null);
+              const { data: rows, error: qe } = await ph235v.limit(2);
               if (qe) {
                 console.error("[SUPABASE] PATIENT 23505 phone re-fetch (variants) failed", qe);
                 return res.status(500).json({
@@ -4603,12 +4602,13 @@ async function runPatientRegister(req, res, route, otpMode) {
             console.warn("[REGISTER] insert 23505 — no phone; re-fetch by email", {
               code: insErr.code,
             });
-            const { data: emRow, error: q2 } = await supabase
+            let em235 = supabase
               .from("patients")
               .select("id, patient_id, email, language, name, full_name, clinic_id, referral_code")
-              .eq("email", emailNormalized)
-              .limit(1)
-              .maybeSingle();
+              .eq("email", emailNormalized);
+            if (supabaseClinicId) em235 = em235.eq("clinic_id", supabaseClinicId);
+            else em235 = em235.is("clinic_id", null);
+            const { data: emRow, error: q2 } = await em235.limit(1).maybeSingle();
             if (q2) {
               return res.status(500).json({
                 ok: false,
@@ -4635,12 +4635,13 @@ async function runPatientRegister(req, res, route, otpMode) {
               conflict: "email_mismatch",
             });
           }
-          const { data: upData, error: upe } = await supabase
+          let u235 = supabase
             .from("patients")
             .update(buildUpdatePayload())
-            .eq("id", found.id)
-            .select()
-            .single();
+            .eq("id", found.id);
+          if (supabaseClinicId) u235 = u235.eq("clinic_id", supabaseClinicId);
+          else u235 = u235.is("clinic_id", null);
+          const { data: upData, error: upe } = await u235.select().single();
           if (upe) {
             console.error("[SUPABASE] PATIENT 23505 recovery update failed", upe);
             return res.status(500).json({
@@ -8204,18 +8205,32 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
     
 
     
-    // Get all patients with their activity in the date range for this clinic
-    const { data: patients, error } = await supabase
-      .from('patients')
-      .select('id, created_at, updated_at')
-      .eq('clinic_id', req.clinicId)
-      .gte('created_at', startDate.toISOString())
-      .lte('created_at', endDate.toISOString());
-    
-    if (error) {
-
+    // Patients for this clinic with created_at or updated_at in the reporting window
+    const startIso = startDate.toISOString();
+    const endIso = endDate.toISOString();
+    const selPat = "id, created_at, updated_at, clinic_id";
+    const { data: byCreated, error: e1 } = await supabase
+      .from("patients")
+      .select(selPat)
+      .eq("clinic_id", req.clinicId)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso);
+    const { data: byUpdated, error: e2 } = await supabase
+      .from("patients")
+      .select(selPat)
+      .eq("clinic_id", req.clinicId)
+      .gte("updated_at", startIso)
+      .lte("updated_at", endIso);
+    if (e1 && e2) {
       return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
     }
+    const patientById = new Map();
+    for (const row of [...(byCreated || []), ...(byUpdated || [])]) {
+      if (!row || !row.id) continue;
+      if (row.clinic_id != null && String(row.clinic_id) !== String(req.clinicId)) continue;
+      patientById.set(String(row.id), row);
+    }
+    const patients = [...patientById.values()];
     
     // Group patients by month and count unique active patients
     const monthlyData = {};
@@ -8228,14 +8243,22 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
       monthlyData[monthKey] = new Set();
     }
     
-    // Count patients by creation month (simplified - treating creation as activity)
-    patients.forEach(patient => {
-      const createdDate = new Date(patient.created_at);
-      const monthKey = `${createdDate.getFullYear()}-${String(createdDate.getMonth() + 1).padStart(2, '0')}`;
-      
-      if (monthlyData[monthKey]) {
-        monthlyData[monthKey].add(patient.id);
-      }
+    const inMonth = (d, y, m) => {
+      if (!d) return false;
+      const x = d instanceof Date ? d : new Date(d);
+      return x.getFullYear() === y && x.getMonth() + 1 === m;
+    };
+    patients.forEach((patient) => {
+      Object.keys(monthlyData).forEach((monthKey) => {
+        const [ys, ms] = monthKey.split("-");
+        const y = parseInt(ys, 10);
+        const m = parseInt(ms, 10);
+        const c = patient.created_at ? new Date(patient.created_at) : null;
+        const u = patient.updated_at ? new Date(patient.updated_at) : null;
+        if (inMonth(c, y, m) || inMonth(u, y, m)) {
+          monthlyData[monthKey].add(patient.id);
+        }
+      });
     });
     
     // Convert to array and sort by month
@@ -8300,18 +8323,23 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
     
 
     
-    // Get all patients with treatments in the date range for this clinic
+    // All clinic patients (for procedures JSON) — scoped by clinic_id only; bucketing by procedure timestamps
     const { data: patients, error } = await supabase
-      .from('patients')
-      .select('id, created_at, updated_at, treatments')
-      .eq('clinic_id', req.clinicId)
-      .gte('created_at', startDate.toISOString())
-      .lte('created_at', endDate.toISOString());
+      .from("patients")
+      .select("id, created_at, updated_at, treatments, clinic_id")
+      .eq("clinic_id", req.clinicId);
     
     if (error) {
 
       return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
     }
+    
+    const startMs = startDate.getTime();
+    const endMs = endDate.getTime();
+    const monthKeyForTs = (ts) => {
+      const d = new Date(ts);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    };
     
     // Group procedures by month and count them
     const monthlyData = {};
@@ -8324,29 +8352,31 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
       monthlyData[monthKey] = 0;
     }
     
-    // Count procedures by month from treatments data
-    patients.forEach(patient => {
-      const createdDate = new Date(patient.created_at);
-      const monthKey = `${createdDate.getFullYear()}-${String(createdDate.getMonth() + 1).padStart(2, '0')}`;
-      
-      if (monthlyData[monthKey] !== undefined && patient.treatments) {
-        try {
-          const treatments = typeof patient.treatments === 'string' 
-            ? JSON.parse(patient.treatments) 
-            : patient.treatments;
-          
-          // Count procedures from treatments data
-          if (treatments && treatments.teeth) {
-            Object.values(treatments.teeth).forEach(tooth => {
-              if (tooth.procedures && Array.isArray(tooth.procedures)) {
-                monthlyData[monthKey] += tooth.procedures.length;
-              }
-            });
-          }
-        } catch (e) {
-
-        }
+    (patients || []).forEach((patient) => {
+      if (patient && patient.clinic_id != null && String(patient.clinic_id) !== String(req.clinicId)) return;
+      let treatments;
+      try {
+        treatments = typeof patient.treatments === "string" ? JSON.parse(patient.treatments) : patient.treatments;
+      } catch (_) {
+        treatments = null;
       }
+      if (!treatments || !treatments.teeth) return;
+      Object.values(treatments.teeth).forEach((tooth) => {
+        if (!tooth.procedures || !Array.isArray(tooth.procedures)) return;
+        tooth.procedures.forEach((proc) => {
+          const raw =
+            proc.scheduledAt != null
+              ? proc.scheduledAt
+              : proc.createdAt != null
+                ? proc.createdAt
+                : proc.updatedAt;
+          let ts = typeof raw === "number" ? raw : raw != null ? Date.parse(String(raw)) : NaN;
+          if (!Number.isFinite(ts)) ts = patient.updated_at ? new Date(patient.updated_at).getTime() : NaN;
+          if (!Number.isFinite(ts) || ts < startMs || ts > endMs) return;
+          const mk = monthKeyForTs(ts);
+          if (monthlyData[mk] !== undefined) monthlyData[mk] += 1;
+        });
+      });
     });
     
     // Convert to array and sort by month
@@ -10930,13 +10960,22 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
     const eid = String(encounterId || "").trim();
     const { data: encRow, error: encErr } = await supabase
       .from("patient_encounters")
-      .select("patient_id")
+      .select("patient_id, clinic_id")
       .eq("id", eid)
       .maybeSingle();
     if (encErr || !encRow?.patient_id) return;
 
     const pidEnc = String(encRow.patient_id).trim();
-    const { data: trRow, error: trErr } = await fetchPatientTreatmentsRowSupabase(pidEnc, null);
+    let encCid = encRow.clinic_id != null ? String(encRow.clinic_id).trim() : "";
+    if (!encCid) {
+      const pr = await supabase.from("patients").select("clinic_id").eq("id", pidEnc).maybeSingle();
+      encCid = pr.data?.clinic_id != null ? String(pr.data.clinic_id).trim() : "";
+    }
+    if (!encCid) {
+      console.warn("[ENCOUNTER TREATMENT MIRROR] no clinic_id on encounter/patient");
+      return;
+    }
+    const { data: trRow, error: trErr } = await fetchPatientTreatmentsRowSupabase(pidEnc, encCid);
     if (trErr || !trRow?.id) {
       console.warn("[ENCOUNTER TREATMENT MIRROR] patient row:", trErr?.message || "not_found");
       return;
@@ -10984,7 +11023,7 @@ async function mirrorEncounterDiagnosesToPatientTreatmentsJson(encounterId, inse
     const eid = String(encounterId || "").trim();
     const { data: encRow, error: encErr } = await supabase
       .from("patient_encounters")
-      .select("patient_id")
+      .select("patient_id, clinic_id")
       .eq("id", eid)
       .maybeSingle();
     if (encErr || !encRow?.patient_id) {
@@ -10993,7 +11032,16 @@ async function mirrorEncounterDiagnosesToPatientTreatmentsJson(encounterId, inse
     }
 
     const pidEnc = String(encRow.patient_id).trim();
-    const { data: trRow, error: trErr } = await fetchPatientTreatmentsRowSupabase(pidEnc, null);
+    let encCid = encRow.clinic_id != null ? String(encRow.clinic_id).trim() : "";
+    if (!encCid) {
+      const pr = await supabase.from("patients").select("clinic_id").eq("id", pidEnc).maybeSingle();
+      encCid = pr.data?.clinic_id != null ? String(pr.data.clinic_id).trim() : "";
+    }
+    if (!encCid) {
+      console.warn("[ENCOUNTER DIAGNOSIS MIRROR] no clinic_id");
+      return;
+    }
+    const { data: trRow, error: trErr } = await fetchPatientTreatmentsRowSupabase(pidEnc, encCid);
     if (trErr || !trRow?.id) {
       console.warn("[ENCOUNTER DIAGNOSIS MIRROR] patient row:", trErr?.message || "not_found");
       return;
@@ -12382,36 +12430,33 @@ async function saveTreatmentsSupabaseWithFallback(patientId, payload, enteredBy)
 }
 
 async function fetchPatientTreatmentsRowSupabase(patientId, clinicIdOrNull) {
+  if (clinicIdOrNull == null || String(clinicIdOrNull).trim() === "") {
+    return { error: { code: "PGRST116", message: "clinic_id required for patient treatments row" } };
+  }
+  const cid = String(clinicIdOrNull).trim();
   // Prefer `patient_id` when available; fall back to `id`.
   let q1 = supabase
     .from("patients")
     .select("id, clinic_id, treatments, patient_id")
-    .eq("patient_id", patientId);
-  if (clinicIdOrNull) q1 = q1.eq("clinic_id", clinicIdOrNull);
-  const r1 = await q1.single();
-  if (!r1.error) return { data: r1.data, key: "patient_id" };
+    .eq("patient_id", patientId)
+    .eq("clinic_id", cid);
+  const r1 = await q1.maybeSingle();
+  if (!r1.error && r1.data) return { data: r1.data, key: "patient_id" };
 
   const msg = String(r1.error?.message || "");
   const isMissingPatientIdCol = msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
   const isNotFound = String(r1.error?.code || "") === "PGRST116";
   if (!isMissingPatientIdCol && !isNotFound) return { error: r1.error };
 
-  let q2 = supabase.from("patients").select("id, clinic_id, treatments").eq("id", patientId);
-  if (clinicIdOrNull) q2 = q2.eq("clinic_id", clinicIdOrNull);
-  const r2 = await q2.single();
-  if (!r2.error) return { data: r2.data, key: "id" };
-  return { error: r2.error };
+  let q2 = supabase.from("patients").select("id, clinic_id, treatments").eq("id", patientId).eq("clinic_id", cid);
+  const r2 = await q2.maybeSingle();
+  if (!r2.error && r2.data) return { data: r2.data, key: "id" };
+  return { error: r2.error || r1.error };
 }
 
 async function loadExistingTreatmentsPayload(patientId, clinicIdOrNull, treatmentsFile, fallbackPayload) {
   if (isSupabaseEnabled()) {
-    let { data: row, error } = await fetchPatientTreatmentsRowSupabase(patientId, clinicIdOrNull);
-    if (error && String(error.code || "") === "PGRST116" && clinicIdOrNull) {
-      // Retry without clinic filter to avoid overwriting when clinic_id is missing/mismatched.
-      const retry = await fetchPatientTreatmentsRowSupabase(patientId, null);
-      row = retry.data;
-      error = retry.error;
-    }
+    const { data: row, error } = await fetchPatientTreatmentsRowSupabase(patientId, clinicIdOrNull);
 
     if (!error && row && isPlainObject(row.treatments)) {
       return row.treatments;
@@ -12434,25 +12479,27 @@ async function loadExistingTreatmentsPayload(patientId, clinicIdOrNull, treatmen
 }
 
 async function fetchPatientTreatmentRowSupabase(patientId, clinicIdOrNull) {
-  // Prefer `patient_id` when available; fall back to `id`.
+  if (clinicIdOrNull == null || String(clinicIdOrNull).trim() === "") {
+    return { error: { code: "PGRST116", message: "clinic_id required" } };
+  }
+  const cid = String(clinicIdOrNull).trim();
   let q1 = supabase
     .from("patients")
     .select("id, clinic_id, treatment, patient_id")
-    .eq("patient_id", patientId);
-  if (clinicIdOrNull) q1 = q1.eq("clinic_id", clinicIdOrNull);
-  const r1 = await q1.single();
-  if (!r1.error) return { data: r1.data, key: "patient_id" };
+    .eq("patient_id", patientId)
+    .eq("clinic_id", cid);
+  const r1 = await q1.maybeSingle();
+  if (!r1.error && r1.data) return { data: r1.data, key: "patient_id" };
 
   const msg = String(r1.error?.message || "");
   const isMissingPatientIdCol = msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
   const isNotFound = String(r1.error?.code || "") === "PGRST116";
   if (!isMissingPatientIdCol && !isNotFound) return { error: r1.error };
 
-  let q2 = supabase.from("patients").select("id, clinic_id, treatment").eq("id", patientId);
-  if (clinicIdOrNull) q2 = q2.eq("clinic_id", clinicIdOrNull);
-  const r2 = await q2.single();
-  if (!r2.error) return { data: r2.data, key: "id" };
-  return { error: r2.error };
+  let q2 = supabase.from("patients").select("id, clinic_id, treatment").eq("id", patientId).eq("clinic_id", cid);
+  const r2 = await q2.maybeSingle();
+  if (!r2.error && r2.data) return { data: r2.data, key: "id" };
+  return { error: r2.error || r1.error };
 }
 
 async function updatePatientTreatmentRowSupabase(patientId, clinicIdOrNull, updatedTreatment) {
@@ -14113,17 +14160,21 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
 
   if (isSupabaseEnabled()) {
     try {
-      const clinicFilter = null;
-      let { data: row, error } = await fetchPatientTreatmentsRowSupabase(patientId, clinicFilter);
-      const hasPrimaryTeeth = Array.isArray(row?.treatments?.teeth) && row.treatments.teeth.length > 0;
-
-      if (!error && clinicFilter && !hasPrimaryTeeth) {
-        const fallbackResult = await fetchPatientTreatmentsRowSupabase(patientId, null);
-        const hasFallbackTeeth = Array.isArray(fallbackResult?.data?.treatments?.teeth) && fallbackResult.data.treatments.teeth.length > 0;
-        if (!fallbackResult.error && hasFallbackTeeth) {
-          row = fallbackResult.data;
+      let clinicForTreatments = null;
+      if (req.isAdmin && req.clinicId) {
+        const adm = await getPatientById(patientId, { clinicId: req.clinicId });
+        if (!adm) {
+          return res.status(404).json({ ok: false, error: "patient_not_found" });
         }
+        clinicForTreatments = String(req.clinicId);
+      } else {
+        const prow = await getPatientById(patientId);
+        clinicForTreatments = prow && prow.clinic_id != null ? String(prow.clinic_id) : null;
       }
+      if (!clinicForTreatments) {
+        return res.status(404).json({ ok: false, error: "patient_not_found", message: "clinic_id required" });
+      }
+      let { data: row, error } = await fetchPatientTreatmentsRowSupabase(patientId, clinicForTreatments);
       if (error) {
         if (isMissingColumnError(error, "treatments")) {
           return res.status(500).json({
@@ -17859,6 +17910,15 @@ function isMissingColumnError(error, columnName) {
     return true;
   }
   return isMissingCode && combined.includes(col);
+}
+
+/** Strict tenant filter: missing tenant context or missing row.clinic_id → exclude. */
+function rowBelongsToClinic(row, expectedClinicId) {
+  const exp = expectedClinicId != null ? String(expectedClinicId).trim() : "";
+  if (!exp) return false;
+  const got = row && row.clinic_id != null ? String(row.clinic_id).trim() : "";
+  if (!got) return false;
+  return got === exp;
 }
 // POST /api/chat/upload (patient uploads files/images to chat)
 app.post("/api/chat/upload", requireToken, chatUpload.array("files", 5), async (req, res) => {
@@ -24761,26 +24821,31 @@ app.get("/api/clinic/:code", (req, res) => {
 });
 
 // ================== PROCEDURE DEFINITIONS (shared) ==================
-// Canonical list for pickers (id = procedure type code, name = human label).
-// `lang` = tr | en | ru | ka — affects display labels only (stable API codes stay English).
+// Single source: shared/procedures.js (PROCEDURE_TYPES + PROCEDURE_I18N). API returns string labels only.
+function safeLang(obj, lang) {
+  return obj?.[lang] || obj?.en || Object.values(obj || {})[0] || "";
+}
+function assertNoMixedLanguage(text) {
+  if (typeof text !== "string") return;
+  if (text.includes("(") && text.includes(")")) {
+    console.warn("⚠️ Mixed language detected:", text);
+  }
+}
 function buildProceduresCatalogPayload(lang) {
-  const L = procedures.normalizeProcedureLang ? procedures.normalizeProcedureLang(lang) : "en";
-  const safe = procedures.safeLang;
+  const langKey = (String((lang != null && lang !== "" ? lang : "en") || "en") || "en")
+    .toLowerCase()
+    .slice(0, 2);
+  const L = procedures.normalizeProcedureLang ? procedures.normalizeProcedureLang(langKey) : "en";
   const list = (procedures.PROCEDURE_TYPES || []).map((p) => {
     const nameObj = procedures.getMultilingualTypeName
       ? procedures.getMultilingualTypeName(p.type)
       : { en: p.type, tr: p.type, ru: p.type, ka: p.type };
-    const single = safe ? safe(nameObj, L) : nameObj.en || p.type;
-    return {
-      id: p.type,
-      name: single,
-      type: p.type,
-      label: single,
-      category: p.category,
-    };
+    const name = safeLang(nameObj, L);
+    assertNoMixedLanguage(name);
+    return { id: p.type, type: p.type, category: p.category, name };
   });
   const categoryLabels =
-    procedures.getLocalizedCategoryLabels ? procedures.getLocalizedCategoryLabels(lang) : {};
+    procedures.getLocalizedCategoryLabels ? procedures.getLocalizedCategoryLabels(L) : {};
   const categoryLabelsI18n = procedures.getCategoryLabelsI18n
     ? procedures.getCategoryLabelsI18n()
     : {};
@@ -24830,11 +24895,12 @@ function doctorProfileProcedureItemsFromIds(profileProcedureIds) {
       ids = [];
     }
   }
-  const safe = procedures.safeLang;
-  const catalog = (procedures.PROCEDURE_TYPES || []).map((t) => ({
-    id: t.type,
-    name: safe(procedures.getMultilingualTypeName(t.type), "en"),
-  }));
+  const en = "en";
+  const catalog = (procedures.PROCEDURE_TYPES || []).map((t) => {
+    const n = safeLang(procedures.getMultilingualTypeName(t.type), en);
+    assertNoMixedLanguage(n);
+    return { id: t.type, name: n };
+  });
   const byId = new Map(catalog.map((p) => [p.id, p]));
   return ids
     .map((x) => String(x || "").trim())
@@ -24844,24 +24910,32 @@ function doctorProfileProcedureItemsFromIds(profileProcedureIds) {
 
 // Public + doctor-app: same catalog (doctor routes require auth)
 app.get("/api/procedures", (req, res) => {
-  const lang = req.query && req.query.lang != null ? req.query.lang : "";
+  const lang = (req.query && req.query.lang != null ? req.query.lang : "en")
+    .toString()
+    .slice(0, 2);
   res.json(buildProceduresCatalogPayload(lang));
 });
 
 app.get("/api/doctor/procedures", requireDoctorAuth, (req, res) => {
-  const lang = req.query && req.query.lang != null ? req.query.lang : "";
+  const lang = (req.query && req.query.lang != null ? req.query.lang : "en")
+    .toString()
+    .slice(0, 2);
   res.json(buildProceduresCatalogPayload(lang));
+});
+
+app.get("/api/debug/procedures", (req, res) => {
+  res.json(procedures.PROCEDURES || []);
 });
 
 // Profile settings multi-select (expects { ok, procedures: [{ id, name }] })
 app.get("/api/doctor/procedures-list", requireDoctorAuth, (req, res) => {
-  const L = procedures.normalizeProcedureLang(req.query && req.query.lang);
-  const safe = procedures.safeLang;
-  const proceduresOnly = (procedures.PROCEDURE_TYPES || []).map((t) => ({
-    id: t.type,
-    name: safe(procedures.getMultilingualTypeName(t.type), L),
-    category: t.category,
-  }));
+  const Lk = (req.query && req.query.lang != null ? req.query.lang : "en").toString().slice(0, 2);
+  const L = procedures.normalizeProcedureLang(Lk);
+  const proceduresOnly = (procedures.PROCEDURE_TYPES || []).map((t) => {
+    const n = safeLang(procedures.getMultilingualTypeName(t.type), L);
+    assertNoMixedLanguage(n);
+    return { id: t.type, name: n, category: t.category };
+  });
   res.json({ ok: true, procedures: proceduresOnly });
 });
 
@@ -28145,6 +28219,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     const upcomingEndTs = upcomingEnd.getTime();
     
     const allEvents = [];
+    let currentPatientMembershipStartMs = 0;
 
     const toIso = (tsOrIso) => {
       if (!tsOrIso) return null;
@@ -28172,6 +28247,14 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const iso = timelineAt || dateTimeToIso(evt.date, evt.time) || toIso(evt.timestamp);
       if (!iso) return;
       const ts = Date.parse(iso);
+      if (
+        Number.isFinite(currentPatientMembershipStartMs) &&
+        currentPatientMembershipStartMs > 0 &&
+        Number.isFinite(ts) &&
+        ts < currentPatientMembershipStartMs
+      ) {
+        return;
+      }
       if (hasRangeFilter) {
         const evtDateStr = String(evt?.date || "").trim();
         if (/^\d{4}-\d{2}-\d{2}$/.test(evtDateStr)) {
@@ -28325,8 +28408,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const chunk = allUuids.slice(i, i + 50);
           const { data: ptRows, error: ptErr } = await supabase
             .from("patient_treatments")
-            .select("patient_id, treatments_data")
-            .in("patient_id", chunk);
+            .select("patient_id, treatments_data, clinic_id")
+            .in("patient_id", chunk)
+            .eq("clinic_id", req.clinicId);
           if (ptErr) {
             if (!["42P01", "PGRST205", "PGRST204"].includes(String(ptErr.code || ""))) {
               console.error("[EVENTS] patient_treatments query failed:", ptErr.message);
@@ -28334,6 +28418,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             break;
           }
           (ptRows || []).forEach((row) => {
+            if (!rowBelongsToClinic(row, req.clinicId)) return;
             if (row?.treatments_data) patientTreatmentsMap.set(String(row.patient_id), row.treatments_data);
           });
         }
@@ -28355,12 +28440,20 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         try {
           for (let i = 0; i < allPatientUuids.length; i += 100) {
             const chunk = allPatientUuids.slice(i, i + 100);
-            const { data: encRows } = await supabase
-              .from('patient_encounters')
-              .select('id, patient_id')
-              .in('patient_id', chunk);
-            (encRows || []).forEach(row => {
-              const pid = String(row.patient_id || '');
+            const { data: encRows, error: encQErr } = await supabase
+              .from("patient_encounters")
+              .select("id, patient_id, clinic_id")
+              .in("patient_id", chunk)
+              .eq("clinic_id", req.clinicId);
+            if (encQErr) {
+              if (!["42P01", "PGRST205", "PGRST204"].includes(String(encQErr.code || ""))) {
+                console.error("[EVENTS] patient_encounters:", encQErr.message);
+              }
+              continue;
+            }
+            (encRows || []).forEach((row) => {
+              if (!rowBelongsToClinic(row, req.clinicId)) return;
+              const pid = String(row.patient_id || "");
               if (!encountersByPatientId.has(pid)) encountersByPatientId.set(pid, []);
               encountersByPatientId.get(pid).push(row);
             });
@@ -28377,22 +28470,26 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       // patientId → Set<planId>
       const planIdsByPatientId = new Map();
       try {
-        const planFetches = [];
-        // by encounter_id (chunked)
+        const planRowsMerged = [];
+        const selTp = "id, encounter_id, patient_id, clinic_id";
+        const runTreatmentPlansIn = async (col, chunk) => {
+          if (!chunk.length) return;
+          const { data, error } = await supabase
+            .from("treatment_plans")
+            .select(selTp)
+            .in(col, chunk)
+            .eq("clinic_id", req.clinicId);
+          if (error) return;
+          (data || []).forEach((row) => {
+            if (rowBelongsToClinic(row, req.clinicId)) planRowsMerged.push(row);
+          });
+        };
         for (let i = 0; i < allEncounterIds.length; i += 100) {
-          planFetches.push(
-            supabase.from('treatment_plans').select('id, encounter_id, patient_id')
-              .in('encounter_id', allEncounterIds.slice(i, i + 100))
-          );
+          await runTreatmentPlansIn("encounter_id", allEncounterIds.slice(i, i + 100));
         }
-        // by patient_id (chunked)
         for (let i = 0; i < allPatientUuids.length; i += 100) {
-          planFetches.push(
-            supabase.from('treatment_plans').select('id, encounter_id, patient_id')
-              .in('patient_id', allPatientUuids.slice(i, i + 100))
-          );
+          await runTreatmentPlansIn("patient_id", allPatientUuids.slice(i, i + 100));
         }
-        const planResults = await Promise.all(planFetches);
 
         // Build encounter_id → patient_id reverse lookup from encountersByPatientId
         const encIdToPatientId = new Map();
@@ -28400,16 +28497,17 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           for (const enc of encs) encIdToPatientId.set(String(enc.id || ''), pid);
         }
 
-        for (const result of planResults) {
-          if (result.error) continue;
-          (result.data || []).forEach(row => {
-            const planId = String(row?.id || '').trim();
-            if (!planId) return;
-            const pid = String(row?.patient_id || encIdToPatientId.get(String(row?.encounter_id || '')) || '').trim();
-            if (!pid) return;
-            if (!planIdsByPatientId.has(pid)) planIdsByPatientId.set(pid, new Set());
-            planIdsByPatientId.get(pid).add(planId);
-          });
+        const seenPlanId = new Set();
+        for (const row of planRowsMerged) {
+          const planId = String(row?.id || "").trim();
+          if (!planId || seenPlanId.has(planId)) continue;
+          seenPlanId.add(planId);
+          const pid = String(
+            row?.patient_id || encIdToPatientId.get(String(row?.encounter_id || "")) || ""
+          ).trim();
+          if (!pid) continue;
+          if (!planIdsByPatientId.has(pid)) planIdsByPatientId.set(pid, new Set());
+          planIdsByPatientId.get(pid).add(planId);
         }
       } catch (planBatchErr) {
         console.error('[ADMIN EVENTS] treatment_plans batch fetch error:', planBatchErr.message);
@@ -28543,6 +28641,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const procType = String(row.procedure_type || "TREATMENT").trim();
           const toothNum = row.tooth_number;
           const normalizedLabel = mapEncounterTreatmentStatusToPatientJsonStatus(row.status);
+          currentPatientMembershipStartMs = prow?.created_at ? Date.parse(String(prow.created_at)) : 0;
           const enriched = applyEventPrices(
             [
               {
@@ -28574,6 +28673,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       }
 
       for (const p of list) {
+        if (!p || p.clinic_id == null || String(p.clinic_id) !== String(req.clinicId)) continue;
+        currentPatientMembershipStartMs = p?.created_at ? Date.parse(String(p.created_at)) : 0;
         const patientId = String(p?.patient_id || p?.id || "").trim();
         if (!patientId) continue;
         const patientName = String(p?.name || p?.full_name || patientId).trim();
@@ -33300,6 +33401,7 @@ function encounterScheduleInstantMs(enc) {
 async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
   const empty = { todayAppointments: [], tomorrowAppointments: [] };
   const doctorRecord = req.doctor || {};
+  const clinicScope = String(req.clinicId || doctorRecord.clinic_id || "").trim();
   const doctorId = req.doctorId || doctorRecord.id || doctorRecord.doctor_id;
   const doctorKeysRaw = [
     ...new Set(
@@ -33324,13 +33426,16 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     "id, encounter_id, patient_id, status, assigned_doctor_id",
   ];
   let plans = [];
+  if (clinicScope) {
   for (const sel of planSelectAttempts) {
-    const { data, error } = await supabaseClient
+    let q0 = supabaseClient
       .from("treatment_plans")
       .select(sel)
       .in("assigned_doctor_id", doctorKeysUuidFk)
       .not("encounter_id", "is", null)
+      .eq("clinic_id", clinicScope)
       .limit(400);
+    let { data, error } = await q0;
     const code = String(error?.code || "");
     if (!error && Array.isArray(data)) {
       plans = data;
@@ -33339,10 +33444,13 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     if (["42703", "PGRST204", "42P01"].includes(code)) continue;
     break;
   }
+  plans = (plans || []).filter((p) => rowBelongsToClinic(p, clinicScope));
+  }
 
   const encIdsFromPlans = [...new Set(plans.map((p) => String(p.encounter_id || "").trim()).filter(Boolean))];
   const encMap = new Map();
   const encSelectAttempts = [
+    "id, patient_id, clinic_id, scheduled_at, encounter_date, visit_date, created_at, updated_at",
     "id, patient_id, scheduled_at, encounter_date, visit_date, created_at, updated_at",
     "id, patient_id, scheduled_at, created_at, updated_at",
     "id, patient_id, encounter_date, visit_date, created_at, updated_at",
@@ -33381,6 +33489,7 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
     if (!eid) continue;
     const enc = encMap.get(eid);
     if (!enc) continue;
+    if (clinicScope && !encounterPassesClinicForDashboard(enc, clinicScope)) continue;
     let tMs = resolveDashboardPlanDayInstantMs(plan, enc, todayStr, todayR.startMs, todayR.endMs);
     let dayKey = null;
     let dateYmd = null;
@@ -33492,6 +33601,7 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
 
     const enc = encMap.get(eid);
     if (!enc) continue;
+    if (clinicScope && !encounterPassesClinicForDashboard(enc, clinicScope)) continue;
     const pid = String(enc.patient_id || "").trim();
     if (!pid) continue;
 
@@ -33527,11 +33637,15 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
 
   const pmap = new Map();
   const pArr = [...patientIdSet].slice(0, 150);
-  if (pArr.length > 0) {
+  if (pArr.length > 0 && clinicScope) {
     try {
-      const { data: pts } = await supabaseClient.from("patients").select("id, name").in("id", pArr);
+      const { data: pts } = await supabaseClient
+        .from("patients")
+        .select("id, name, clinic_id")
+        .in("id", pArr)
+        .eq("clinic_id", clinicScope);
       (pts || []).forEach((p) => {
-        if (p?.id) pmap.set(String(p.id), String(p.name || "Hasta"));
+        if (p?.id && rowBelongsToClinic(p, clinicScope)) pmap.set(String(p.id), String(p.name || "Hasta"));
       });
     } catch (_) {}
   }
@@ -33583,14 +33697,11 @@ function planScheduleInstantMs(plan) {
   return NaN;
 }
 
-/**
- * encounter.clinic_id doluysa doktor kliniği ile eşleşmeli; NULL ise (çoğu ortam) plan zaten hekime bağlı — dahil et.
- */
 function encounterPassesClinicForDashboard(enc, clinicIdRaw) {
   const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
-  if (!cid) return true;
+  if (!cid) return false;
   const eCl = String(enc?.clinic_id ?? "").trim();
-  if (!eCl) return true;
+  if (!eCl) return false;
   return eCl === cid;
 }
 
@@ -34906,6 +35017,14 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       if (patientsError) break;
 
       patients = [...byId.values()];
+      if (clinicId) {
+        const c = String(clinicId).trim();
+        patients = patients.filter((row) => {
+          const pc = row?.clinic_id != null ? String(row.clinic_id).trim() : "";
+          if (pc && pc !== c) return false;
+          return true;
+        });
+      }
       patientsError = null;
       break;
     }
@@ -35469,25 +35588,34 @@ async function handleDoctorInboxSummary(req, res) {
     // Fetch patient details (include health column for allergy/risk badges)
     let patients = [];
     if (patientIdSet.size > 0) {
+      if (!clinicId) {
+        patients = [];
+      }
+    }
+    if (patientIdSet.size > 0 && clinicId) {
       const ids = Array.from(patientIdSet)
         .map((x) => String(x || "").trim())
         .filter((x) => PATIENT_ROW_UUID_RE.test(x))
         .slice(0, 100);
       let pResult = { data: [], error: null };
       if (ids.length > 0) {
-        pResult = await supabase
+        let pQ = supabase
           .from('patients')
-          .select('id, name, created_at, health')
+          .select('id, name, created_at, health, clinic_id')
           .in('id', ids)
           .order('created_at', { ascending: false });
+        if (clinicId) pQ = pQ.eq("clinic_id", clinicId);
+        pResult = await pQ;
         if (pResult.error && (String(pResult.error.code || '') === '42703' || String(pResult.error.code || '') === 'PGRST204')) {
-          pResult = await supabase
+          let pQ2 = supabase
             .from('patients')
-            .select('id, name, created_at')
+            .select('id, name, created_at, clinic_id')
             .in('id', ids)
             .order('created_at', { ascending: false });
+          if (clinicId) pQ2 = pQ2.eq("clinic_id", clinicId);
+          pResult = await pQ2;
         }
-        patients = pResult.data || [];
+        patients = (pResult.data || []).filter((row) => rowBelongsToClinic(row, clinicId));
       }
     }
 
@@ -37741,11 +37869,9 @@ app.get('/api/doctor/encounters/:id/diagnoses', requireDoctorAuth, async (req, r
         if (pat2?.id) {
           const clinicId = String(req?.doctor?.clinic_id || req?.doctor?.clinicId || '').trim() || null;
           let trRow = null;
-          const tr = await fetchPatientTreatmentsRowSupabase(String(pat2.id), clinicId);
-          if (tr?.data) trRow = tr.data;
-          else {
-            const tr2 = await fetchPatientTreatmentsRowSupabase(String(pat2.id), null);
-            if (tr2?.data) trRow = tr2.data;
+          if (clinicId) {
+            const tr = await fetchPatientTreatmentsRowSupabase(String(pat2.id), clinicId);
+            if (tr?.data) trRow = tr.data;
           }
           const jsonDiag = extractDiagnosesFromPatientTreatmentsJson(
             trRow?.treatments,
@@ -37852,10 +37978,11 @@ app.get('/api/doctor/encounters/:id/plan', requireDoctorAuth, async (req, res) =
 
 // ── Encounter treatments (doctor app: diagnosis → treatment) — table: encounter_treatments
 const _procedureTypeToLabel = Object.fromEntries(
-  (procedures.PROCEDURE_TYPES || []).map((p) => [
-    p.type,
-    procedures.safeLang(procedures.getMultilingualTypeName(p.type), "en"),
-  ])
+  (procedures.PROCEDURE_TYPES || []).map((p) => {
+    const lab = safeLang(procedures.getMultilingualTypeName(p.type), "en");
+    assertNoMixedLanguage(lab);
+    return [p.type, lab];
+  })
 );
 const _validProcedureTypeSet = new Set((procedures.PROCEDURE_TYPES || []).map((p) => p.type));
 
@@ -38243,10 +38370,10 @@ app.get('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req, 
     // Admin / klinik: patients.treatments JSONB + isteğe bağlı v1 patients.treatment — doktor aynı listeyi görsün
     try {
       const pid = accessPatientId ? String(accessPatientId).trim() : '';
-      if (pid) {
+      if (pid && clinicId) {
         const [trRes, v1Res] = await Promise.all([
-          fetchPatientTreatmentsRowSupabase(pid, null),
-          fetchPatientTreatmentRowSupabase(pid, null),
+          fetchPatientTreatmentsRowSupabase(pid, clinicId),
+          fetchPatientTreatmentRowSupabase(pid, clinicId),
         ]);
         const { data: trRow, error: trErr } = trRes;
         if (!trErr && trRow && isPlainObject(trRow.treatments) && Array.isArray(trRow.treatments.teeth)) {
@@ -38613,6 +38740,10 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
     if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
 
     const patRow = await getPatientById(patientId).catch(() => null);
+    const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
+    if (docCid && patRow && patRow.clinic_id != null && String(patRow.clinic_id).trim() !== docCid) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
     const internalUuid = String(patRow?.id || "").trim();
     const encounterPidKeys = internalUuid
       ? await encounterPatientIdMatchSet(internalUuid, patientId)
@@ -38621,10 +38752,18 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
       return res.json({ ok: true, treatments: [] });
     }
 
-    const { data: encounters, error: encErr } = await supabase
-      .from('patient_encounters')
-      .select('id')
-      .in('patient_id', encounterPidKeys);
+    let encQ = supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
+    if (docCid) encQ = encQ.eq("clinic_id", docCid);
+    let { data: encounters, error: encErr } = await encQ;
+    if (encErr && docCid) {
+      ({ data: encounters, error: encErr } = await supabase
+        .from("patient_encounters")
+        .select("id, clinic_id")
+        .in("patient_id", encounterPidKeys));
+    }
+    if (!encErr && docCid) {
+      encounters = (encounters || []).filter((e) => rowBelongsToClinic(e, docCid));
+    }
 
     if (encErr) {
       console.error('[DOCTOR PATIENT TREATMENTS] encounters fetch error:', encErr);
@@ -38829,6 +38968,10 @@ app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (r
     }
 
     const patient = lookup.patient;
+    const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
+    if (docCid && patient.clinic_id != null && String(patient.clinic_id).trim() !== docCid) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
     const statusRaw = String(patient?.status || '').toUpperCase();
     if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
@@ -38863,10 +39006,18 @@ app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (r
       return res.json({ ok: true, diagnoses: [] });
     }
 
-    const { data: encounters, error: encErr } = await supabase
-      .from('patient_encounters')
-      .select('id')
-      .in('patient_id', encounterPidKeys);
+    let encDiagQ = supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
+    if (docCid) encDiagQ = encDiagQ.eq("clinic_id", docCid);
+    let { data: encounters, error: encErr } = await encDiagQ;
+    if (encErr && docCid) {
+      ({ data: encounters, error: encErr } = await supabase
+        .from("patient_encounters")
+        .select("id, clinic_id")
+        .in("patient_id", encounterPidKeys));
+    }
+    if (!encErr && docCid) {
+      encounters = (encounters || []).filter((e) => rowBelongsToClinic(e, docCid));
+    }
 
     if (encErr) {
       const ignorable = ['42P01', 'PGRST116'].includes(String(encErr.code || ''));

@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
+  <script src="/admin-i18n.js?v=17"></script>
+  <link rel="stylesheet" href="/admin-layout.css"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Chat - Clinifly Admin</title>
+  <title data-i18n="chat.documentTitle">Chat - Clinifly Admin</title>
   <script>
     // Token check - redirect to login if not authenticated
     (function() {
@@ -184,7 +186,7 @@
 <body>
   <div class="wrap">
     <header>
-      <h1>💬 Clinifly Admin – Chat</h1>
+      <h1 id="chatPageHeading" data-i18n="chat.pageHeading">💬 Clinifly Admin – Chat</h1>
     </header>
     
     <nav class="navbar">
@@ -196,20 +198,20 @@
         <div class="navbar-clinic-name" id="navbarClinicName">Clinic</div>
       </div>
       <div class="navbar-center">
-        <a href="/admin.html" class="nav-link">Dashboard</a>
+        <a href="/admin.html" class="nav-link" data-i18n="dashboard.nav.dashboard"></a>
         <a href="/admin-patients.html" class="nav-link" id="patientsNavLink">
-          Patients
+          <span data-i18n="dashboard.nav.patients"></span>
           <span id="patientsBadge" class="nav-badge" style="display:none;"></span>
         </a>
-        <a href="/admin-treatment.html" class="nav-link">Treatment</a>
+        <a href="/admin-treatment.html" class="nav-link" data-i18n="dashboard.nav.treatment"></a>
         <a href="/admin-chat.html" class="nav-link active" id="chatNavLink">
-          Chat
+          <span data-i18n="chat.title">Chat</span>
           <span id="chatBadge" class="nav-badge" style="display:none;"></span>
         </a>
       </div>
       <div class="navbar-right">
-        <a href="/admin-settings.html" class="nav-link secondary">Clinic Settings</a>
-        <a href="#" onclick="logout(); return false;" class="nav-link secondary" style="cursor: pointer;">Logout</a>
+        <a href="/admin-settings.html" class="nav-link secondary" data-i18n="chat.navClinicSettings"></a>
+        <a href="#" onclick="logout(); return false;" class="nav-link secondary" style="cursor: pointer;" data-i18n="dashboard.sidebar.logout"></a>
       </div>
     </nav>
 
@@ -218,9 +220,9 @@
     <div class="card">
       <div class="chat-container">
         <div class="patient-list card">
-          <h2 style="margin:0 0 16px 0; font-size:16px; font-weight:600;">Hastalar</h2>
+          <h2 id="chatPatientsTitle" style="margin:0 0 16px 0; font-size:16px; font-weight:600;" data-i18n="chat.patientsHeading">Patients</h2>
           <div id="patientList">
-            <div class="loading">Yükleniyor...</div>
+            <div class="loading" data-i18n="chat.loading">Loading...</div>
           </div>
         </div>
 
@@ -232,7 +234,7 @@
             </div>
             <div id="noPatientSelected" class="empty">
               <div class="empty-icon">👈</div>
-              <div>Hasta seçin</div>
+              <div data-i18n="chat.selectPatient">Select a patient</div>
             </div>
           </div>
           
@@ -241,17 +243,15 @@
           </div>
 
           <div id="chatInputArea" class="chat-input-area" style="display:none;">
-            <input type="text" id="messageInput" class="chat-input" placeholder="Mesaj yazın..." />
-            <button class="btn-primary" onclick="sendMessage()">Gönder</button>
-            <button class="btn-secondary" onclick="triggerImageUpload()">📷 Fotoğraf</button>
-            <button class="btn-secondary" onclick="triggerFileUpload()">📎 Dosya</button>
+            <input type="text" id="messageInput" class="chat-input" data-i18n-placeholder="chat.placeholder" placeholder="Type a message..." />
+            <button type="button" class="btn-primary" id="chatSendBtn" onclick="sendMessage()" data-i18n="chat.send">Send</button>
+            <button type="button" class="btn-secondary" id="chatPhotoBtn" onclick="triggerImageUpload()">📷 <span data-i18n="chat.photo">Photo</span></button>
+            <button type="button" class="btn-secondary" id="chatFileBtn" onclick="triggerFileUpload()">📎 <span data-i18n="chat.file">File</span></button>
             <input id="imageInput" type="file" accept="image/jpeg,image/png,image/heic,image/heif" style="display:none;" />
             <input id="fileInput" type="file" accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip" style="display:none;" />
             <span id="uploadStatus" class="muted" style="display:none;"></span>
           </div>
-          <div id="uploadHelp" class="upload-help" style="display:none;">
-            Desteklenen formatlar: JPG, PNG, HEIC (max 10MB) • PDF/DOC/DOCX/TXT/XLS/XLSX (max 20MB) • ZIP (max 50MB)
-          </div>
+          <div id="uploadHelp" class="upload-help" style="display:none;" data-i18n="chat.uploadHelp">Supported: JPG, PNG, HEIC (max 10MB) • PDF/DOC/DOCX/TXT/XLS/XLSX (max 20MB) • ZIP (max 50MB)</div>
         </div>
       </div>
     </div>
@@ -273,6 +273,27 @@
     let selectedPatientName = null;
     let clinicName = null;
     let refreshInterval = null;
+
+    function t(key, params) {
+      return (window.i18n && window.i18n.t) ? window.i18n.t(key, params || {}) : key;
+    }
+    function chatI18nGuard(text) {
+      if (typeof text !== 'string' || !text.length) return;
+      if (text.match(/[çğıöşüİ]/i) && window.i18n && (window.i18n.getLang() === 'en' || window.i18n.getLang() === 'ru')) {
+        console.warn('Non-i18n string detected:', text);
+      }
+    }
+    function chatLocale() {
+      const l = (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : 'en';
+      return { tr: 'tr-TR', en: 'en-US', ru: 'ru-RU', ka: 'ka-GE' }[l] || 'en-US';
+    }
+    function renderChat() {
+      const inp = document.getElementById('messageInput');
+      if (inp) inp.placeholder = t('chat.placeholder');
+      loadPatients();
+      if (selectedPatientId) loadMessages(true);
+    }
+    window.renderChat = renderChat;
     
     function getAdminToken() {
       return localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
@@ -289,6 +310,7 @@
     }
 
     function showError(msg) {
+      chatI18nGuard(String(msg));
       const el = document.getElementById('errorMsg');
       el.textContent = msg;
       el.style.display = 'block';
@@ -298,12 +320,13 @@
     async function loadPatients() {
       const token = getAdminToken();
       if (!token) {
-        showError('❌ Admin token bulunamadı. Lütfen önce giriş yapın.');
-        document.getElementById('patientList').innerHTML = '<div class="empty">Admin token gerekli</div>';
+        showError(t('chat.errNoToken'));
+        document.getElementById('patientList').innerHTML = '<div class="empty">' + escapeHtml(t('chat.errTokenList')) + '</div>';
         return;
       }
 
       try {
+        document.getElementById('patientList').innerHTML = '<div class="loading">' + escapeHtml(t('chat.loading')) + '</div>';
         const res = await fetch(`${API_BASE}/api/admin/patients`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -313,7 +336,7 @@
 
         if (!res.ok) {
           if (res.status === 401) {
-            showError('❌ Yetkilendirme hatası. Lütfen tekrar giriş yapın.');
+            showError(t('chat.errAuth'));
             return;
           }
           throw new Error(`HTTP ${res.status}`);
@@ -321,7 +344,7 @@
 
         const json = await res.json();
         if (!json.ok) {
-          throw new Error(json.error || 'Bilinmeyen hata');
+          throw new Error(json.error || t('chat.errUnknown'));
         }
 
         const patients = Array.isArray(json.list) ? json.list : (Array.isArray(json.patients) ? json.patients : []);
@@ -372,9 +395,9 @@
                       if (lastBody.length > 50) lastMessagePreview += '...';
                     } else if (lastMsg.attachment) {
                       if (lastMsg.attachment.fileType === 'image') {
-                        lastMessagePreview = '📷 Photo';
+                        lastMessagePreview = t('chat.photoFile');
                       } else {
-                        lastMessagePreview = '📎 File';
+                        lastMessagePreview = t('chat.fileAttach');
                       }
                     }
                   }
@@ -414,7 +437,7 @@
           });
           
           if (patient) {
-            const name = patient.name || patient.fullName || 'İsimsiz';
+            const name = patient.name || patient.fullName || t('chat.unnamed');
             const phone = patient.phone || '-';
             selectPatient(selectedPatientId, name, phone);
           } else {
@@ -429,21 +452,21 @@
         }
       } catch (error) {
         console.error('Load patients error:', error);
-        showError('❌ Hasta listesi yüklenemedi: ' + error.message);
-        document.getElementById('patientList').innerHTML = '<div class="empty">Hata: ' + escapeHtml(error.message) + '</div>';
+        showError(t('chat.errLoadList', { message: error.message }));
+        document.getElementById('patientList').innerHTML = '<div class="empty">' + escapeHtml(error.message) + '</div>';
       }
     }
 
     function renderPatients(patients) {
       const container = document.getElementById('patientList');
       if (patients.length === 0) {
-        container.innerHTML = '<div class="empty">Henüz hasta yok</div>';
+        container.innerHTML = '<div class="empty">' + escapeHtml(t('chat.noPatients')) + '</div>';
         return;
       }
 
       container.innerHTML = patients.map(p => {
         const patientId = p.patientId || p.patient_id || '';
-        const name = p.name || p.fullName || 'İsimsiz';
+        const name = p.name || p.fullName || t('chat.unnamed');
         const phone = p.phone || '-';
         const isActive = selectedPatientId === patientId;
         const unreadCount = p.unreadCount || 0;
@@ -518,7 +541,7 @@
 
         if (!res.ok) {
           if (res.status === 401) {
-            showError('❌ Yetkilendirme hatası');
+            showError(t('chat.errAuthShort'));
             return;
           }
           throw new Error(`HTTP ${res.status}`);
@@ -526,7 +549,7 @@
 
         const json = await res.json();
         if (!json.ok) {
-          throw new Error(json.error || 'Mesajlar yüklenemedi');
+          throw new Error(json.error || t('chat.errLoadMessages'));
         }
 
         const messages = Array.isArray(json.messages) ? json.messages : [];
@@ -535,7 +558,7 @@
         markMessagesRead(selectedPatientId);
       } catch (error) {
         console.error('Load messages error:', error);
-        showError('❌ Mesajlar yüklenemedi: ' + error.message);
+        showError(t('chat.errLoadMessagesFull', { message: error.message }));
       }
     }
 
@@ -559,7 +582,7 @@
     function renderMessages(messages, forceScroll = false) {
       const container = document.getElementById('chatMessages');
       if (messages.length === 0) {
-        container.innerHTML = '<div class="empty"><div class="empty-icon">💬</div><div>Henüz mesaj yok</div></div>';
+        container.innerHTML = '<div class="empty"><div class="empty-icon">💬</div><div>' + escapeHtml(t('chat.noMessages')) + '</div></div>';
         return;
       }
 
@@ -582,26 +605,27 @@
             ? msg.text
             : (msg.message != null ? msg.message : (msg.content != null ? msg.content : ''))
         ).trim();
-        const time = msg.createdAt ? new Date(msg.createdAt).toLocaleString('tr-TR') : '';
+        const time = msg.createdAt ? new Date(msg.createdAt).toLocaleString(chatLocale()) : '';
         const attachment = msg.attachment || null;
         const type = String(msg.type || (attachment?.fileType || "text")).toLowerCase();
 
         let attachmentHtml = '';
         if (attachment && (type === 'image' || attachment.fileType === 'image')) {
           const url = escapeHtml(attachment.url || '');
-          const name = escapeHtml(attachment.name || 'Fotoğraf');
+          const name = escapeHtml(attachment.name || t('chat.defaultPhoto'));
           const tags = attachment.tags || null;
           
           // Build tags HTML - clinic name, date, Before/After, Doctor review
           let tagsHtml = '';
           if (tags) {
-            const displayClinicName = clinicName || 'Klinik';
-            const captureDate = tags.captureDate || (tags.captureTimestamp ? new Date(tags.captureTimestamp).toLocaleDateString('tr-TR', {
+            const displayClinicName = clinicName || t('chat.defaultClinic');
+            const captureDate = tags.captureDate || (tags.captureTimestamp ? new Date(tags.captureTimestamp).toLocaleDateString(chatLocale(), {
               day: '2-digit',
               month: '2-digit',
               year: 'numeric'
             }) : '');
             const comparisonStatus = tags.comparisonStatus || '';
+            const comparisonLabel = comparisonStatus === 'Before' ? t('chat.before') : (comparisonStatus === 'After' ? t('chat.after') : comparisonStatus);
             const doctorReview = tags.doctorReview || tags.clinicNote || null;
             
             tagsHtml = `
@@ -610,12 +634,12 @@
                 ${captureDate ? `<span class="photo-tag">${escapeHtml(captureDate)}</span>` : ''}
                 ${comparisonStatus && (comparisonStatus === 'Before' || comparisonStatus === 'After') ? `
                   <span class="photo-tag photo-tag-comparison" style="background:rgba(139, 92, 246, 0.2); border-color:rgba(139, 92, 246, 0.4); color:#c4b5fd;">
-                    ${escapeHtml(comparisonStatus)}
+                    ${escapeHtml(comparisonLabel)}
                   </span>
                 ` : ''}
                 ${doctorReview ? `
                   <span class="photo-tag photo-tag-review" style="background:rgba(245, 158, 11, 0.2); border-color:rgba(245, 158, 11, 0.4); color:#fcd34d;">
-                    👨‍⚕️ Doctor Review
+                    ${escapeHtml(t('chat.doctorReview'))}
                   </span>
                 ` : ''}
               </div>
@@ -628,12 +652,12 @@
                 <img src="${url}" alt="${name}" style="max-width:220px; border-radius:8px; display:block;" />
               </a>
               ${tagsHtml}
-              <div class="message-time">📷 ${name} • <a href="${url}" target="_blank" rel="noopener" download style="color:inherit; text-decoration:underline;">İndir</a></div>
+              <div class="message-time">📷 ${name} • <a href="${url}" target="_blank" rel="noopener" download style="color:inherit; text-decoration:underline;">${escapeHtml(t('chat.download'))}</a></div>
             </div>
           `;
         } else if (attachment) {
           const url = escapeHtml(attachment.url || '');
-          const name = escapeHtml(attachment.name || 'Dosya');
+          const name = escapeHtml(attachment.name || t('chat.defaultFile'));
           const size = attachment.size ? ` • ${formatFileSize(attachment.size)}` : '';
           const icon = getAttachmentIcon(attachment);
           const isZip = String(attachment.fileType || "").toLowerCase() === "zip" || name.endsWith(".zip") || String(attachment.mimeType || "").toLowerCase().includes("zip");
@@ -676,7 +700,7 @@
 
     async function sendMessage() {
       if (!selectedPatientId) {
-        showError('❌ Lütfen önce hasta seçin');
+        showError(t('chat.errSelectFirst'));
         return;
       }
 
@@ -686,13 +710,13 @@
 
       const token = getAdminToken();
       if (!token) {
-        showError('❌ Admin token bulunamadı');
+        showError(t('chat.errNoTokenSend'));
         return;
       }
 
-      const sendBtn = input.nextElementSibling;
+      const sendBtn = document.getElementById('chatSendBtn');
       sendBtn.disabled = true;
-      sendBtn.textContent = 'Gönderiliyor...';
+      sendBtn.textContent = t('chat.sending');
 
       try {
         const res = await fetch(`${API_BASE}/api/patient/${encodeURIComponent(selectedPatientId)}/messages/admin`, {
@@ -709,7 +733,7 @@
 
         const json = await res.json();
         if (!res.ok || !json.ok) {
-          throw new Error(json.error || 'Mesaj gönderilemedi');
+          throw new Error(json.error || t('chat.errSend'));
         }
 
         input.value = '';
@@ -719,16 +743,16 @@
         setTimeout(() => loadPatients().catch(e => console.warn('Failed to reload patients:', e)), 500);
       } catch (error) {
         console.error('Send message error:', error);
-        showError('❌ Mesaj gönderilemedi: ' + error.message);
+        showError(t('chat.errSendFull', { message: error.message }));
       } finally {
         sendBtn.disabled = false;
-        sendBtn.textContent = 'Gönder';
+        sendBtn.textContent = t('chat.send');
       }
     }
 
     function triggerImageUpload() {
       if (!selectedPatientId) {
-        showError('❌ Lütfen önce hasta seçin');
+        showError(t('chat.errSelectFirst'));
         return;
       }
       document.getElementById('imageInput')?.click();
@@ -736,7 +760,7 @@
 
     function triggerFileUpload() {
       if (!selectedPatientId) {
-        showError('❌ Lütfen önce hasta seçin');
+        showError(t('chat.errSelectFirst'));
         return;
       }
       document.getElementById('fileInput')?.click();
@@ -745,12 +769,12 @@
     async function uploadFile(file, isImage) {
       const token = getAdminToken();
       if (!token) {
-        showError('❌ Admin token bulunamadı');
+        showError(t('chat.errNoTokenSend'));
         return;
       }
       
       if (!selectedPatientId) {
-        showError('❌ Lütfen önce bir hasta seçin');
+        showError(t('chat.errSelectPatient'));
         return;
       }
       
@@ -784,36 +808,36 @@
       const allowedDocExts = [".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".zip"];
 
       if (forbiddenExts.includes(fileExt)) {
-        showError(`❌ Bu dosya tipi desteklenmiyor: ${fileExt}. RAR ve çalıştırılabilir dosyalar yasaktır.`);
+        showError(t('chat.errForbidden', { ext: fileExt }));
         return;
       }
 
       if (!mimeType) {
-        showError("❌ Dosya tipi belirlenemedi. Lütfen farklı bir dosya deneyin.");
+        showError(t('chat.errMime'));
         return;
       }
 
       if (isImage) {
         if (!allowedImageMimes.includes(mimeType) || !allowedImageExts.includes(fileExt)) {
-          showError("❌ Desteklenen formatlar: JPG, PNG, HEIC – Max 10MB");
+          showError(t('chat.errImageFmt'));
           return;
         }
         if (size > 10 * 1024 * 1024) {
-          showError("❌ Fotoğraf boyutu 10MB'dan küçük olmalıdır.");
+          showError(t('chat.errPhotoSize'));
           return;
         }
       } else {
         if (!allowedDocMimes.includes(mimeType) || !allowedDocExts.includes(fileExt)) {
-          showError("❌ Desteklenen formatlar: PDF, DOC/DOCX, TXT, XLS/XLSX, ZIP");
+          showError(t('chat.errDocFmt'));
           return;
         }
         const isZip = fileExt === ".zip" || mimeType === "application/zip" || mimeType === "application/x-zip-compressed";
         if (isZip && size > 50 * 1024 * 1024) {
-          showError("❌ ZIP dosyası 50MB'dan küçük olmalıdır.");
+          showError(t('chat.errZipSize'));
           return;
         }
         if (!isZip && size > 20 * 1024 * 1024) {
-          showError("❌ Doküman 20MB'dan küçük olmalıdır.");
+          showError(t('chat.errDocSize'));
           return;
         }
       }
@@ -831,7 +855,7 @@
 
       try {
         if (uploadStatus) {
-          uploadStatus.textContent = "Gönderiliyor...";
+          uploadStatus.textContent = t('chat.sending');
           uploadStatus.style.display = "inline";
         }
         
@@ -866,7 +890,7 @@
           
           // Handle token errors specifically
           if (res.status === 401 || json.error === "invalid_token" || json.error === "unauthorized") {
-            showError('❌ Oturum süreniz dolmuş. Lütfen sayfayı yenileyip tekrar giriş yapın.');
+            showError(t('chat.errSession'));
             // Optionally redirect to login
             setTimeout(() => {
               window.location.href = '/admin-register.html';
@@ -879,7 +903,7 @@
 
         console.log('[ADMIN CHAT] Upload successful!');
         if (uploadStatus) {
-          uploadStatus.textContent = "✓ Gönderildi";
+          uploadStatus.textContent = t('chat.sentOk');
           uploadStatus.style.color = "#16a34a";
           setTimeout(() => {
             uploadStatus.textContent = "";
@@ -892,10 +916,10 @@
         setTimeout(() => loadPatients().catch(e => console.warn('Failed to reload patients:', e)), 500);
       } catch (error) {
         console.error('[ADMIN CHAT] Upload file error:', error);
-        const errorMsg = error.message || error.toString() || 'Bilinmeyen hata';
-        showError('❌ Dosya gönderilemedi: ' + errorMsg);
+        const errorMsg = error.message || error.toString() || t('chat.errUnknown');
+        showError(t('chat.errFileUpload', { message: errorMsg }));
         if (uploadStatus) {
-          uploadStatus.textContent = "✗ Hata";
+          uploadStatus.textContent = t('chat.uploadError');
           uploadStatus.style.color = "#dc2626";
         }
       } finally {
@@ -1130,7 +1154,7 @@
         });
         if (res.ok) {
           const clinic = await res.json();
-          clinicName = clinic.branding?.clinicName || clinic.name || 'Klinik';
+          clinicName = clinic.branding?.clinicName || clinic.name || t('chat.defaultClinic');
           
           // Update navbar clinic name
           const navbarClinicName = document.getElementById('navbarClinicName');
@@ -1140,12 +1164,12 @@
         }
       } catch (error) {
         console.error('Failed to load clinic name:', error);
-        clinicName = 'Klinik';
+        clinicName = t('chat.defaultClinic');
         
         // Update navbar with fallback
         const navbarClinicName = document.getElementById('navbarClinicName');
         if (navbarClinicName) {
-          navbarClinicName.textContent = 'Klinik';
+          navbarClinicName.textContent = t('chat.defaultClinic');
         }
       }
     }
@@ -1164,6 +1188,7 @@
       }
     });
   </script>
+<script src="/admin-layout.js?v=202604277"></script>
 </body>
 </html>
 

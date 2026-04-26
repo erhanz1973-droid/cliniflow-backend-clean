@@ -4,6 +4,13 @@
  * All labels are i18n-aware and update on language change.
  */
 (function () {
+  if (typeof window !== 'undefined' && !window.i18n) {
+    console.error('❌ i18n not loaded — check script order');
+  }
+
+  console.log('I18N FILE VERSION (layout):', 'v17');
+
+  const t = (key) => (window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key) : key);
 
   /** When admin HTML is on backend static but API lives on cliniflow-admin service (must match login + JWT_SECRET there). */
   var RENDER_ADMIN_API_FALLBACK =
@@ -58,20 +65,23 @@
     { href: '/admin-settings.html', icon: iconSettings(), key: 'settings' },
   ];
 
-  /* ── i18n helper ─────────────────────────────────────────────── */
-  function tn(key) {
-    if (window.i18n && typeof window.i18n.t === 'function') return window.i18n.t(key);
-    // Fallbacks
-    const fallbacks = {
-      'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
-      'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
-      'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.chat': 'Messages', 'dashboard.nav.leads': 'Leads / Unassigned',
-      'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.settings': 'Settings',
-      'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
-      'dashboard.sidebar.logout': 'Logout', 'dashboard.sidebar.clinic': 'Clinic',
-    };
-    return fallbacks[key] || key.split('.').pop();
-  }
+  var i18nReadyApplyCount = 0;
+  document.addEventListener('i18n:ready', function () {
+    if (window.i18n && typeof window.i18n.getLang === 'function') {
+      console.log('NAV LANG:', window.i18n.getLang());
+    }
+    const path = window.location.pathname || '';
+    i18nReadyApplyCount++;
+    const nav = document.querySelector('.al-nav');
+    if (nav) {
+      nav.replaceChildren();
+      nav.innerHTML = buildNavHTML(path);
+      nav.dataset.path = path;
+      try {
+        console.log('NAV HTML AFTER:', document.querySelector('.al-nav') && document.querySelector('.al-nav').innerHTML);
+      } catch (e) { /* no-op */ }
+    }
+  });
 
   /* ── SVG Icons ─────────────────────────────────────────────── */
   function svg(d, extra) {
@@ -98,54 +108,49 @@
     const badge = item.badge ? `<span class="al-nav-badge" id="${item.badge}"></span>` : '';
     return `<a href="${item.href}" class="${cls}" data-nav-key="${item.key}">
       <span class="al-nav-icon">${item.icon}</span>
-      <span class="al-nav-label">${tn('dashboard.nav.' + item.key)}</span>
+      <span class="al-nav-label">${t('dashboard.nav.' + item.key)}</span>
       ${badge}
     </a>`;
   }
 
+  function navItemActive(item, currentHref) {
+    const ch = String(currentHref || '');
+    return ch.endsWith(item.key) || ch.includes(item.href.replace('/', ''));
+  }
+
+  function buildNavHTML(currentHref) {
+    const ch = String(currentHref || (typeof location !== 'undefined' ? (location.pathname || '') : ''));
+    const nav1 = NAV.map((i) => navItem(i, navItemActive(i, ch))).join('');
+    const nav2 = NAV2.map((i) => navItem(i, navItemActive(i, ch))).join('');
+    return (
+      '<div class="al-nav-section" id="alNavSection1">' + t('dashboard.sidebar.mainMenu') + '</div>' +
+      nav1 +
+      '<div class="al-nav-section" id="alNavSection2" style="margin-top:14px;">' + t('dashboard.sidebar.management') + '</div>' +
+      nav2
+    );
+  }
+
   /* ── Build full sidebar HTML ─────────────────────────────── */
   function buildSidebar(currentHref) {
-    const nav1 = NAV.map(i => navItem(i, currentHref.endsWith(i.key) || currentHref.includes(i.href.replace('/', '')))).join('');
-    const nav2 = NAV2.map(i => navItem(i, currentHref.endsWith(i.key) || currentHref.includes(i.href.replace('/', '')))).join('');
+    const ch = String(currentHref || '');
     return `
       <a href="/admin.html" class="al-logo" style="text-decoration:none;">
         <div class="al-logo-icon">🦷</div>
         <div>
           <div class="al-logo-brand">Clinifly</div>
-          <div class="al-logo-clinic" id="alClinicName">${tn('dashboard.sidebar.clinic')}</div>
+          <div class="al-logo-clinic" id="alClinicName">${t('dashboard.sidebar.clinic')}</div>
         </div>
       </a>
       <nav class="al-nav">
-        <div class="al-nav-section" id="alNavSection1">${tn('dashboard.sidebar.mainMenu')}</div>
-        ${nav1}
-        <div class="al-nav-section" id="alNavSection2" style="margin-top:14px;">${tn('dashboard.sidebar.management')}</div>
-        ${nav2}
+        ${buildNavHTML(ch)}
       </nav>
       <div class="al-sidebar-footer">
         <button class="al-logout-btn" id="alLogoutBtn" onclick="window.__alLogout()">
           <span class="al-nav-icon">${iconLogout()}</span>
-          <span id="alLogoutLabel">${tn('dashboard.sidebar.logout')}</span>
+          <span id="alLogoutLabel">${t('dashboard.sidebar.logout')}</span>
         </button>
       </div>
     `;
-  }
-
-  /* ── Update sidebar labels (called on language change) ───── */
-  function updateSidebarLabels() {
-    // Nav item labels
-    document.querySelectorAll('.al-nav-item[data-nav-key]').forEach(el => {
-      const key = el.getAttribute('data-nav-key');
-      const labelEl = el.querySelector('.al-nav-label');
-      if (labelEl) labelEl.textContent = tn('dashboard.nav.' + key);
-    });
-    // Section headers
-    const s1 = document.getElementById('alNavSection1');
-    if (s1) s1.textContent = tn('dashboard.sidebar.mainMenu');
-    const s2 = document.getElementById('alNavSection2');
-    if (s2) s2.textContent = tn('dashboard.sidebar.management');
-    // Logout
-    const logoutLabel = document.getElementById('alLogoutLabel');
-    if (logoutLabel) logoutLabel.textContent = tn('dashboard.sidebar.logout');
   }
 
   /* ── Build topbar HTML ───────────────────────────────────── */
@@ -155,11 +160,11 @@
         <span class="al-page-title" id="alPageTitle">${pageTitle}</span>
       </div>
       <div class="al-topbar-right">
-        <div class="al-lang" id="alLang">
-          <span id="lang-tr" onclick="if(window.onLanguageChange)window.onLanguageChange('tr')">TR</span>
-          <span id="lang-en" onclick="if(window.onLanguageChange)window.onLanguageChange('en')">EN</span>
-          <span id="lang-ru" onclick="if(window.onLanguageChange)window.onLanguageChange('ru')">RU</span>
-          <span id="lang-ka" onclick="if(window.onLanguageChange)window.onLanguageChange('ka')">KA</span>
+        <div class="al-lang lang-switcher" id="alLang" role="group" aria-label="Language">
+          <span class="lang-btn" id="lang-tr" data-lang="tr" role="button" tabindex="0">TR</span>
+          <span class="lang-btn" id="lang-en" data-lang="en" role="button" tabindex="0">EN</span>
+          <span class="lang-btn" id="lang-ru" data-lang="ru" role="button" tabindex="0">RU</span>
+          <span class="lang-btn" id="lang-ka" data-lang="ka" role="button" tabindex="0">KA</span>
         </div>
       </div>
     `;
@@ -217,12 +222,9 @@
     // Start unread badge polling
     startBadgePolling();
 
-    // Hook into i18n updates to refresh sidebar labels
-    const prevOnI18nUpdated = window.onI18nUpdated;
-    window.onI18nUpdated = function () {
-      updateSidebarLabels();
-      if (typeof prevOnI18nUpdated === 'function') prevOnI18nUpdated();
-    };
+    if (typeof window.rebindAdminLangButtons === 'function') {
+      window.rebindAdminLangButtons();
+    }
   }
 
   /* ── Load clinic name ────────────────────────────────────── */
@@ -235,7 +237,7 @@
       });
       if (res.ok) {
         const d = await res.json();
-        const name = d.branding?.clinicName || d.name || tn('dashboard.sidebar.clinic');
+        const name = d.branding?.clinicName || d.name || t('dashboard.sidebar.clinic');
         const el = document.getElementById('alClinicName');
         if (el) el.textContent = name;
       } else if (res.status === 401 && typeof window.handle401 === 'function') {

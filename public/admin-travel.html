@@ -14,7 +14,8 @@
       }
     })();
   </script>
-  <script src="/admin-i18n.js"></script>
+  <script src="/admin-i18n.js?v=17"></script>
+  <link rel="stylesheet" href="/admin-layout.css"/>
   <style>
     body { font-family: system-ui; background:#111827; color:#e5e7eb; }
     .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; background:#1f2937; border-radius: 16px; }
@@ -170,30 +171,8 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>✈️ Clinifly Admin – Travel</h1>
-    
-    <nav class="navbar">
-      <div class="navbar-left">
-        <div class="navbar-logo">
-          <img src="/logo.svg" alt="Clinifly" />
-          <span class="navbar-logo-text">Clinifly</span>
-    </div>
-        <div class="navbar-clinic-name" id="navbarClinicName">Clinic</div>
-      </div>
-      <div class="navbar-center">
-        <a href="/admin.html" class="nav-link">Dashboard</a>
-        <a href="/admin-patients.html" class="nav-link">Patients</a>
-        <a href="/admin-treatment.html" class="nav-link">Treatment</a>
-        <a href="/admin-chat.html" class="nav-link">Chat</a>
-      </div>
-      <div class="navbar-right">
-        <a href="/admin-settings.html" class="nav-link secondary">Clinic Settings</a>
-        <a href="#" onclick="logout(); return false;" class="nav-link secondary" style="cursor: pointer;">Logout</a>
-      </div>
-    </nav>
-    <div id="globalWarning" style="display:none; padding:14px; background:#fef3c7; border:2px solid #f59e0b; border-radius:8px; margin-bottom:16px; color:#92400e; font-size:14px; font-weight:600;">
-      ⚠️ <strong>UYARI:</strong> Hasta tarafından doldurulacak alan(lar) var. Aşağıdaki uyarıları kontrol edin.
-    </div>
+    <h1 data-i18n="adminPages.travelH1"></h1>
+    <div id="globalWarning" style="display:none; padding:14px; background:#fef3c7; border:2px solid #f59e0b; border-radius:8px; margin-bottom:16px; color:#92400e; font-size:14px; font-weight:600;" role="status"></div>
 
     <div class="card">
       <div>
@@ -747,17 +726,16 @@
       console.error("[ADMIN-TRAVEL] globalWarning element not found!");
       // Don't return early - continue with other updates
     }
-    const patientSections = [];
-    if (hotelPolicy === "PATIENT") patientSections.push("Otel");
-    if (flightsPolicy === "PATIENT") patientSections.push("Uçuş");
-    const sectionText = patientSections.length > 0 ? patientSections.join(" ve ") : "";
+    const tI18n = (k, p) => (window.i18n && window.i18n.t) ? window.i18n.t(k, p || {}) : k;
+    const parts = [];
+    if (hotelPolicy === "PATIENT") parts.push(tI18n("adminPages.travelWordHotel"));
+    if (flightsPolicy === "PATIENT") parts.push(tI18n("adminPages.travelWordFlights"));
+    const list = parts.join(tI18n("adminPages.travelListSeparator"));
     if (globalWarning) {
-      if (patientSections.length > 0) {
-        globalWarning.innerHTML =
-          `⚠️ <strong>UYARI:</strong> ${sectionText} bilgilerini hasta dolduracak. Bu alanları değiştiremezsiniz. ` +
-          `Hasta mobil uygulamadan ${sectionText.toLowerCase()} bilgilerini girecek.`;
+      if (parts.length > 0) {
+        globalWarning.textContent = tI18n("adminPages.travelDynamicWarning", { list });
         globalWarning.style.display = "block";
-        console.log("[ADMIN-TRAVEL] Global warning shown:", sectionText);
+        console.log("[ADMIN-TRAVEL] Global warning shown:", list);
       } else {
         globalWarning.style.display = "none";
         console.log("[ADMIN-TRAVEL] Global warning hidden");
@@ -1257,5 +1235,6 @@
   
   renderAll();
 </script>
+<script src="/admin-layout.js?v=202604277"></script>
 </body>
 </html>
