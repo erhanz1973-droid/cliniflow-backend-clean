@@ -629,6 +629,7 @@
   }
   const STATUS_ORDER = ["PLANNED", "ACTIVE", "COMPLETED", "CANCELLED"];
   let PROCEDURE_DEFS = []; // from /api/procedures
+  let PROCEDURE_CATEGORY_LABELS_I18N = {};
   let TYPE_TO_CATEGORY = {}; // { [type]: category }
   let EXTRACTION_TYPES = new Set(["EXTRACTION", "SURGICAL_EXTRACTION"]);
   let PROCEDURE_ALIAS_MAP = new Map();
@@ -724,6 +725,13 @@
     return ["tr", "en", "ru", "ka"].includes(lang) ? lang : "en";
   }
 
+  function safeLang(obj, lang) {
+    if (obj == null || obj === "") return "";
+    if (typeof obj === "string") return obj;
+    const c = String(lang || "en").toLowerCase().split("-")[0];
+    return obj[c] || obj.en || Object.values(obj || {}).find(function (v) { return v && String(v).trim(); }) || "";
+  }
+
   function normalizeAliasToken(value) {
     return String(value || "")
       .toLowerCase()
@@ -761,7 +769,13 @@
       if (!code) return;
       registerProcedureAlias(code, code);
       registerProcedureAlias(String(d?.label || ""), code);
-      registerProcedureAlias(String(d?.name || ""), code);
+      if (d?.name && typeof d.name === "object") {
+        Object.values(d.name).forEach((label) => {
+          if (label) registerProcedureAlias(String(label), code);
+        });
+      } else {
+        registerProcedureAlias(String(d?.name || ""), code);
+      }
       registerProcedureAlias(code.replace(/_/g, " "), code);
     });
   }
@@ -847,12 +861,14 @@
   function getProcLabel(type) {
     const normalizedType = normalizeProcedureTypeValue(type);
     const lang = currentLangCode();
-    // Client-side table is the primary source — always correct regardless of API cache state
+    const def = PROCEDURE_DEFS.find((d) => String(d.type).toUpperCase() === normalizedType);
+    if (def && def.name) {
+      const n = safeLang(def.name, lang);
+      if (n) return n;
+    }
     const clientLabel = PROCEDURE_CODE_LABEL_FALLBACK[normalizedType]?.[lang]
                      || PROCEDURE_CODE_LABEL_FALLBACK[normalizedType]?.en;
     if (clientLabel) return clientLabel;
-    // Fallback: use API-returned def label (may be in any language)
-    const def = PROCEDURE_DEFS.find((d) => String(d.type).toUpperCase() === normalizedType);
     if (def && def.label) return String(def.label).trim();
     return normalizedType || type || "—";
   }
@@ -1196,6 +1212,7 @@
       EXTRACTION_TYPES = new Set(Array.isArray(j.extractionTypes) ? j.extractionTypes : ["EXTRACTION", "SURGICAL_EXTRACTION"]);
       rebuildProcedureAliasMap();
       const categoryLabels = j.categoryLabels || {};
+      PROCEDURE_CATEGORY_LABELS_I18N = j.categoryLabelsI18n && typeof j.categoryLabelsI18n === "object" ? j.categoryLabelsI18n : {};
 
       // populate procType select
       const sel = document.getElementById("procType");
@@ -1211,16 +1228,17 @@
         Object.keys(byCat).forEach((cat) => {
           const og = document.createElement("optgroup");
           const catLang = currentLangCode();
-          og.label = CATEGORY_LABELS_FALLBACK[cat]?.[catLang]
+          og.label = safeLang(PROCEDURE_CATEGORY_LABELS_I18N[cat], catLang)
+                  || CATEGORY_LABELS_FALLBACK[cat]?.[catLang]
                   || CATEGORY_LABELS_FALLBACK[cat]?.en
                   || categoryLabels[cat] || cat;
           byCat[cat].forEach((d) => {
             const opt = document.createElement("option");
             const typeUpper = String(d.type).toUpperCase();
             const lang = currentLangCode();
-            // Use client-side label for correct language regardless of API cache
             opt.value = typeUpper;
-            opt.textContent = PROCEDURE_CODE_LABEL_FALLBACK[typeUpper]?.[lang]
+            opt.textContent = safeLang(d.name, lang)
+                           || PROCEDURE_CODE_LABEL_FALLBACK[typeUpper]?.[lang]
                            || PROCEDURE_CODE_LABEL_FALLBACK[typeUpper]?.en
                            || d.label || typeUpper;
             og.appendChild(opt);

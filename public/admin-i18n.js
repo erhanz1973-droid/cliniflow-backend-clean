@@ -468,6 +468,7 @@
         },
         success: "✅ Ayarlar başarıyla kaydedildi!",
         categoryLabels: {
+          EVENTS: "Muayene / Görüntüleme",
           PROSTHETIC: "Prosthetic (Protez)",
           RESTORATIVE: "Restorative (Restoratif)",
           ENDODONTIC: "Endodontic (Endodontik)",
@@ -481,7 +482,9 @@
           duration: "Süre (dk)",
           breakMin: "Mola (dk)",
           active: "Aktif"
-        }
+        },
+        recommendedDuration: "~{minutes} dk",
+        minutes: "dk"
       },
 
       // Patients (admin-patients.html)
@@ -594,6 +597,52 @@
         badgePdf: "PDF",
         badgeFile: "Dosya",
         badgeChat: "Chat"
+      },
+      doctorListV2: {
+        pageTitle: "👨‍⚕️ Doktorlar",
+        documentTitle: "Doktorlar - Clinifly Admin",
+        statPending: "Bekleyen",
+        statApproved: "Onaylı",
+        statRejected: "Reddedilen",
+        statTotal: "Toplam",
+        searchPlaceholder: "Ad, email veya telefon ara...",
+        filterAll: "Tüm Durumlar",
+        filterOptionPending: "Bekleyen",
+        filterOptionApproved: "Onaylanan",
+        filterOptionActive: "Aktif",
+        filterOptionRejected: "Reddedilen",
+        refresh: "↺ Yenile",
+        loading: "Yükleniyor...",
+        empty: "Henüz doktor kaydı bulunmuyor.",
+        errorHttp: "HTTP {status}",
+        errorLoad: "Yüklenemedi",
+        sectionProfessional: "Mesleki",
+        labelExperience: "Deneyim",
+        labelUniversity: "Üniversite",
+        labelGraduation: "Mezuniyet",
+        labelProfile: "Profil",
+        labelBio: "Bio",
+        profilePublic: "🌐 Açık",
+        profilePrivate: "🔒 Gizli",
+        sectionSpecialty: "Uzmanlık",
+        sectionLanguages: "Diller",
+        sectionProcedures: "Prosedürler",
+        notSpecified: "Belirtilmedi",
+        yearsCount: "{years} yıl",
+        dash: "—",
+        status: {
+          PENDING: "Bekleyen",
+          APPROVED: "Onaylı",
+          ACTIVE: "Aktif",
+          REJECTED: "Reddedildi"
+        },
+        btnApprove: "✅ Onayla",
+        btnReject: "❌ Reddet",
+        confirmApprove: "Bu doktoru onaylamak istediğinizden emin misiniz?",
+        confirmReject: "Bu başvuruyu reddetmek istediğinizden emin misiniz?",
+        approvedAlert: "✅ Doktor onaylandı!",
+        rejectedAlert: "Başvuru reddedildi.",
+        errorGeneric: "Hata"
       }
     },
 
@@ -1063,6 +1112,7 @@
         },
         success: "✅ Settings saved successfully!",
         categoryLabels: {
+          EVENTS: "Events / Imaging",
           PROSTHETIC: "Prosthetic (Protez)",
           RESTORATIVE: "Restorative (Restoratif)",
           ENDODONTIC: "Endodontic (Endodontik)",
@@ -1076,7 +1126,9 @@
           duration: "Duration (min)",
           breakMin: "Break (min)",
           active: "Active"
-        }
+        },
+        recommendedDuration: "~{minutes} min",
+        minutes: "min"
       },
 
       // Patients (admin-patients.html)
@@ -1189,6 +1241,52 @@
         badgePdf: "PDF",
         badgeFile: "File",
         badgeChat: "Chat"
+      },
+      doctorListV2: {
+        pageTitle: "👨‍⚕️ Doctors",
+        documentTitle: "Doctors - Clinifly Admin",
+        statPending: "Pending",
+        statApproved: "Approved",
+        statRejected: "Rejected",
+        statTotal: "Total",
+        searchPlaceholder: "Search by name, email or phone...",
+        filterAll: "All statuses",
+        filterOptionPending: "Pending",
+        filterOptionApproved: "Approved",
+        filterOptionActive: "Active",
+        filterOptionRejected: "Rejected",
+        refresh: "↺ Refresh",
+        loading: "Loading...",
+        empty: "No doctor records yet.",
+        errorHttp: "HTTP {status}",
+        errorLoad: "Failed to load",
+        sectionProfessional: "Professional",
+        labelExperience: "Experience",
+        labelUniversity: "University",
+        labelGraduation: "Graduation",
+        labelProfile: "Profile",
+        labelBio: "Bio",
+        profilePublic: "🌐 Public",
+        profilePrivate: "🔒 Private",
+        sectionSpecialty: "Specialty",
+        sectionLanguages: "Languages",
+        sectionProcedures: "Procedures",
+        notSpecified: "Not specified",
+        yearsCount: "{years} yrs",
+        dash: "—",
+        status: {
+          PENDING: "Pending",
+          APPROVED: "Approved",
+          ACTIVE: "Active",
+          REJECTED: "Rejected"
+        },
+        btnApprove: "✅ Approve",
+        btnReject: "❌ Reject",
+        confirmApprove: "Are you sure you want to approve this doctor?",
+        confirmReject: "Are you sure you want to reject this application?",
+        approvedAlert: "✅ Doctor approved!",
+        rejectedAlert: "Application rejected.",
+        errorGeneric: "Error"
       }
     },
 
@@ -1326,7 +1424,17 @@
           duration: "Длительность (мин)",
           breakMin: "Перерыв (мин)",
           active: "Активно"
-        }
+        },
+        categoryLabels: {
+          EVENTS: "События",
+          PROSTHETIC: "Ортопедия",
+          RESTORATIVE: "Терапия",
+          ENDODONTIC: "Эндодонтия",
+          SURGICAL: "Хирургия",
+          IMPLANT: "Имплантация"
+        },
+        recommendedDuration: "~{minutes} мин",
+        minutes: "мин"
       },
       treatment: {
         patientName: "Имя пациента (выбор)",
@@ -1465,6 +1573,52 @@
         badgePdf: "PDF",
         badgeFile: "Файл",
         badgeChat: "Чат"
+      },
+      doctorListV2: {
+        pageTitle: "👨‍⚕️ Врачи",
+        documentTitle: "Врачи - Clinifly Admin",
+        statPending: "Ожидают",
+        statApproved: "Одобрено",
+        statRejected: "Отклонено",
+        statTotal: "Всего",
+        searchPlaceholder: "Поиск по имени, email или телефону...",
+        filterAll: "Все статусы",
+        filterOptionPending: "Ожидают",
+        filterOptionApproved: "Одобрено",
+        filterOptionActive: "Активен",
+        filterOptionRejected: "Отклонено",
+        refresh: "↺ Обновить",
+        loading: "Загрузка...",
+        empty: "Записей врачей пока нет.",
+        errorHttp: "HTTP {status}",
+        errorLoad: "Не удалось загрузить",
+        sectionProfessional: "Профессия",
+        labelExperience: "Опыт",
+        labelUniversity: "Университет",
+        labelGraduation: "Окончание",
+        labelProfile: "Профиль",
+        labelBio: "О себе",
+        profilePublic: "🌐 Открыт",
+        profilePrivate: "🔒 Скрыт",
+        sectionSpecialty: "Специализация",
+        sectionLanguages: "Языки",
+        sectionProcedures: "Процедуры",
+        notSpecified: "Не указано",
+        yearsCount: "{years} лет",
+        dash: "—",
+        status: {
+          PENDING: "Ожидает",
+          APPROVED: "Одобрено",
+          ACTIVE: "Активен",
+          REJECTED: "Отклонён"
+        },
+        btnApprove: "✅ Одобрить",
+        btnReject: "❌ Отклонить",
+        confirmApprove: "Одобрить этого врача?",
+        confirmReject: "Отклонить эту заявку?",
+        approvedAlert: "✅ Врач одобрен!",
+        rejectedAlert: "Заявка отклонена.",
+        errorGeneric: "Ошибка"
       }
     },
 
@@ -1602,7 +1756,17 @@
           duration: "ხანგრძლივობა (წთ)",
           breakMin: "შესვენება (წთ)",
           active: "აქტიური"
-        }
+        },
+        categoryLabels: {
+          EVENTS: "შეხვედრები / დიაგნოსტიკა",
+          PROSTHETIC: "პროთეტიკა",
+          RESTORATIVE: "რესტავრაცია",
+          ENDODONTIC: "ენდოდონტია",
+          SURGICAL: "ქირურგია",
+          IMPLANT: "იმპლანტაცია"
+        },
+        recommendedDuration: "~{minutes} წთ",
+        minutes: "წთ"
       },
       treatment: {
         patientName: "პაციენტის სახელი (არჩევა)",
@@ -1741,6 +1905,52 @@
         badgePdf: "PDF",
         badgeFile: "ფაილი",
         badgeChat: "ჩათი"
+      },
+      doctorListV2: {
+        pageTitle: "👨‍⚕️ ექიმები",
+        documentTitle: "ექიმები - Clinifly Admin",
+        statPending: "ლოდინი",
+        statApproved: "დამოწმებული",
+        statRejected: "უარყოფილი",
+        statTotal: "სულ",
+        searchPlaceholder: "ძიება სახელით, email-ით ან ტელეფონით...",
+        filterAll: "ყველა სტატუსი",
+        filterOptionPending: "ლოდინში",
+        filterOptionApproved: "დამოწმებული",
+        filterOptionActive: "აქტიური",
+        filterOptionRejected: "უარყოფილი",
+        refresh: "↺ განახლება",
+        loading: "იტვირთება...",
+        empty: "ექიმის ჩანაწერები ჯერ არ არის.",
+        errorHttp: "HTTP {status}",
+        errorLoad: "ჩატვირთვა ვერ მოხერხდა",
+        sectionProfessional: "პროფესია",
+        labelExperience: "გამოცდილება",
+        labelUniversity: "უნივერსიტეტი",
+        labelGraduation: "დამთავრება",
+        labelProfile: "პროფილი",
+        labelBio: "ბიო",
+        profilePublic: "🌐 საჯარო",
+        profilePrivate: "🔒 დამალული",
+        sectionSpecialty: "სპეციალიზაცია",
+        sectionLanguages: "ენები",
+        sectionProcedures: "პროცედურები",
+        notSpecified: "არ არის მითითებული",
+        yearsCount: "{years} წ",
+        dash: "—",
+        status: {
+          PENDING: "ლოდინში",
+          APPROVED: "დამოწმებული",
+          ACTIVE: "აქტიური",
+          REJECTED: "უარყოფილი"
+        },
+        btnApprove: "✅ დადასტურება",
+        btnReject: "❌ უარყოფა",
+        confirmApprove: "დარწმუნებული ხართ, რომ გინდათ ამ ექიმის დამოწმება?",
+        confirmReject: "დარწმუნებული ხართ, რომ გინდათ განაცხადის უარყოფა?",
+        approvedAlert: "✅ ექიმი დამოწმებულია!",
+        rejectedAlert: "განაცხადი უარყოფილია.",
+        errorGeneric: "შეცდომა"
       }
     }
   };

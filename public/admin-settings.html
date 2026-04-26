@@ -767,6 +767,7 @@
     { type: "IMPLANT_CROWN",    label: "Implant Crown",    category: "IMPLANT" },
   ];
   let PROCEDURE_TYPES = [...PROCEDURE_TYPES_FALLBACK]; // Başlangıçta fallback, API gelince güncellenir
+  let CATEGORY_LABELS_I18N = {};
   let CATEGORY_LABELS_LOCALIZED = {
     "EVENTS": "Events",
     "PROSTHETIC": "Prosthetic",
@@ -775,6 +776,16 @@
     "SURGICAL": "Surgical",
     "IMPLANT": "Implant"
   };
+
+  function safeLang(obj, lang) {
+    if (obj == null || obj === "") return "";
+    if (typeof obj === "string") return obj;
+    const c = String(lang || "en").toLowerCase().split("-")[0];
+    return obj[c] || obj.en || Object.values(obj).find(function (v) { return v && String(v).trim(); }) || "";
+  }
+  function currentLanguage() {
+    return (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : "en";
+  }
 
   function fetchWithTimeout(url, options, ms = 6000) {
     const ctrl = new AbortController();
@@ -790,10 +801,22 @@
       const data = await res.json();
       const types = Array.isArray(data.types) ? data.types : [];
       if (types.length > 0) {
-        PROCEDURE_TYPES = types.map(p => ({ type: p.type, label: p.label, category: p.category }));
+        PROCEDURE_TYPES = types.map(function (p) {
+          return {
+            type: p.type,
+            name: p.name && typeof p.name === "object"
+              ? p.name
+              : { en: p.label || "", tr: p.label || "", ru: p.label || "", ka: p.label || "" },
+            label: p.label,
+            category: p.category,
+          };
+        });
       }
-      if (data.categoryLabels && typeof data.categoryLabels === 'object') {
+      if (data.categoryLabels && typeof data.categoryLabels === "object") {
         CATEGORY_LABELS_LOCALIZED = { ...CATEGORY_LABELS_LOCALIZED, ...data.categoryLabels };
+      }
+      if (data.categoryLabelsI18n && typeof data.categoryLabelsI18n === "object") {
+        CATEGORY_LABELS_I18N = { ...data.categoryLabelsI18n };
       }
     } catch (e) {
       console.warn('Could not load procedure defs from API, using fallback:', e.message);
@@ -816,8 +839,13 @@
     BRIDGE_REPLACEMENT_OR_REMOVAL: 60,
     INLAY: 60,
     ONLAY: 60,
+    VENEER: 30,
     OVERLAY: 60,
     POST_AND_CORE: 60,
+    WHITENING: 30,
+    OTHER: 30,
+    ALL_ON_4: 30,
+    ALL_ON_6: 30,
     FILLING: 30,
     TEMP_FILLING: 20,
     FILLING_REPLACEMENT_OR_REMOVAL: 30,
@@ -917,7 +945,7 @@
       if (!byCategory[category] || byCategory[category].length === 0) return;
 
       html += `<div style="margin-bottom: 24px;">`;
-      html += `<h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--p);">${escapeHtml(CATEGORY_LABELS_LOCALIZED[category] || category)}</h3>`;
+      html += `<h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--p);">${escapeHtml(safeLang(CATEGORY_LABELS_I18N[category] || CATEGORY_LABELS_LOCALIZED[category], currentLanguage()))}</h3>`;
       html += `<table style="width: 100%; border-collapse: collapse;">`;
       const _t = (k) => (window.i18n && window.i18n.t) ? window.i18n.t(k) : k.split('.').pop();
       html += `<thead><tr style="border-bottom: 1px solid var(--b);">`;
@@ -941,11 +969,13 @@
         const finalBreak = Number.isFinite(breakMinutes) && breakMinutes >= 0 ? breakMinutes : 0;
         
         html += `<tr style="border-bottom: 1px solid rgba(55, 65, 81, 0.3);">`;
-        html += `<td style="padding: 12px; font-size: 14px;">${escapeHtml(proc.name || proc.label)}</td>`;
+        html += `<td style="padding: 12px; font-size: 14px;">${escapeHtml(safeLang(proc.name || { en: proc.label, tr: proc.label, ru: proc.label, ka: proc.label }, currentLanguage()))}</td>`;
         html += `<td style="padding: 12px; text-align: right;">`;
         html += `<input type="number" id="price_${proc.type}" value="${price}" placeholder="0.00" step="0.01" min="0" style="width: 100%; padding: 6px 8px; text-align: right; background: #1f2937; border: 1px solid var(--b); border-radius: 4px; color: #e6eaf2; font-size: 14px;" />`;
         html += `</td>`;
-        html += `<td style="padding: 12px; text-align: center; color: #94a3b8; font-weight: 600;">~${recommendedDuration} dk</td>`;
+        const minU = (window.i18n && window.i18n.t) ? window.i18n.t("settings.minutes") : "min";
+        const _rec = "~" + recommendedDuration + " " + minU;
+        html += `<td style="padding: 12px; text-align: center; color: #94a3b8; font-weight: 600;">${escapeHtml(_rec)}</td>`;
         html += `<td style="padding: 12px; text-align: right;">`;
         html += `<input type="number" id="duration_${proc.type}" value="${finalDuration}" placeholder="${recommendedDuration}" step="5" min="5" max="720" style="width: 100%; padding: 6px 8px; text-align: right; background: #1f2937; border: 1px solid var(--b); border-radius: 4px; color: #e6eaf2; font-size: 14px;" />`;
         html += `</td>`;
@@ -1087,7 +1117,7 @@
     window.onI18nUpdated = function(lang) {
       if (typeof _prev === 'function') _prev(lang);
       if (window.i18n) window.i18n.updatePage();
-      loadProcedureDefs().then(() => renderPrices());
+      loadProcedureDefs().then(function () { renderPrices(); });
       const input = document.getElementById('referralDiscountPercent');
       if (input) updateReferralPreview(input.value);
     };

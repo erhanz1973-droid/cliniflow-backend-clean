@@ -24251,19 +24251,35 @@ app.get("/api/clinic/:code", (req, res) => {
 
 // ================== PROCEDURE DEFINITIONS (shared) ==================
 // Canonical list for pickers (id = procedure type code, name = human label).
-function buildProceduresCatalogPayload() {
-  const list = (procedures.PROCEDURE_TYPES || []).map((t) => ({
-    id: t.type,
-    name: t.label,
-    type: t.type,
-    label: t.label,
-    category: t.category,
-  }));
+// `lang` = tr | en | ru | ka — display labels only (stable API codes stay English).
+function buildProceduresCatalogPayload(lang) {
+  const L = procedures.normalizeProcedureLang ? procedures.normalizeProcedureLang(lang) : "en";
+  const safe = procedures.safeLang;
+  const list = (procedures.PROCEDURE_TYPES || []).map((p) => {
+    const nameObj = procedures.getMultilingualTypeName
+      ? procedures.getMultilingualTypeName(p.type)
+      : { en: p.type, tr: p.type, ru: p.type, ka: p.type };
+    const single = safe ? safe(nameObj, L) : nameObj.en || p.type;
+    return {
+      id: p.type,
+      name: single,
+      type: p.type,
+      label: single,
+      category: p.category,
+    };
+  });
+  const categoryLabels =
+    procedures.getLocalizedCategoryLabels ? procedures.getLocalizedCategoryLabels(lang) : {};
+  const categoryLabelsI18n = procedures.getCategoryLabelsI18n
+    ? procedures.getCategoryLabelsI18n()
+    : {};
   return {
     ok: true,
     procedures: list,
     data: list,
-    types: procedures.PROCEDURE_TYPES,
+    types: list,
+    categoryLabels,
+    categoryLabelsI18n,
     statuses: ["PLANNED", "ACTIVE", "COMPLETED", "CANCELLED"],
     categories: ["EVENTS", "PROSTHETIC", "RESTORATIVE", "ENDODONTIC", "SURGICAL", "IMPLANT"],
     extractionTypes: Array.from(procedures.EXTRACTION_TYPES),
@@ -24303,7 +24319,11 @@ function doctorProfileProcedureItemsFromIds(profileProcedureIds) {
       ids = [];
     }
   }
-  const catalog = (procedures.PROCEDURE_TYPES || []).map((t) => ({ id: t.type, name: t.label }));
+  const safe = procedures.safeLang;
+  const catalog = (procedures.PROCEDURE_TYPES || []).map((t) => ({
+    id: t.type,
+    name: safe(procedures.getMultilingualTypeName(t.type), "en"),
+  }));
   const byId = new Map(catalog.map((p) => [p.id, p]));
   return ids
     .map((x) => String(x || "").trim())
@@ -24313,18 +24333,22 @@ function doctorProfileProcedureItemsFromIds(profileProcedureIds) {
 
 // Public + doctor-app: same catalog (doctor routes require auth)
 app.get("/api/procedures", (req, res) => {
-  res.json(buildProceduresCatalogPayload());
+  const lang = req.query && req.query.lang != null ? req.query.lang : "";
+  res.json(buildProceduresCatalogPayload(lang));
 });
 
 app.get("/api/doctor/procedures", requireDoctorAuth, (req, res) => {
-  res.json(buildProceduresCatalogPayload());
+  const lang = req.query && req.query.lang != null ? req.query.lang : "";
+  res.json(buildProceduresCatalogPayload(lang));
 });
 
 // Profile settings multi-select (expects { ok, procedures: [{ id, name }] })
 app.get("/api/doctor/procedures-list", requireDoctorAuth, (req, res) => {
+  const L = procedures.normalizeProcedureLang(req.query && req.query.lang);
+  const safe = procedures.safeLang;
   const proceduresOnly = (procedures.PROCEDURE_TYPES || []).map((t) => ({
     id: t.type,
-    name: t.label,
+    name: safe(procedures.getMultilingualTypeName(t.type), L),
     category: t.category,
   }));
   res.json({ ok: true, procedures: proceduresOnly });
@@ -37364,7 +37388,10 @@ app.get('/api/doctor/encounters/:id/plan', requireDoctorAuth, async (req, res) =
 
 // ── Encounter treatments (doctor app: diagnosis → treatment) — table: encounter_treatments
 const _procedureTypeToLabel = Object.fromEntries(
-  (procedures.PROCEDURE_TYPES || []).map((p) => [p.type, p.label])
+  (procedures.PROCEDURE_TYPES || []).map((p) => [
+    p.type,
+    procedures.safeLang(procedures.getMultilingualTypeName(p.type), "en"),
+  ])
 );
 const _validProcedureTypeSet = new Set((procedures.PROCEDURE_TYPES || []).map((p) => p.type));
 

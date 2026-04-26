@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Doktorlar - Clinifly Admin</title>
+  <title data-i18n="doctorListV2.documentTitle">Doktorlar - Clinifly Admin</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <link rel="stylesheet" href="/admin-layout.css"/>
   <script src="/admin-i18n.js"></script>
@@ -244,43 +244,43 @@
 </head>
 <body>
   <div class="wrap">
-    <h2 class="page-title">👨‍⚕️ Doktorlar</h2>
+    <h2 class="page-title" data-i18n="doctorListV2.pageTitle">👨‍⚕️ Doktorlar</h2>
 
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-number" id="pending-count">—</div>
-        <div class="stat-label">Bekleyen</div>
+        <div class="stat-label" data-i18n="doctorListV2.statPending">Bekleyen</div>
       </div>
       <div class="stat-card">
         <div class="stat-number" id="approved-count">—</div>
-        <div class="stat-label">Onaylı</div>
+        <div class="stat-label" data-i18n="doctorListV2.statApproved">Onaylı</div>
       </div>
       <div class="stat-card">
         <div class="stat-number" id="rejected-count">—</div>
-        <div class="stat-label">Reddedilen</div>
+        <div class="stat-label" data-i18n="doctorListV2.statRejected">Reddedilen</div>
       </div>
       <div class="stat-card">
         <div class="stat-number" id="total-count">—</div>
-        <div class="stat-label">Toplam</div>
+        <div class="stat-label" data-i18n="doctorListV2.statTotal">Toplam</div>
       </div>
     </div>
 
     <div class="search-filter">
-      <input type="text" class="search-input" id="search-input" placeholder="Ad, email veya telefon ara...">
+      <input type="text" class="search-input" id="search-input" data-i18n-placeholder="doctorListV2.searchPlaceholder" placeholder="Ad, email veya telefon ara...">
       <select class="filter-select" id="status-filter">
-        <option value="">Tüm Durumlar</option>
-        <option value="PENDING">Bekleyen</option>
-        <option value="APPROVED">Onaylanan</option>
-        <option value="ACTIVE">Aktif</option>
-        <option value="REJECTED">Reddedilen</option>
+        <option value="" data-i18n="doctorListV2.filterAll">Tüm Durumlar</option>
+        <option value="PENDING" data-i18n="doctorListV2.filterOptionPending">Bekleyen</option>
+        <option value="APPROVED" data-i18n="doctorListV2.filterOptionApproved">Onaylanan</option>
+        <option value="ACTIVE" data-i18n="doctorListV2.filterOptionActive">Aktif</option>
+        <option value="REJECTED" data-i18n="doctorListV2.filterOptionRejected">Reddedilen</option>
       </select>
-      <button class="refresh-btn" onclick="loadDoctors()">↺ Yenile</button>
+      <button type="button" class="refresh-btn" id="refresh-btn" data-i18n="doctorListV2.refresh" onclick="loadDoctors()">↺ Yenile</button>
     </div>
 
     <div id="error-container"></div>
-    <div id="loading-container" class="loading" style="display:none;">Yükleniyor...</div>
+    <div id="loading-container" class="loading" style="display:none;" data-i18n="doctorListV2.loading">Yükleniyor...</div>
     <div id="doctors-container" class="doctor-grid"></div>
-    <div id="empty-container" class="empty" style="display:none;">Henüz doktor kaydı bulunmuyor.</div>
+    <div id="empty-container" class="empty" style="display:none;" data-i18n="doctorListV2.empty">Henüz doktor kaydı bulunmuyor.</div>
   </div>
 
   <script>
@@ -288,6 +288,33 @@
       const token = localStorage.getItem("adminToken");
       if (!token) window.location.href = "/admin-login.html";
     })();
+
+    function t(key, params) {
+      if (window.i18n && typeof window.i18n.t === "function") {
+        return window.i18n.t(key, params || {});
+      }
+      return key;
+    }
+
+    function localeForDate() {
+      var L = (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : "tr";
+      return ({ tr: "tr-TR", en: "en-GB", ru: "ru-RU", ka: "ka-GE" }[L] || "en-GB");
+    }
+
+    function statusLabelFromKey(status) {
+      if (!status) return "";
+      var k = "doctorListV2.status." + status;
+      var tr = t(k);
+      return tr !== k ? tr : status;
+    }
+
+    window.onI18nUpdated = function () {
+      try {
+        if (typeof filterDoctors === "function" && (allDoctors && allDoctors.length >= 0)) {
+          filterDoctors();
+        }
+      } catch (e) {}
+    };
 
     let allDoctors = [];
     let filteredDoctors = [];
@@ -324,16 +351,16 @@
         const res = await fetch((typeof apiUrl === 'function' ? apiUrl('/admin/doctor-list') : '/admin/doctor-list'), {
           headers: { "Authorization": "Bearer " + token }
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(t("doctorListV2.errorHttp", { status: res.status }));
         const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'Yüklenemedi');
+        if (!data.ok) throw new Error(data.error || t("doctorListV2.errorLoad"));
 
         allDoctors = data.doctors || [];
         filteredDoctors = [...allDoctors];
         updateStats();
         renderDoctors();
       } catch (err) {
-        errorEl.innerHTML = `<div class="error-box">❌ ${err.message}</div>`;
+        errorEl.innerHTML = "<div class=\"error-box\">❌ " + (err && err.message ? err.message : t("doctorListV2.errorGeneric")) + "</div>";
       } finally {
         loadingEl.style.display = "none";
       }
@@ -358,25 +385,33 @@
       emptyEl.style.display = "none";
 
       doctorsEl.innerHTML = filteredDoctors.map(d => {
-        const statusLabel = { PENDING:'Bekleyen', APPROVED:'Onaylı', ACTIVE:'Aktif', REJECTED:'Reddedildi' }[d.status] || d.status;
+        const statusLabel = statusLabelFromKey(d.status) || d.status;
         const rowKey = (d.id || d.doctor_id || '').replace(/'/g, "\\'");
-        const approveBtn = (d.status !== 'APPROVED' && d.status !== 'ACTIVE') ? `<button class="btn btn-approve" onclick="approveDoctor('${rowKey}')">✅ Onayla</button>` : '';
-        const rejectBtn  = (d.status !== 'REJECTED') ? `<button class="btn btn-reject" onclick="rejectDoctor('${rowKey}')">❌ Reddet</button>` : '';
+        const approveBtn = (d.status !== 'APPROVED' && d.status !== 'ACTIVE') ? `<button class="btn btn-approve" onclick="approveDoctor('${rowKey}')">${t("doctorListV2.btnApprove")}</button>` : '';
+        const rejectBtn  = (d.status !== 'REJECTED') ? `<button class="btn btn-reject" onclick="rejectDoctor('${rowKey}')">${t("doctorListV2.btnReject")}</button>` : '';
 
         const specs  = d.specialities_list || [];
         const langs  = d.languages_list    || [];
         const procs  = d.procedures_list   || [];
+        const dash = t("doctorListV2.dash");
+        const loc = localeForDate();
+        const yExp = d.years_of_experience
+          ? t("doctorListV2.yearsCount", { years: d.years_of_experience })
+          : dash;
+        const uni = d.university || dash;
+        const grad = d.graduation_year != null && d.graduation_year !== "" ? d.graduation_year : dash;
+        const profLine = d.public_profile ? t("doctorListV2.profilePublic") : t("doctorListV2.profilePrivate");
 
         const tagsHtml = arr => arr.length
-          ? arr.map(t => `<span class="tag">${t}</span>`).join('')
-          : `<span class="tag-empty">Belirtilmedi</span>`;
+          ? arr.map(tag => `<span class="tag">${tag}</span>`).join('')
+          : `<span class="tag-empty">${t("doctorListV2.notSpecified")}</span>`;
 
         return `
         <div class="doctor-card">
           <div class="doctor-header">
             ${avatarHtml(d)}
             <div class="doctor-info">
-              <h3>${d.name || '—'}</h3>
+              <h3>${d.name || dash}</h3>
               <div class="doctor-title-dept">${[d.role || d.title, d.department].filter(Boolean).join(' · ') || ''}</div>
               <span class="doctor-status status-${d.status}">${statusLabel}</span>
             </div>
@@ -387,28 +422,28 @@
             ${d.phone  ? `<span>📱 ${d.phone}</span>` : ''}
             ${d.clinic_code ? `<span>🏥 ${d.clinic_code}</span>` : ''}
             ${d.license_number ? `<span>📜 ${d.license_number}</span>` : ''}
-            <span>📅 ${new Date(d.created_at).toLocaleDateString('tr-TR')}</span>
+            <span>📅 ${d.created_at ? new Date(d.created_at).toLocaleDateString(loc) : dash}</span>
           </div>
 
           <div class="profile-sections">
             <div class="profile-section">
-              <div class="profile-section-title">Mesleki</div>
-              <div class="profile-row"><span class="lbl">Deneyim</span>${d.years_of_experience ? d.years_of_experience + ' yıl' : '—'}</div>
-              <div class="profile-row"><span class="lbl">Üniversite</span>${d.university || '—'}</div>
-              <div class="profile-row"><span class="lbl">Mezuniyet</span>${d.graduation_year || '—'}</div>
-              <div class="profile-row"><span class="lbl">Profil</span>${d.public_profile ? '🌐 Açık' : '🔒 Gizli'}</div>
-              ${d.bio ? `<div class="profile-row" style="flex-direction:column;gap:2px"><span class="lbl">Bio</span><span style="color:var(--muted);font-size:11px">${d.bio}</span></div>` : ''}
+              <div class="profile-section-title">${t("doctorListV2.sectionProfessional")}</div>
+              <div class="profile-row"><span class="lbl">${t("doctorListV2.labelExperience")}</span>${yExp}</div>
+              <div class="profile-row"><span class="lbl">${t("doctorListV2.labelUniversity")}</span>${uni}</div>
+              <div class="profile-row"><span class="lbl">${t("doctorListV2.labelGraduation")}</span>${grad}</div>
+              <div class="profile-row"><span class="lbl">${t("doctorListV2.labelProfile")}</span>${profLine}</div>
+              ${d.bio ? `<div class="profile-row" style="flex-direction:column;gap:2px"><span class="lbl">${t("doctorListV2.labelBio")}</span><span style="color:var(--muted);font-size:11px">${d.bio}</span></div>` : ''}
             </div>
             <div class="profile-section">
-              <div class="profile-section-title">Uzmanlık</div>
+              <div class="profile-section-title">${t("doctorListV2.sectionSpecialty")}</div>
               <div class="tags">${tagsHtml(specs)}</div>
             </div>
             <div class="profile-section">
-              <div class="profile-section-title">Diller</div>
+              <div class="profile-section-title">${t("doctorListV2.sectionLanguages")}</div>
               <div class="tags">${tagsHtml(langs)}</div>
             </div>
             <div class="profile-section" style="grid-column:1/-1">
-              <div class="profile-section-title">Prosedürler</div>
+              <div class="profile-section-title">${t("doctorListV2.sectionProcedures")}</div>
               <div class="tags">${tagsHtml(procs)}</div>
             </div>
           </div>
@@ -421,7 +456,7 @@
     }
 
     async function approveDoctor(doctorId) {
-      if (!confirm("Bu doktoru onaylamak istediğinizden emin misiniz?")) return;
+      if (!confirm(t("doctorListV2.confirmApprove"))) return;
       try {
         const token = localStorage.getItem("adminToken");
         const res = await fetch((typeof apiUrl === 'function' ? apiUrl('/admin/approve-doctor-v2') : '/admin/approve-doctor-v2'), {
@@ -430,16 +465,16 @@
           body: JSON.stringify({ doctorId })
         });
         const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'Hata');
-        alert('✅ Doktor onaylandı!');
+        if (!data.ok) throw new Error(data.error || t("doctorListV2.errorGeneric"));
+        alert(t("doctorListV2.approvedAlert"));
         loadDoctors();
       } catch (err) {
-        alert('❌ ' + err.message);
+        alert("❌ " + (err && err.message ? err.message : t("doctorListV2.errorGeneric")));
       }
     }
 
     async function rejectDoctor(doctorId) {
-      if (!confirm("Bu başvuruyu reddetmek istediğinizden emin misiniz?")) return;
+      if (!confirm(t("doctorListV2.confirmReject"))) return;
       try {
         const token = localStorage.getItem("adminToken");
         const res = await fetch((typeof apiUrl === 'function' ? apiUrl('/admin/reject-doctor-v2') : '/admin/reject-doctor-v2'), {
@@ -448,11 +483,11 @@
           body: JSON.stringify({ doctorId })
         });
         const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'Hata');
-        alert('Başvuru reddedildi.');
+        if (!data.ok) throw new Error(data.error || t("doctorListV2.errorGeneric"));
+        alert(t("doctorListV2.rejectedAlert"));
         loadDoctors();
       } catch (err) {
-        alert('❌ ' + err.message);
+        alert("❌ " + (err && err.message ? err.message : t("doctorListV2.errorGeneric")));
       }
     }
 
