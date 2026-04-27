@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <script src="/api-base.js?v=202603301"></script>
+  <script src="/api-base.js?v=202604271"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http:; media-src 'self' https: http: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http:; style-src 'self' 'unsafe-inline' https: http:;">
   <title>İntraoral Fotoğraf Çekimi - Clinifly</title>
@@ -348,6 +348,9 @@
   </script>
   
   <script>
+    try {
+      if (!localStorage.getItem("lang")) localStorage.setItem("lang", "tr");
+    } catch (e) {}
     // MediaPipe Face Mesh setup
     let faceMesh = null;
     let camera = null;

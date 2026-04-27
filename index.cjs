@@ -18674,8 +18674,9 @@ function parseAcceptLanguageHeader(raw) {
 }
 
 /**
- * Synchronous part of language resolution (no DB). Prefer {@link resolveAiAnalyzeLanguage} for full chain.
- * Priority: body.language → body.lang → query → x-lang → Accept-Language → req.user.lang → JWT → null
+ * Synchronous hints only (no DB). Used by getAiAnalyzeRequestLanguage legacy helper.
+ * Order: explicit body/query/x-lang → Accept-Language → req.user → JWT.
+ * For ai-analyze, use {@link resolveAiAnalyzeLanguage} which inserts DB before these heuristics.
  */
 function getAiAnalyzeRequestLanguageSync(req) {
   const body = req.body || {};
@@ -18719,24 +18720,16 @@ function getAiAnalyzeRequestLanguageSync(req) {
 }
 
 /**
- * Full chain: body / query / x-lang / Accept-Language / user / JWT, then patients.language from DB.
- * @param {import('express').Request} req
  * @param {string|undefined} patientId
- * @returns {Promise<string>}
+ * @returns {Promise<string|null>}
  */
-async function resolveAiAnalyzeLanguage(req, patientId) {
-  const sync = getAiAnalyzeRequestLanguageSync(req);
-  if (sync) return sync;
-  if (!patientId) return "en";
-  if (!isSupabaseEnabled()) return "en";
+async function fetchPatientLanguageForAiAnalyze(patientId) {
+  if (!patientId || !isSupabaseEnabled()) return null;
   const pid = String(patientId).trim();
+  if (!pid) return null;
   try {
     if (UUID_RE.test(pid)) {
-      const { data, error } = await supabase
-        .from("patients")
-        .select("language")
-        .eq("id", pid)
-        .maybeSingle();
+      const { data, error } = await supabase.from("patients").select("language").eq("id", pid).maybeSingle();
       if (!error && data?.language != null && String(data.language).trim() !== "") {
         return String(data.language).trim();
       }
@@ -18751,6 +18744,60 @@ async function resolveAiAnalyzeLanguage(req, patientId) {
     }
   } catch (e) {
     console.warn("[ai-analyze] patient language lookup failed", e?.message || e);
+  }
+  return null;
+}
+
+/**
+ * Full chain: explicit body / query / x-lang → **patients.language (DB)** → Accept-Language → user → JWT → en.
+ * DB is read when the app omits `language` so profile tr/ru/ka is not overridden by English device locale.
+ * @param {import('express').Request} req
+ * @param {string|undefined} patientId
+ * @returns {Promise<string>}
+ */
+async function resolveAiAnalyzeLanguage(req, patientId) {
+  const body = req.body || {};
+  const q = req.query || {};
+  if (body.language != null && String(body.language).trim() !== "") {
+    return String(body.language).trim();
+  }
+  if (body.lang != null && String(body.lang).trim() !== "") {
+    return String(body.lang).trim();
+  }
+  if (q.language != null && String(q.language).trim() !== "") {
+    return String(q.language).trim();
+  }
+  if (q.lang != null && String(q.lang).trim() !== "") {
+    return String(q.lang).trim();
+  }
+  const xLang = req.headers["x-lang"] || req.headers["X-Lang"];
+  if (xLang != null && String(xLang).trim() !== "") {
+    return String(xLang).trim();
+  }
+
+  const fromDb = await fetchPatientLanguageForAiAnalyze(patientId);
+  if (fromDb != null && String(fromDb).trim() !== "") {
+    return String(fromDb).trim();
+  }
+
+  const fromAccept = parseAcceptLanguageHeader(
+    req.headers["accept-language"] || req.headers["Accept-Language"]
+  );
+  if (fromAccept) return fromAccept;
+  if (req.user && req.user.lang) {
+    return String(req.user.lang).trim();
+  }
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : (req.headers["x-patient-token"] || "");
+  if (token && String(token).startsWith("eyJ")) {
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.language) {
+        return String(decoded.language).trim();
+      }
+    } catch (e) {
+      /* non-fatal */
+    }
   }
   return "en";
 }

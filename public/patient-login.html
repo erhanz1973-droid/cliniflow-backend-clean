@@ -377,6 +377,10 @@
         ? "http://localhost:10000"
         : "https://cliniflow-backend-dg8a.onrender.com";
     
+    try {
+      if (!localStorage.getItem("lang")) localStorage.setItem("lang", "tr");
+    } catch (e) {}
+    
     function showAlert(message, type = "error") {
       const container = document.getElementById("alert-container");
       container.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
@@ -455,6 +459,10 @@
         localStorage.setItem("patient_token", json.token);
         localStorage.setItem("patient_id", json.patientId);
         localStorage.setItem("clinic_id", json.clinicId);
+        try {
+          var plang = json.language || json.lang || "tr";
+          localStorage.setItem("lang", String(plang).trim().slice(0, 2).toLowerCase());
+        } catch (e) {}
         
         showAlert("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
         
@@ -567,6 +575,10 @@
         if (json.token) localStorage.setItem("patient_token", json.token);
         if (json.patientId) localStorage.setItem("patient_id", json.patientId);
         if (json.clinicId) localStorage.setItem("clinic_id", json.clinicId);
+        try {
+          var plang2 = json.language || json.lang || "tr";
+          localStorage.setItem("lang", String(plang2).trim().slice(0, 2).toLowerCase());
+        } catch (e) {}
 
         if (json.email_sent === false) {
           showAlert(

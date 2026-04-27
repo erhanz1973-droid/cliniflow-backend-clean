@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <script src="/api-base.js?v=202603301"></script>
+  <script src="/api-base.js?v=202604271"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Chat - Clinifly</title>
   <style>
@@ -165,6 +165,9 @@
   </div>
 
   <script>
+    try {
+      if (!localStorage.getItem("lang")) localStorage.setItem("lang", "tr");
+    } catch (e) {}
     // Get patient ID from URL or localStorage
     const urlParams = new URLSearchParams(window.location.search);
     let patientId = urlParams.get('patientId') || localStorage.getItem('patient_id') || localStorage.getItem('patientId');

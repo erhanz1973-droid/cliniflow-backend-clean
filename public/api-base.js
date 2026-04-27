@@ -1,6 +1,9 @@
 /**
  * Backend API origin for standalone admin (static site on Render, etc.).
  *
+ * Patient app (ai-analyze): use window.cliniflowFetchAiAnalyze(patientToken, { patientId, imageUrl, photoType })
+ * so `language` is always sent. Override for tests: window.__CLINIFLOW_FORCE_AI_LANG__ = 'tr'
+ *
  * Override (any host):
  *   <script>window.CLINIFLOW_API_BASE_URL="https://your-api.example.com"</script> before this file
  *   or <meta name="cliniflow-api-base" content="https://your-api.example.com" />
@@ -99,5 +102,32 @@
 
   w.cliniflowLogSendingLanguage = function (userLanguage) {
     console.log('🌍 Sending language:', userLanguage);
+  };
+
+  /**
+   * POST /api/chat/ai-analyze with required `language` (and Bearer token). Use from WebView or PWA.
+   * Quick test: window.__CLINIFLOW_FORCE_AI_LANG__ = 'tr' then call this.
+   * @param {string} token - patient JWT
+   * @param {object} body - must include imageUrl, patientId; optional photoType, userLocation, etc.
+   * @returns {Promise<Response>}
+   */
+  w.cliniflowFetchAiAnalyze = function (token, body) {
+    var b = body && typeof body === 'object' ? Object.assign({}, body) : {};
+    var forced =
+      typeof w.__CLINIFLOW_FORCE_AI_LANG__ === 'string' && w.__CLINIFLOW_FORCE_AI_LANG__.trim();
+    var userLanguage = (forced || w.cliniflowGetUserLanguage()).toString().slice(0, 2).toLowerCase();
+    w.cliniflowLogSendingLanguage(userLanguage);
+    b.language = userLanguage;
+    var base = typeof w.cliniflowApiBase === 'function' ? w.cliniflowApiBase() : '';
+    var path = '/api/chat/ai-analyze';
+    var url = base ? String(base).replace(/\/+$/, '') + path : path;
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: token ? 'Bearer ' + String(token) : '',
+      },
+      body: JSON.stringify(b),
+    });
   };
 })();
