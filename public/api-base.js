@@ -1,8 +1,10 @@
 /**
  * Backend API origin for standalone admin (static site on Render, etc.).
  *
- * Patient app (ai-analyze): use window.cliniflowFetchAiAnalyze(patientToken, { patientId, imageUrl, photoType })
- * so `language` is always sent. Override for tests: window.__CLINIFLOW_FORCE_AI_LANG__ = 'tr'
+ * Patient AI (both required):
+ *   - POST /api/chat/ai-upload — multipart field `file` + `language` (use cliniflowFetchAiUpload or cliniflowAppendAiLanguageToFormData)
+ *   - POST /api/chat/ai-analyze — JSON body with `language` (use cliniflowFetchAiAnalyze)
+ * Test: window.__CLINIFLOW_FORCE_AI_LANG__ = 'tr'
  *
  * Override (any host):
  *   <script>window.CLINIFLOW_API_BASE_URL="https://your-api.example.com"</script> before this file
@@ -104,6 +106,59 @@
     console.log('🌍 Sending language:', userLanguage);
   };
 
+  w.cliniflowLogUploadLanguage = function (userLanguage) {
+    console.log('🌍 Upload language:', userLanguage);
+  };
+
+  w.cliniflowLogAnalyzeLanguage = function (userLanguage) {
+    console.log('🌍 Analyze language:', userLanguage);
+  };
+
+  /** Resolves language for AI calls (localStorage lang → navigator → en), or __CLINIFLOW_FORCE_AI_LANG__. */
+  w.cliniflowResolveAiLanguage = function () {
+    var forced =
+      typeof w.__CLINIFLOW_FORCE_AI_LANG__ === 'string' && w.__CLINIFLOW_FORCE_AI_LANG__.trim();
+    return (forced || w.cliniflowGetUserLanguage()).toString().slice(0, 2).toLowerCase();
+  };
+
+  /**
+   * Append `language` to an existing FormData before POST /api/chat/ai-upload (React Native: fd.append('language', ...)).
+   * @param {FormData} fd
+   * @returns {FormData}
+   */
+  w.cliniflowAppendAiLanguageToFormData = function (fd) {
+    if (!fd || typeof fd.append !== 'function') return fd;
+    var userLanguage = w.cliniflowResolveAiLanguage();
+    w.cliniflowLogUploadLanguage(userLanguage);
+    fd.append('language', userLanguage);
+    return fd;
+  };
+
+  /**
+   * POST /api/chat/ai-upload — multipart: `file` + `language`.
+   * @param {string} token - patient JWT
+   * @param {Blob|File} file
+   * @param {string} [fileName] - default photo.jpg
+   * @returns {Promise<Response>}
+   */
+  w.cliniflowFetchAiUpload = function (token, file, fileName) {
+    var userLanguage = w.cliniflowResolveAiLanguage();
+    w.cliniflowLogUploadLanguage(userLanguage);
+    var fd = new FormData();
+    fd.append('file', file, fileName || 'photo.jpg');
+    fd.append('language', userLanguage);
+    var base = typeof w.cliniflowApiBase === 'function' ? w.cliniflowApiBase() : '';
+    var path = '/api/chat/ai-upload';
+    var url = base ? String(base).replace(/\/+$/, '') + path : path;
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: token ? 'Bearer ' + String(token) : '',
+      },
+      body: fd,
+    });
+  };
+
   /**
    * POST /api/chat/ai-analyze with required `language` (and Bearer token). Use from WebView or PWA.
    * Quick test: window.__CLINIFLOW_FORCE_AI_LANG__ = 'tr' then call this.
@@ -113,10 +168,8 @@
    */
   w.cliniflowFetchAiAnalyze = function (token, body) {
     var b = body && typeof body === 'object' ? Object.assign({}, body) : {};
-    var forced =
-      typeof w.__CLINIFLOW_FORCE_AI_LANG__ === 'string' && w.__CLINIFLOW_FORCE_AI_LANG__.trim();
-    var userLanguage = (forced || w.cliniflowGetUserLanguage()).toString().slice(0, 2).toLowerCase();
-    w.cliniflowLogSendingLanguage(userLanguage);
+    var userLanguage = w.cliniflowResolveAiLanguage();
+    w.cliniflowLogAnalyzeLanguage(userLanguage);
     b.language = userLanguage;
     var base = typeof w.cliniflowApiBase === 'function' ? w.cliniflowApiBase() : '';
     var path = '/api/chat/ai-analyze';
