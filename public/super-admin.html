@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
+  <script src="/admin-i18n.js?v=17"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Super Admin – Dashboard</title>
   <style>
@@ -379,8 +380,8 @@
         <div style="font-size: 18px; font-weight: 700; color: var(--p);">Super Admin</div>
       </div>
       <div class="navbar-right">
-        <a href="/super-admin.html" class="nav-link active">Dashboard</a>
-        <a href="/super-admin-login.html" class="nav-link secondary" onclick="logout(); return false;">Logout</a>
+        <a href="/super-admin.html" class="nav-link active" data-i18n="dashboard.nav.dashboard"></a>
+        <a href="/super-admin-login.html" class="nav-link secondary" onclick="logout(); return false;" data-i18n="dashboard.sidebar.logout"></a>
       </div>
     </nav>
 
@@ -972,5 +973,6 @@
     loadClinics();
   }
 </script>
+<script>if (window.i18n && window.i18n.updatePage) window.i18n.updatePage();</script>
 </body>
 </html>

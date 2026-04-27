@@ -8143,8 +8143,26 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
     if (!req.clinic) {
       return res.status(404).json({ ok: false, error: "clinic_not_found" });
     }
-    const clinicId = (req.user && req.user.clinicId) != null ? req.user.clinicId : req.clinicId;
-    console.log("USAGE CLINIC:", clinicId);
+    const clinicIdFromJwt =
+      req.clinicId != null && String(req.clinicId).trim() !== ""
+        ? String(req.clinicId).trim()
+        : (req.user && req.user.clinicId != null)
+          ? String(req.user.clinicId).trim()
+          : null;
+    const hasAnyClinicId =
+      (clinicIdFromJwt && String(clinicIdFromJwt).trim() !== "") ||
+      (req.clinic && req.clinic.id != null && String(req.clinic.id).trim() !== "") ||
+      (req.clinic && req.clinic._fileId != null && String(req.clinic._fileId).trim() !== "");
+    if (!hasAnyClinicId) {
+      console.error("Missing clinicId in billing usage");
+      return res.json({
+        ok: true,
+        limitsEnabled: saasEnforcement.limitsEnabled(),
+        snapshot: saasEnforcement.getBillingSnapshotWithZeroUsage(req.clinic),
+        catalog: saasPlans.getPublicPlanCatalog(),
+      });
+    }
+    console.log("USAGE CLINIC:", clinicIdFromJwt || req.clinic?.id || req.clinic?._fileId);
     if (!isSupabaseEnabled()) {
       return res.json({
         ok: true,
@@ -8157,9 +8175,9 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
       supabase,
       req.clinic,
       req.clinicCode,
-      clinicId
+      clinicIdFromJwt
     );
-    res.json({
+    return res.json({
       ok: true,
       limitsEnabled: saasEnforcement.limitsEnabled(),
       snapshot,
@@ -8167,7 +8185,18 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
     });
   } catch (e) {
     console.error("[BILLING USAGE]", e);
-    res.status(500).json({ ok: false, error: e?.message || "internal_error" });
+    if (!res.headersSent) {
+      try {
+        return res.json({
+          ok: true,
+          limitsEnabled: saasEnforcement.limitsEnabled(),
+          snapshot: saasEnforcement.getBillingSnapshotWithZeroUsage(req.clinic),
+          catalog: saasPlans.getPublicPlanCatalog(),
+        });
+      } catch (e2) {
+        return res.status(500).json({ ok: false, error: e?.message || "internal_error" });
+      }
+    }
   }
 });
 
@@ -18342,78 +18371,6 @@ function getDentalAiFallback(langKey) {
   return { ...row, confidence: "low" };
 }
 
-/** Model kept wrong script/language after language-correction prompt. */
-const DENTAL_AI_LANGUAGE_ERROR_I18N = {
-  tr: {
-    insights: ["Dil hatası oluştu. Lütfen tekrar deneyin."],
-    summary: "Dil hatası oluştu. Lütfen tekrar deneyin.",
-    recommendation: "Dil hatası oluştu. Lütfen tekrar deneyin.",
-  },
-  en: {
-    insights: ["A language error occurred. Please try again."],
-    summary: "A language error occurred. Please try again.",
-    recommendation: "A language error occurred. Please try again.",
-  },
-  ka: {
-    insights: ["ენის შეცდომა. გთხოვთ, სცადოთ ხელახლა."],
-    summary: "ენის შეცდომა. გთხოვთ, სცადოთ ხელახლა.",
-    recommendation: "ენის შეცდომა. გთხოვთ, სცადოთ ხელახლა.",
-  },
-  ru: {
-    insights: ["Ошибка языка. Пожалуйста, попробуйте снова."],
-    summary: "Ошибка языка. Пожалуйста, попробуйте снова.",
-    recommendation: "Ошибка языка. Пожалуйста, попробуйте снова.",
-  },
-};
-
-function getDentalLanguageErrorFallback(langKey) {
-  const k = normalizeAiDentalLang(langKey);
-  const row = DENTAL_AI_LANGUAGE_ERROR_I18N[k] || DENTAL_AI_LANGUAGE_ERROR_I18N.tr;
-  return { ...row, confidence: "low" };
-}
-
-function buildDentalAnalysisTextForLangCheck(parsed) {
-  const ins = Array.isArray(parsed?.insights) ? parsed.insights : [];
-  return [
-    ...ins.map((s) => String(s || "")),
-    String(parsed?.summary || ""),
-    String(parsed?.recommendation || ""),
-  ].join(" ");
-}
-
-/**
- * @returns {boolean} true if the response is likely the wrong language for langKey
- */
-function detectWrongLanguage(text, langKey) {
-  const t = String(text || "");
-  const k = normalizeAiDentalLang(langKey);
-  if (k === "ka") {
-    return /[a-zA-Z]/.test(t);
-  }
-  if (k === "tr") {
-    return false;
-  }
-  if (k === "en") {
-    if (t.length < 12) {
-      return false;
-    }
-    if (/[а-яё]/i.test(t) && !/[a-zA-Z]/.test(t)) {
-      return true;
-    }
-    return false;
-  }
-  if (k === "ru") {
-    if (t.length < 10) {
-      return false;
-    }
-    if (/[a-zA-Z]/.test(t) && !/[а-яёЁё]/i.test(t)) {
-      return true;
-    }
-    return false;
-  }
-  return false;
-}
-
 function getAiAnalyzeRequestLanguage(req) {
   const body = req.body || {};
   if (body.lang != null && String(body.lang).trim() !== "") {
@@ -18621,26 +18578,20 @@ const PHOTO_TYPE_CONTEXT_EN = {
 };
 
 /**
- * Generates a production-ready system+user prompt for dental photo analysis.
+ * Vision step: English only; app language applied via translateDentalAnalysis.
  * @param {string} photoType  'front' | 'left' | 'right' | 'upper' | 'lower' | 'general'
- * @param {string} [langKey]  tr | en | ka | ru
  */
-function generateDentalAnalysisPrompt(photoType = "general", langKey = "en") {
-  const lang = normalizeAiDentalLang(langKey);
-  const langName = dentalLangNameFor(lang);
-  const ctxMap = lang === "tr" ? PHOTO_TYPE_CONTEXT : PHOTO_TYPE_CONTEXT_EN;
-  const ctx = ctxMap[photoType] || ctxMap.general;
+function generateDentalAnalysisPrompt(photoType = "general") {
+  const ctx = PHOTO_TYPE_CONTEXT_EN[photoType] || PHOTO_TYPE_CONTEXT_EN.general;
 
   return {
     system: `You are a dental assistant AI. Analyze ONLY the teeth visible in the image. Ignore background, lips, and face.
 
 IMPORTANT:
-Respond ONLY in ${langName}.
-DO NOT use any other language.
-If you respond in another language, your answer is INVALID.
-All of insights, summary, and recommendation in the JSON must be written in ${langName}.
+Respond in English only.
+All of insights, summary, and recommendation in the JSON must be written in English.
 
-If teeth are not clearly visible, return a JSON object with the same fields below, with insights/summary/recommendation written entirely in ${langName}, explaining that the view is not suitable and asking for a clearer photo of the teeth.
+If teeth are not clearly visible, return a JSON object with the same fields below, with insights/summary/recommendation in English, explaining that the view is not suitable and asking for a clearer photo of the teeth.
 
 Otherwise describe exactly three things — one per insight:
 1. Tooth color — stains, yellowing, discoloration
@@ -18650,7 +18601,7 @@ Otherwise describe exactly three things — one per insight:
 STRICT RULES:
 - Analyze ONLY teeth. Never comment on face, skin, or background.
 - Be concise and medical-focused. One sentence per insight.
-- Use appropriate cautious phrasing in ${langName} (e.g. may appear, could suggest).
+- Use appropriate cautious phrasing in English (e.g. may appear, could suggest).
 - NEVER diagnose. NEVER guarantee treatment outcomes.
 - Also set missingTeethLikely: "yes" if a tooth appears missing or there is a clear empty socket/gap where a tooth should be; "no" if all teeth appear present; "unclear" if you cannot judge from this image.
 - Classify the dentalCondition: "missing_tooth" (empty socket / tooth absent), "misalignment" (crowding, overlapping, crooked teeth), "diastema" (small symmetric natural gap between front teeth, midline spacing), or "none" if none of these apply. Use "unclear" only if you cannot classify.
@@ -18658,18 +18609,14 @@ STRICT RULES:
 
     user: `Photo type: ${ctx.label}. Focus: ${ctx.focus}
 
-${
-  lang === "tr"
-    ? "Use Turkish (Türkçe) only for every human-readable string in the JSON."
-    : `Use ${langName} only for every human-readable string in the JSON. Do not use Turkish. Do not mix languages.`
-}
+Use English only for every human-readable string in the JSON.
 
-Examine the teeth in this image and return ONLY this JSON. Every text field must be in ${langName}:
+Examine the teeth in this image and return ONLY this JSON. Every text field must be in English:
 {
-  "insights": ["${langName} observation 1 (color)", "${langName} observation 2 (alignment)", "${langName} observation 3 (visible issues)"],
+  "insights": ["English observation 1 (color)", "English observation 2 (alignment)", "English observation 3 (visible issues)"],
   "confidence": "low" | "medium" | "high",
-  "summary": "1-sentence overall dental assessment in ${langName}",
-  "recommendation": "1 concrete next step for the patient in ${langName}",
+  "summary": "1-sentence overall dental assessment in English",
+  "recommendation": "1 concrete next step for the patient in English",
   "missingTeethLikely": "yes" | "no" | "unclear",
   "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
   "dentalConditionConfidence": "low" | "medium" | "high"
@@ -18678,72 +18625,6 @@ Examine the teeth in this image and return ONLY this JSON. Every text field must
 Classify this dental condition: missing tooth, misalignment, or natural front gap (diastema). Set dentalConditionConfidence to match how sure you are.
 
 confidence guide: "low" = blurry or teeth barely visible | "medium" = partially visible | "high" = clear, well-lit photo`,
-  };
-}
-
-/**
- * Stronger retry prompt — used when the first response is vague or refused.
- */
-function generateRetryPrompt(photoType = "general", langKey = "en") {
-  const lang = normalizeAiDentalLang(langKey);
-  const langName = dentalLangNameFor(lang);
-  const ctxMap = lang === "tr" ? PHOTO_TYPE_CONTEXT : PHOTO_TYPE_CONTEXT_EN;
-  const ctx = ctxMap[photoType] || ctxMap.general;
-  return {
-    system: `You are a dental assistant AI. Your ONLY job is to describe what you see in the teeth.
-
-IMPORTANT:
-Respond ONLY in ${langName}.
-DO NOT use any other language.
-If you respond in another language, your answer is INVALID.
-All JSON text must be in ${langName}.
-
-MANDATORY — you MUST return exactly 2–3 observations about:
-- Tooth color (yellowing, staining, whiteness)
-- Tooth alignment (straight, crowded, gaps)
-- Any visible problems (decay, chips, tartar, gum line)
-
-FORBIDDEN: empty insights, or refusal with no real observation. Even a blurry photo has visible tooth shapes, approximate color, and a gum line — describe those in ${langName}.
-Include missingTeethLikely: "yes" | "no" | "unclear" (missing tooth / empty socket vs all teeth present).
-Include dentalCondition: "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear" and dentalConditionConfidence.
-Return ONLY valid JSON — no markdown, no extra text.`,
-
-    user: `Photo type: ${ctx.label}. Focus: ${ctx.focus}
-
-Your previous response lacked sufficient observations. Look again at the teeth only.
-
-${
-  lang === "tr"
-    ? "Use Turkish (Türkçe) only for every human-readable string in the JSON."
-    : `Use ${langName} only for every human-readable string in the JSON. Do not use Turkish. Do not mix languages.`
-}
-
-Return ONLY this JSON with 2–3 real dental observations, all in ${langName}:
-{
-  "insights": ["${langName} color observation", "${langName} alignment observation", "${langName} visible issue (if any)"],
-  "confidence": "low",
-  "summary": "1-sentence honest summary in ${langName}",
-  "recommendation": "1-sentence next step for the patient in ${langName}",
-  "missingTeethLikely": "yes" | "no" | "unclear",
-  "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
-  "dentalConditionConfidence": "low" | "medium" | "high"
-}`,
-  };
-}
-
-/**
- * Re-asks with explicit correction after a language-mismatch.
- */
-function generateLanguageViolationRetryPrompt(photoType = "general", langKey = "en") {
-  const langName = dentalLangNameFor(normalizeAiDentalLang(langKey));
-  const { system, user } = generateDentalAnalysisPrompt(photoType, langKey);
-  return {
-    system: `You responded in the wrong language.
-You MUST respond ONLY in ${langName}.
-Retry now.
-
-${system}`,
-    user,
   };
 }
 
@@ -18860,7 +18741,12 @@ function inferDentalConditionFromRules(t) {
  * Calls OpenAI Vision once and returns { parsed, usage, model }.
  * Throws on HTTP / network errors. Never throws on parse failure.
  */
-async function callOpenAIVision(system, user, imageDataUrl, { apiKey, timeoutMs = 30000 } = {}) {
+async function callOpenAIVision(
+  system,
+  user,
+  imageDataUrl,
+  { apiKey, timeoutMs = 30000 } = {}
+) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -18914,141 +18800,689 @@ async function callOpenAIVision(system, user, imageDataUrl, { apiKey, timeoutMs 
   return { parsed, usage: data.usage, model: data.model || 'gpt-4o' };
 }
 
+/** In-memory EN vision results: validated `parsed` + quality, keyed by image+photoType hash. Set env to 0 to disable. */
+const DENTAL_AI_VISION_EN_CACHE_MAX = (() => {
+  const e = process.env.DENTAL_AI_VISION_EN_CACHE_MAX;
+  if (e === "0") return 0;
+  const n = parseInt(e != null && e !== "" ? e : "200", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 200;
+})();
+const dentalAiVisionEnCache = new Map();
+
+function hashDentalAiCacheKey(imageDataUrl, photoType) {
+  return crypto
+    .createHash("sha256")
+    .update(String(imageDataUrl || ""), "utf8")
+    .update("\0", "utf8")
+    .update(String(photoType || "general"), "utf8")
+    .digest("hex");
+}
+
+/** Default 24h; override via DENTAL_AI_CACHE_TTL_MS (milliseconds). */
+const DENTAL_AI_CACHE_TTL_MS = (() => {
+  const n = parseInt(process.env.DENTAL_AI_CACHE_TTL_MS || "86400000", 10);
+  return Number.isFinite(n) && n > 0 ? n : 86400000;
+})();
+
+function dentalAiVisionEnCacheGet(key) {
+  if (DENTAL_AI_VISION_EN_CACHE_MAX < 1) return null;
+  const entry = dentalAiVisionEnCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > DENTAL_AI_CACHE_TTL_MS) {
+    dentalAiVisionEnCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function dentalAiCacheSet(key, value) {
+  if (DENTAL_AI_VISION_EN_CACHE_MAX < 1) return;
+  while (dentalAiVisionEnCache.size >= DENTAL_AI_VISION_EN_CACHE_MAX) {
+    const first = dentalAiVisionEnCache.keys().next().value;
+    if (first === undefined) break;
+    dentalAiVisionEnCache.delete(first);
+  }
+  dentalAiVisionEnCache.set(key, { value, ts: Date.now() });
+}
+
+const DENTAL_AI_TRANSLATION_CACHE_MAX = (() => {
+  const e = process.env.DENTAL_AI_TRANSLATION_CACHE_MAX;
+  if (e === "0") return 0;
+  const n = parseInt(e != null && e !== "" ? e : "500", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 500;
+})();
+const dentalAiTranslationCache = new Map();
+
+function getTranslationCacheKey(enParsed, lang) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(enParsed), "utf8")
+    .update("|" + String(lang), "utf8")
+    .digest("hex");
+}
+
+function dentalAiTranslationCacheGet(key) {
+  if (DENTAL_AI_TRANSLATION_CACHE_MAX < 1) return null;
+  const entry = dentalAiTranslationCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > DENTAL_AI_CACHE_TTL_MS) {
+    dentalAiTranslationCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function dentalAiTranslationCacheSet(key, value) {
+  if (DENTAL_AI_TRANSLATION_CACHE_MAX < 1) return;
+  while (dentalAiTranslationCache.size >= DENTAL_AI_TRANSLATION_CACHE_MAX) {
+    const first = dentalAiTranslationCache.keys().next().value;
+    if (first === undefined) break;
+    dentalAiTranslationCache.delete(first);
+  }
+  dentalAiTranslationCache.set(key, { value, ts: Date.now() });
+}
+
+/** When disabled via DENTAL_AI_MULTI_LANG=0, use per-lang translate only. */
+const DENTAL_AI_MULTI_LANG_ENABLED = (() => {
+  if (process.env.DENTAL_AI_MULTI_LANG === "0" || process.env.DENTAL_AI_MULTI_LANG === "false") {
+    return false;
+  }
+  return true;
+})();
+
+const DENTAL_AI_MULTI_TARGET_LANGS = ["tr", "ru", "ka"];
+
+const DENTAL_AI_MULTI_CACHE_MAX = (() => {
+  if (process.env.DENTAL_AI_MULTI_CACHE_MAX === "0") return 0;
+  const n = parseInt(process.env.DENTAL_AI_MULTI_CACHE_MAX || "200", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 200;
+})();
+
+const dentalAiMultiTranslationCache = new Map();
+
+function hashMultiCacheKey(enParsed) {
+  const sl = {
+    summary: enParsed && String(enParsed.summary || ""),
+    recommendation: enParsed && String(enParsed.recommendation || ""),
+  };
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        i: enParsed && Array.isArray(enParsed.insights) ? enParsed.insights : [],
+        ...sl,
+      }),
+      "utf8"
+    )
+    .digest("hex");
+}
+
+function dentalAiMultiTranslationCacheGet(key) {
+  if (DENTAL_AI_MULTI_CACHE_MAX < 1) return null;
+  const entry = dentalAiMultiTranslationCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > DENTAL_AI_CACHE_TTL_MS) {
+    dentalAiMultiTranslationCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function dentalAiMultiTranslationCacheSet(key, value) {
+  if (DENTAL_AI_MULTI_CACHE_MAX < 1) return;
+  while (dentalAiMultiTranslationCache.size >= DENTAL_AI_MULTI_CACHE_MAX) {
+    const first = dentalAiMultiTranslationCache.keys().next().value;
+    if (first === undefined) break;
+    dentalAiMultiTranslationCache.delete(first);
+  }
+  dentalAiMultiTranslationCache.set(key, { value, ts: Date.now() });
+}
+
 /**
- * Calls OpenAI Vision with automatic retry on weak/refusal responses.
- *
- * Flow:
- *   1) First call — language check → if wrong, one language-violation retry; if still wrong → language-error fallback
- *   2) Quality validation
- *   3) If quality fails → one stronger "must observe" prompt (+ language check on that response)
- *   4) If still bad → DENTAL_AI fallback
- *
- * Still throws on HTTP / network errors so the caller can return 502/504.
+ * Tolerates trailing commas and minor JSON glitches (model / transport).
+ * @param {string} text
+ * @returns {any | null}
  */
-async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, timeoutMs = 30000, langKey = "en" } = {}) {
-  const { system: sys1, user: usr1 } = generateDentalAnalysisPrompt(photoType, langKey);
-  let a = await callOpenAIVision(sys1, usr1, imageDataUrl, { apiKey, timeoutMs });
-  let t = buildDentalAnalysisTextForLangCheck(a.parsed);
-  let wrong = detectWrongLanguage(t, langKey);
-  let didLangRetry = false;
-  if (wrong) {
-    didLangRetry = true;
-    console.warn("[AI] wrong language, retrying...", { photoType, langKey });
-    const { system: sL, user: uL } = generateLanguageViolationRetryPrompt(photoType, langKey);
-    a = await callOpenAIVision(sL, uL, imageDataUrl, { apiKey, timeoutMs: Math.min(timeoutMs, 25_000) });
-    t = buildDentalAnalysisTextForLangCheck(a.parsed);
-    wrong = detectWrongLanguage(t, langKey);
-    if (wrong) {
-      const le = getDentalLanguageErrorFallback(langKey);
-      return {
-        insights: le.insights,
-        confidence: le.confidence,
-        summary: le.summary,
-        recommendation: le.recommendation,
-        missingTeethLikely: null,
-        dentalConditionParsed: null,
-        _usage: a.usage,
-        _model: a.model,
-        _fallback: true,
-        _langError: true,
-        _retried: true,
-        _qualityScore: 0,
-        _qualityReasons: ["language_mismatch"],
+function safeJsonParse(text) {
+  if (text == null) return null;
+  const s = String(text);
+  if (!s.trim()) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    try {
+      return JSON.parse(
+        s.replace(/,\s*}/g, "}").replace(/,\s*]/g, "]")
+      );
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * @param {any} x
+ * @returns {{ ok: true } | { ok: false, reason: string }}
+ */
+function validateTranslatedDentalOutput(x) {
+  if (!x) return { ok: false, reason: "empty" };
+  if (!Array.isArray(x.insights) || x.insights.length === 0) {
+    return { ok: false, reason: "insights" };
+  }
+  if (typeof x.summary !== "string" || x.summary.length < 20) {
+    return { ok: false, reason: "summary" };
+  }
+  if (typeof x.recommendation !== "string" || x.recommendation.length < 10) {
+    return { ok: false, reason: "recommendation" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Text-only: translate user-facing fields to the app language; same JSON shape.
+ */
+async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25000 } = {}) {
+  const k = normalizeAiDentalLang(langKey);
+  if (k === "en") return result;
+  const lang = dentalLangNameFor(k);
+  const ins = Array.isArray(result?.insights) ? result.insights : [];
+  if (!ins.length && !String(result?.summary || "").trim()) return result;
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `Translate the following dental analysis JSON into ${lang}.
+Keep EXACT JSON structure.
+Do NOT change meaning.
+Use natural, professional medical terminology.
+Do NOT add, remove, or rename fields.
+Only translate the string values in "insights", "summary", and "recommendation". Return ONLY valid JSON. No explanation or markdown.`,
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            insights: ins.map((s) => String(s || "").trim()).filter(Boolean),
+            summary: String(result?.summary || "").trim(),
+            recommendation: String(result?.recommendation || "").trim(),
+          }),
+        },
+      ],
+      max_tokens: 800,
+      response_format: { type: "json_object" },
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) return result;
+  const data = await res.json().catch(() => ({}));
+  const content = data.choices?.[0]?.message?.content || "{}";
+  const raw = safeJsonParse(content);
+  if (!raw || typeof raw !== "object") {
+    return result;
+  }
+  const outInsights = Array.isArray(raw.insights)
+    ? raw.insights.map((s) => String(s).trim()).filter(Boolean).slice(0, 3)
+    : [];
+  if (!outInsights.length) return result;
+  return {
+    ...result,
+    insights: outInsights,
+    summary: String(
+      raw.summary != null ? raw.summary : result?.summary || ""
+    ).trim(),
+    recommendation: String(
+      raw.recommendation != null ? raw.recommendation : result?.recommendation || ""
+    ).trim(),
+  };
+}
+
+function applyTranslationUnavailablePrefix(enParsed, k) {
+  const tag = `[${String(k).toUpperCase()} unavailable] `;
+  return {
+    ...enParsed,
+    summary: tag + String(enParsed.summary || ""),
+  };
+}
+
+function pickEnDataForMulti(en) {
+  return {
+    insights: en && Array.isArray(en.insights) ? en.insights : [],
+    summary: String(en?.summary || ""),
+    recommendation: String(en?.recommendation || ""),
+  };
+}
+
+const MULTI_BLOCK_EXPECTED_KEYS = [
+  "insights",
+  "summary",
+  "recommendation",
+  "confidence",
+  "missingTeethLikely",
+  "dentalConditionParsed",
+];
+
+/**
+ * Strips extra model fields; only known keys (EN schema-aligned).
+ * @param {object|undefined} x
+ */
+function normalizeBlock(x) {
+  const o = {};
+  for (const k of MULTI_BLOCK_EXPECTED_KEYS) {
+    o[k] = x?.[k] ?? (k === "insights" ? [] : null);
+  }
+  return o;
+}
+
+function textBundleForPurity(merged) {
+  const ins = Array.isArray(merged?.insights) ? merged.insights : [];
+  return [ins.map((s) => String(s || "")).join(" "), String(merged?.summary || ""), String(merged?.recommendation || "")].join(" ");
+}
+
+function hasCyrillic(s) {
+  return /[А-Яа-яЁё]/.test(String(s || ""));
+}
+function hasLatin(s) {
+  return /[A-Za-z]/.test(String(s || ""));
+}
+
+/**
+ * @param {object} merged  full parse after merge
+ * @param {string} L  tr|ru|ka
+ * @returns {boolean}
+ */
+function isValidMergedForLang(merged, L) {
+  const vt = validateTranslatedDentalOutput(merged);
+  if (!vt.ok) return false;
+  const text = textBundleForPurity(merged);
+  if (L === "ka" && hasCyrillic(text)) {
+    return false;
+  }
+  if (L === "ru" && hasLatin(text)) {
+    console.warn("⚠️ Latin in Russian text (allowed with warning)", { preview: text.slice(0, 160) });
+  }
+  return true;
+}
+
+/**
+ * Merges localized text from one language block (insights/summary/recommendation) into full EN parse.
+ * @param {object} en
+ * @param {object} loc
+ */
+function mergeMultiBlockIntoEn(en, loc) {
+  if (!loc || typeof loc !== "object") {
+    return { ...en };
+  }
+  const ins0 = loc.insights;
+  const ins = Array.isArray(ins0)
+    ? ins0.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 3)
+    : null;
+  return {
+    ...en,
+    insights: ins && ins.length ? ins : en.insights,
+    summary:
+      typeof loc.summary === "string" && String(loc.summary).trim()
+        ? String(loc.summary).trim()
+        : en.summary,
+    recommendation:
+      typeof loc.recommendation === "string" && String(loc.recommendation).trim()
+        ? String(loc.recommendation).trim()
+        : en.recommendation,
+  };
+}
+
+/**
+ * Multi output → per language: normalize → validate; fail → per-lang `runDentalLocalization` (partial success).
+ * @param {object|null} rawMulti  API multi JSON (may be null if multi call failed)
+ * @returns {Promise<Record<string, { insights, summary, recommendation }>>}
+ */
+async function buildPerLangWithPartialFallbacks(enResult, rawMulti, { apiKey, timeoutMs } = {}) {
+  const valid = {};
+  const tmo = Math.min(timeoutMs, 30_000);
+  for (const L of DENTAL_AI_MULTI_TARGET_LANGS) {
+    let usePick = null;
+    if (rawMulti && rawMulti[L] && typeof rawMulti[L] === "object") {
+      const nb = normalizeBlock(rawMulti[L]);
+      const loc = {
+        insights: Array.isArray(nb.insights) ? nb.insights : [],
+        summary: nb.summary == null ? "" : String(nb.summary),
+        recommendation: nb.recommendation == null ? "" : String(nb.recommendation),
       };
+      const merged = mergeMultiBlockIntoEn(enResult, loc);
+      if (isValidMergedForLang(merged, L)) {
+        usePick = pickEnDataForMulti(merged);
+      }
+    }
+    if (usePick) {
+      valid[L] = usePick;
+      continue;
+    }
+    const r = await runDentalLocalization(enResult, L, {
+      apiKey,
+      timeoutMs: tmo,
+      useTranslationCache: true,
+    });
+    if (r.translated && isValidMergedForLang(r.out, L)) {
+      valid[L] = pickEnDataForMulti(r.out);
+    } else {
+      console.warn("⚠️ per-lang fallback also failed, skipping language", { L });
+    }
+  }
+  return valid;
+}
+
+/**
+ * One GPT call → tr, ru, ka string fields (use fetch; same stack as other AI calls).
+ * @param {object} enData  { insights, summary, recommendation }
+ * @param {string[]} targetLangs  e.g. ["tr","ru","ka"]
+ */
+async function translateDentalAnalysisMulti(enData, targetLangs, { apiKey, timeoutMs = 40_000 } = {}) {
+  if (!enData || !apiKey) return null;
+  const names = (targetLangs || [])
+    .map((c) => `${c} (${dentalLangNameFor(normalizeAiDentalLang(c))})`)
+    .join(", ");
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      max_tokens: 3000,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a medical translation engine. Output ONLY valid JSON. No markdown, no comments.",
+        },
+        {
+          role: "user",
+          content: `Translate the following dental analysis JSON into multiple languages.
+
+Languages: ${names}
+
+Rules:
+- Keep EXACT JSON structure for each language block
+- Do NOT change meaning
+- Use professional medical terminology
+- Do NOT add, remove, or rename keys inside each block
+- Return ONLY valid JSON
+- Output format (use these top-level keys exactly: ${(targetLangs || []).map((x) => `"${x}"`).join(", ")}):
+
+{
+${(targetLangs || [])
+  .map(
+    (c) => `  "${c}": { "insights": ["..."], "summary": "...", "recommendation": "..." }`
+  )
+  .join(",\n")}
+
+}
+
+Input JSON:
+${JSON.stringify(enData)}`,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    const err = new Error(errBody?.error?.message || "OpenAI multi-translate failed");
+    err.status = res.status;
+    err.code = "openai_error";
+    throw err;
+  }
+  const data = await res.json().catch(() => ({}));
+  const content = data.choices?.[0]?.message?.content || "";
+  return safeJsonParse(String(content)) || null;
+}
+
+/**
+ * @param {object} enResult
+ * @returns {Promise<Record<string, { insights, summary, recommendation }>|null>}
+ */
+async function getOrFetchMultiTextBundle(enResult, { apiKey, timeoutMs } = {}) {
+  if (!DENTAL_AI_MULTI_LANG_ENABLED) return null;
+  const mKey = hashMultiCacheKey(enResult);
+  const hit = dentalAiMultiTranslationCacheGet(mKey);
+  if (hit) return hit;
+
+  const enData = pickEnDataForMulti(enResult);
+  let raw = null;
+  try {
+    raw = await translateDentalAnalysisMulti(enData, DENTAL_AI_MULTI_TARGET_LANGS, {
+      apiKey,
+      timeoutMs: Math.min(timeoutMs, 40_000),
+    });
+  } catch (e) {
+    console.warn("multi failed → fallback per-lang", e?.message || e);
+  }
+  if (!raw || typeof raw !== "object") {
+    raw = null;
+  }
+  const out = await buildPerLangWithPartialFallbacks(enResult, raw, {
+    apiKey,
+    timeoutMs: Math.min(timeoutMs, 30_000),
+  });
+  if (Object.keys(out).length === 0) {
+    return null;
+  }
+  if (DENTAL_AI_MULTI_CACHE_MAX > 0) {
+    dentalAiMultiTranslationCacheSet(mKey, out);
+  }
+  return out;
+}
+
+/**
+ * Multilingual (tr/ru/ka) bundle + EN snapshot in _allTranslations; falls back to per-lang translate.
+ * @returns {Promise<{ out: object, translated: boolean, allTranslations: object }>}
+ */
+async function resolveLocalizedDentalOutput(enResult, k, { apiKey, timeoutMs = 25_000 } = {}) {
+  const enSnapshot = { en: pickEnDataForMulti(enResult) };
+  let trRuKa = null;
+  if (DENTAL_AI_MULTI_LANG_ENABLED) {
+    trRuKa = await getOrFetchMultiTextBundle(enResult, { apiKey, timeoutMs });
+  }
+  if (DENTAL_AI_MULTI_LANG_ENABLED && trRuKa) {
+    const allTranslations = { ...enSnapshot, ...trRuKa };
+    if (k === "en") {
+      return { out: enResult, translated: false, allTranslations };
+    }
+    if (DENTAL_AI_MULTI_TARGET_LANGS.includes(k) && trRuKa[k]) {
+      const merged = mergeMultiBlockIntoEn(enResult, trRuKa[k]);
+      if (isValidMergedForLang(merged, k)) {
+        return { out: merged, translated: true, allTranslations };
+      }
+      console.warn("bad multi translation for selected lang, fallback to EN", { k });
+      return { out: enResult, translated: false, allTranslations };
+    }
+  }
+  const r = await runDentalLocalization(enResult, k, { apiKey, timeoutMs, useTranslationCache: false });
+  if (DENTAL_AI_MULTI_LANG_ENABLED && trRuKa) {
+    return {
+      out: r.out,
+      translated: r.translated,
+      allTranslations: { ...enSnapshot, ...trRuKa, ...buildLegacyLangSlice(r, k) },
+    };
+  }
+  return {
+    out: r.out,
+    translated: r.translated,
+    allTranslations: {
+      ...enSnapshot,
+      ...buildLegacyLangSlice(r, k),
+    },
+  };
+}
+
+function buildLegacyLangSlice(r, k) {
+  if (k === "en" || !r.translated) {
+    return {};
+  }
+  return { [k]: pickEnDataForMulti(r.out) };
+}
+
+/**
+ * EN-only parsed → cache lookup / translate; retry once; else prefix on summary.
+ * @returns {{ out: object, translated: boolean }}
+ */
+async function runDentalLocalization(enParsed, k, { apiKey, timeoutMs = 25_000, useTranslationCache } = {}) {
+  if (k === "en") return { out: enParsed, translated: false };
+  const useCache =
+    useTranslationCache === true ||
+    (useTranslationCache !== false && !DENTAL_AI_MULTI_LANG_ENABLED);
+  const tKey = getTranslationCacheKey(enParsed, k);
+  if (useCache && DENTAL_AI_TRANSLATION_CACHE_MAX > 0) {
+    const c = dentalAiTranslationCacheGet(tKey);
+    if (c) {
+      const qc = validateTranslatedDentalOutput(c);
+      if (qc.ok) {
+        if (k === "ka" && hasCyrillic(textBundleForPurity(c))) {
+          console.warn("⚠️ Cyrillic in Georgian (translation cache) — discarding");
+          dentalAiTranslationCache.delete(tKey);
+        } else {
+          return { out: c, translated: true };
+        }
+      }
+      dentalAiTranslationCache.delete(tKey);
+    }
+  }
+  const opts = { apiKey, timeoutMs };
+  let t = await translateDentalAnalysis(enParsed, k, opts);
+  let qt = validateTranslatedDentalOutput(t);
+  if (!qt.ok) {
+    console.warn("⚠️ Bad translation, retry once", { reason: qt.reason });
+    t = await translateDentalAnalysis(enParsed, k, opts);
+    qt = validateTranslatedDentalOutput(t);
+  }
+  if (!qt.ok) {
+    console.warn("⚠️ Bad translation after retry, tagging summary", { reason: qt.reason });
+    return { out: applyTranslationUnavailablePrefix(enParsed, k), translated: false };
+  }
+  if (k === "ka" && hasCyrillic(textBundleForPurity(t))) {
+    console.warn("⚠️ Cyrillic in Georgian (single path)");
+  }
+  if (useCache && DENTAL_AI_TRANSLATION_CACHE_MAX > 0) {
+    dentalAiTranslationCacheSet(tKey, t);
+  }
+  return { out: t, translated: true };
+}
+
+/**
+ * One vision call (English) → validate EN → cache EN → optional translate. No vision retries.
+ * Throws on HTTP / network errors so the caller can return 502/504.
+ */
+function buildDentalAiProcessReturn(parsed, a, { q, fromCache, translated, allTranslations } = {}) {
+  return {
+    insights: parsed.insights,
+    confidence: parsed.confidence,
+    summary: parsed.summary,
+    recommendation: parsed.recommendation,
+    missingTeethLikely: parsed.missingTeethLikely ?? null,
+    dentalConditionParsed: parsed.dentalConditionParsed ?? null,
+    _usage: a?.usage ?? null,
+    _model: fromCache ? "gpt-4o+cache" : a?.model || "gpt-4o",
+    _fallback: false,
+    _retried: false,
+    _fromCache: Boolean(fromCache),
+    _translated: Boolean(translated),
+    _allTranslations: allTranslations && typeof allTranslations === "object" ? allTranslations : null,
+    _qualityScore: q?.score,
+    _qualityReasons: q?.reasons || [],
+  };
+}
+
+async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, timeoutMs = 30000, langKey = "en" } = {}) {
+  const k = normalizeAiDentalLang(langKey);
+  const cacheKey = hashDentalAiCacheKey(imageDataUrl, photoType);
+  const enEntry = dentalAiVisionEnCacheGet(cacheKey);
+  if (enEntry) {
+    const qCached = enEntry?.q;
+    const enResult =
+      qCached && qCached.ok && enEntry.parsed
+        ? JSON.parse(JSON.stringify(enEntry.parsed))
+        : null;
+    if (enResult) {
+      const {
+        out: result,
+        translated: tFlag,
+        allTranslations: allTr,
+      } = await resolveLocalizedDentalOutput(enResult, k, {
+        apiKey,
+        timeoutMs: Math.min(timeoutMs, 25_000),
+      });
+      console.log("FINAL LANG:", k, "TRANSLATED:", tFlag, "FROM_CACHE: true");
+      console.log("AI PIPELINE:", {
+        multi: DENTAL_AI_MULTI_LANG_ENABLED,
+        fromCache: true,
+        translated: tFlag,
+        lang: k,
+        langsReturned: allTr && typeof allTr === "object" ? Object.keys(allTr) : [],
+      });
+      return buildDentalAiProcessReturn(
+        result,
+        { usage: null, model: "gpt-4o+cache" },
+        { q: qCached, fromCache: true, translated: tFlag, allTranslations: allTr }
+      );
     }
   }
 
-  const q1 = validateDentalAIQuality(a.parsed);
-  if (q1.ok) {
+  const { system, user } = generateDentalAnalysisPrompt(photoType);
+  const a = await callOpenAIVision(system, user, imageDataUrl, { apiKey, timeoutMs });
+  const q0 = validateDentalAIQuality(a.parsed);
+  if (!q0.ok) {
     return {
-      insights: a.parsed.insights,
-      confidence: a.parsed.confidence,
-      summary: a.parsed.summary,
-      recommendation: a.parsed.recommendation,
-      missingTeethLikely: a.parsed.missingTeethLikely ?? null,
-      dentalConditionParsed: a.parsed.dentalConditionParsed ?? null,
+      ...getDentalAiFallback(langKey),
+      missingTeethLikely: null,
+      dentalConditionParsed: null,
       _usage: a.usage,
       _model: a.model,
-      _fallback: false,
-      _retried: didLangRetry,
-      _qualityScore: q1.score,
-      _qualityReasons: [],
+      _fallback: true,
+      _retried: false,
+      _fromCache: false,
+      _translated: false,
+      _qualityScore: q0.score,
+      _qualityReasons: q0.reasons,
     };
   }
 
-  console.warn("[AI] First attempt weak — retrying with stronger prompt.", {
-    photoType, score: q1.score, reasons: q1.reasons,
-    insights: a.parsed.insights,
-  });
+  if (DENTAL_AI_VISION_EN_CACHE_MAX > 0) {
+    dentalAiCacheSet(cacheKey, {
+      parsed: JSON.parse(JSON.stringify(a.parsed)),
+      q: q0,
+    });
+  }
 
-  const { system: sys2, user: usr2 } = generateRetryPrompt(photoType, langKey);
-  let a2 = await callOpenAIVision(sys2, usr2, imageDataUrl, {
-    apiKey,
-    timeoutMs: Math.min(timeoutMs, 20_000),
-  });
-  t = buildDentalAnalysisTextForLangCheck(a2.parsed);
-  wrong = detectWrongLanguage(t, langKey);
-  if (wrong) {
-    console.warn("[AI] wrong language after quality retry, correcting...", { photoType, langKey });
-    const { system: sL2, user: uL2 } = generateLanguageViolationRetryPrompt(photoType, langKey);
-    a2 = await callOpenAIVision(sL2, uL2, imageDataUrl, { apiKey, timeoutMs: Math.min(timeoutMs, 20_000) });
-    t = buildDentalAnalysisTextForLangCheck(a2.parsed);
-    wrong = detectWrongLanguage(t, langKey);
-    if (wrong) {
-      const le = getDentalLanguageErrorFallback(langKey);
-      return {
-        insights: le.insights,
-        confidence: le.confidence,
-        summary: le.summary,
-        recommendation: le.recommendation,
-        missingTeethLikely: null,
-        dentalConditionParsed: null,
-        _usage: a2.usage,
-        _model: a2.model,
-        _fallback: true,
-        _langError: true,
-        _retried: true,
-        _qualityScore: 0,
-        _qualityReasons: ["language_mismatch"],
-      };
+  const { out: result, translated: tFlag, allTranslations: allTr } = await resolveLocalizedDentalOutput(
+    a.parsed,
+    k,
+    {
+      apiKey,
+      timeoutMs: Math.min(timeoutMs, 25_000),
     }
-  }
-
-  const q2 = validateDentalAIQuality(a2.parsed);
-  if (q2.ok) {
-    return {
-      insights: a2.parsed.insights,
-      confidence: a2.parsed.confidence,
-      summary: a2.parsed.summary,
-      recommendation: a2.parsed.recommendation,
-      missingTeethLikely: a2.parsed.missingTeethLikely ?? null,
-      dentalConditionParsed: a2.parsed.dentalConditionParsed ?? null,
-      _usage: a2.usage,
-      _model: a2.model,
-      _fallback: false,
-      _retried: true,
-      _qualityScore: q2.score,
-      _qualityReasons: [],
-    };
-  }
-
-  console.error("[AI] Both attempts failed quality validation.", {
-    photoType,
-    q1: { score: q1.score, reasons: q1.reasons },
-    q2: { score: q2.score, reasons: q2.reasons },
+  );
+  console.log("FINAL LANG:", k, "TRANSLATED:", tFlag, "FROM_CACHE: false");
+  console.log("AI PIPELINE:", {
+    multi: DENTAL_AI_MULTI_LANG_ENABLED,
+    fromCache: false,
+    translated: tFlag,
+    lang: k,
+    langsReturned: allTr && typeof allTr === "object" ? Object.keys(allTr) : [],
   });
-
-  return {
-    ...getDentalAiFallback(langKey),
-    missingTeethLikely: null,
-    dentalConditionParsed: null,
-    _usage: a2.usage,
-    _model: a2.model,
-    _fallback: true,
-    _retried: true,
-    _qualityScore: q2.score,
-    _qualityReasons: q2.reasons,
-  };
+  return buildDentalAiProcessReturn(result, a, {
+    q: q0,
+    fromCache: false,
+    translated: tFlag,
+    allTranslations: allTr,
+  });
 }
 
 // ─── Dental Enhancement Engine — structured teeth-first pipeline ───────────────
@@ -24075,6 +24509,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
 
     const rawLang = getAiAnalyzeRequestLanguage(req);
     const langKey = normalizeAiDentalLang(rawLang);
+    console.log('AI LANG RECEIVED:', langKey);
 
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
     if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
@@ -24245,7 +24680,18 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       return res.status(502).json({ ok: false, error: 'openai_error', message: openaiErr.message || 'OpenAI request failed' });
     }
 
-    const { insights, confidence, summary, recommendation, missingTeethLikely, dentalConditionParsed, _usage, _model } = aiAnalysis;
+    const {
+      insights,
+      confidence,
+      summary,
+      recommendation,
+      missingTeethLikely,
+      dentalConditionParsed,
+      _usage,
+      _model,
+      _translated,
+      _allTranslations,
+    } = aiAnalysis;
 
     logAI('info', 'openai_response', {
       patientId,
@@ -24306,6 +24752,8 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
           summary,
           recommendation,
           disclaimer,
+          translated: Boolean(_translated),
+          allTranslations: _allTranslations || null,
           originalImageUrl: imageUrl,
           issues: treatmentPlan.issues,
           treatments: treatmentPlan.treatments,
@@ -24342,6 +24790,8 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       confidence,
       summary,
       recommendation,
+      translated: Boolean(_translated),
+      allTranslations: _allTranslations || null,
       simulatedImageUrl,
       simulationProvider,
       disclaimer,

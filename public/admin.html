@@ -807,6 +807,79 @@
     }
   }
 
+  function limitsFromBillingCatalog(catalog) {
+    try {
+      const p = catalog && catalog.plans;
+      if (!p || !p.FREE) return PLAN_USAGE_MOCK.limits;
+      return {
+        free: {
+          activeTreatments: p.FREE.activeTreatments,
+          uploads: p.FREE.monthlyUploads,
+          referrals: p.FREE.referralInvites,
+        },
+        basic: {
+          activeTreatments: p.BASIC.activeTreatments,
+          uploads: p.BASIC.monthlyUploads,
+          referrals: p.BASIC.referralInvites,
+        },
+        pro: {
+          activeTreatments: p.PRO.activeTreatments,
+          uploads: p.PRO.monthlyUploads,
+          referrals: p.PRO.referralInvites,
+        },
+      };
+    } catch (e) {
+      return PLAN_USAGE_MOCK.limits;
+    }
+  }
+
+  async function loadPlanUsageWidget() {
+    const token = getAdminToken();
+    if (!token) {
+      renderPlanWidget("planUsageWidgetMount");
+      return;
+    }
+    try {
+      const res = await safariFetch(`${API}/api/admin/billing/usage`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) {
+        if (window.handle401 && window.handle401(res.status)) return;
+        renderPlanWidget("planUsageWidgetMount");
+        return;
+      }
+      const data = await res.json();
+      if (!data.ok) {
+        renderPlanWidget("planUsageWidgetMount");
+        return;
+      }
+      const lim = limitsFromBillingCatalog(data.catalog);
+      if (!data.snapshot) {
+        renderPlanWidget("planUsageWidgetMount", {
+          plan: "free",
+          usage: { activeTreatments: 0, uploads: 0, referrals: 0 },
+          limits: lim,
+        });
+        return;
+      }
+      const s = data.snapshot;
+      const u = s.usage || {};
+      const plan = String(s.plan || "free").toLowerCase();
+      renderPlanWidget("planUsageWidgetMount", {
+        plan,
+        usage: {
+          activeTreatments: Number(u.activeTreatments) || 0,
+          uploads: Number(u.monthlyUploads) || 0,
+          referrals: Number(u.referralInvites) || 0,
+        },
+        limits: lim,
+      });
+    } catch (e) {
+      console.warn("[PLAN USAGE]", e);
+      renderPlanWidget("planUsageWidgetMount");
+    }
+  }
+
   // tooth/clinical procedure display names: loaded from /api/procedures; legacy-only codes below
   window._PROC_LABELS_CATALOG = window._PROC_LABELS_CATALOG || {};
   const PROC_LABELS_LEGACY = {
@@ -1481,7 +1554,7 @@
 
   window.renderDashboard = function() {
     if (!document.getElementById("upcomingList")) return;
-    renderPlanWidget("planUsageWidgetMount");
+    loadPlanUsageWidget();
     loadClinicInfo();
     loadEvents();
     setTimeout(function() {
@@ -1494,7 +1567,7 @@
   };
   
   function initializeDashboard() {
-    renderPlanWidget("planUsageWidgetMount");
+    loadPlanUsageWidget();
     loadClinicInfo();
     loadEvents();
 

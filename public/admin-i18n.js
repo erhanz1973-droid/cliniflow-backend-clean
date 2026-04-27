@@ -108,7 +108,8 @@
         treatmentCreateH1: "🏥 Treatment Oluştur",
         treatmentCreateSubtitle: "Yeni tedavi grubu oluşturun ve doktor atayın",
         patientDetailH1: "Hasta Detay",
-        patientDetailBack: "Geri"
+        patientDetailBack: "Geri",
+        legacyNavClinics: "Klinikler"
       },
       
       // Suspended Clinic Messages
@@ -890,7 +891,8 @@
         treatmentCreateH1: "🏥 Create treatment",
         treatmentCreateSubtitle: "Create a new treatment group and assign doctors",
         patientDetailH1: "Patient detail",
-        patientDetailBack: "Back"
+        patientDetailBack: "Back",
+        legacyNavClinics: "Clinics"
       },
       
       // Suspended Clinic Messages
@@ -1660,7 +1662,8 @@
         treatmentCreateH1: "🏥 Создать лечение",
         treatmentCreateSubtitle: "Создайте группу лечения и назначьте врачей",
         patientDetailH1: "Карта пациента",
-        patientDetailBack: "Назад"
+        patientDetailBack: "Назад",
+        legacyNavClinics: "Клиники"
       },
       dashboard: {
         title: "Clinifly Admin – Панель управления",
@@ -2136,7 +2139,8 @@
         treatmentCreateH1: "🏥 მკურნალობის შექმნა",
         treatmentCreateSubtitle: "შექმენით ახალი ჯგუფი და მიანიჭეთ ექიმები",
         patientDetailH1: "პაციენტის დეტალები",
-        patientDetailBack: "უკან"
+        patientDetailBack: "უკან",
+        legacyNavClinics: "კლინიკები"
       },
       dashboard: {
         title: "Clinifly Admin – მართვის პანელი",
@@ -2863,9 +2867,9 @@
           el.title = this.t(key);
         });
         if (this.currentLang === 'ru' && document.body) {
-          const bodyText = (document.body.innerText || '');
-          if (/(Takvim|Randevu|Doktor|Önceki|Bugün|Kaydet|Hastalar|Koltuk|Panel|Tüm)/.test(bodyText)) {
-            console.warn('Mixed language: Turkish fragments may be visible in RU mode (check data-i18n / JS strings)');
+          const bodyText = document.body.innerText || '';
+          if (bodyText.match(/[A-Za-z]/)) {
+            console.warn('⚠️ Mixed language detected');
           }
         }
       } finally {
