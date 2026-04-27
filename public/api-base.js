@@ -90,7 +90,7 @@
 
   /**
    * Patient / chat UI: language for POST /api/chat/ai-analyze (JSON field `language`, required for translation).
-   * Matches: localStorage "lang" → navigator → "en"
+   * Matches: localStorage "lang" → navigator → "tr"
    */
   w.cliniflowGetUserLanguage = function () {
     try {
@@ -99,7 +99,7 @@
     } catch (e) {}
     var nav = typeof navigator !== 'undefined' && navigator.language ? String(navigator.language) : '';
     if (nav) return nav.slice(0, 2).toLowerCase();
-    return 'en';
+    return "tr";
   };
 
   w.cliniflowLogSendingLanguage = function (userLanguage) {
@@ -114,7 +114,7 @@
     console.log('🌍 Analyze language:', userLanguage);
   };
 
-  /** Resolves language for AI calls (localStorage lang → navigator → en), or __CLINIFLOW_FORCE_AI_LANG__. */
+  /** Resolves language for AI calls (localStorage lang → navigator → tr), or __CLINIFLOW_FORCE_AI_LANG__. */
   w.cliniflowResolveAiLanguage = function () {
     var forced =
       typeof w.__CLINIFLOW_FORCE_AI_LANG__ === 'string' && w.__CLINIFLOW_FORCE_AI_LANG__.trim();

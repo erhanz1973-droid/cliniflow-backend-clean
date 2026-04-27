@@ -18610,15 +18610,18 @@ const DENTAL_AI_LANG_MAP = {
 };
 
 function normalizeAiDentalLang(input) {
-  const raw = String(input || "en")
+  const raw = String(input || "tr")
     .trim()
     .toLowerCase();
   const key = raw.slice(0, 2);
-  return DENTAL_AI_LANG_MAP[key] ? key : "en";
+  const k = DENTAL_AI_LANG_MAP[key] ? key : "tr";
+  /** Turkish-first product: treat English locale the same as unset — never ship en as display lang for this API. */
+  if (k === "en") return "tr";
+  return k;
 }
 
 function dentalLangNameFor(key) {
-  return DENTAL_AI_LANG_MAP[normalizeAiDentalLang(key)] || "English";
+  return DENTAL_AI_LANG_MAP[normalizeAiDentalLang(key)] || "Turkish";
 }
 
 /** Safe fallback when AI output is invalid (localized). */
@@ -18647,76 +18650,8 @@ const DENTAL_AI_FALLBACK_I18N = {
 
 function getDentalAiFallback(langKey) {
   const k = normalizeAiDentalLang(langKey);
-  const row = DENTAL_AI_FALLBACK_I18N[k] || DENTAL_AI_FALLBACK_I18N.en;
+  const row = DENTAL_AI_FALLBACK_I18N[k] || DENTAL_AI_FALLBACK_I18N.tr;
   return { ...row, confidence: "low" };
-}
-
-function getAiAnalyzeRequestLanguage(req) {
-  return getAiAnalyzeRequestLanguageSync(req) || "en";
-}
-
-/**
- * First acceptable locale from Accept-Language (e.g. "tr-TR,en;q=0.8" → "tr" when supported).
- * @param {string|undefined} raw
- * @returns {string|null}
- */
-function parseAcceptLanguageHeader(raw) {
-  if (raw == null || String(raw).trim() === "") return null;
-  const part = String(raw)
-    .split(",")[0]
-    .trim()
-    .split(";")[0]
-    .trim();
-  if (!part) return null;
-  const code = part.replace(/_/g, "-").split("-")[0].toLowerCase().slice(0, 2);
-  if (DENTAL_AI_LANG_MAP[code]) return code;
-  return null;
-}
-
-/**
- * Synchronous hints only (no DB). Used by getAiAnalyzeRequestLanguage legacy helper.
- * Order: explicit body/query/x-lang → Accept-Language → req.user → JWT.
- * For ai-analyze, use {@link resolveAiAnalyzeLanguage} which inserts DB before these heuristics.
- */
-function getAiAnalyzeRequestLanguageSync(req) {
-  const body = req.body || {};
-  if (body.language != null && String(body.language).trim() !== "") {
-    return String(body.language).trim();
-  }
-  if (body.lang != null && String(body.lang).trim() !== "") {
-    return String(body.lang).trim();
-  }
-  const q = req.query || {};
-  if (q.language != null && String(q.language).trim() !== "") {
-    return String(q.language).trim();
-  }
-  if (q.lang != null && String(q.lang).trim() !== "") {
-    return String(q.lang).trim();
-  }
-  const xLang = req.headers["x-lang"] || req.headers["X-Lang"];
-  if (xLang != null && String(xLang).trim() !== "") {
-    return String(xLang).trim();
-  }
-  const fromAccept = parseAcceptLanguageHeader(
-    req.headers["accept-language"] || req.headers["Accept-Language"]
-  );
-  if (fromAccept) return fromAccept;
-  if (req.user && req.user.lang) {
-    return String(req.user.lang).trim();
-  }
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : (req.headers["x-patient-token"] || "");
-  if (token && String(token).startsWith("eyJ")) {
-    try {
-      const decoded = jwt.decode(token);
-      if (decoded && decoded.language) {
-        return String(decoded.language).trim();
-      }
-    } catch (e) {
-      /* non-fatal */
-    }
-  }
-  return null;
 }
 
 /**
@@ -18749,57 +18684,25 @@ async function fetchPatientLanguageForAiAnalyze(patientId) {
 }
 
 /**
- * Full chain: explicit body / query / x-lang → **patients.language (DB)** → Accept-Language → user → JWT → en.
- * DB is read when the app omits `language` so profile tr/ru/ka is not overridden by English device locale.
- * @param {import('express').Request} req
- * @param {string|undefined} patientId
- * @returns {Promise<string>}
+ * Single source of truth for POST /api/chat/ai-upload and POST /api/chat/ai-analyze.
+ * @param {import("express").Request} req
+ * @param {{ language?: string } | null | undefined} patient
  */
-async function resolveAiAnalyzeLanguage(req, patientId) {
-  const body = req.body || {};
-  const q = req.query || {};
-  if (body.language != null && String(body.language).trim() !== "") {
-    return String(body.language).trim();
-  }
-  if (body.lang != null && String(body.lang).trim() !== "") {
-    return String(body.lang).trim();
-  }
-  if (q.language != null && String(q.language).trim() !== "") {
-    return String(q.language).trim();
-  }
-  if (q.lang != null && String(q.lang).trim() !== "") {
-    return String(q.lang).trim();
-  }
-  const xLang = req.headers["x-lang"] || req.headers["X-Lang"];
-  if (xLang != null && String(xLang).trim() !== "") {
-    return String(xLang).trim();
-  }
+function resolveLang(req, patient) {
+  const raw =
+    req.body?.language ||
+    req.body?.lang ||
+    req.headers["x-lang"] ||
+    patient?.language ||
+    "tr";
 
-  const fromDb = await fetchPatientLanguageForAiAnalyze(patientId);
-  if (fromDb != null && String(fromDb).trim() !== "") {
-    return String(fromDb).trim();
-  }
+  let lang = String(raw)
+    .toLowerCase()
+    .slice(0, 2);
 
-  const fromAccept = parseAcceptLanguageHeader(
-    req.headers["accept-language"] || req.headers["Accept-Language"]
-  );
-  if (fromAccept) return fromAccept;
-  if (req.user && req.user.lang) {
-    return String(req.user.lang).trim();
-  }
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : (req.headers["x-patient-token"] || "");
-  if (token && String(token).startsWith("eyJ")) {
-    try {
-      const decoded = jwt.decode(token);
-      if (decoded && decoded.language) {
-        return String(decoded.language).trim();
-      }
-    } catch (e) {
-      /* non-fatal */
-    }
-  }
-  return "en";
+  if (!lang || lang === "en") return "tr";
+
+  return lang;
 }
 
 // ── Vague / generic phrases to reject (Turkish + English, case-insensitive) ──
@@ -19368,6 +19271,30 @@ function safeJsonParse(text) {
   }
 }
 
+function hasCyrillic(s) {
+  return /[А-Яа-яЁё]/.test(String(s || ""));
+}
+function hasLatin(s) {
+  return /[A-Za-z]/.test(String(s || ""));
+}
+
+/** Mkhedruli / Georgian block present and no Cyrillic. */
+function isValidGeorgian(text) {
+  const t = String(text || "");
+  return /[\u10A0-\u10FF]/.test(t) && !hasCyrillic(t);
+}
+
+const TRANSLATE_TEXT_SYSTEM = `You are a professional medical translator.
+
+Translate dental analysis accurately.
+
+IMPORTANT:
+- If target language is Georgian (ka), you MUST use ONLY Georgian script (Mkhedruli ქართული).
+- DO NOT use Cyrillic or Latin characters.
+- Output must be natural Georgian language.
+
+For all languages: translate accurately, preserve medical meaning. Output the translation only, no preamble.`;
+
 /**
  * Plain string translation (gpt-4o-mini). Main dental flow uses translateDentalAnalysis (structured JSON) so fields stay aligned.
  * Use for the optional patient-friendly explainer: English first, then translate for tr/ru/ka.
@@ -19381,36 +19308,52 @@ async function translateText(text, targetLang, { apiKey, timeoutMs = 25000 } = {
   if (!k || k === "en") return String(text);
   if (!apiKey) return String(text);
   const lang = dentalLangNameFor(k);
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a professional medical translator. Translate accurately and preserve medical meaning. Output the translation only, no preamble.",
-        },
-        {
-          role: "user",
-          content: `Translate this dental analysis to ${lang}:\n\n${String(text)}`,
-        },
-      ],
-      max_tokens: 1200,
-      temperature: 0.2,
-    }),
-    signal: AbortSignal.timeout(Math.min(timeoutMs, 60_000)),
-  });
-  if (!res.ok) {
+  const runOnce = async () => {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: TRANSLATE_TEXT_SYSTEM,
+          },
+          {
+            role: "user",
+            content: `Translate this dental analysis to ${lang}:\n\n${String(text)}`,
+          },
+        ],
+        max_tokens: 1200,
+        temperature: 0.2,
+      }),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 60_000)),
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    const out = data?.choices?.[0]?.message?.content;
+    return out != null && String(out).trim() ? String(out).trim() : null;
+  };
+
+  let translated = await runOnce();
+  if (translated == null) return String(text);
+
+  if (k === "ka" && !isValidGeorgian(translated)) {
+    console.log("⚠️ Invalid Georgian script, retrying...");
+    const second = await runOnce();
+    if (second != null) translated = second;
+  }
+
+  if (k === "ka" && !isValidGeorgian(translated)) {
+    console.log("❌ Georgian failed, fallback to English");
     return String(text);
   }
-  const data = await res.json().catch(() => ({}));
-  const out = data?.choices?.[0]?.message?.content;
-  return out != null && String(out).trim() ? String(out).trim() : String(text);
+  return translated;
 }
 
 const DENTAL_AI_PATIENT_FRIENDLY = String(process.env.DENTAL_AI_PATIENT_FRIENDLY || "").trim() === "1";
@@ -19519,59 +19462,99 @@ async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25
   const lang = dentalLangNameFor(k);
   const ins = Array.isArray(result?.insights) ? result.insights : [];
   if (!ins.length && !String(result?.summary || "").trim()) return result;
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: `Translate the following dental analysis JSON into ${lang}.
-Keep EXACT JSON structure.
-Do NOT change meaning.
-Use natural, professional medical terminology.
-Do NOT add, remove, or rename fields.
-Only translate the string values in "insights", "summary", and "recommendation". Return ONLY valid JSON. No explanation or markdown.`,
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            insights: ins.map((s) => String(s || "").trim()).filter(Boolean),
-            summary: String(result?.summary || "").trim(),
-            recommendation: String(result?.recommendation || "").trim(),
-          }),
-        },
-      ],
-      max_tokens: 800,
-      response_format: { type: "json_object" },
-    }),
-    signal: AbortSignal.timeout(timeoutMs),
+  const userJson = JSON.stringify({
+    insights: ins.map((s) => String(s || "").trim()).filter(Boolean),
+    summary: String(result?.summary || "").trim(),
+    recommendation: String(result?.recommendation || "").trim(),
   });
-  if (!res.ok) return result;
-  const data = await res.json().catch(() => ({}));
-  const content = data.choices?.[0]?.message?.content || "{}";
-  const raw = safeJsonParse(content);
-  if (!raw || typeof raw !== "object") {
-    return result;
+  const systemLines = [
+    `Translate the following dental analysis JSON into ${lang}.`,
+    "Keep EXACT JSON structure.",
+    "Do NOT change meaning.",
+    "Use natural, professional medical terminology.",
+    "Do NOT add, remove, or rename fields.",
+    'Only translate the string values in "insights", "summary", and "recommendation". Return ONLY valid JSON. No explanation or markdown.',
+  ];
+  if (k === "ka") {
+    systemLines.push(
+      "",
+      "IMPORTANT for Georgian (ka):",
+      "- You MUST use ONLY Georgian script (Mkhedruli ქართული) in all translated string values.",
+      "- DO NOT use Cyrillic or Latin characters in those values."
+    );
   }
-  const outInsights = Array.isArray(raw.insights)
-    ? raw.insights.map((s) => String(s).trim()).filter(Boolean).slice(0, 3)
-    : [];
-  if (!outInsights.length) return result;
-  return {
-    ...result,
-    insights: outInsights,
-    summary: String(
-      raw.summary != null ? raw.summary : result?.summary || ""
-    ).trim(),
-    recommendation: String(
-      raw.recommendation != null ? raw.recommendation : result?.recommendation || ""
-    ).trim(),
+  const systemContent = systemLines.join("\n");
+
+  const buildMerged = (raw) => {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const outInsights = Array.isArray(raw.insights)
+      ? raw.insights.map((s) => String(s).trim()).filter(Boolean).slice(0, 3)
+      : [];
+    if (!outInsights.length) {
+      return null;
+    }
+    return {
+      ...result,
+      insights: outInsights,
+      summary: String(
+        raw.summary != null ? raw.summary : result?.summary || ""
+      ).trim(),
+      recommendation: String(
+        raw.recommendation != null ? raw.recommendation : result?.recommendation || ""
+      ).trim(),
+    };
   };
+
+  const runOnce = async (userRem) => {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: systemContent,
+          },
+          {
+            role: "user",
+            content: userRem ? `${userJson}\n\n${userRem}` : userJson,
+          },
+        ],
+        max_tokens: 800,
+        response_format: { type: "json_object" },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => ({}));
+    const content = data.choices?.[0]?.message?.content || "{}";
+    const raw = safeJsonParse(content);
+    return buildMerged(raw);
+  };
+
+  let merged = await runOnce();
+  if (!merged) return result;
+  if (k === "ka") {
+    const t = textBundleForPurity(merged);
+    if (!isValidGeorgian(t)) {
+      console.log("⚠️ Invalid Georgian script (dental JSON), retrying...");
+      const again = await runOnce(
+        "REMINDER: All strings must be in Mkhedruli (Georgian script) only. No Cyrillic. No Latin."
+      );
+      if (again) merged = again;
+    }
+    if (!isValidGeorgian(textBundleForPurity(merged))) {
+      console.log("❌ Georgian failed (dental JSON), fallback to English");
+      return result;
+    }
+  }
+  return merged;
 }
 
 function applyTranslationUnavailablePrefix(enParsed, k) {
@@ -19616,13 +19599,6 @@ function textBundleForPurity(merged) {
   return [ins.map((s) => String(s || "")).join(" "), String(merged?.summary || ""), String(merged?.recommendation || "")].join(" ");
 }
 
-function hasCyrillic(s) {
-  return /[А-Яа-яЁё]/.test(String(s || ""));
-}
-function hasLatin(s) {
-  return /[A-Za-z]/.test(String(s || ""));
-}
-
 /**
  * @param {object} merged  full parse after merge
  * @param {string} L  tr|ru|ka
@@ -19632,7 +19608,7 @@ function isValidMergedForLang(merged, L) {
   const vt = validateTranslatedDentalOutput(merged);
   if (!vt.ok) return false;
   const text = textBundleForPurity(merged);
-  if (L === "ka" && hasCyrillic(text)) {
+  if (L === "ka" && !isValidGeorgian(text)) {
     return false;
   }
   if (L === "ru" && hasLatin(text)) {
@@ -19718,6 +19694,8 @@ async function translateDentalAnalysisMulti(enData, targetLangs, { apiKey, timeo
   const names = (targetLangs || [])
     .map((c) => `${c} (${dentalLangNameFor(normalizeAiDentalLang(c))})`)
     .join(", ");
+  const tlangs = targetLangs || [];
+  const hasKa = tlangs.map((c) => normalizeAiDentalLang(c)).includes("ka");
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -19732,8 +19710,9 @@ async function translateDentalAnalysisMulti(enData, targetLangs, { apiKey, timeo
       messages: [
         {
           role: "system",
-          content:
-            "You are a medical translation engine. Output ONLY valid JSON. No markdown, no comments.",
+          content: hasKa
+            ? "You are a medical translation engine. Output ONLY valid JSON. No markdown, no comments. For the ka (Georgian) block, use ONLY Mkhedruli (Georgian script) in all strings — not Cyrillic or Latin."
+            : "You are a medical translation engine. Output ONLY valid JSON. No markdown, no comments.",
         },
         {
           role: "user",
@@ -19747,7 +19726,12 @@ Rules:
 - Use professional medical terminology
 - Do NOT add, remove, or rename keys inside each block
 - Return ONLY valid JSON
-- Output format (use these top-level keys exactly: ${(targetLangs || []).map((x) => `"${x}"`).join(", ")}):
+${
+  hasKa
+    ? `- For the "ka" (Georgian) block: every string MUST be in Mkhedruli (Georgian script) only. DO NOT use Cyrillic or Latin in that block.
+`
+    : ""
+}- Output format (use these top-level keys exactly: ${(targetLangs || []).map((x) => `"${x}"`).join(", ")}):
 
 {
 ${(targetLangs || [])
@@ -19916,7 +19900,7 @@ async function runDentalLocalization(enParsed, k, { apiKey, timeoutMs = 25_000, 
 function buildDentalAiProcessReturn(
   parsed,
   a,
-  { q, fromCache, translated, allTranslations, langKey = "en" } = {}
+  { q, fromCache, translated, allTranslations, langKey = "tr" } = {}
 ) {
   const k = normalizeAiDentalLang(langKey);
   const enB = englishBundleForDentalText(parsed, allTranslations);
@@ -19943,7 +19927,7 @@ function buildDentalAiProcessReturn(
   };
 }
 
-async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, timeoutMs = 30000, langKey = "en" } = {}) {
+async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, timeoutMs = 30000, langKey = "tr" } = {}) {
   const k = normalizeAiDentalLang(langKey);
   const cacheKey = hashDentalAiCacheKey(imageDataUrl, photoType);
   const enEntry = dentalAiVisionEnCacheGet(cacheKey);
@@ -24238,8 +24222,8 @@ app.post('/api/chat/smile-scenarios', requireToken, async (req, res) => {
 });
 
 // POST /api/chat/ai-upload
-// Multipart: field "file" (required). Optional text fields: language | lang (same resolution as ai-analyze).
-// Returns { ok, url, path, language } — use `language` when calling POST /api/chat/ai-analyze JSON body.
+// Multipart: field "file" (required). Optional: language | lang (see resolveLang).
+// Returns { ok, imageUrl, url, path, language } — imageUrl = signed URL; language: body|x-lang|patient|tr
 // Stores the photo in Supabase Storage and returns a long-lived signed URL that
 // the ai-analyze endpoint can fetch.
 app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (req, res) => {
@@ -24289,10 +24273,29 @@ app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (
       return res.status(500).json({ ok: false, error: 'sign_failed', message: signErr?.message });
     }
 
-    const rawLang = await resolveAiAnalyzeLanguage(req, patientId);
-    const language = normalizeAiDentalLang(rawLang);
-    console.log('[AI UPLOAD] OK:', { patientId, storagePath, sizeKB: Math.round(size / 1024), language });
-    return res.json({ ok: true, url: signed.signedUrl, path: storagePath, language });
+    const pl = await fetchPatientLanguageForAiAnalyze(patientId);
+    const patient = pl != null ? { language: pl } : null;
+    const language =
+      req.body?.language ||
+      req.body?.lang ||
+      req.headers["x-lang"] ||
+      patient?.language ||
+      "tr";
+    const l2 = String(language).toLowerCase().trim().slice(0, 2) || "tr";
+    const languageOut = !l2 || l2 === "en" ? "tr" : l2;
+    console.log("🌍 UPLOAD LANG FINAL:", {
+      body: req.body?.language,
+      header: req.headers["x-lang"],
+      patient: patient?.language,
+      final: languageOut,
+    });
+    return res.json({
+      ok: true,
+      imageUrl: signed.signedUrl,
+      url: signed.signedUrl,
+      path: storagePath,
+      language: languageOut,
+    });
 
   } catch (err) {
     console.error('[AI UPLOAD] Exception:', err?.message, err?.stack);
@@ -25041,7 +25044,7 @@ function buildDentalTreatmentPlan(
 
 // POST /api/chat/ai-analyze
 // Accepts: { patientId, imageUrl, photoType?, language? | lang?, userLocation?, ... }
-// Optional header: x-lang  —  Send `language: "tr"` in JSON so translation runs (tr/ru/ka).
+// Language: single source of truth — {@link resolveLang} + {@link fetchPatientLanguageForAiAnalyze} → {@link normalizeAiDentalLang} (missing / "en" → tr).
 // Feature flags: ENABLE_AI_ANALYSIS, ENABLE_SMILE_SIMULATION
 // Timeouts:      AI_TIMEOUT_MS (default 30 000 ms)
 // Images are processed in-memory as base64 — no external storage required
@@ -25066,10 +25069,18 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
     if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl_required' });
 
-    const rawLang = await resolveAiAnalyzeLanguage(req, patientId);
-    // Effective: req.body.language || x-lang || … || patients.language (DB); see resolveAiAnalyzeLanguage.
-    const lang = normalizeAiDentalLang(rawLang);
-    console.log("🌍 AI LANG RECEIVED:", lang);
+    const pl = await fetchPatientLanguageForAiAnalyze(patientId);
+    const patient = pl != null ? { language: pl } : null;
+    const lang = normalizeAiDentalLang(resolveLang(req, patient));
+    console.log("🌍 RESOLVED LANG:", {
+      body: req.body?.language,
+      header: req.headers["x-lang"],
+      patient: patient?.language,
+      final: lang,
+    });
+    console.log("AI LANG RECEIVED:", lang);
+    console.log("AI LANG INPUT:", lang);
+    console.log("TRANSLATED?", lang !== "en");
 
     const OPENAI_KEY = process.env.OPENAI_API_KEY;
     if (!OPENAI_KEY) {
