@@ -82,4 +82,22 @@
 
   /** Same origin as DEFAULT_ADMIN_API_RENDER — use in HTML fallbacks if this script is cached old. */
   w.CLINIFLOW_ADMIN_API_ORIGIN = DEFAULT_ADMIN_API_RENDER;
+
+  /**
+   * Patient / chat UI: language for POST /api/chat/ai-analyze (JSON field `language`, required for translation).
+   * Matches: localStorage "lang" → navigator → "en"
+   */
+  w.cliniflowGetUserLanguage = function () {
+    try {
+      var s = localStorage.getItem('lang');
+      if (s && String(s).trim()) return String(s).trim().slice(0, 2).toLowerCase();
+    } catch (e) {}
+    var nav = typeof navigator !== 'undefined' && navigator.language ? String(navigator.language) : '';
+    if (nav) return nav.slice(0, 2).toLowerCase();
+    return 'en';
+  };
+
+  w.cliniflowLogSendingLanguage = function (userLanguage) {
+    console.log('🌍 Sending language:', userLanguage);
+  };
 })();

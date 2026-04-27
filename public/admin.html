@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
-  <script src="/admin-i18n.js?v=17"></script>
+  <script src="/admin-i18n.js?v=19"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
@@ -1552,7 +1552,26 @@
     }
   }
 
+  /** Card headings — static defaults (TR); i18n overrides per language. Not from API. */
+  const METRIC_TITLES = {
+    monthlyPatients: "Aylık Kaydolan Hasta Sayısı",
+    monthlyProcedures: "Aylık İşlem Sayısı"
+  };
+  function initMetricCardTitles() {
+    const t = (window.i18n && window.i18n.t) ? (k) => window.i18n.t(k) : null;
+    const ap = document.getElementById("activePatientsTitle");
+    const pr = document.getElementById("proceduresTitle");
+    if (ap) {
+      ap.textContent = t ? t("dashboard.charts.metricTitleMonthlyPatients") : METRIC_TITLES.monthlyPatients;
+    }
+    if (pr) {
+      pr.textContent = t ? t("dashboard.charts.metricTitleMonthlyProcedures") : METRIC_TITLES.monthlyProcedures;
+    }
+  }
+  window.initMetricCardTitles = initMetricCardTitles;
+
   window.renderDashboard = function() {
+    initMetricCardTitles();
     if (!document.getElementById("upcomingList")) return;
     loadPlanUsageWidget();
     loadClinicInfo();
@@ -1567,6 +1586,7 @@
   };
   
   function initializeDashboard() {
+    initMetricCardTitles();
     loadPlanUsageWidget();
     loadClinicInfo();
     loadEvents();
@@ -1629,7 +1649,7 @@
       data: {
         labels: labels,
         datasets: [{
-          label: (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.charts.activePatients") : 'Active Patients',
+          label: (window.i18n && window.i18n.t) ? window.i18n.t("dashboard.charts.chartLabelMonthlyRegistered") : "Registered patients",
           data: values,
           borderColor: '#3b82f6',
           backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -1661,7 +1681,7 @@
                 return context[0].label;
               },
               label: function(context) {
-                return `${(window.i18n && window.i18n.t) ? window.i18n.t("dashboard.charts.activePatients") : 'Active Patients'}: ${context.parsed.y}`;
+                return `${(window.i18n && window.i18n.t) ? window.i18n.t("dashboard.charts.chartLabelMonthlyRegistered") : "Registered patients"}: ${context.parsed.y}`;
               }
             }
           }
@@ -1736,8 +1756,8 @@ function updateActivePatientsUI(data) {
     const totalPatients = latestMonth.activePatients;
     const tl = (window.i18n && window.i18n.t) ? (k, p) => window.i18n.t(k, p) : null;
     summaryEl.textContent = tl
-      ? tl("dashboard.charts.summaryActivePatients", { count: totalPatients, month: latestMonth.monthLabel })
-      : `${totalPatients} active patients • ${latestMonth.monthLabel}`;
+      ? tl("dashboard.charts.summaryMonthlyRegistered", { count: totalPatients, month: latestMonth.monthLabel })
+      : `${totalPatients} registered • ${latestMonth.monthLabel}`;
   }
   
   // Create or update chart

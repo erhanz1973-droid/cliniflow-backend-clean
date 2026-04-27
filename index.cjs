@@ -1,3 +1,16 @@
+process.on("uncaughtException", (err) => {
+  console.error("🔥 UNCAUGHT EXCEPTION:", err);
+  if (err && err.stack) console.error(err.stack);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("🔥 UNHANDLED REJECTION:", reason);
+  if (reason && typeof reason === "object" && reason.stack) {
+    console.error(reason.stack);
+  } else if (reason instanceof Error) {
+    console.error(reason.stack);
+  }
+});
+
 require("@tensorflow/tfjs-node");
 const tf = require("@tensorflow/tfjs-node");
 console.log("TF BACKEND:", tf.getBackend());
@@ -1929,6 +1942,50 @@ function emptyStringsToNull(obj) {
   return obj;
 }
 
+/** Split a display name for patients.first_name / patients.last_name (DB first_name NOT NULL; last optional). */
+function splitFullNameToFirstLast(fullName) {
+  const raw = String(fullName ?? "").trim();
+  const parts = raw.split(/\s+/).filter(Boolean);
+  const first_name = parts[0] || "";
+  const last_name = parts.length > 1 ? parts.slice(1).join(" ") : null;
+  return { first_name, last_name };
+}
+
+/**
+ * Merge split name with optional existing row (UPDATE). first_name: regF || exF || "Unknown" + CRITICAL log if still empty.
+ * last_name: null for single-word new name; non-empty string when multiple tokens.
+ */
+function resolvePatientNameFieldsForRegistration({ regFirst, regLast, existing, log }) {
+  const regF = String(regFirst || "").trim();
+  const exF = existing && existing.first_name != null ? String(existing.first_name).trim() : "";
+  if (!exF && regF && log) {
+    console.log("[REGISTER] backfill first_name for legacy null row", { route: log?.route, hasEmail: Boolean(log?.email) });
+  }
+  let first_name = regF || exF;
+  if (!String(first_name || "").trim()) {
+    console.error("CRITICAL: first_name missing after split", {
+      fullName: log?.fullName,
+      route: log?.route,
+      phone: log?.phone,
+      email: log?.email,
+    });
+    first_name = "Unknown";
+  }
+  if (!first_name || !String(first_name).trim()) {
+    first_name = "Unknown";
+  } else {
+    first_name = String(first_name).trim();
+  }
+  let last_name;
+  if (regLast === null) {
+    last_name = null;
+  } else {
+    const r = regLast != null ? String(regLast).trim() : "";
+    last_name = r || null;
+  }
+  return { first_name, last_name };
+}
+
 /** Tolerant: letters (all scripts), numbers, space, dash, apostrophe; max 100 chars. */
 const DISPLAY_NAME_UNICODE_RE = /^[\p{L}\p{M}\p{N}\s'’.\-]{1,100}$/u;
 function isAcceptablePersonName(value) {
@@ -1970,11 +2027,30 @@ async function createLeadFromPublicContact({ clinicCode, name, email, phone, tex
   }
 
   const legacyPatientId = `LD_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const { first_name: leadFn, last_name: leadLn } = splitFullNameToFirstLast(safeName);
+  const leadMerged = resolvePatientNameFieldsForRegistration({
+    regFirst: leadFn,
+    regLast: leadLn,
+    existing: null,
+    log: {
+      fullName: safeName,
+      route: "lead_contact",
+      phone: phoneTrim || "",
+      email: emailNorm || "",
+    },
+  });
+  const leadFull = [leadMerged.first_name, leadMerged.last_name]
+    .filter((x) => x != null && String(x).trim() !== "")
+    .join(" ")
+    .trim();
   const patientPayload = {
     clinic_id: clinicId,
     clinic_code: code,
     patient_id: legacyPatientId,
-    name: safeName,
+    name: leadFull || safeName,
+    full_name: leadFull || safeName,
+    first_name: leadMerged.first_name,
+    last_name: leadMerged.last_name,
     ...(emailNorm ? { email: emailNorm } : {}),
     ...(phoneTrim ? { phone: phoneTrim } : {}),
     status: "LEAD",
@@ -2342,6 +2418,10 @@ let _eventsItemsTableName      = null;   // cached working table name (treatment
 /** Short-lived cache for unread-counts (badge polling hits this every ~30s from multiple pages). */
 const UNREAD_COUNTS_TTL_MS = 25000;
 const unreadCountsCache = new Map(); // key: `${clinicId}:${totalOnlyFlag}` → { body, expires }
+/** Doctor-scoped unread (assigned/visible patients only). */
+const unreadCountsDoctorCache = new Map(); // key: `doc:${doctorId}:${totalOnlyFlag}` → { body, expires }
+const DOCTOR_VISIBLE_MSG_TTL_MS = 60000;
+const doctorVisiblePatientIdCache = new Map(); // key: doctorId → { set, expires }
 function bumpUnreadCountsCache(clinicId) {
   if (clinicId) {
     unreadCountsCache.delete(`${clinicId}:1`);
@@ -2349,6 +2429,8 @@ function bumpUnreadCountsCache(clinicId) {
   } else {
     unreadCountsCache.clear();
   }
+  unreadCountsDoctorCache.clear();
+  doctorVisiblePatientIdCache.clear();
 }
 
 function readJson(file, fallback) {
@@ -4091,21 +4173,37 @@ async function runPatientRegister(req, res, route, otpMode) {
   console.log("🔥 NEW REGISTER FLOW ACTIVE - NO UPSERT", { route });
   const body = req.body || {};
   const {
-    name = "",
-    patientName: bodyPatientName = "",
-    fullName = "",
     phone = "",
     email = "",
     language = "",
   } = body;
   const referralCode = String(body.referralCode || body.inviterReferralCode || "").trim();
-  const displayName = String(bodyPatientName || fullName || name || "").trim();
-  console.log("INPUT NAME:", req.body?.name, "patientName:", req.body?.patientName, "fullName:", req.body?.fullName, "resolved:", displayName);
-  let safeName = displayName;
-  if (displayName && !isAcceptablePersonName(displayName)) {
-    console.warn("Invalid name, fallback:", displayName);
-    safeName = String(displayName).slice(0, 100);
-  }
+  console.log("[REGISTER] name fields", {
+    hasFirst: body.firstName != null || body.first_name != null,
+    hasLast: body.lastName != null || body.last_name != null,
+    legacy: !!(body.name || body.patientName || body.fullName),
+  });
+
+  /** Catches thrown exceptions from @supabase/postgrest-js (network / client bugs). */
+  const supabaseCallOrCrash = async (label, fn) => {
+    console.log("BEFORE SUPABASE " + label);
+    try {
+      const out = await fn();
+      console.log("AFTER SUPABASE " + label);
+      return { ok: true, out };
+    } catch (e) {
+      console.error("🔥 SUPABASE THREW (" + label + "):", e);
+      if (e && e.stack) console.error(e.stack);
+      if (!res.headersSent) {
+        res.status(500).json({
+          ok: false,
+          error: "supabase_crash",
+          message: e?.message || String(e),
+        });
+      }
+      return { ok: false, out: null };
+    }
+  };
 
   let clinicCode = "";
   try {
@@ -4115,7 +4213,7 @@ async function runPatientRegister(req, res, route, otpMode) {
   }
 
   console.log(`[REGISTER] Request received:`, { 
-    name: displayName ? "***" : "", 
+    name: "...",
     phone: phone ? "***" : "", 
     email: email ? "***" : "",
     clinicCode: clinicCode || "(empty)",
@@ -4264,83 +4362,85 @@ async function runPatientRegister(req, res, route, otpMode) {
   /** @type {string|null} Supabase `patients.id` (UUID) when an existing row is found */
   let existingPatientUuid = null;
   if (isSupabaseEnabled() && (phoneDigits || phoneNormalized)) {
-    try {
-      let phoneRows = null;
-      let phErr = null;
-      if (phoneDigits) {
+    let phoneRows = null;
+    let phErr = null;
+    if (phoneDigits) {
+      const rPq = await supabaseCallOrCrash("register preflight phone (digits)", () => {
         let pq = supabase
           .from("patients")
           .select("id, patient_id, email, clinic_id")
           .eq("phone", phoneDigits);
         if (supabaseClinicId) pq = pq.eq("clinic_id", supabaseClinicId);
         else pq = pq.is("clinic_id", null);
-        const r = await pq.limit(3);
-        phoneRows = r.data;
-        phErr = r.error;
-      }
-      if (!phErr && (!phoneRows || phoneRows.length === 0) && phoneNormalized) {
-        const variants = phoneSearchVariants(phoneNormalized);
-        if (variants.length) {
+        return pq.limit(3);
+      });
+      if (!rPq.ok) return;
+      phoneRows = rPq.out.data;
+      phErr = rPq.out.error;
+    }
+    if (!phErr && (!phoneRows || phoneRows.length === 0) && phoneNormalized) {
+      const variants = phoneSearchVariants(phoneNormalized);
+      if (variants.length) {
+        const r2w = await supabaseCallOrCrash("register preflight phone (variants)", () => {
           let pqv = supabase.from("patients").select("id, patient_id, email, clinic_id").in("phone", variants);
           if (supabaseClinicId) pqv = pqv.eq("clinic_id", supabaseClinicId);
           else pqv = pqv.is("clinic_id", null);
-          const r2 = await pqv.limit(3);
-          phoneRows = r2.data;
-          phErr = r2.error;
-        }
-      }
-      if (phErr && String(phErr.code) !== "PGRST116") {
-        console.error("[REGISTER] phone identity lookup failed", {
-          message: phErr.message,
-          code: phErr.code,
+          return pqv.limit(3);
         });
-      } else if (Array.isArray(phoneRows) && phoneRows.length > 1) {
-        return res.status(500).json({
+        if (!r2w.ok) return;
+        phoneRows = r2w.out.data;
+        phErr = r2w.out.error;
+      }
+    }
+    if (phErr && String(phErr.code) !== "PGRST116") {
+      console.error("[REGISTER] phone identity lookup failed", {
+        message: phErr.message,
+        code: phErr.code,
+      });
+    } else if (Array.isArray(phoneRows) && phoneRows.length > 1) {
+      return res.status(500).json({
+        ok: false,
+        error: "phone_identity_ambiguous",
+        message: "Telefon eşleşmesi belirsiz. Lütfen destek ile iletişime geçin.",
+      });
+    } else if (Array.isArray(phoneRows) && phoneRows.length === 1) {
+      const row = phoneRows[0];
+      const pem = String(row.email || "").trim().toLowerCase();
+      if (pem && pem !== emailNormalized) {
+        return res.status(409).json({
           ok: false,
-          error: "phone_identity_ambiguous",
-          message: "Telefon eşleşmesi belirsiz. Lütfen destek ile iletişime geçin.",
+          error: "phone_already_registered",
+          message: REGISTER_USER_MSG.phoneAlreadyRegistered,
+          conflict: "email_mismatch",
         });
-      } else if (Array.isArray(phoneRows) && phoneRows.length === 1) {
-        const row = phoneRows[0];
-        const pem = String(row.email || "").trim().toLowerCase();
-        if (pem && pem !== emailNormalized) {
-          return res.status(409).json({
-            ok: false,
-            error: "phone_already_registered",
-            message: REGISTER_USER_MSG.phoneAlreadyRegistered,
-            conflict: "email_mismatch",
-          });
-        }
-        existingPatientUuid = String(row.id || "").trim() || null;
-        patientId = row.patient_id || row.id;
-        existingUser = true;
       }
-    } catch (e) {
-      console.warn("[REGISTER] phone lookup", e?.message || e);
+      existingPatientUuid = String(row.id || "").trim() || null;
+      patientId = row.patient_id || row.id;
+      existingUser = true;
     }
   }
   if (!existingPatientUuid && isSupabaseEnabled()) {
-    try {
+    const rEm = await supabaseCallOrCrash("register preflight email", () => {
       let emQ = supabase
         .from("patients")
         .select("id, patient_id, email, clinic_id")
         .eq("email", emailNormalized);
       if (supabaseClinicId) emQ = emQ.eq("clinic_id", supabaseClinicId);
       else emQ = emQ.is("clinic_id", null);
-      const { data: existing, error: e } = await emQ.maybeSingle();
-      if (!e && existing) {
-        existingPatientUuid = String(existing.id || "").trim() || null;
-        patientId = existing.patient_id || existing.id;
-        existingUser = true;
-      } else if (e && String(e.code || "") !== "PGRST116") {
-        console.error("[REGISTER] Supabase patient lookup by email failed", {
-          message: e.message,
-          code: e.code,
-          details: e.details,
-        });
-      }
-    } catch (err) {
-      // ignore
+      return emQ.maybeSingle();
+    });
+    if (!rEm.ok) return;
+    const { data: existing, error: e } = rEm.out;
+    if (!e && existing) {
+      existingPatientUuid = String(existing.id || "").trim() || null;
+      patientId = existing.patient_id || existing.id;
+      existingUser = true;
+    } else if (e && String(e.code || "") !== "PGRST116") {
+      console.error("[REGISTER] Supabase patient lookup by email failed", {
+        message: e.message,
+        code: e.code,
+        details: e.details,
+      });
     }
   }
   if (!patientId && !isSupabaseEnabled()) {
@@ -4354,6 +4454,30 @@ async function runPatientRegister(req, res, route, otpMode) {
       }
     }
   }
+
+  console.log("REGISTER FLOW:", {
+    existingUser: !!existingUser,
+    hasExistingPatientUuid: !!existingPatientUuid,
+    route,
+    phone: phoneNormalized ? `***${String(phoneNormalized).slice(-4)}` : phoneTrimmed || null,
+    email: maskEmailForLog(emailNormalized),
+  });
+
+  if (isSupabaseEnabled() && existingPatientUuid) {
+    return res.status(409).json({
+      ok: false,
+      error: "user_already_exists",
+      message: "User already registered. Please login.",
+    });
+  }
+  if (!isSupabaseEnabled() && existingUser) {
+    return res.status(409).json({
+      ok: false,
+      error: "user_already_exists",
+      message: "User already registered. Please login.",
+    });
+  }
+
   if (!patientId) patientId = rid("p");
   const requestId = rid("req");
   const token = makeToken();
@@ -4375,22 +4499,48 @@ async function runPatientRegister(req, res, route, otpMode) {
     supabase: isSupabaseEnabled(),
   });
 
+  const rawName =
+    body.firstName ||
+    body.first_name ||
+    body.name ||
+    body.patientName ||
+    "";
+
+  const safeName = String(rawName).trim();
+  const parts = safeName.split(/\s+/).filter(Boolean);
+  const first_name = parts[0];
+  const last_name = parts.length > 1 ? parts.slice(1).join(" ") : null;
+
+  if (!first_name) {
+    return res.status(400).json({ error: "first_name_required" });
+  }
+
+  const name = `${first_name} ${last_name || ""}`.trim();
+  console.log("CHECKPOINT 1: after name parse", { route, hasFirst: !!first_name, nameLen: String(name).length });
+
+  let nameForReferral = name;
+  if (name && !isAcceptablePersonName(name)) {
+    console.warn("Invalid name, fallback:", name);
+    nameForReferral = String(name).slice(0, 100);
+  }
+
   // === SUPABASE: update by id, or insert — no upsert (phone identity is not upserted) ===
   if (isSupabaseEnabled()) {
     try {
-    const roleUp = (normalize(req.body?.role) || "PATIENT").toUpperCase();
+    const roleUp = (normalize(req.body?.role) || normalize(req.body?.userType) || "PATIENT").toUpperCase();
     const nowIso = new Date().toISOString();
-    const nameForRow = (() => {
-      const n = normalize(safeName);
-      return n || "Patient";
-    })();
     const notesForRow = normalize(body.notes);
     const buildCoreFields = (forInsert) => {
+      // Identity: always from parsed `first_name` / `last_name` / `name` in outer scope.
+      // `emptyStringsToNull` can turn "" → null; re-apply NOT NULL name keys after it.
+      const nm = name;
+      const fn = String(first_name || "").trim();
+      const ln = last_name != null && String(last_name).trim() !== "" ? String(last_name).trim() : null;
       const p = {
-        name: nameForRow,
-        full_name: nameForRow,
-        first_name: "",
-        last_name: "",
+        name: nm,
+        full_name: nm,
+        first_name: fn,
+        last_name: ln,
         email: emailNormalized,
         clinic_id: supabaseClinicId,
         status: "PENDING",
@@ -4409,14 +4559,71 @@ async function runPatientRegister(req, res, route, otpMode) {
       };
       if (notesForRow) p.notes = notesForRow;
       emptyStringsToNull(p);
-      if (!p.name) p.name = "Patient";
-      if (!p.full_name) p.full_name = p.name;
+      p.first_name = fn;
+      p.last_name = ln;
+      p.name = nm;
+      p.full_name = nm;
       return p;
     };
     const buildUpdatePayload = () => buildCoreFields(false);
     const buildInsertPayload = () => buildCoreFields(true);
+    console.log("CHECKPOINT 2: after buildCoreFields / payload builders", { route });
+
+    /** Merge buildInsertPayload row with forced name fields (only object passed to .insert()). */
+    const applyNameOverrides = (p) => {
+      if (!p || typeof p !== "object") return p;
+      const nn = `${first_name} ${last_name || ""}`.trim();
+      return {
+        ...p,
+        first_name,
+        last_name,
+        name: nn,
+        full_name: nn,
+      };
+    };
+    const buildFinalInsertPayload = (p) => {
+      const finalPayload = applyNameOverrides(p);
+      console.log("🔥 FINAL INSERT PAYLOAD:", finalPayload);
+      return finalPayload;
+    };
+
+    const assertFirstNameForDb = (finalPayload) => {
+      try {
+        const fn = finalPayload == null || typeof finalPayload !== "object" ? "" : String(finalPayload.first_name ?? "");
+        if (!fn || !fn.trim()) {
+          console.error("ASSERT FAIL (first_name):", finalPayload);
+          if (!res.headersSent) {
+            res.status(400).json({ ok: false, error: "invalid_name" });
+          }
+          return false;
+        }
+      } catch (assertErr) {
+        console.error("ASSERT THREW:", assertErr);
+        if (!res.headersSent) {
+          res.status(400).json({ ok: false, error: "invalid_name" });
+        }
+        return false;
+      }
+      return true;
+    };
 
     const detailBlob = (err) => `${err?.details || ""} ${err?.message || ""}`.toLowerCase();
+
+    const guardPayload = (p) => {
+      if (!p || typeof p !== "object") {
+        console.error("INVALID PAYLOAD:", p);
+        if (!res.headersSent) {
+          res.status(500).json({ ok: false, error: "invalid_payload" });
+        }
+        return false;
+      }
+      return true;
+    };
+
+    const logBeforeDb = (p, tag, op = "insert") => {
+      console.log("DEBUG VALUES:", { first_name, last_name, name, payload: p, tag, op });
+      console.log(op === "update" ? "BEFORE UPDATE PAYLOAD:" : "BEFORE INSERT PAYLOAD:", p);
+    };
 
     let patientPersistRow = null;
     const applyRow = (row) => {
@@ -4426,67 +4633,41 @@ async function runPatientRegister(req, res, route, otpMode) {
       }
     };
 
-    if (existingPatientUuid) {
-      let upData, upErr;
-      try {
-        let uq = supabase
-          .from("patients")
-          .update(buildUpdatePayload())
-          .eq("id", existingPatientUuid);
-        if (supabaseClinicId) uq = uq.eq("clinic_id", supabaseClinicId);
-        else uq = uq.is("clinic_id", null);
-        const up = await uq.select().single();
-        upData = up.data;
-        upErr = up.error;
-      } catch (eUp) {
-        console.error("PATIENT UPDATE THROW:", eUp);
-        if (!res.headersSent) {
-          return res.status(500).json({ ok: false, error: "db_update_failed", details: String(eUp?.message || eUp) });
-        }
-        throw eUp;
-      }
-      if (upErr) {
-        console.error("[SUPABASE] PATIENT UPDATE FAILED", {
-          message: upErr.message,
-          code: upErr.code,
-          details: upErr.details,
-        });
-        if (String(upErr.code) === "23505" && /email|key \(email\)|patients_email_unique/i.test(detailBlob(upErr))) {
-          return res.status(409).json({
-            ok: false,
-            error: "email_in_use",
-            message: "Bu e-posta başka bir hesaba ait. Lütfen giriş yapın veya farklı e-posta kullanın.",
-          });
-        }
-        if (String(upErr.code) === "23505" && /phone|patients_phone_unique|key \(phone\)/i.test(detailBlob(upErr))) {
-          return res.status(409).json({
-            ok: false,
-            error: "phone_in_use",
-            message: REGISTER_USER_MSG.phoneAlreadyRegistered,
-          });
-        }
-        return res.status(500).json({
-          ok: false,
-          error: "db_update_failed",
-          details: upErr.message,
-        });
-      }
-      applyRow(upData);
-      console.log("[SUPABASE] ✅ patient updated:", upData?.id);
-    } else {
+    try {
       let data;
       let insErr;
+      let registeredVia23505 = false;
       try {
-        const ins = await supabase
-          .from("patients")
-          .insert(buildInsertPayload())
-          .select()
-          .single();
+        const insertPayload0 = buildInsertPayload();
+        console.log("CHECKPOINT 3: before name override (insert)");
+        if (!guardPayload(insertPayload0)) return;
+        logBeforeDb(insertPayload0, "primary_insert");
+        console.log("CHECKPOINT 4: before supabase insert (primary)");
+        if (!insertPayload0 || typeof insertPayload0 !== "object") {
+          console.error("INVALID PAYLOAD:", insertPayload0);
+          if (!res.headersSent) {
+            return res.status(500).json({ ok: false, error: "invalid_payload" });
+          }
+          return;
+        }
+        const finalInsertPayload0 = buildFinalInsertPayload(insertPayload0);
+        if (!assertFirstNameForDb(finalInsertPayload0)) return;
+        const rIns = await supabaseCallOrCrash("register INSERT primary", () =>
+          supabase.from("patients").insert(finalInsertPayload0).select().single(),
+        );
+        if (!rIns.ok) return;
+        const ins = rIns.out;
         data = ins.data;
         insErr = ins.error;
+        if (insErr) {
+          console.error("SUPABASE ERROR:", insErr);
+        } else {
+          console.log("INSERT SUCCESS:", data);
+        }
       } catch (e) {
         console.error("INSERT ERROR:", e);
         console.error("PATIENT INSERT:", e);
+        console.error("FATAL REGISTER ERROR:", e);
         if (!res.headersSent) {
           return res.status(500).json({
             ok: false,
@@ -4501,28 +4682,59 @@ async function runPatientRegister(req, res, route, otpMode) {
         if (isSchema) {
           const p1 = { ...buildInsertPayload() };
           delete p1.is_lead;
-          try {
-            const r2 = await supabase.from("patients").insert(p1).select().single();
-            data = r2.data;
-            insErr = r2.error;
-            if (insErr && /notes|42703|pgrst204|column/i.test(detailBlob(insErr))) {
-              const p2 = { ...p1 };
-              delete p2.notes;
-              const r3 = await supabase.from("patients").insert(p2).select().single();
-              data = r3.data;
-              insErr = r3.error;
-            }
-          } catch (e2) {
-            console.error("INSERT ERROR:", e2);
-            console.error("PATIENT INSERT:", e2);
+          const finalP1 = p1;
+          if (!guardPayload(finalP1)) return;
+          logBeforeDb(finalP1, "schema_retry_no_is_lead", "insert");
+          console.log("CHECKPOINT 4: before supabase insert (schema retry 1)");
+          if (!finalP1 || typeof finalP1 !== "object") {
+            console.error("INVALID PAYLOAD:", finalP1);
             if (!res.headersSent) {
-              return res.status(500).json({
-                ok: false,
-                error: "db_insert_failed",
-                details: String(e2?.message || e2).slice(0, 500),
-              });
+              return res.status(500).json({ ok: false, error: "invalid_payload" });
             }
-            throw e2;
+            return;
+          }
+          const finalInsertPayload1 = buildFinalInsertPayload(finalP1);
+          if (!assertFirstNameForDb(finalInsertPayload1)) return;
+          const r2w = await supabaseCallOrCrash("register INSERT schema (no is_lead)", () =>
+            supabase.from("patients").insert(finalInsertPayload1).select().single(),
+          );
+          if (!r2w.ok) return;
+          const r2 = r2w.out;
+          data = r2.data;
+          insErr = r2.error;
+          if (insErr) {
+            console.error("SUPABASE ERROR:", insErr);
+          } else {
+            console.log("INSERT SUCCESS:", data);
+          }
+          if (insErr && /notes|42703|pgrst204|column/i.test(detailBlob(insErr))) {
+            const p2 = { ...p1 };
+            delete p2.notes;
+            const finalP2 = p2;
+            if (!guardPayload(finalP2)) return;
+            logBeforeDb(finalP2, "schema_retry_no_notes", "insert");
+            console.log("CHECKPOINT 4: before supabase insert (schema retry 2)");
+            if (!finalP2 || typeof finalP2 !== "object") {
+              console.error("INVALID PAYLOAD:", finalP2);
+              if (!res.headersSent) {
+                return res.status(500).json({ ok: false, error: "invalid_payload" });
+              }
+              return;
+            }
+            const finalInsertPayload2 = buildFinalInsertPayload(finalP2);
+            if (!assertFirstNameForDb(finalInsertPayload2)) return;
+            const r3w = await supabaseCallOrCrash("register INSERT schema (no notes)", () =>
+              supabase.from("patients").insert(finalInsertPayload2).select().single(),
+            );
+            if (!r3w.ok) return;
+            const r3 = r3w.out;
+            data = r3.data;
+            insErr = r3.error;
+            if (insErr) {
+              console.error("SUPABASE ERROR:", insErr);
+            } else {
+              console.log("INSERT SUCCESS:", data);
+            }
           }
         }
         const is23505 = insErr && (String(insErr.code) === "23505" || detailBlob(insErr).includes("duplicate key"));
@@ -4540,7 +4752,9 @@ async function runPatientRegister(req, res, route, otpMode) {
                 .eq("phone", phoneDigits);
               if (supabaseClinicId) ph235 = ph235.eq("clinic_id", supabaseClinicId);
               else ph235 = ph235.is("clinic_id", null);
-              const { data: d1, error: q0 } = await ph235.limit(2);
+              const rD1 = await supabaseCallOrCrash("register 23505 select by phone digits", () => ph235.limit(2));
+              if (!rD1.ok) return;
+              const { data: d1, error: q0 } = rD1.out;
               if (q0) {
                 console.error("[SUPABASE] PATIENT 23505 phone re-fetch (digits) failed", q0);
                 return res.status(500).json({
@@ -4567,7 +4781,9 @@ async function runPatientRegister(req, res, route, otpMode) {
                 .in("phone", phoneSearchVariants(phoneNormalized));
               if (supabaseClinicId) ph235v = ph235v.eq("clinic_id", supabaseClinicId);
               else ph235v = ph235v.is("clinic_id", null);
-              const { data: rows, error: qe } = await ph235v.limit(2);
+              const rPhV = await supabaseCallOrCrash("register 23505 select by phone variants", () => ph235v.limit(2));
+              if (!rPhV.ok) return;
+              const { data: rows, error: qe } = rPhV.out;
               if (qe) {
                 console.error("[SUPABASE] PATIENT 23505 phone re-fetch (variants) failed", qe);
                 return res.status(500).json({
@@ -4608,7 +4824,11 @@ async function runPatientRegister(req, res, route, otpMode) {
               .eq("email", emailNormalized);
             if (supabaseClinicId) em235 = em235.eq("clinic_id", supabaseClinicId);
             else em235 = em235.is("clinic_id", null);
-            const { data: emRow, error: q2 } = await em235.limit(1).maybeSingle();
+            const rEm235 = await supabaseCallOrCrash("register 23505 select by email", () =>
+              em235.limit(1).maybeSingle(),
+            );
+            if (!rEm235.ok) return;
+            const { data: emRow, error: q2 } = rEm235.out;
             if (q2) {
               return res.status(500).json({
                 ok: false,
@@ -4635,14 +4855,33 @@ async function runPatientRegister(req, res, route, otpMode) {
               conflict: "email_mismatch",
             });
           }
+          const u235Row = buildUpdatePayload();
+          const finalU235 = u235Row;
+          if (!guardPayload(finalU235)) return;
+          logBeforeDb(finalU235, "23505_update", "update");
+          console.log("CHECKPOINT 4: before supabase update (23505)");
+          if (!finalU235 || typeof finalU235 !== "object") {
+            console.error("INVALID PAYLOAD (23505 update):", finalU235);
+            if (!res.headersSent) {
+              return res.status(500).json({ ok: false, error: "invalid_payload" });
+            }
+            return;
+          }
+          const rowU235 = applyNameOverrides(finalU235);
+          if (!assertFirstNameForDb(rowU235)) return;
           let u235 = supabase
             .from("patients")
-            .update(buildUpdatePayload())
+            .update(rowU235)
             .eq("id", found.id);
           if (supabaseClinicId) u235 = u235.eq("clinic_id", supabaseClinicId);
           else u235 = u235.is("clinic_id", null);
-          const { data: upData, error: upe } = await u235.select().single();
+          const rUp = await supabaseCallOrCrash("register 23505 UPDATE patients", () => u235.select().single());
+          if (!rUp.ok) return;
+          const upRes = rUp.out;
+          const upData = upRes.data;
+          const upe = upRes.error;
           if (upe) {
+            console.error("SUPABASE ERROR:", upe);
             console.error("[SUPABASE] PATIENT 23505 recovery update failed", upe);
             return res.status(500).json({
               ok: false,
@@ -4650,7 +4889,8 @@ async function runPatientRegister(req, res, route, otpMode) {
               message: REGISTER_USER_MSG.registerFailed,
             });
           }
-          applyRow(upData);
+          console.log("UPDATE SUCCESS:", upData);
+          registeredVia23505 = true;
           existingUser = true;
           existingPatientUuid = found.id;
           insErr = null;
@@ -4678,11 +4918,22 @@ async function runPatientRegister(req, res, route, otpMode) {
             ...(hintNull ? { hint: REGISTER_USER_MSG.clinicIdNullableHint } : {}),
           });
         }
+      }
+      if (data) {
         applyRow(data);
-        if (data?.id) console.log("[SUPABASE] ✅ patient inserted:", data.id);
-      } else {
-        applyRow(data);
-        if (data?.id) console.log("[SUPABASE] ✅ patient inserted:", data.id);
+        if (data?.id && !registeredVia23505) {
+          console.log("[SUPABASE] ✅ patient inserted:", data.id);
+        }
+      }
+    } catch (persistBlockErr) {
+      console.error("🔥 FATAL REGISTER ERROR (persist block, non-Supabase throw):", persistBlockErr);
+      if (persistBlockErr && persistBlockErr.stack) console.error(persistBlockErr.stack);
+      if (!res.headersSent) {
+        return res.status(500).json({
+          ok: false,
+          error: "register_failed",
+          message: persistBlockErr?.message || String(persistBlockErr),
+        });
       }
     }
 
@@ -4691,19 +4942,27 @@ async function runPatientRegister(req, res, route, otpMode) {
       patientRowId: patientPersistRow?.id || supabasePatientRow?.id || null,
     });
   } catch (persistCrash) {
-    console.error("CRASH:", persistCrash);
+    console.error("CRASH (register supabase outer):", persistCrash);
+    console.error("CRASH stack:", persistCrash?.stack);
     if (!res.headersSent) {
-      return res.status(500).json({ ok: false, error: "server_crash" });
+      return res.status(500).json({
+        ok: false,
+        error: "server_crash",
+        message: persistCrash?.message || String(persistCrash),
+      });
     }
   }
   }
 
+  try {
   // FILE-BASED: Fallback storage (for backward compatibility)
   const patients = readJson(PAT_FILE, {});
   const existingFile = patients[patientId] || null;
   patients[patientId] = {
     patientId,
-    name: safeName,
+    name,
+    first_name,
+    last_name: last_name || null,
     ...(phoneNormalized ? { phone: phoneNormalized } : {}),
     email: emailNormalized,
     language: patientLanguage,
@@ -4719,7 +4978,9 @@ async function runPatientRegister(req, res, route, otpMode) {
   const row = {
     requestId,
     patientId,
-    name: safeName,
+    name,
+    first_name,
+    last_name: last_name || null,
     phone: phoneNormalized, // Use normalized phone
     email: emailNormalized,
     status: "PENDING",
@@ -4751,60 +5012,60 @@ async function runPatientRegister(req, res, route, otpMode) {
         let lastInviterErr = null;
         for (const v of variants) {
           // 1) referral_code match (if column exists)
-          try {
-            const q1 = await supabase
+          const rQ1 = await supabaseCallOrCrash("register referral lookup referral_code", () =>
+            supabase
               .from("patients")
               .select("id, patient_id, clinic_id, name, referral_code")
               .eq("referral_code", v)
               .limit(1)
-              .maybeSingle();
-            if (!q1.error && q1.data) {
-              inviter = q1.data;
-              break;
-            }
-            if (q1.error && !isMissingColumnError(q1.error, "referral_code") && String(q1.error.code || "") !== "PGRST116") {
-              lastInviterErr = q1.error;
-            }
-          } catch (e) {
-            // ignore
+              .maybeSingle(),
+          );
+          if (!rQ1.ok) return;
+          const q1 = rQ1.out;
+          if (!q1.error && q1.data) {
+            inviter = q1.data;
+            break;
+          }
+          if (q1.error && !isMissingColumnError(q1.error, "referral_code") && String(q1.error.code || "") !== "PGRST116") {
+            lastInviterErr = q1.error;
           }
 
           // 2) patient_id match (if column exists)
-          try {
-            const q2 = await supabase
+          const rQ2 = await supabaseCallOrCrash("register referral lookup patient_id", () =>
+            supabase
               .from("patients")
               .select("id, patient_id, clinic_id, name, referral_code")
               .eq("patient_id", v)
               .limit(1)
-              .maybeSingle();
-            if (!q2.error && q2.data) {
-              inviter = q2.data;
-              break;
-            }
-            if (q2.error && !isMissingColumnError(q2.error, "patient_id") && String(q2.error.code || "") !== "PGRST116") {
-              lastInviterErr = q2.error;
-            }
-          } catch (e) {
-            // ignore
+              .maybeSingle(),
+          );
+          if (!rQ2.ok) return;
+          const q2 = rQ2.out;
+          if (!q2.error && q2.data) {
+            inviter = q2.data;
+            break;
+          }
+          if (q2.error && !isMissingColumnError(q2.error, "patient_id") && String(q2.error.code || "") !== "PGRST116") {
+            lastInviterErr = q2.error;
           }
 
           // 3) id match (covers schemas where patient id is stored in `id`)
-          try {
-            const q3 = await supabase
+          const rQ3 = await supabaseCallOrCrash("register referral lookup id", () =>
+            supabase
               .from("patients")
               .select("id, patient_id, clinic_id, name, referral_code")
               .eq("id", v)
               .limit(1)
-              .maybeSingle();
-            if (!q3.error && q3.data) {
-              inviter = q3.data;
-              break;
-            }
-            if (q3.error && String(q3.error.code || "") !== "PGRST116") {
-              lastInviterErr = q3.error;
-            }
-          } catch (e) {
-            // ignore
+              .maybeSingle(),
+          );
+          if (!rQ3.ok) return;
+          const q3 = rQ3.out;
+          if (!q3.error && q3.data) {
+            inviter = q3.data;
+            break;
+          }
+          if (q3.error && String(q3.error.code || "") !== "PGRST116") {
+            lastInviterErr = q3.error;
           }
         }
 
@@ -4888,7 +5149,7 @@ async function runPatientRegister(req, res, route, otpMode) {
                 invited_discount_percent: null,
                 discount_percent: null,
                 inviter_patient_name: inviter?.name || null,
-                invited_patient_name: safeName || null,
+                invited_patient_name: nameForReferral || null,
               };
               created = await createReferralInDBFlexible(referralData);
               break;
@@ -4955,7 +5216,7 @@ async function runPatientRegister(req, res, route, otpMode) {
             inviterPatientId,
             inviterPatientName,
             invitedPatientId: patientId,
-            invitedPatientName: safeName,
+            invitedPatientName: nameForReferral,
             status: "PENDING",
             createdAt: now(),
             inviterDiscountPercent: null,
@@ -4974,6 +5235,19 @@ async function runPatientRegister(req, res, route, otpMode) {
     }
   }
 
+  } catch (preOtpErr) {
+    console.error("🔥 REGISTER PRE-OTP CRASH (file/referral path):", preOtpErr);
+    console.error("🔥 STACK:", preOtpErr?.stack);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: "register_failed",
+        message: String(preOtpErr?.message || preOtpErr || "Unknown error"),
+      });
+    }
+    return;
+  }
+
   // Send OTP for email verification instead of returning token immediately
   try {
     // Review Mode Bypass: Skip OTP generation and saving for test@clinifly.net
@@ -4986,7 +5260,7 @@ async function runPatientRegister(req, res, route, otpMode) {
           /* ignore */
         }
       }
-      return res.status(201).json({
+      res.status(201).json({
         ok: true,
         success: true,
         patientId,
@@ -5000,6 +5274,8 @@ async function runPatientRegister(req, res, route, otpMode) {
         requiresOTP: true,
         email_sent: false,
       });
+      console.log("AFTER RESPONSE REACHED (register: review mode 201)");
+      return;
     }
 
     logRegisterTrace(route, "STEP_OTP_BLOCK_ENTER", {
@@ -5074,19 +5350,20 @@ async function runPatientRegister(req, res, route, otpMode) {
     }
     console.log("[REGISTER] register_otp_stored", { email: maskEmailForLog(emailNormalized) });
 
-    return res.json(
-      buildRegisterOtpSuccessJson({
-        patientId,
-        emailNormalized,
-        patientLanguage,
-        requestId,
-        supabaseClinicId,
-        validatedClinicCode,
-        emailSent: delivery?.emailSent || false,
-        smsSent: delivery?.smsSent || false,
-        deliveryChannel: delivery?.channel,
-      }),
-    );
+    const _registerOtpBody = buildRegisterOtpSuccessJson({
+      patientId,
+      emailNormalized,
+      patientLanguage,
+      requestId,
+      supabaseClinicId,
+      validatedClinicCode,
+      emailSent: delivery?.emailSent || false,
+      smsSent: delivery?.smsSent || false,
+      deliveryChannel: delivery?.channel,
+    });
+    res.json(_registerOtpBody);
+    console.log("AFTER RESPONSE REACHED (register: OTP success res.json called)");
+    return;
   } catch (otpError) {
     if (res.headersSent) return;
     console.error("[REGISTER] register_otp_unexpected", otpError?.stack || otpError?.message || otpError);
@@ -5097,12 +5374,13 @@ async function runPatientRegister(req, res, route, otpMode) {
     });
   }
   } catch (regErr) {
-    console.error("[REGISTER] unhandled:", regErr?.stack || regErr?.message || regErr);
+    console.error("🔥 REGISTER CRASH:", regErr);
+    console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
       res.status(500).json({
         ok: false,
         error: "internal_error",
-        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+        message: String(regErr?.message || regErr || "Unknown error"),
       });
     }
   }
@@ -5111,31 +5389,45 @@ app.post("/api/register", async (req, res) => {
   try {
     await runPatientRegister(req, res, "/api/register", "saveOTP");
   } catch (regErr) {
-    console.error("[REGISTER] unhandled (wrapper):", regErr?.stack || regErr?.message || regErr);
+    console.error("🔥 REGISTER CRASH:", regErr);
+    console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
       res.status(500).json({
         ok: false,
         error: "internal_error",
-        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+        message: String(regErr?.message || regErr || "Unknown error"),
       });
     }
   }
 });
 /** Hashed-OTP register — same handler for both mobile URL shapes (backward compatible). */
 async function postRegisterPatientWithHashedOtp(req, res) {
-  const tracePath = String(req.path || "/api/register/patient");
-  await runPatientRegister(req, res, tracePath, "hashedOTP");
+  try {
+    const tracePath = String(req.path || "/api/register/patient");
+    await runPatientRegister(req, res, tracePath, "hashedOTP");
+  } catch (e) {
+    console.error("🔥 REGISTER CRASH (postRegisterPatientWithHashedOtp):", e);
+    console.error("🔥 STACK:", e?.stack);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: "internal_error",
+        message: String(e?.message || e || "Unknown error"),
+      });
+    }
+  }
 }
 app.post("/api/register/patient", async (req, res) => {
   try {
     await postRegisterPatientWithHashedOtp(req, res);
   } catch (regErr) {
-    console.error("[REGISTER] unhandled (/api/register/patient):", regErr?.stack || regErr?.message || regErr);
+    console.error("🔥 REGISTER CRASH:", regErr);
+    console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
       res.status(500).json({
         ok: false,
         error: "internal_error",
-        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+        message: String(regErr?.message || regErr || "Unknown error"),
       });
     }
   }
@@ -5144,12 +5436,13 @@ app.post("/api/patient/register", async (req, res) => {
   try {
     await postRegisterPatientWithHashedOtp(req, res);
   } catch (regErr) {
-    console.error("[REGISTER] unhandled (/api/patient/register):", regErr?.stack || regErr?.message || regErr);
+    console.error("🔥 REGISTER CRASH:", regErr);
+    console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
       res.status(500).json({
         ok: false,
         error: "internal_error",
-        message: IS_PROD ? "Sunucu hatası. Lütfen tekrar deneyin." : String(regErr?.message || regErr),
+        message: String(regErr?.message || regErr || "Unknown error"),
       });
     }
   }
@@ -8175,7 +8468,8 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
       supabase,
       req.clinic,
       req.clinicCode,
-      clinicIdFromJwt
+      clinicIdFromJwt,
+      { force: String(req.query.force || "") === "true" }
     );
     return res.json({
       ok: true,
@@ -8213,14 +8507,14 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
   try {
     const { months = 6 } = req.query;
     const monthsCount = Math.min(Math.max(parseInt(months), 1), 24); // 1-24 months range
-    
+    const clinicId = req.clinicId != null ? String(req.clinicId).trim() : "";
 
     
     if (!isSupabaseEnabled()) {
       return res.status(500).json({ ok: false, error: "Database not available" });
     }
     
-    if (!req.clinicId) {
+    if (!clinicId) {
       return res.status(403).json({ ok: false, error: "clinic_not_authenticated" });
     }
     
@@ -8234,34 +8528,21 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
     
 
     
-    // Patients for this clinic with created_at or updated_at in the reporting window
+    // Patients registered in the reporting window — created_at only (no updated_at; avoids noise / wrong signals)
     const startIso = startDate.toISOString();
     const endIso = endDate.toISOString();
-    const selPat = "id, created_at, updated_at, clinic_id";
     const { data: byCreated, error: e1 } = await supabase
       .from("patients")
-      .select(selPat)
-      .eq("clinic_id", req.clinicId)
+      .select("id, created_at, clinic_id")
+      .eq("clinic_id", clinicId)
       .gte("created_at", startIso)
       .lte("created_at", endIso);
-    const { data: byUpdated, error: e2 } = await supabase
-      .from("patients")
-      .select(selPat)
-      .eq("clinic_id", req.clinicId)
-      .gte("updated_at", startIso)
-      .lte("updated_at", endIso);
-    if (e1 && e2) {
+    if (e1) {
       return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
     }
-    const patientById = new Map();
-    for (const row of [...(byCreated || []), ...(byUpdated || [])]) {
-      if (!row || !row.id) continue;
-      if (row.clinic_id != null && String(row.clinic_id) !== String(req.clinicId)) continue;
-      patientById.set(String(row.id), row);
-    }
-    const patients = [...patientById.values()];
+    const patients = byCreated || [];
     
-    // Group patients by month and count unique active patients
+    // Group by calendar month of registration (each patient counts once, in their created_at month)
     const monthlyData = {};
     
     // Initialize months
@@ -8272,22 +8553,15 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
       monthlyData[monthKey] = new Set();
     }
     
-    const inMonth = (d, y, m) => {
-      if (!d) return false;
-      const x = d instanceof Date ? d : new Date(d);
-      return x.getFullYear() === y && x.getMonth() + 1 === m;
-    };
     patients.forEach((patient) => {
-      Object.keys(monthlyData).forEach((monthKey) => {
-        const [ys, ms] = monthKey.split("-");
-        const y = parseInt(ys, 10);
-        const m = parseInt(ms, 10);
-        const c = patient.created_at ? new Date(patient.created_at) : null;
-        const u = patient.updated_at ? new Date(patient.updated_at) : null;
-        if (inMonth(c, y, m) || inMonth(u, y, m)) {
-          monthlyData[monthKey].add(patient.id);
-        }
-      });
+      if (!patient || !patient.id) return;
+      if (patient.clinic_id != null && String(patient.clinic_id) !== clinicId) return;
+      if (!patient.created_at) return;
+      const d = new Date(patient.created_at);
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (monthlyData[monthKey] !== undefined) {
+        monthlyData[monthKey].add(patient.id);
+      }
     });
     
     // Convert to array and sort by month
@@ -8317,7 +8591,7 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
       ok: true, 
       data: resultWithGrowth,
       period: `${monthsCount} months`,
-      totalPatients: patients.length
+      totalPatients: patients.length,
     });
     
   } catch (error) {
@@ -8331,14 +8605,14 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
   try {
     const { months = 6 } = req.query;
     const monthsCount = Math.min(Math.max(parseInt(months), 1), 24); // 1-24 months range
-    
+    const clinicId = req.clinicId != null ? String(req.clinicId).trim() : "";
 
     
     if (!isSupabaseEnabled()) {
       return res.status(500).json({ ok: false, error: "Database not available" });
     }
     
-    if (!req.clinicId) {
+    if (!clinicId) {
       return res.status(403).json({ ok: false, error: "clinic_not_authenticated" });
     }
     
@@ -8356,7 +8630,7 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
     const { data: patients, error } = await supabase
       .from("patients")
       .select("id, created_at, updated_at, treatments, clinic_id")
-      .eq("clinic_id", req.clinicId);
+      .eq("clinic_id", clinicId);
     
     if (error) {
 
@@ -8382,7 +8656,7 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
     }
     
     (patients || []).forEach((patient) => {
-      if (patient && patient.clinic_id != null && String(patient.clinic_id) !== String(req.clinicId)) return;
+      if (patient && patient.clinic_id != null && String(patient.clinic_id) !== clinicId) return;
       let treatments;
       try {
         treatments = typeof patient.treatments === "string" ? JSON.parse(patient.treatments) : patient.treatments;
@@ -8435,7 +8709,7 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
       ok: true, 
       data: resultWithGrowth,
       period: `${monthsCount} months`,
-      totalProcedures: resultWithGrowth.reduce((sum, item) => sum + item.procedures, 0)
+      totalProcedures: resultWithGrowth.reduce((sum, item) => sum + item.procedures, 0),
     });
     
   } catch (error) {
@@ -17416,7 +17690,10 @@ async function handlePatientChatUpload(req, res) {
           validation_score: validationResult ? validationResult.score : null,
           validation_issues: validationResult ? validationResult.issues : null,
         }).select('id').maybeSingle();
-        if (pfRow && pfRow.id) savedId = String(pfRow.id);
+        if (pfRow && pfRow.id) {
+          savedId = String(pfRow.id);
+          saasEnforcement.invalidateBillingUsageCache(clinicIdForFile);
+        }
       }
     }
 
@@ -17539,7 +17816,10 @@ app.post('/api/admin/patient/:patientId/upload', requireAdminAuth, chatUpload.si
           from_role: 'admin',
           source: 'upload',
         }).select('id').maybeSingle();
-        if (pfRow && pfRow.id) savedId = pfRow.id;
+        if (pfRow && pfRow.id) {
+          savedId = pfRow.id;
+          saasEnforcement.invalidateBillingUsageCache(clinicId);
+        }
       }
     }
 
@@ -18372,12 +18652,56 @@ function getDentalAiFallback(langKey) {
 }
 
 function getAiAnalyzeRequestLanguage(req) {
+  return getAiAnalyzeRequestLanguageSync(req) || "en";
+}
+
+/**
+ * First acceptable locale from Accept-Language (e.g. "tr-TR,en;q=0.8" → "tr" when supported).
+ * @param {string|undefined} raw
+ * @returns {string|null}
+ */
+function parseAcceptLanguageHeader(raw) {
+  if (raw == null || String(raw).trim() === "") return null;
+  const part = String(raw)
+    .split(",")[0]
+    .trim()
+    .split(";")[0]
+    .trim();
+  if (!part) return null;
+  const code = part.replace(/_/g, "-").split("-")[0].toLowerCase().slice(0, 2);
+  if (DENTAL_AI_LANG_MAP[code]) return code;
+  return null;
+}
+
+/**
+ * Synchronous part of language resolution (no DB). Prefer {@link resolveAiAnalyzeLanguage} for full chain.
+ * Priority: body.language → body.lang → query → x-lang → Accept-Language → req.user.lang → JWT → null
+ */
+function getAiAnalyzeRequestLanguageSync(req) {
   const body = req.body || {};
-  if (body.lang != null && String(body.lang).trim() !== "") {
-    return body.lang;
+  if (body.language != null && String(body.language).trim() !== "") {
+    return String(body.language).trim();
   }
+  if (body.lang != null && String(body.lang).trim() !== "") {
+    return String(body.lang).trim();
+  }
+  const q = req.query || {};
+  if (q.language != null && String(q.language).trim() !== "") {
+    return String(q.language).trim();
+  }
+  if (q.lang != null && String(q.lang).trim() !== "") {
+    return String(q.lang).trim();
+  }
+  const xLang = req.headers["x-lang"] || req.headers["X-Lang"];
+  if (xLang != null && String(xLang).trim() !== "") {
+    return String(xLang).trim();
+  }
+  const fromAccept = parseAcceptLanguageHeader(
+    req.headers["accept-language"] || req.headers["Accept-Language"]
+  );
+  if (fromAccept) return fromAccept;
   if (req.user && req.user.lang) {
-    return req.user.lang;
+    return String(req.user.lang).trim();
   }
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : (req.headers["x-patient-token"] || "");
@@ -18385,11 +18709,48 @@ function getAiAnalyzeRequestLanguage(req) {
     try {
       const decoded = jwt.decode(token);
       if (decoded && decoded.language) {
-        return decoded.language;
+        return String(decoded.language).trim();
       }
     } catch (e) {
       /* non-fatal */
     }
+  }
+  return null;
+}
+
+/**
+ * Full chain: body / query / x-lang / Accept-Language / user / JWT, then patients.language from DB.
+ * @param {import('express').Request} req
+ * @param {string|undefined} patientId
+ * @returns {Promise<string>}
+ */
+async function resolveAiAnalyzeLanguage(req, patientId) {
+  const sync = getAiAnalyzeRequestLanguageSync(req);
+  if (sync) return sync;
+  if (!patientId) return "en";
+  if (!isSupabaseEnabled()) return "en";
+  const pid = String(patientId).trim();
+  try {
+    if (UUID_RE.test(pid)) {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("language")
+        .eq("id", pid)
+        .maybeSingle();
+      if (!error && data?.language != null && String(data.language).trim() !== "") {
+        return String(data.language).trim();
+      }
+    }
+    const { data: d2, error: e2 } = await supabase
+      .from("patients")
+      .select("language")
+      .eq("patient_id", pid)
+      .maybeSingle();
+    if (!e2 && d2?.language != null && String(d2.language).trim() !== "") {
+      return String(d2.language).trim();
+    }
+  } catch (e) {
+    console.warn("[ai-analyze] patient language lookup failed", e?.message || e);
   }
   return "en";
 }
@@ -18961,6 +19322,130 @@ function safeJsonParse(text) {
 }
 
 /**
+ * Plain string translation (gpt-4o-mini). Main dental flow uses translateDentalAnalysis (structured JSON) so fields stay aligned.
+ * Use for the optional patient-friendly explainer: English first, then translate for tr/ru/ka.
+ * Vision/analysis model (gpt-4o) is never used here.
+ * @param {string} text
+ * @param {string} targetLang  tr|en|ru|ka
+ */
+async function translateText(text, targetLang, { apiKey, timeoutMs = 25000 } = {}) {
+  if (text == null || text === "") return text;
+  const k = normalizeAiDentalLang(targetLang);
+  if (!k || k === "en") return String(text);
+  if (!apiKey) return String(text);
+  const lang = dentalLangNameFor(k);
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a professional medical translator. Translate accurately and preserve medical meaning. Output the translation only, no preamble.",
+        },
+        {
+          role: "user",
+          content: `Translate this dental analysis to ${lang}:\n\n${String(text)}`,
+        },
+      ],
+      max_tokens: 1200,
+      temperature: 0.2,
+    }),
+    signal: AbortSignal.timeout(Math.min(timeoutMs, 60_000)),
+  });
+  if (!res.ok) {
+    return String(text);
+  }
+  const data = await res.json().catch(() => ({}));
+  const out = data?.choices?.[0]?.message?.content;
+  return out != null && String(out).trim() ? String(out).trim() : String(text);
+}
+
+const DENTAL_AI_PATIENT_FRIENDLY = String(process.env.DENTAL_AI_PATIENT_FRIENDLY || "").trim() === "1";
+
+/**
+ * Human-readable block for API consumers (separate from structured insights[]).
+ * @param {{ insights?: string[], summary?: string, recommendation?: string }|null|undefined} bundle
+ * @returns {string}
+ */
+function formatDentalAnalysisBundleToText(bundle) {
+  if (!bundle || typeof bundle !== "object") return "";
+  const insights = Array.isArray(bundle.insights)
+    ? bundle.insights.map((s) => String(s || "").trim()).filter(Boolean)
+    : [];
+  const parts = [];
+  if (insights.length) {
+    parts.push(insights.map((x, i) => `${i + 1}. ${x}`).join("\n"));
+  }
+  if (bundle.summary) parts.push(String(bundle.summary).trim());
+  if (bundle.recommendation) parts.push(String(bundle.recommendation).trim());
+  return parts.join("\n\n");
+}
+
+/**
+ * Optional: short patient-facing explanation. English from model first, then translateText for tr/ru/ka.
+ * Set DENTAL_AI_PATIENT_FRIENDLY=1 to enable.
+ */
+async function generatePatientFriendlyEnglishFromBundle(englishBundle, { apiKey, timeoutMs = 22000 } = {}) {
+  if (!apiKey) return null;
+  const text = formatDentalAnalysisBundleToText(englishBundle);
+  if (!String(text).trim()) return null;
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.3,
+      max_tokens: 600,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You help patients understand dental information. Be clear, calm, and accurate. Do not diagnose or promise outcomes. Use plain language. Reply in English only.",
+        },
+        {
+          role: "user",
+          content: `Explain this dental result in simple language for a patient (English only, short paragraphs):\n\n${text}`,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(Math.min(timeoutMs, 60_000)),
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  const out = data?.choices?.[0]?.message?.content;
+  return out != null && String(out).trim() ? String(out).trim() : null;
+}
+
+async function patientFriendlyDentalOptional(englishBundle, langKey, { apiKey, timeoutMs = 25000 } = {}) {
+  if (!DENTAL_AI_PATIENT_FRIENDLY || !apiKey || !englishBundle) return null;
+  const enPlain = await generatePatientFriendlyEnglishFromBundle(englishBundle, { apiKey, timeoutMs });
+  if (!enPlain) return null;
+  const k = normalizeAiDentalLang(langKey);
+  if (k === "en") return enPlain;
+  return await translateText(enPlain, k, { apiKey, timeoutMs });
+}
+
+/**
+ * @param {object} parsed  localized display row
+ * @param {object|null} allTranslations
+ */
+function englishBundleForDentalText(parsed, allTranslations) {
+  if (allTranslations && allTranslations.en && typeof allTranslations.en === "object") {
+    return allTranslations.en;
+  }
+  return pickEnDataForMulti(parsed);
+}
+
+/**
  * @param {any} x
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
@@ -19378,9 +19863,17 @@ async function runDentalLocalization(enParsed, k, { apiKey, timeoutMs = 25_000, 
 
 /**
  * One vision call (English) → validate EN → cache EN → optional translate. No vision retries.
+ * `analysis` / `analysis_en` are plain-text views; structured `insights` etc. stay the source of truth.
  * Throws on HTTP / network errors so the caller can return 502/504.
  */
-function buildDentalAiProcessReturn(parsed, a, { q, fromCache, translated, allTranslations } = {}) {
+function buildDentalAiProcessReturn(
+  parsed,
+  a,
+  { q, fromCache, translated, allTranslations, langKey = "en" } = {}
+) {
+  const k = normalizeAiDentalLang(langKey);
+  const enB = englishBundleForDentalText(parsed, allTranslations);
+  const curB = pickEnDataForMulti(parsed);
   return {
     insights: parsed.insights,
     confidence: parsed.confidence,
@@ -19388,6 +19881,9 @@ function buildDentalAiProcessReturn(parsed, a, { q, fromCache, translated, allTr
     recommendation: parsed.recommendation,
     missingTeethLikely: parsed.missingTeethLikely ?? null,
     dentalConditionParsed: parsed.dentalConditionParsed ?? null,
+    analysis: formatDentalAnalysisBundleToText(curB),
+    analysis_en: formatDentalAnalysisBundleToText(enB),
+    language: k,
     _usage: a?.usage ?? null,
     _model: fromCache ? "gpt-4o+cache" : a?.model || "gpt-4o",
     _fallback: false,
@@ -19430,7 +19926,7 @@ async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, ti
       return buildDentalAiProcessReturn(
         result,
         { usage: null, model: "gpt-4o+cache" },
-        { q: qCached, fromCache: true, translated: tFlag, allTranslations: allTr }
+        { q: qCached, fromCache: true, translated: tFlag, allTranslations: allTr, langKey: k }
       );
     }
   }
@@ -19439,8 +19935,14 @@ async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, ti
   const a = await callOpenAIVision(system, user, imageDataUrl, { apiKey, timeoutMs });
   const q0 = validateDentalAIQuality(a.parsed);
   if (!q0.ok) {
+    const kfb = normalizeAiDentalLang(langKey);
+    const locFb = getDentalAiFallback(kfb);
+    const enFb = getDentalAiFallback("en");
     return {
-      ...getDentalAiFallback(langKey),
+      ...locFb,
+      analysis: formatDentalAnalysisBundleToText(pickEnDataForMulti(locFb)),
+      analysis_en: formatDentalAnalysisBundleToText(pickEnDataForMulti(enFb)),
+      language: kfb,
       missingTeethLikely: null,
       dentalConditionParsed: null,
       _usage: a.usage,
@@ -19449,6 +19951,7 @@ async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, ti
       _retried: false,
       _fromCache: false,
       _translated: false,
+      _allTranslations: null,
       _qualityScore: q0.score,
       _qualityReasons: q0.reasons,
     };
@@ -19482,6 +19985,7 @@ async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, ti
     fromCache: false,
     translated: tFlag,
     allTranslations: allTr,
+    langKey: k,
   });
 }
 
@@ -23687,7 +24191,8 @@ app.post('/api/chat/smile-scenarios', requireToken, async (req, res) => {
 });
 
 // POST /api/chat/ai-upload
-// Lightweight upload for AI analysis — no clinic_id required, no messages DB write.
+// Multipart: field "file" (required). Optional text fields: language | lang (same resolution as ai-analyze).
+// Returns { ok, url, path, language } — use `language` when calling POST /api/chat/ai-analyze JSON body.
 // Stores the photo in Supabase Storage and returns a long-lived signed URL that
 // the ai-analyze endpoint can fetch.
 app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (req, res) => {
@@ -23737,8 +24242,10 @@ app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (
       return res.status(500).json({ ok: false, error: 'sign_failed', message: signErr?.message });
     }
 
-    console.log('[AI UPLOAD] OK:', { patientId, storagePath, sizeKB: Math.round(size / 1024) });
-    return res.json({ ok: true, url: signed.signedUrl, path: storagePath });
+    const rawLang = await resolveAiAnalyzeLanguage(req, patientId);
+    const language = normalizeAiDentalLang(rawLang);
+    console.log('[AI UPLOAD] OK:', { patientId, storagePath, sizeKB: Math.round(size / 1024), language });
+    return res.json({ ok: true, url: signed.signedUrl, path: storagePath, language });
 
   } catch (err) {
     console.error('[AI UPLOAD] Exception:', err?.message, err?.stack);
@@ -24486,7 +24993,8 @@ function buildDentalTreatmentPlan(
 }
 
 // POST /api/chat/ai-analyze
-// Accepts: { patientId, imageUrl, photoType?, userLocation?, preferredCountry?, userCountry? }
+// Accepts: { patientId, imageUrl, photoType?, language? | lang?, userLocation?, ... }
+// Optional header: x-lang  —  Send `language: "tr"` in JSON so translation runs (tr/ru/ka).
 // Feature flags: ENABLE_AI_ANALYSIS, ENABLE_SMILE_SIMULATION
 // Timeouts:      AI_TIMEOUT_MS (default 30 000 ms)
 // Images are processed in-memory as base64 — no external storage required
@@ -24507,13 +25015,14 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       userCountry = null,
     } = req.body || {};
 
-    const rawLang = getAiAnalyzeRequestLanguage(req);
-    const langKey = normalizeAiDentalLang(rawLang);
-    console.log('AI LANG RECEIVED:', langKey);
-
     if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
     if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
     if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl_required' });
+
+    const rawLang = await resolveAiAnalyzeLanguage(req, patientId);
+    // Effective: req.body.language || x-lang || … || patients.language (DB); see resolveAiAnalyzeLanguage.
+    const lang = normalizeAiDentalLang(rawLang);
+    console.log("🌍 AI LANG RECEIVED:", lang);
 
     const OPENAI_KEY = process.env.OPENAI_API_KEY;
     if (!OPENAI_KEY) {
@@ -24544,7 +25053,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       }
     }
 
-    logAI('info', 'analyze_start', { patientId, imageUrl, lang: langKey });
+    logAI('info', 'analyze_start', { patientId, imageUrl, lang });
 
     // ── Load image — from remote URL (Supabase) or local disk ───────────
     let imageBuffer;
@@ -24667,7 +25176,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       aiAnalysis = await processDentalAI(imageDataUrl, photoType, {
         apiKey:    OPENAI_KEY,
         timeoutMs: AI_TIMEOUT_MS,
-        langKey,
+        langKey: lang,
       });
     } catch (openaiErr) {
       logAI('error', 'openai_error', {
@@ -24687,11 +25196,49 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       recommendation,
       missingTeethLikely,
       dentalConditionParsed,
+      analysis: analysisText,
+      analysis_en: analysisEn,
+      language: responseLanguage,
       _usage,
       _model,
       _translated,
       _allTranslations,
     } = aiAnalysis;
+
+    if (
+      String(process.env.DENTAL_AI_DEBUG_TRANSLATE || "").trim() === "1" &&
+      OPENAI_KEY &&
+      String(analysisEn || "").trim() &&
+      lang !== "en" &&
+      !aiAnalysis._fallback
+    ) {
+      try {
+        const translated = await translateText(String(analysisEn), lang, { apiKey: OPENAI_KEY, timeoutMs: 25000 });
+        console.log("TRANSLATED:", translated);
+      } catch (dbgErr) {
+        logAI("warn", "debug_translate_text_failed", { message: dbgErr?.message || String(dbgErr) });
+      }
+    }
+
+    let patientFriendly = null;
+    if (DENTAL_AI_PATIENT_FRIENDLY && OPENAI_KEY && !aiAnalysis._fallback) {
+      const enB =
+        _allTranslations && _allTranslations.en
+          ? _allTranslations.en
+          : lang === "en"
+            ? { insights, summary, recommendation }
+            : null;
+      if (enB) {
+        try {
+          patientFriendly = await patientFriendlyDentalOptional(enB, lang, {
+            apiKey: OPENAI_KEY,
+            timeoutMs: 22000,
+          });
+        } catch (pfErr) {
+          logAI("warn", "patient_friendly_failed", { patientId, message: pfErr?.message || String(pfErr) });
+        }
+      }
+    }
 
     logAI('info', 'openai_response', {
       patientId,
@@ -24718,14 +25265,14 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     // imageDataUrl no longer needed — release before writing to Supabase
     // (GC hint; avoids keeping a large string alive through async I/O)
 
-    const disclaimer = getAiAnalysisDisclaimer(langKey);
+    const disclaimer = getAiAnalysisDisclaimer(lang);
 
     const treatmentPlan = buildDentalTreatmentPlan(
       insights,
       summary,
       missingTeethLikely ?? null,
       dentalConditionParsed ?? null,
-      langKey
+      lang
     );
 
     const missingToothDetected = Boolean(treatmentPlan.missingTooth);
@@ -24744,13 +25291,17 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     await insertMessageToSupabase({
       patientId,
       sender: 'clinic',
-      message: getAiPreviewInboxMessage(langKey),
+      message: getAiPreviewInboxMessage(lang),
       attachments: {
         aiResult: {
           insights,
           confidence,
           summary,
           recommendation,
+          analysis: analysisText,
+          analysis_en: analysisEn,
+          language: responseLanguage,
+          ...(patientFriendly ? { patientFriendly } : {}),
           disclaimer,
           translated: Boolean(_translated),
           allTranslations: _allTranslations || null,
@@ -24785,13 +25336,17 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
 
     return res.json({
       ok: true,
-      lang: langKey,
+      lang,
+      language: responseLanguage,
+      analysis: analysisText,
+      analysis_en: analysisEn,
       insights,
       confidence,
       summary,
       recommendation,
       translated: Boolean(_translated),
       allTranslations: _allTranslations || null,
+      ...(patientFriendly ? { patientFriendly } : {}),
       simulatedImageUrl,
       simulationProvider,
       disclaimer,
@@ -24842,7 +25397,9 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
 app.get("/api/admin/messages/unread-counts", requireAdminAuth, async (req, res) => {
   try {
     res.setHeader("Cache-Control", "private, no-cache, must-revalidate");
-    if (!isSupabaseEnabled()) return res.json({ ok: true, total: 0, counts: {} });
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
+    }
     const clinicId = req.clinicId;
     const totalOnly = String(req.query.totalOnly || req.query.summary || "").trim() === "1";
     const cacheKey = `${clinicId}:${totalOnly ? "1" : "0"}`;
@@ -24886,7 +25443,8 @@ app.get("/api/admin/messages/unread-counts", requireAdminAuth, async (req, res) 
           }
         }
       }
-      const body = { ok: true, total: countResult?.count || 0, counts: {} };
+      const tot = countResult?.count || 0;
+      const body = { ok: true, total: tot, totalUnread: tot, counts: {}, byPatient: [] };
       unreadCountsCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
       return res.json(body);
     }
@@ -24920,7 +25478,7 @@ app.get("/api/admin/messages/unread-counts", requireAdminAuth, async (req, res) 
 
     if (error && !["42P01", "42703", "PGRST204"].includes(String(error.code || ""))) {
       console.error("[UNREAD COUNTS] messages fetch error:", error.message);
-      return res.json({ ok: true, total: 0, counts: {} });
+      return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
     }
     const rows = Array.isArray(data) ? data : [];
     const counts = {};
@@ -24929,12 +25487,13 @@ app.get("/api/admin/messages/unread-counts", requireAdminAuth, async (req, res) 
       if (pid) counts[pid] = (counts[pid] || 0) + 1;
     });
     const total = Object.values(counts).reduce((s, n) => s + n, 0);
-    const body = { ok: true, total, counts };
+    const byPatient = Object.entries(counts).map(([patientId, count]) => ({ patientId, count }));
+    const body = { ok: true, total, totalUnread: total, counts, byPatient };
     unreadCountsCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
     return res.json(body);
   } catch (e) {
     console.error("[UNREAD COUNTS] error:", e.message);
-    return res.json({ ok: true, total: 0, counts: {} });
+    return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
   }
 });
 
@@ -27143,6 +27702,14 @@ app.post("/api/referral/invite", requireToken, async (req, res) => {
       }
 
       if (inserted) {
+        try {
+          const invCid = inserted.clinic_id || clinicId;
+          if (invCid) {
+            saasEnforcement.invalidateBillingUsageCache(String(invCid).trim());
+          }
+        } catch (invErr) {
+          /* non-fatal */
+        }
         let verified = inserted;
         try {
           const { data: verifyRow, error: verifyErr } = await supabase
@@ -35366,6 +35933,127 @@ async function handleDoctorMeUpdateCliniflow(req, res) {
 app.put("/api/doctor/me", requireDoctorAuth, handleDoctorMeUpdateCliniflow);
 app.patch("/api/doctor/me", requireDoctorAuth, handleDoctorMeUpdateCliniflow);
 
+/** Same visibility rules as GET /api/doctor/patients — unread counts only for patients this doctor may see (clinic + assignment). */
+async function getDoctorVisiblePatientIdSet(req) {
+  const doctorId = req.doctorId;
+  const clinicId = req.doctor?.clinic_id || req.clinicId || null;
+  const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim().toUpperCase();
+  const doctorKeysRaw = [
+    ...new Set([
+      String(doctorId || "").trim(),
+      String(req?.doctor?.id || "").trim(),
+      String(req?.doctor?.doctor_id || "").trim(),
+    ].filter(Boolean)),
+  ];
+  const [teamPatientIds, fromPatientTableAssign, fromProcessAssign, fromCalendar] = await Promise.all([
+    collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
+    collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
+    collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
+    collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
+  ]);
+  const visiblePatientIds = new Set(teamPatientIds);
+  for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
+  for (const pid of fromProcessAssign) visiblePatientIds.add(pid);
+  for (const pid of fromCalendar) visiblePatientIds.add(pid);
+  await expandPatientIdSetForDoctorMatching(visiblePatientIds);
+  return visiblePatientIds;
+}
+
+async function getDoctorVisiblePatientIdSetCached(req) {
+  const did = String(req.doctorId || "").trim();
+  if (!did) return new Set();
+  const hit = doctorVisiblePatientIdCache.get(did);
+  if (hit && hit.expires > Date.now()) return hit.set;
+  const set = await getDoctorVisiblePatientIdSet(req);
+  doctorVisiblePatientIdCache.set(did, { set, expires: Date.now() + DOCTOR_VISIBLE_MSG_TTL_MS });
+  return set;
+}
+
+// GET /api/doctor/messages/unread-counts — same payload shape as admin; messages only for patients visible to this doctor.
+app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "private, no-cache, must-revalidate");
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
+    }
+    const clinicId = req.doctor?.clinic_id || req.clinicId;
+    const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim().toUpperCase();
+    if (!clinicId && !clinicCode) {
+      return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
+    }
+    const totalOnly = String(req.query.totalOnly || req.query.summary || "").trim() === "1";
+    const did = String(req.doctorId || "").trim();
+    const cacheKey = `doc:${did}:${totalOnly ? "1" : "0"}`;
+    const cached = unreadCountsDoctorCache.get(cacheKey);
+    if (cached && cached.expires > Date.now()) {
+      return res.json(cached.body);
+    }
+
+    const visible = await getDoctorVisiblePatientIdSetCached(req);
+    if (visible.size === 0) {
+      const body = { ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] };
+      unreadCountsDoctorCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
+      return res.json(body);
+    }
+
+    let data = [];
+    let fetchError = null;
+    outerRows: for (const [field, value] of [[`clinic_code`, clinicCode], [`clinic_id`, clinicId]]) {
+      if (!value) continue;
+      for (const unreadOnly of [true, false]) {
+        let q = supabase
+          .from("messages")
+          .select("patient_id")
+          .eq("from_patient", true)
+          .eq(field, value);
+        if (unreadOnly) q = q.is("read_at", null);
+        const r = await q;
+        if (!r.error) {
+          data = r.data || [];
+          break outerRows;
+        }
+        fetchError = r.error;
+        if (unreadOnly && isSupabaseSchemaMissingColumnError(r.error)) continue;
+        const rowEc = String(r.error?.code || "");
+        if (["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) || isSupabaseSchemaMissingColumnError(r.error) || !rowEc) {
+          continue;
+        }
+        if (!["42P01", "42703", "PGRST204"].includes(rowEc)) break outerRows;
+      }
+    }
+
+    if (fetchError && !["42P01", "42703", "PGRST204"].includes(String(fetchError.code || ""))) {
+      return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
+    }
+
+    const rows = (Array.isArray(data) ? data : []).filter((r) => {
+      const p = String(r.patient_id || "");
+      return p && visible.has(p);
+    });
+
+    if (totalOnly) {
+      const t = rows.length;
+      const body = { ok: true, total: t, totalUnread: t, counts: {}, byPatient: [] };
+      unreadCountsDoctorCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
+      return res.json(body);
+    }
+
+    const counts = {};
+    rows.forEach((r) => {
+      const pid = String(r.patient_id || "");
+      if (pid) counts[pid] = (counts[pid] || 0) + 1;
+    });
+    const total = Object.values(counts).reduce((s, n) => s + n, 0);
+    const byPatient = Object.entries(counts).map(([patientId, count]) => ({ patientId, count }));
+    const body = { ok: true, total, totalUnread: total, counts, byPatient };
+    unreadCountsDoctorCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
+    return res.json(body);
+  } catch (e) {
+    console.error("[DOCTOR UNREAD COUNTS]", e?.message || e);
+    return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
+  }
+});
+
 // Get doctor's assigned patients (multi-doctor model)
 app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
   try {
@@ -38969,6 +39657,16 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
         });
       }
       break;
+    }
+
+    if (data) {
+      try {
+        if (clinicId) {
+          saasEnforcement.invalidateBillingUsageCache(String(clinicId).trim());
+        }
+      } catch (invE) {
+        /* non-fatal */
+      }
     }
 
     if (!data) {
@@ -45438,22 +46136,8 @@ app.get(
 );
 
 
-
-// ── Final global error handler (catches anything not caught per-route) ────────
-app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-  console.error("ERROR:", err);
-  if (res.headersSent) return;
-  const raw = Number(err.status || err.statusCode);
-  const status = Number.isFinite(raw) && raw >= 400 && raw < 600 ? raw : 500;
-  if (status >= 500) {
-    return res.status(500).json({ ok: false, error: "Internal Server Error" });
-  }
-  const msg = String(err.message || "Bad Request").trim() || "Bad Request";
-  return res.status(status).json({ ok: false, error: msg });
-});
-
 // ================== START ==================
-// (uncaughtException / unhandledRejection handlers are registered near app bootstrap)
+// (uncaughtException / unhandledRejection — see top of this file)
 // Railway / Render: bind the same http.Server instance; handle listen errors (avoid silent uncaughtException).
 server.on("error", (err) => {
   console.error("[SERVER] listen/bind error:", err && err.message ? err.message : err);
@@ -45467,6 +46151,27 @@ app.use(express.static(publicDir));
 // ── Global JSON 404 — unknown paths (never HTML/plain text for unhandled routes) ─
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.path });
+});
+
+// ── Final error handler (must be after all routes + static + 404) ─────────────
+app.use((err, req, res, next) => {
+  // eslint-disable-line no-unused-vars
+  console.error("🔥 EXPRESS ERROR:", err);
+  if (err && err.stack) console.error(err.stack);
+  if (res.headersSent) {
+    return;
+  }
+  const raw = Number(err.status || err.statusCode);
+  const status = Number.isFinite(raw) && raw >= 400 && raw < 600 ? raw : 500;
+  const message = String(err.message || "internal_error");
+  if (status >= 500) {
+    return res.status(500).json({
+      ok: false,
+      error: "internal_error",
+      message,
+    });
+  }
+  return res.status(status).json({ ok: false, error: "bad_request", message });
 });
 
 console.log("[STARTUP] http.Server.listen", {

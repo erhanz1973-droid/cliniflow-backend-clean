@@ -63,6 +63,12 @@
     .tag { background:rgba(37,99,235,0.15); color:#93c5fd; border:1px solid rgba(37,99,235,0.3); border-radius:20px; padding:3px 10px; font-size:13px; }
     .tag-red { background:rgba(220,38,38,0.1); color:#fca5a5; border-color:rgba(220,38,38,0.3); }
     .no-form-msg { text-align:center; color:var(--muted); font-size:14px; padding:16px 0; }
+    .header-bell-wrap { position:relative; display:flex; align-items:center; gap:10px; }
+    .msg-badge { min-width:22px; height:22px; padding:0 7px; border-radius:999px; background:var(--r); color:#fff; font-size:12px; font-weight:700; display:none; align-items:center; justify-content:center; line-height:1; }
+    .msg-badge.visible { display:inline-flex; }
+    .msg-toast { position:fixed; bottom:24px; right:24px; max-width:340px; padding:14px 18px; background:var(--card); border:1px solid var(--b); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.35); z-index:9999; font-size:14px; display:none; animation:msgToastIn .25s ease; }
+    .msg-toast.visible { display:block; }
+    @keyframes msgToastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
   </style>
 </head>
 <body>
@@ -72,8 +78,13 @@
         <h1>🦷 Doktor Paneli</h1>
         <p id="doctor-name-label">Yükleniyor...</p>
       </div>
-      <button class="btn btn-danger" onclick="logout()">Çıkış</button>
+      <div class="header-bell-wrap">
+        <span id="msgNavBadge" class="msg-badge" title="Okunmamış hasta mesajı" role="status" aria-live="polite" aria-atomic="true">0</span>
+        <button type="button" class="btn btn-secondary" id="msgBellBtn" style="position:relative;" title="Hasta mesajları">💬 Mesajlar</button>
+        <button class="btn btn-danger" onclick="logout()">Çıkış</button>
+      </div>
     </header>
+    <div id="msgToast" class="msg-toast" role="status" aria-live="polite"></div>
 
     <div id="loading" class="loading">⏳ Hastalar yükleniyor...</div>
     <div id="error" class="error-msg" style="display:none;"></div>
@@ -274,6 +285,96 @@
     function escHtml(s) {
       return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     }
+
+    /** null = first poll (no toast); then compare for increases only */
+    let previousUnreadMsgCount = null;
+    let msgToastTimer = null;
+
+    function playMsgPing() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ac = new Ctx();
+        const o = ac.createOscillator();
+        const g = ac.createGain();
+        o.connect(g);
+        g.connect(ac.destination);
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.08, ac.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.15);
+        o.start(ac.currentTime);
+        o.stop(ac.currentTime + 0.15);
+        setTimeout(function () { ac.close(); }, 200);
+      } catch (_) { /* no audio */ }
+    }
+
+    function showMessageNotification(count) {
+      if (count <= 0) return;
+      console.log("[Mesajlar] Okunmamış hasta mesajı: " + count);
+      const el = document.getElementById("msgToast");
+      if (el) {
+        el.textContent = count > 1
+          ? count + " yeni hasta mesajı (atanmış hastalarınız)."
+          : "Yeni hasta mesajı (atanmış hastalarınız).";
+        el.classList.add("visible");
+        if (msgToastTimer) clearTimeout(msgToastTimer);
+        msgToastTimer = setTimeout(function () { el.classList.remove("visible"); }, 5000);
+      }
+      playMsgPing();
+    }
+
+    function updateMsgBadge(n) {
+      const badge = document.getElementById("msgNavBadge");
+      if (!badge) return;
+      const t = n > 99 ? "99+" : String(n);
+      if (n > 0) {
+        badge.textContent = t;
+        badge.classList.add("visible");
+        badge.setAttribute("aria-label", n + " okunmamış mesaj");
+      } else {
+        badge.textContent = "0";
+        badge.classList.remove("visible");
+        badge.setAttribute("aria-label", "Okunmamış mesaj yok");
+      }
+    }
+
+    async function pollDoctorUnreadMessages() {
+      if (!localStorage.getItem("doctor_token")) return;
+      try {
+        const r = await apiFetch("/api/doctor/messages/unread-counts?totalOnly=1", { headers: { Accept: "application/json" } });
+        const data = await r.json();
+        if (!data || data.ok === false) return;
+        const total = Number(data.totalUnread != null ? data.totalUnread : data.total || 0);
+        if (total > 0) {
+          updateMsgBadge(total);
+          if (previousUnreadMsgCount !== null && total > previousUnreadMsgCount) {
+            showMessageNotification(total);
+          }
+        } else {
+          updateMsgBadge(0);
+        }
+        previousUnreadMsgCount = total;
+      } catch (e) {
+        console.warn("[pollDoctorUnreadMessages]", e);
+      }
+    }
+
+    (function initDoctorMsgPolling() {
+      const bell = document.getElementById("msgBellBtn");
+      if (bell) {
+        bell.addEventListener("click", function () {
+          const el = document.getElementById("msgToast");
+          if (el) {
+            el.textContent = "Okunmamış sayısı yalnızca bu klinikte ve size atanmış hastalardaki mesajları içerir. Yanıtlamak için kliniğin Clinifly Admin (Mesajlar) ekranını kullanın.";
+            el.classList.add("visible");
+            if (msgToastTimer) clearTimeout(msgToastTimer);
+            msgToastTimer = setTimeout(function () { el.classList.remove("visible"); }, 7000);
+          }
+        });
+      }
+      setTimeout(pollDoctorUnreadMessages, 800);
+      setInterval(pollDoctorUnreadMessages, 5000);
+    })();
 
     loadDoctorInfo();
     loadPatients();

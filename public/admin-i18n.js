@@ -149,6 +149,9 @@
           register: "Klinik Kaydı"
         },
         charts: {
+          metricTitleMonthlyPatients: "Aylık Kaydolan Hasta Sayısı",
+          metricTitleMonthlyProcedures: "Aylık İşlem Sayısı",
+          chartLabelMonthlyRegistered: "Aylık kayıt",
           activePatients: "Aktif Hastalar",
           procedures: "Prosedürler",
           noData: "Veri yok",
@@ -156,6 +159,7 @@
           vsPreviousMonth: "önceki aya göre",
           noPreviousData: "Önceki veri yok",
           summaryActivePatients: "{count} aktif hasta • {month}",
+          summaryMonthlyRegistered: "{count} kayıt • {month}",
           summaryProcedures: "{count} prosedür • {month}"
         },
         clinicBadge: {
@@ -932,6 +936,9 @@
           register: "Register Clinic"
         },
         charts: {
+          metricTitleMonthlyPatients: "Monthly registered patients",
+          metricTitleMonthlyProcedures: "Monthly procedure count",
+          chartLabelMonthlyRegistered: "Monthly registrations",
           activePatients: "Active Patients",
           procedures: "Procedures",
           noData: "No data",
@@ -939,6 +946,7 @@
           vsPreviousMonth: "vs previous month",
           noPreviousData: "No previous data",
           summaryActivePatients: "{count} active patients • {month}",
+          summaryMonthlyRegistered: "{count} registered • {month}",
           summaryProcedures: "{count} procedures • {month}"
         },
         clinicBadge: {
@@ -1669,6 +1677,9 @@
         title: "Clinifly Admin – Панель управления",
         nav: { dashboard: "Панель", patients: "Пациенты", travel: "Путешествие", treatment: "Лечение", schedule: "Календарь", doctors: "Врачи", chat: "Сообщения", leads: "Лиды / Без назначения", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
         charts: {
+          metricTitleMonthlyPatients: "Количество зарегистрированных пациентов по месяцам",
+          metricTitleMonthlyProcedures: "Количество процедур по месяцам",
+          chartLabelMonthlyRegistered: "Регистрации по месяцам",
           activePatients: "Активные пациенты",
           procedures: "Процедуры",
           noData: "Нет данных",
@@ -1676,6 +1687,7 @@
           vsPreviousMonth: "по сравнению с прошлым месяцем",
           noPreviousData: "Нет данных за предыдущий период",
           summaryActivePatients: "{count} активных пациентов • {month}",
+          summaryMonthlyRegistered: "{count} регистраций • {month}",
           summaryProcedures: "{count} процедур • {month}"
         },
         upcoming: {
@@ -2146,6 +2158,9 @@
         title: "Clinifly Admin – მართვის პანელი",
         nav: { dashboard: "პანელი", patients: "პაციენტები", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "კალენდარი", doctors: "ექიმები", chat: "შეტყობინებები", leads: "ლიდები / მიუთითებელი", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები" },
         charts: {
+          metricTitleMonthlyPatients: "ყოველთვიული რეგისტრაციის რაოდენობა",
+          metricTitleMonthlyProcedures: "ყოველთვიული პროცედურების რაოდენობა",
+          chartLabelMonthlyRegistered: "ყოველთვიული რეგისტრაცია",
           activePatients: "აქტიური პაციენტები",
           procedures: "პროცედურები",
           noData: "მონაცემი არ არის",
@@ -2153,6 +2168,7 @@
           vsPreviousMonth: "წინა თვესთან შედარებით",
           noPreviousData: "წინა მონაცემი არ არის",
           summaryActivePatients: "{count} აქტიური პაციენტი • {month}",
+          summaryMonthlyRegistered: "{count} რეგისტრაცია • {month}",
           summaryProcedures: "{count} პროცედურა • {month}"
         },
         upcoming: {
