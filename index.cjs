@@ -8225,14 +8225,15 @@ app.post("/api/patient/city-onboarding-input", requireToken, async (req, res) =>
     if (norm.city_code) {
       return res.json({ ok: true, resolved: norm.city_code, pending: false });
     }
-    const pendingRaw = norm.pending_city_raw;
-    if (!pendingRaw) {
+    const suggestionRaw =
+      raw != null && String(raw).trim() !== "" ? String(raw).trim() : "";
+    if (!suggestionRaw) {
       return res.status(400).json({ ok: false, error: "invalid" });
     }
     const { data: ins, error: insErr } = await supabase
       .from("city_suggestions")
       .insert({
-        raw_input: pendingRaw,
+        raw_input: suggestionRaw,
         patient_id: req.patientId || null,
         status: "pending",
       })
@@ -8245,7 +8246,7 @@ app.post("/api/patient/city-onboarding-input", requireToken, async (req, res) =>
     return res.json({
       ok: true,
       pending: true,
-      raw_saved: pendingRaw,
+      raw_saved: suggestionRaw,
       suggestion_id: ins?.id || null,
     });
   } catch (e) {
@@ -8684,7 +8685,7 @@ app.get("/api/clinics/nearby", async (req, res) => {
         name: row.name || "Klinik",
         city: cityPayload.city,
         city_code: cityPayload.city_code,
-        pending_city_raw: cityPayload.pending_city_raw,
+        pending_city_raw: null,
         country: row.country || null,
         clinicCode: row.clinic_code || null,
         rating: ratingMap[row.id] ?? null,
@@ -27953,7 +27954,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
             supabaseUpdate.city = cityTrimForDb;
             if (n.city_code) {
               supabaseUpdate.city_code = n.city_code;
-            } else if (n.pending_city_raw) {
+            } else {
               const slug = normalizeCity(cityTrimForDb);
               supabaseUpdate.city_code = slug || null;
             }
@@ -32912,9 +32913,9 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
       if (n.city_code) {
         cityCodeCol = n.city_code;
         cityCol = n.city_code;
-      } else if (n.pending_city_raw) {
-        cityCol = n.pending_city_raw;
-        cityCodeCol = normalizeCity(n.pending_city_raw) || null;
+      } else {
+        cityCol = cityTrim || null;
+        cityCodeCol = normalizeCity(cityTrim) || null;
       }
     }
 
