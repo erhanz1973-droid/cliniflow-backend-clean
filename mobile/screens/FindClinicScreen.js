@@ -1,7 +1,7 @@
 /**
  * Find Clinic: one combined search field (city synonym + free text). No separate city screen, no location gate.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -48,7 +48,7 @@ async function readOptionalPatientJwt() {
 
 /** @param {{ initialCityCode?: string }} [props] Hydrate from geo / profile when available (still no permission prompt). */
 export default function FindClinicScreen(props) {
-  const { t } = useLanguage();
+  const { t, currentLanguage } = useLanguage();
   const initial =
     typeof props?.initialCityCode === "string" && props.initialCityCode.trim()
       ? props.initialCityCode.trim().toLowerCase()
@@ -67,13 +67,24 @@ export default function FindClinicScreen(props) {
   /** When the field has no city token, keep filtering under the last explicit city (or default). */
   const lastCityContextRef = useRef(initial);
 
+  /** Stable UI strings — avoid `t(...)` churn on unrelated re-renders; refresh when locale changes. */
+  const uiCopy = useMemo(
+    () => ({
+      find_clinic_search_label: t("find_clinic_search_label"),
+      find_clinic_shown_base: t("find_clinic_shown_count"),
+    }),
+    [t, currentLanguage],
+  );
+
   useEffect(() => {
     lastCityContextRef.current = initial;
     setCityCode(initial);
   }, [initial]);
 
   useEffect(() => {
-    console.log("SCREEN MOUNTED", "FindClinicScreen");
+    if (typeof __DEV__ !== "undefined" && __DEV__) {
+      console.log("SCREEN MOUNTED", "FindClinicScreen");
+    }
 
     if (CLINIFLOW_LOG_NETWORK_PROBES_ON_MOUNT) {
       runBackendDebugProbes().catch((e) => console.warn("[FindClinicScreen] probe", e));
@@ -141,7 +152,10 @@ export default function FindClinicScreen(props) {
   }, [input, initial]);
 
   const cityLabelKey = `city.${cityCode}`;
-  const cityLabel = t(cityLabelKey);
+  const cityLabel = useMemo(
+    () => t(cityLabelKey),
+    [t, currentLanguage, cityLabelKey],
+  );
 
   return (
     <View style={styles.container}>
@@ -153,7 +167,7 @@ export default function FindClinicScreen(props) {
       </Pressable>
 
       <SearchBar
-        label={t("find_clinic_search_label")}
+        label={uiCopy.find_clinic_search_label}
         value={input}
         onChangeText={setInput}
         autoCapitalize="none"
@@ -178,12 +192,12 @@ export default function FindClinicScreen(props) {
           </View>
         ))}
         {!loading && clinics.length === 0 && !listError ? (
-          <Text style={styles.muted}>{t("find_clinic_shown_count").replace("%{count}", "0")}</Text>
+          <Text style={styles.muted}>{uiCopy.find_clinic_shown_base.replace("%{count}", "0")}</Text>
         ) : null}
       </ScrollView>
 
       <Text style={styles.footerCount}>
-        {t("find_clinic_shown_count").replace("%{count}", String(clinics.length))}
+        {uiCopy.find_clinic_shown_base.replace("%{count}", String(clinics.length))}
       </Text>
     </View>
   );

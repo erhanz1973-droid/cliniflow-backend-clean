@@ -248,6 +248,7 @@ const {
   normalizeManualCityInput,
   listKnownCityCodes,
   slugifyCatalogCode,
+  normalizeCity,
 } = require("./lib/cityCodes.cjs");
 const { getMergedCityCatalogSet, invalidateCityCatalogCache } = require("./lib/cityCatalogLoader.cjs");
 const { logPatientDebug, warnInvalidPatientData } = require("./lib/patientDebugLog.cjs");
@@ -8106,8 +8107,8 @@ async function handleBrowseClinicList(req, res) {
     }
 
     const selFull =
-      "id, name, city, city_code, pending_city_raw, country, clinic_code, latitude, longitude, status";
-    const selLite = "id, name, city, city_code, pending_city_raw, country, clinic_code, status";
+      "id, name, city, city_code, country, clinic_code, latitude, longitude, status";
+    const selLite = "id, name, city, city_code, country, clinic_code, status";
 
     let { rows } = await fetchPatientVisibleClinicRows(supabase, {
       patientId: req.patientId,
@@ -8136,7 +8137,6 @@ async function handleBrowseClinicList(req, res) {
           c.city,
           geoLike.city,
           geoLike.city_code,
-          geoLike.pending_city_raw,
         ]
           .filter((x) => x != null && String(x).trim() !== "")
           .join(" ")
@@ -8170,7 +8170,7 @@ async function handleBrowseClinicList(req, res) {
         name: c.name || "Klinik",
         city: geo.city,
         city_code: geo.city_code,
-        pending_city_raw: geo.pending_city_raw ?? null,
+        pending_city_raw: null,
         country: c.country || null,
         clinicCode: c.clinic_code || null,
         rating: ratingMap[c.id] ?? null,
@@ -8262,9 +8262,9 @@ app.get("/api/super-admin/cities/pending", superAdminGuard, async (_req, res) =>
     const [clinicsR, suggR] = await Promise.all([
       supabase
         .from("clinics")
-        .select("id, name, clinic_code, city, city_code, pending_city_raw, country, created_at")
-        .not("pending_city_raw", "is", null)
+        .select("id, name, clinic_code, city, city_code, country, created_at")
         .is("city_code", null)
+        .not("city", "is", null)
         .order("created_at", { ascending: false })
         .limit(200),
       supabase
@@ -8324,10 +8324,9 @@ app.patch("/api/super-admin/clinics/:clinicId/city-resolve", superAdminGuard, as
       .update({
         city_code: norm.city_code,
         city: norm.city_code,
-        pending_city_raw: null,
       })
       .eq("id", clinicId)
-      .select("id, city_code, pending_city_raw")
+      .select("id, city_code")
       .maybeSingle();
     if (error) {
       console.error("[PATCH clinic city-resolve]", error);
@@ -8464,8 +8463,8 @@ app.get("/api/clinics/nearby", async (req, res) => {
     }
 
     const selects = [
-      "id, name, city, city_code, pending_city_raw, country, clinic_code, latitude, longitude, lat, lng, status",
-      "id, name, city, city_code, pending_city_raw, country, clinic_code, latitude, longitude, status",
+      "id, name, city, city_code, country, clinic_code, latitude, longitude, lat, lng, status",
+      "id, name, city, city_code, country, clinic_code, latitude, longitude, status",
       "id, name, city, country, clinic_code, latitude, longitude, lat, lng, status",
       "id, name, city, country, clinic_code, latitude, longitude, status",
     ];
@@ -27845,7 +27844,6 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
           plan: updated.plan,
           max_patients: updated.max_patients,
           address: updated.address,
-          city: updated.city ? String(updated.city).trim() : (body.city ? String(body.city).trim() : undefined),
           phone: updated.phone,
           website: updated.website,
           google_maps_url: updated.googleMapsUrl ? String(updated.googleMapsUrl).trim() : null,
@@ -27932,6 +27930,56 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
 
         if (body.country != null && String(body.country).trim()) {
           supabaseUpdate.country = String(body.country).trim().toUpperCase();
+        }
+
+        const cityTrimForDb =
+          updated.city != null && String(updated.city).trim()
+            ? String(updated.city).trim()
+            : body.city != null && String(body.city).trim()
+              ? String(body.city).trim()
+              : "";
+
+        const clientProvidedSlug = normalizeCity(
+          body.city_code ?? body.cityCode ?? "",
+        );
+
+        if (cityTrimForDb) {
+          try {
+            const catalog = await getMergedCityCatalogSet(supabase);
+            const n = normalizeManualCityInput(cityTrimForDb, catalog);
+            if (n.error === "too_long") {
+              return res.status(400).json({ ok: false, error: "city_too_long" });
+            }
+            supabaseUpdate.city = cityTrimForDb;
+            if (n.city_code) {
+              supabaseUpdate.city_code = n.city_code;
+            } else if (n.pending_city_raw) {
+              const slug = normalizeCity(cityTrimForDb);
+              supabaseUpdate.city_code = slug || null;
+            }
+            if (
+              clientProvidedSlug &&
+              clientProvidedSlug !== (n.city_code || "") &&
+              clientProvidedSlug !== normalizeCity(cityTrimForDb)
+            ) {
+              console.warn(
+                "[PUT /api/admin/clinic] ignoring mismatched city_code from client:",
+                clientProvidedSlug,
+              );
+            }
+          } catch (e) {
+            console.warn("[PUT /api/admin/clinic] city_catalog:", e?.message || e);
+            supabaseUpdate.city = cityTrimForDb;
+            const slug = normalizeCity(cityTrimForDb);
+            if (slug) {
+              supabaseUpdate.city_code = slug;
+            } else {
+              supabaseUpdate.city_code = null;
+            }
+          }
+        } else if (Object.prototype.hasOwnProperty.call(body, "city")) {
+          supabaseUpdate.city = null;
+          supabaseUpdate.city_code = null;
         }
         
         const { data, error } = await supabase
@@ -32856,7 +32904,6 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
     const catalog = await getMergedCityCatalogSet(supabase);
     let cityCol = null;
     let cityCodeCol = null;
-    let pendingCityRawCol = null;
     if (cityTrim) {
       const n = normalizeManualCityInput(cityTrim, catalog);
       if (n.error === "too_long") {
@@ -32866,7 +32913,8 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
         cityCodeCol = n.city_code;
         cityCol = n.city_code;
       } else if (n.pending_city_raw) {
-        pendingCityRawCol = n.pending_city_raw;
+        cityCol = n.pending_city_raw;
+        cityCodeCol = normalizeCity(n.pending_city_raw) || null;
       }
     }
 
@@ -32892,7 +32940,6 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
       address: "",
       city: cityCol,
       city_code: cityCodeCol,
-      pending_city_raw: pendingCityRawCol,
       country: countryStr || null,
       latitude: latN,
       longitude: lngN,

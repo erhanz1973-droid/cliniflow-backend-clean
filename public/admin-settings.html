@@ -392,6 +392,16 @@
     if (raw === "FREE" || raw === "BASIC" || raw === "PRO") return raw;
     return "FREE";
   }
+  /** Matches backend lib/cityCodes.normalizeCity — lowercase ASCII slug for city_code. */
+  function normalizeCity(text) {
+    if (text == null) return "";
+    const s = String(text)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-z0-9_]/g, "");
+    return s.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 64);
+  }
   function logout() {
     try {
       localStorage.removeItem("adminToken");
@@ -642,6 +652,7 @@
         plan: normalizePlanValue(($("plan") ? $("plan").value : "") || clinicPlan || "FREE"),
         referral_discount_percent: $("referralDiscountPercent").value.trim(),
         city: cityVal,
+        city_code: normalizeCity(cityVal),
         address: clinicAddress || undefined,
         googleMapsUrl: googleMapsUrl || undefined,
         // 🎯 Eski referral sistemi için settings
