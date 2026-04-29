@@ -7248,7 +7248,7 @@ app.post("/api/patient/login", async (req, res) => {
 
       // Always use UUID as patientId — TEXT patient_id is only a display label
       const foundPatientId = patientRow.id;
-      const foundLanguage = patientRow.language || 'tr';
+      const foundLanguage = patientRow.language || 'en';
       const foundName = patientRow.name || '';
       console.log('[PATIENT LOGIN] uuid:', foundPatientId, '| name:', foundName, '| phone:', patientRow.phone);
 
@@ -36701,7 +36701,7 @@ app.get('/api/doctor/recent-activities', requireDoctorAuth, async (req, res) => 
 });
 
 function icdDisplayDescriptionFromRow(row, langRaw) {
-  const lang = String(langRaw || 'tr').toLowerCase().trim().slice(0, 2) || 'tr';
+  const lang = String(langRaw || 'en').toLowerCase().trim().slice(0, 2) || 'en';
   const t = (v) => (v != null && String(v).trim() ? String(v).trim() : '');
   const seq = [];
   if (lang === 'en') {

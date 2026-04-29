@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "plugins": ["expo-location"],
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Yakındaki klinikleri göstermek için konumunu kullanıyoruz. İzin vermezseniz manuel arama ile devam edebilirsiniz.",
+        "NSLocationUsageDescription": "Yakındaki klinikleri göstermek için konumunu kullanıyoruz."
+      }
+    },
+    "android": {
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    }
+  }
+}

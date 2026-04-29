@@ -558,8 +558,8 @@
   }
 
   function getAdminDateLocale() {
-    if (!window.i18n || typeof window.i18n.getLang !== "function") return "tr-TR";
-    const lang = window.i18n.getLang() || "tr";
+    if (!window.i18n || typeof window.i18n.getLang !== "function") return "en-US";
+    const lang = window.i18n.getLang() || "en";
     const map = { tr: "tr-TR", en: "en-US", ru: "ru-RU", ka: "ka-GE" };
     return map[lang] || "en-US";
   }

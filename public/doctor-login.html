@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
   <title id="pageTitle">Clinifly Doctor – Login</title>
-  <script src="/admin-i18n.js?v=17"></script>
+  <script src="/admin-i18n.js?v=19"></script>
   <style>
     :root { 
       --bg:#0f172a; 
@@ -67,8 +67,28 @@
       padding:32px;
       box-shadow:0 4px 12px rgba(0,0,0,0.2);
     }
+    .field{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      margin-bottom:14px;
+    }
+    .field label{
+      display:block;
+      font-size:13px;
+      font-weight:500;
+      color:#94a3b8;
+      margin-bottom:0;
+    }
     .form-group{
       margin-bottom:20px;
+    }
+    .field-label-muted{
+      display:block;
+      font-size:13px;
+      font-weight:500;
+      color:#94a3b8;
+      margin-bottom:6px;
     }
     label{
       display:block;
@@ -174,47 +194,41 @@
 
     <div id="form-container" class="form-container">
       <form id="login-form">
-        <div class="form-group">
-          <label>
-            <span data-i18n="login.email">Email</span> <span class="required" data-i18n="login.emailRequired">*</span>
+        <div class="field">
+          <label for="email">
+            <span data-i18n="auth.email">Email</span><span class="required" aria-hidden="true">*</span>
           </label>
           <input 
             type="email" 
             id="email" 
             name="email" 
-            data-i18n-placeholder="login.emailPlaceholder"
-            placeholder="doctor@clinifly.com" 
             required
           />
           <div class="help-text" data-i18n="login.emailHelp">Doctor email adresinizi giriniz</div>
         </div>
 
-        <div class="form-group">
-          <label>
-            <span data-i18n="login.clinicCode">Clinic Code</span> <span class="required" data-i18n="login.clinicCodeRequired">*</span>
+        <div class="field">
+          <label for="clinicCode">
+            <span data-i18n="login.clinicCode">Clinic code</span><span class="required" aria-hidden="true">*</span>
           </label>
           <input 
             type="text" 
             id="clinicCode" 
             name="clinicCode" 
-            data-i18n-placeholder="login.clinicCodePlaceholder"
-            placeholder="ERHANCAN" 
             style="text-transform: uppercase;"
             required
           />
           <div class="help-text" data-i18n="login.clinicCodeHelp">Klinik kodunuzu giriniz</div>
         </div>
 
-        <div class="form-group">
-          <label>
-            <span data-i18n="login.password">Password</span> <span class="required" data-i18n="login.passwordRequired">*</span>
+        <div class="field">
+          <label for="password">
+            <span data-i18n="auth.password">Password</span><span class="required" aria-hidden="true">*</span>
           </label>
           <input 
             type="password" 
             id="password" 
             name="password" 
-            data-i18n-placeholder="login.passwordPlaceholder"
-            placeholder="••••••••" 
             required
           />
         </div>
@@ -259,18 +273,22 @@
       }
     }
 
-    // Update UI with i18n
+    function stripAuthFieldPlaceholders() {
+      document.querySelectorAll(".field input, .field textarea").forEach(function (el) {
+        el.removeAttribute("placeholder");
+        el.removeAttribute("data-i18n-placeholder");
+      });
+    }
+
+    // Update UI with i18n (labels + help; inputs use visible labels — no placeholder copy)
     function updateUI() {
       document.documentElement.lang = i18n.currentLang;
-      document.getElementById('pageTitle').textContent = i18n.t('login.doctorTitle');
-      document.querySelectorAll('[data-i18n]').forEach(el => {
-        const key = el.getAttribute('data-i18n');
-        el.textContent = i18n.t(key);
-      });
-      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-        const key = el.getAttribute('data-i18n-placeholder');
-        el.placeholder = i18n.t(key);
-      });
+      const titleEl = document.getElementById("pageTitle");
+      if (titleEl) titleEl.textContent = i18n.t("login.doctorTitle");
+      if (typeof i18n.updatePage === "function") {
+        i18n.updatePage();
+      }
+      stripAuthFieldPlaceholders();
     }
 
     if (typeof i18n !== 'undefined') {
@@ -318,6 +336,8 @@
             errorMsg = i18n.t("login.errors.doctorNotFound");
           } else if (json.error === "clinic_not_found") {
             errorMsg = i18n.t("login.errors.clinicNotFound");
+          } else if (json.error === "doctor_pending_approval" && json.message) {
+            errorMsg = json.message;
           }
           showAlert(errorMsg);
           submitBtn.disabled = false;
@@ -363,11 +383,10 @@
         </div>
         
         <form id="otp-form">
-          <div class="form-group">
-            <label>
-              <span data-i18n="login.clinicCode">Clinic Code</span>
-            </label>
+          <div class="field">
+            <label for="otp-clinic-readonly"><span data-i18n="login.clinicCode">Clinic Code</span></label>
             <input 
+              id="otp-clinic-readonly"
               type="text" 
               value="${clinicCode}" 
               readonly 
@@ -375,11 +394,10 @@
             />
           </div>
 
-          <div class="form-group">
-            <label>
-              <span data-i18n="login.email">Email</span>
-            </label>
+          <div class="field">
+            <label for="otp-email-readonly"><span data-i18n="auth.email">Email</span></label>
             <input 
+              id="otp-email-readonly"
               type="email" 
               value="${email}" 
               readonly 
@@ -388,18 +406,14 @@
             <div class="help-text" data-i18n="login.otpEmailHelp">Enter the email address where you received the OTP</div>
           </div>
 
-          <div class="form-group">
-            <label>
-              <span data-i18n="login.otpCode">Verification Code</span> <span class="required" data-i18n="login.otpCodeRequired">*</span>
-            </label>
+          <div class="field">
+            <label for="otp-code"><span data-i18n="login.otpCode">Verification Code</span><span class="required" aria-hidden="true">*</span></label>
             <input 
               type="text" 
               id="otp-code" 
               name="otp" 
               maxlength="6" 
               pattern="[0-9]{6}" 
-              data-i18n-placeholder="login.otpCodePlaceholder"
-              placeholder="123456" 
               required
             />
             <div class="help-text" data-i18n="login.otpHelp">Enter the 6-digit code sent to your email</div>
@@ -412,8 +426,9 @@
         <div id="otp-message" style="margin-top: 16px;"></div>
       `;
       
-      i18n.updateUI();
-      
+      i18n.updatePage();
+      stripAuthFieldPlaceholders();
+
       // Handle OTP form submission
       document.getElementById('otp-form').addEventListener('submit', async (e) => {
         e.preventDefault();

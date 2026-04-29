@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v18');
+  console.log('I18N FILE VERSION:', 'v19');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -463,6 +463,13 @@
         },
         success: "Hoş geldiniz {name}! Giriş başarılı.",
         sessionExpired: "⏰ Oturum süreniz doldu veya token geçersiz. Lütfen tekrar giriş yapın."
+      },
+
+      auth: {
+        email: "E-posta",
+        password: "Şifre",
+        confirm_password: "Şifreyi doğrula",
+        name: "Ad soyad",
       },
       
       // Register (admin-register.html)
@@ -1251,6 +1258,13 @@
         success: "Welcome {name}! Login successful.",
         sessionExpired: "⏰ Your session has expired or the token is invalid. Please log in again."
       },
+
+      auth: {
+        email: "Email",
+        password: "Password",
+        confirm_password: "Confirm password",
+        name: "Full name",
+      },
       
       // Register (admin-register.html)
       register: {
@@ -1759,6 +1773,7 @@
         chairWithNumber: "Кресло {n}"
       },
       login: { title: "Вход в Clinifly Admin", clinicCode: "Код клиники", password: "Пароль", login: "Войти", loading: "Загрузка...", error: "Ошибка входа", invalidCredentials: "Неверный код клиники или пароль.", sessionExpired: "⏰ Срок сессии истёк или токен недействителен. Пожалуйста, войдите снова." },
+      auth: { email: "Эл. почта", password: "Пароль", confirm_password: "Подтвердите пароль", name: "Имя и фамилия" },
       patients: {
         title: "Пациенты", search: "Поиск пациентов...", filter: "Фильтр",
         filterAll: "Все", approve: "Одобрить", treatment: "Лечение", chat: "Чат", travel: "Путешествие", health: "Здоровье", files: "📁 Файлы",
@@ -2240,6 +2255,7 @@
         chairWithNumber: "სკამი {n}"
       },
       login: { title: "Clinifly Admin-ში შესვლა", clinicCode: "კლინიკის კოდი", password: "პაროლი", login: "შესვლა", loading: "იტვირთება...", error: "შესვლის შეცდომა", invalidCredentials: "კლინიკის კოდი ან პაროლი არასწორია.", sessionExpired: "⏰ სეანსი ამოიწურა ან ტოკენი არასწორია. გთხოვთ, ხელახლა შეხვიდეთ." },
+      auth: { email: "ელ-ფოსტა", password: "პაროლი", confirm_password: "დაადასტურეთ პაროლი", name: "სახელი და გვარი" },
       patients: {
         title: "პაციენტები", search: "პაციენტის ძებნა...", filter: "ფილტრი",
         filterAll: "ყველა", approve: "დადასტურება", treatment: "მკურნალება", chat: "ჩათი", travel: "მოგზაურობა", health: "ჯანმრთელობა", files: "📁 ფაილები",
@@ -2702,14 +2718,14 @@
 
   // i18n helper
   const i18n = {
-    currentLang: 'tr',
+    currentLang: 'en',
     
     init() {
       if (this._i18nInitOnce) {
         return;
       }
       this._i18nInitOnce = true;
-      const saved = localStorage.getItem('admin_lang') || 'tr';
+      const saved = localStorage.getItem('admin_lang') || 'en';
       const lang0 = translations[saved] ? saved : 'en';
       this.currentLang = lang0;
       localStorage.setItem('admin_lang', lang0);
@@ -2871,9 +2887,14 @@
           }
         });
         
-        // Update all inputs with data-i18n-placeholder
-        document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-          const key = el.getAttribute('data-i18n-placeholder');
+        // Update all inputs with data-i18n-placeholder (skip labelled fields — rely on labels only)
+        document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+          if (typeof el.closest === "function" && el.closest(".field")) {
+            el.removeAttribute("data-i18n-placeholder");
+            el.placeholder = "";
+            return;
+          }
+          const key = el.getAttribute("data-i18n-placeholder");
           el.placeholder = this.t(key);
         });
         

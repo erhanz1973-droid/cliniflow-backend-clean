@@ -428,26 +428,91 @@
       return div.innerHTML;
     }
 
-    function yesNoLabel(field) {
-      if (!field || field.value === null || field.value === undefined) return '<span style="color:#6b7280">Yanıtlanmadı</span>';
-      return field.value
-        ? '<span style="color:#22c55e">✓ Evet</span>' + (field.detail ? ' — <em>' + escapeHtml(field.detail) + '</em>' : '')
+    function normalizeMedicalFormForUiFromApi(data) {
+      const src = data && typeof data === "object" ? data : {};
+      const raw = src.form || src.formData || {};
+      function yn(field) {
+        if (field && typeof field === "object" && "value" in field) return !!field.value;
+        return undefined;
+      }
+      function detailOf(field) {
+        if (field && typeof field === "object" && field.detail != null) return String(field.detail).trim();
+        return "";
+      }
+      var a = raw.allergies;
+      var m = raw.medications;
+      var cd = raw.chronicDiseases;
+
+      function triFlat(flatBool, canonFn) {
+        if (typeof flatBool === "boolean") return flatBool;
+        var u = canonFn();
+        return u === undefined ? false : !!u;
+      }
+
+      var hasAllergy = triFlat(raw.has_allergy, function () {
+        return yn(a);
+      });
+      var takesMed = triFlat(raw.takes_medication, function () {
+        return yn(m);
+      });
+      var hasChronic = triFlat(raw.has_chronic_disease, function () {
+        return yn(cd);
+      });
+
+      var allergy_detail =
+        String(raw.allergy_details || raw.allergy_detail || raw.allergyDetails || "").trim() ||
+        detailOf(a) ||
+        "";
+      var medication_detail =
+        String(raw.medication_details || raw.medication_detail || raw.medicationDetails || "").trim() ||
+        detailOf(m) ||
+        "";
+      var chronic_detail_str =
+        String(raw.chronic_details || raw.chronic_disease_detail || raw.chronicDetail || "").trim() ||
+        detailOf(cd) ||
+        "";
+
+      var formState = {
+        conditions: Array.isArray(raw.conditions) ? raw.conditions : [],
+        medicationsList: raw.medicationsList != null ? String(raw.medicationsList).trim() : "",
+        notes: raw.notes != null ? String(raw.notes).trim() : "",
+        submittedAt: raw.submittedAt != null ? String(raw.submittedAt).trim() : "",
+        has_allergy: hasAllergy,
+        allergy_details: allergy_detail,
+        takes_medication: takesMed,
+        medication_details: medication_detail,
+        has_chronic_disease: hasChronic,
+        chronic_details: chronic_detail_str,
+      };
+      console.log("FINAL FORM STATE:", formState);
+      return formState;
+    }
+
+    function yesNoLabelFromFlat(formData, hasKey, detailKey) {
+      var hv = formData[hasKey];
+      if (hv === undefined || hv === null)
+        return '<span style="color:#6b7280">Yanıtlanmadı</span>';
+      return hv
+        ? '<span style="color:#22c55e">✓ Evet</span>' +
+            (formData[detailKey]
+              ? ' — <em>' + escapeHtml(String(formData[detailKey])) + "</em>"
+              : "")
         : '<span style="color:#9ca3af">✗ Hayır</span>';
     }
 
-    function renderHealthForm(formData, isComplete) {
+    function renderHealthForm(formData) {
       const container = document.getElementById('health-data');
       const statusBadge = document.getElementById('status-badge');
 
-      if (!formData || Object.keys(formData).length === 0) {
+      if (!formData || typeof formData !== 'object' || Object.keys(formData).length === 0) {
         container.innerHTML = '<p style="color:#9ca3af;text-align:center;padding:40px;">Hasta henüz sağlık formunu doldurmamış.</p>';
         statusBadge.textContent = 'DOLDURULMADI';
         statusBadge.className = 'badge badge-incomplete';
         return;
       }
 
-      statusBadge.textContent = isComplete ? 'TAMAMLANDI' : 'KISMI';
-      statusBadge.className = isComplete ? 'badge badge-complete' : 'badge badge-risk';
+      statusBadge.textContent = 'KAYIT';
+      statusBadge.className = 'badge badge-complete';
 
       const conditionLabels = {
         diabetes: 'Diyabet',
@@ -463,9 +528,9 @@
       // ── Personal Health ─────────────────────────────────────
       html += '<div class="health-section">';
       html += '<h2>1️⃣ Kişisel Sağlık</h2>';
-      html += '<div class="health-item"><strong>Alerjisi var mı?</strong><br>' + yesNoLabel(formData.allergies) + '</div>';
-      html += '<div class="health-item"><strong>İlaç kullanıyor mu?</strong><br>' + yesNoLabel(formData.medications) + '</div>';
-      html += '<div class="health-item"><strong>Kronik hastalık var mı?</strong><br>' + yesNoLabel(formData.chronicDiseases) + '</div>';
+      html += '<div class="health-item"><strong>Alerjisi var mı?</strong><br>' + yesNoLabelFromFlat(formData, 'has_allergy', 'allergy_details') + '</div>';
+      html += '<div class="health-item"><strong>İlaç kullanıyor mu?</strong><br>' + yesNoLabelFromFlat(formData, 'takes_medication', 'medication_details') + '</div>';
+      html += '<div class="health-item"><strong>Kronik hastalık var mı?</strong><br>' + yesNoLabelFromFlat(formData, 'has_chronic_disease', 'chronic_details') + '</div>';
       html += '</div>';
 
       // ── Medical Conditions ───────────────────────────────────
@@ -499,12 +564,12 @@
 
       // ── Risk Warnings ────────────────────────────────────────
       const risks = [];
-      if (formData.allergies?.value === true) risks.push('⚠️ Alerji mevcut');
+      if (formData.has_allergy === true) risks.push('⚠️ Alerji mevcut');
       if (conds.includes('diabetes')) risks.push('⚠️ Diyabet');
       if (conds.includes('heart_disease')) risks.push('⚠️ Kalp Hastalığı');
       if (conds.includes('bleeding_disorders')) risks.push('⚠️ Kanama Bozukluğu');
       if (conds.includes('high_blood_pressure')) risks.push('⚠️ Yüksek Tansiyon');
-      if (formData.medications?.value === true) risks.push('⚠️ İlaç kullanımı');
+      if (formData.takes_medication === true) risks.push('⚠️ İlaç kullanımı');
 
       if (risks.length > 0) {
         html += '<div class="health-section" style="border-color:#92400e;background:#1c1208;">';
@@ -545,6 +610,31 @@
       lines.push(`Patient ID: ${patientId}`);
       lines.push("─".repeat(30));
       lines.push("");
+
+      var hasFlatCanonForWa =
+        typeof formData.has_allergy === "boolean" ||
+        (formData.allergy_details && String(formData.allergy_details).trim()) ||
+        typeof formData.takes_medication === "boolean" ||
+        typeof formData.has_chronic_disease === "boolean" ||
+        (formData.medicationsList && String(formData.medicationsList).trim()) ||
+        (Array.isArray(formData.conditions) && formData.conditions.length > 0) ||
+        (formData.notes && String(formData.notes).trim());
+
+      if (hasFlatCanonForWa) {
+        addSection("1️⃣ SAĞLIK ÖZET (normalize)", [
+          kv("Alerji (evet/hayır)", formData.has_allergy === true ? "Evet" : formData.has_allergy === false ? "Hayır" : ""),
+          kv("Alerji detayı", formData.allergy_details),
+          kv("İlaç kullanımı", formData.takes_medication === true ? "Evet" : formData.takes_medication === false ? "Hayır" : ""),
+          kv("İlaç kullanım detayı", formData.medication_details),
+          kv(
+            "Kronik hastalık",
+            formData.has_chronic_disease === true ? "Evet" : formData.has_chronic_disease === false ? "Hayır" : ""
+          ),
+          kv("Kronik detay", formData.chronic_details),
+          kv("İlaç listesi", formData.medicationsList),
+          kv("Şikayet / notlar", formData.notes),
+        ]);
+      }
 
       if (formData.personalInfo) {
         const p = formData.personalInfo;
@@ -648,9 +738,12 @@
       }
 
       const risks = [];
-      if (formData.generalHealth?.conditions?.includes("diabetes")) risks.push("⚠️ Diabetes");
-      if (formData.medications?.bloodThinner) risks.push("⚠️ Blood Thinner");
-      if (formData.allergies && !formData.allergies.none) risks.push("⚠️ Allergy");
+      if (formData.generalHealth && formData.generalHealth.conditions && formData.generalHealth.conditions.includes("diabetes"))
+        risks.push("⚠️ Diabetes");
+      if (formData.has_allergy === true) risks.push("⚠️ Allergy");
+      else if (formData.allergies && !formData.allergies.none) risks.push("⚠️ Allergy (legacy)");
+      if (formData.takes_medication === true) risks.push("⚠️ Medication");
+      else if (formData.medications && formData.medications.bloodThinner) risks.push("⚠️ Blood Thinner");
       if (risks.length) {
         addSection("⚠️ RISK WARNINGS", risks.map((r) => `• ${r}`));
       }
@@ -733,9 +826,9 @@
         loading.style.display = 'none';
         healthContent.style.display = 'block';
 
-        window.currentHealthFormData = data.form;
-        const isComplete = !!(data.form && Object.keys(data.form).length > 0);
-        renderHealthForm(data.form, isComplete);
+        var normalizedForm = normalizeMedicalFormForUiFromApi(data);
+        window.currentHealthFormData = normalizedForm;
+        renderHealthForm(normalizedForm);
         showAlert('Health form loaded successfully', 'success');
       } catch (error) {
         loading.style.display = 'none';

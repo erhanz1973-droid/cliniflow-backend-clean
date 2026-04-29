@@ -2,7 +2,8 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <script src="/api-base.js?v=202604272"></script>
+  <script src="/api-base.js?v=202604275"></script>
+  <script src="/i18n.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Chat - Clinifly</title>
   <style>
@@ -23,15 +24,50 @@
     }
     
     .chat-header {
-      padding: 16px;
+      padding: 12px 16px;
       border-bottom: 1px solid #1f2937;
       background: #0b1220;
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
     }
     
     .chat-header h1 {
       font-size: 18px;
       font-weight: 600;
+      margin: 0;
+    }
+
+    .patient-lang-bar {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .patient-lang-bar button {
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 8px;
+      border: 1px solid #374151;
+      background: transparent;
+      color: #94a3b8;
+      cursor: pointer;
+      min-width: auto;
+    }
+
+    .patient-lang-bar button:hover {
+      color: #e2e8f0;
+      border-color: #64748b;
+    }
+
+    .patient-lang-bar button.is-active {
+      background: #2563eb;
+      color: #fff;
+      border-color: #2563eb;
     }
     
     .chat-messages {
@@ -150,6 +186,12 @@
 <body>
   <div class="chat-header">
     <h1>Klinik ile Sohbet</h1>
+    <div class="patient-lang-bar" id="patientLangBar" role="group" aria-label="Language">
+      <button type="button" data-lang="tr" class="lang-pick">TR</button>
+      <button type="button" data-lang="en" class="lang-pick">EN</button>
+      <button type="button" data-lang="ru" class="lang-pick">RU</button>
+      <button type="button" data-lang="ka" class="lang-pick">KA</button>
+    </div>
   </div>
   
   <div id="chatMessages" class="chat-messages">
@@ -165,9 +207,7 @@
   </div>
 
   <script>
-    try {
-      if (!localStorage.getItem("lang")) localStorage.setItem("lang", "tr");
-    } catch (e) {}
+    // Lang: /i18n.js — do not force "tr" here
     // Get patient ID from URL or localStorage
     const urlParams = new URLSearchParams(window.location.search);
     let patientId = urlParams.get('patientId') || localStorage.getItem('patient_id') || localStorage.getItem('patientId');
@@ -181,6 +221,47 @@
     // Get token from localStorage or URL
     const token = localStorage.getItem('patient_token') || urlParams.get('token') || '';
     const API_BASE = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+
+    (function syncLang() {
+      try {
+        const saved = localStorage.getItem('lang');
+        console.log('🌍 CURRENT LANG:', saved);
+        if (saved && token && typeof cliniflowSyncSavedPatientLanguage === 'function') {
+          setTimeout(function () {
+            cliniflowSyncSavedPatientLanguage();
+          }, 1000);
+        }
+      } catch (e) {}
+    })();
+
+    function updatePatientLangButtons() {
+      var cur = '';
+      try {
+        cur = (typeof window.getFindClinicLang === "function"
+          ? window.getFindClinicLang()
+          : (localStorage.getItem("lang") || "en")
+        ).trim().slice(0, 2).toLowerCase();
+      } catch (e) {}
+      document.querySelectorAll('#patientLangBar .lang-pick').forEach(function (btn) {
+        var code = (btn.getAttribute('data-lang') || '').toLowerCase();
+        btn.classList.toggle('is-active', code === cur);
+      });
+    }
+
+    document.querySelectorAll('#patientLangBar .lang-pick').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var lang = btn.getAttribute('data-lang');
+        if (typeof cliniflowOnPatientLanguageChange === 'function') {
+          cliniflowOnPatientLanguageChange(lang).then(function () {
+            console.log('FINAL LANG:', (localStorage.getItem('lang') || '').trim());
+            updatePatientLangButtons();
+          }).catch(function (e) {
+            console.warn('Language update failed:', e);
+          });
+        }
+      });
+    });
+    updatePatientLangButtons();
     
     // Check for success message from camera
     if (urlParams.get('message')) {

@@ -114,9 +114,6 @@
       border-color: #6aa6ff;
       background: #263244;
     }
-    input::placeholder {
-      color: #6b7280;
-    }
     select {
       cursor: pointer;
     }
@@ -124,6 +121,13 @@
       font-size: 12px;
       color: #6b7280;
       margin-top: 4px;
+    }
+    .field-label-muted{
+      display:block;
+      font-size:13px;
+      font-weight:500;
+      color:#94a3b8;
+      margin-bottom:6px;
     }
     .btn {
       width: 100%;
@@ -213,30 +217,26 @@
     <div id="form-container" class="form-container">
       <form id="register-form">
         <div class="form-group">
-          <label>
+          <label class="field-label-muted" for="clinicName">
             <span data-i18n="register.name">Clinic Name</span> <span class="required" data-i18n="register.nameRequired">*</span>
           </label>
           <input
             type="text"
             id="clinicName"
             name="clinicName"
-            data-i18n-placeholder="register.namePlaceholder"
-            placeholder="My Dental Clinic"
             required
           />
           <div class="help-text" data-i18n="register.nameHelp">Klinik adınız</div>
         </div>
 
         <div class="form-group">
-          <label>
+          <label class="field-label-muted" for="clinicCode">
             <span data-i18n="register.clinicCode">Clinic Code</span> <span class="required" data-i18n="register.clinicCodeRequired">*</span>
           </label>
           <input
             type="text"
             id="clinicCode"
             name="clinicCode"
-            data-i18n-placeholder="register.clinicCodePlaceholder"
-            placeholder="e.g. MOON, CLINIC01, ISTANBUL"
             pattern="[A-Z0-9]+"
             style="text-transform: uppercase;"
             required
@@ -245,8 +245,8 @@
         </div>
 
         <div class="form-group">
-          <label>
-            <span data-i18n="register.email">Email</span> <span class="required" data-i18n="register.emailRequired">*</span>
+          <label class="field-label-muted" for="email">
+            <span data-i18n="auth.email">Email</span> <span class="required" data-i18n="register.emailRequired">*</span>
           </label>
           <input
             type="email"
@@ -254,22 +254,19 @@
             name="email"
             autocomplete="username"
             inputmode="email"
-            data-i18n-placeholder="register.emailPlaceholder"
-            placeholder="clinic@example.com"
             required
           />
           <div class="help-text" data-i18n="register.emailHelp">Klinik e-posta adresiniz</div>
         </div>
 
         <div class="form-group">
-          <label>
-            <span data-i18n="register.password">Password</span> <span class="required" data-i18n="register.passwordRequired">*</span>
+          <label class="field-label-muted" for="password">
+            <span data-i18n="auth.password">Password</span> <span class="required" data-i18n="register.passwordRequired">*</span>
           </label>
           <input
             type="password"
             id="password"
             name="password"
-            placeholder="••••••••"
             minlength="6"
             autocomplete="new-password"
             required
@@ -278,14 +275,13 @@
         </div>
 
         <div class="form-group">
-          <label>
-            <span data-i18n="register.confirmPassword">Confirm Password</span> <span class="required" data-i18n="register.confirmPasswordRequired">*</span>
+          <label class="field-label-muted" for="confirmPassword">
+            <span data-i18n="auth.confirm_password">Confirm Password</span> <span class="required" data-i18n="register.confirmPasswordRequired">*</span>
           </label>
           <input
             type="password"
             id="confirmPassword"
             name="confirmPassword"
-            placeholder="••••••••"
             minlength="6"
             autocomplete="new-password"
             required
@@ -294,28 +290,24 @@
         </div>
 
         <div class="form-group">
-          <label>
+          <label class="field-label-muted" for="phone">
             <span data-i18n="register.phone">Phone</span>
           </label>
           <input
             type="tel"
             id="phone"
             name="phone"
-            data-i18n-placeholder="register.phonePlaceholder"
-            placeholder="+90 555 123 4567"
           />
         </div>
 
         <div class="form-group">
-          <label>
+          <label class="field-label-muted" for="address">
             <span data-i18n="register.address">Address</span>
           </label>
           <input
             type="text"
             id="address"
             name="address"
-            data-i18n-placeholder="register.addressPlaceholder"
-            placeholder="Clinic address"
           />
         </div>
 
@@ -562,14 +554,13 @@
         </p>
         
         <div class="form-group">
-          <label>Verification Code</label>
+          <label class="field-label-muted" for="otp-input">Verification Code</label>
           <input
             type="text"
             id="otp-input"
             name="one-time-code"
             autocomplete="one-time-code"
             inputmode="numeric"
-            placeholder="Enter 6-digit code"
             maxlength="6"
             pattern="[0-9]{6}"
             style="text-align: center; font-size: 18px; letter-spacing: 2px;"

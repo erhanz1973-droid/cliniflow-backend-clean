@@ -1,4 +1,4 @@
--- Haversine search for mobile "Yakınımdaki" and GET /api/clinics/nearby.
+-- Haversine search for mobile nearby list and GET /api/clinics/nearby.
 -- Params match lib/patientClinicListing.cjs: user_lat, user_lng, radius_km
 --
 -- Clinics may use (latitude, longitude) OR (lat, lng) only. Referencing a missing

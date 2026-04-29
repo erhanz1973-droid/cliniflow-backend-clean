@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hasta Girişi - Cliniflow</title>
+  <script src="/api-base.js?v=202604275"></script>
+  <script src="/i18n.js"></script>
+  <script src="/auth-field-labels.js?v=4"></script>
   <style>
     :root { 
       --bg:#0f172a; 
@@ -67,6 +70,20 @@
       margin-bottom:16px;
     }
     
+    .field{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      margin-bottom:14px;
+    }
+    .field label{
+      display:block;
+      font-size:13px;
+      font-weight:500;
+      color:#94a3b8;
+      margin-bottom:0;
+    }
+    
     .form-group{
       margin-bottom:20px;
     }
@@ -98,10 +115,6 @@
     input:focus{
       outline:none;
       border-color:var(--p);
-    }
-    
-    input::placeholder{
-      color:#6b7280;
     }
     
     .btn{
@@ -202,6 +215,14 @@
       color:var(--muted);
       margin-top:4px;
     }
+
+    .field-label-muted{
+      display:block;
+      font-size:13px;
+      font-weight:500;
+      color:#94a3b8;
+      margin-bottom:6px;
+    }
     
     .nav{
       text-align:center;
@@ -218,9 +239,24 @@
     .nav a:hover{
       color:var(--p);
     }
+
+    .otp-step-title{
+      font-size:1.1rem;
+      font-weight:700;
+      margin:0 0 12px;
+      color:#e6eaf2;
+    }
+
+    .otp-delivery-hint{
+      font-size:13px;
+      color:var(--muted);
+      margin:0 0 16px;
+      line-height:1.4;
+    }
   </style>
 </head>
 <body>
+  <div style="text-align:center;padding:10px;background:#fbbf24;color:#111827;font-weight:800;font-size:14px;">VERSION TEST</div>
   <div class="container">
     <div class="header">
       <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjY3IiB2aWV3Qm94PSIwIDAgMjAwIDY3IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjY3IiByeD0iOCIgZmlsbD0iIzI1NjNiZCIvPgo8dGV4dCB4PSIxMDAiIHk9IjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSJ3aGl0ZSIgZm9udC1zaXplPSIyNCIgZm9udC13ZWlnaHQ9ImJvbGQiPkNsaW5pZmxvdzwvdGV4dD4KPC9zdmc+" alt="Cliniflow" class="logo">
@@ -235,44 +271,71 @@
 
     <div id="alert-container"></div>
 
-    <!-- Login Form -->
+    <!-- Login: step 1 phone + clinic → request OTP; step 2 verify code -->
     <div id="login-tab" class="tab-content active">
       <div class="form-container">
-        <form id="login-form">
-          <div class="form-group">
-            <label for="phone">
-              Telefon Numarası <span class="required">*</span>
-            </label>
-            <input
-              type="tel"
-              id="phone"
-              name="phone"
-              placeholder="+90 555 123 4567"
-              required
-            />
-            <div class="help-text">Klinikte kayıtlı telefon numaranızı girin</div>
+        <div id="login-flow">
+          <div id="login-step-identify" class="login-step">
+            <div class="field">
+              <label for="phone">
+                <span data-i18n-label="patient.phone"></span> <span class="required" aria-hidden="true">*</span>
+              </label>
+              <input
+                type="tel"
+                id="phone"
+                name="phone"
+                autocomplete="tel"
+              />
+              <div class="help-text"><span data-i18n-label="patient.login_help_phone"></span></div>
+            </div>
+
+            <div class="field">
+              <label for="clinicCode">
+                <span data-i18n-label="patient.clinic_code"></span> <span class="required" aria-hidden="true">*</span>
+              </label>
+              <input
+                type="text"
+                id="clinicCode"
+                name="clinicCode"
+                pattern="[A-Z0-9]+"
+                style="text-transform: uppercase;"
+                autocomplete="organization"
+              />
+              <div class="help-text"><span data-i18n-label="patient.login_help_clinic"></span></div>
+            </div>
+
+            <button type="button" class="btn btn-primary" id="send-otp-btn">
+              <span data-auth-i18n="patient.login_send_code">Send verification code</span>
+            </button>
           </div>
 
-          <div class="form-group">
-            <label for="clinicCode">
-              Klinik Kodu <span class="required">*</span>
-            </label>
-            <input
-              type="text"
-              id="clinicCode"
-              name="clinicCode"
-              placeholder="Örn: MOON, CLINIC01"
-              pattern="[A-Z0-9]+"
-              style="text-transform: uppercase;"
-              required
-            />
-            <div class="help-text">Klinik kodunuzu girin</div>
-          </div>
+          <div id="login-step-otp" class="login-step" hidden>
+            <h2 class="otp-step-title"><span data-auth-i18n="patient.login_otp_title">Verify your number</span></h2>
+            <p id="otp-delivery-msg" class="otp-delivery-hint" hidden></p>
+            <div class="field">
+              <label for="login-otp">
+                <span data-i18n-label="patient.login_otp_label"></span> <span class="required" aria-hidden="true">*</span>
+              </label>
+              <input
+                type="text"
+                id="login-otp"
+                name="otp"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="6"
+                autocomplete="one-time-code"
+              />
+              <div class="help-text"><span data-i18n-label="patient.login_otp_help"></span></div>
+            </div>
 
-          <button type="submit" class="btn btn-primary" id="login-submit-btn">
-            Giriş Yap
-          </button>
-        </form>
+            <button type="button" class="btn btn-primary" id="verify-otp-btn">
+              <span data-auth-i18n="patient.login_verify">Verify and sign in</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="login-back-btn">
+              <span data-auth-i18n="patient.login_back">Edit phone or clinic</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -280,66 +343,59 @@
     <div id="register-tab" class="tab-content">
       <div class="form-container">
         <form id="register-form">
-          <div class="form-group">
+          <div class="field">
             <label for="firstName">
-              Ad <span class="required">*</span>
+              <span data-i18n-label="patient.given_name"></span> <span class="required" aria-hidden="true">*</span>
             </label>
             <input
               type="text"
               id="firstName"
               name="firstName"
-              placeholder="Ad"
               autocomplete="given-name"
               required
             />
           </div>
-          <div class="form-group">
+          <div class="field">
             <label for="lastName">
-              Soyad
+              <span data-i18n-label="patient.family_name"></span>
             </label>
             <input
               type="text"
               id="lastName"
               name="lastName"
-              placeholder="Soyad"
               autocomplete="family-name"
             />
           </div>
 
-          <div class="form-group">
+          <div class="field">
             <label for="reg-phone">
-              Telefon Numarası <span class="required">*</span>
+              <span data-i18n-label="patient.phone"></span> <span class="required" aria-hidden="true">*</span>
             </label>
             <input
               type="tel"
               id="reg-phone"
               name="phone"
-              placeholder="+90 555 123 4567"
               required
             />
           </div>
 
-          <div class="form-group">
-            <label for="reg-email">
-              E-posta
-            </label>
+          <div class="field">
+            <label for="reg-email"><span data-i18n-label="auth.email"></span></label>
             <input
               type="email"
               id="reg-email"
               name="email"
-              placeholder="ornek@email.com"
             />
           </div>
 
-          <div class="form-group">
+          <div class="field">
             <label for="reg-clinicCode">
-              Klinik Kodu <span class="required">*</span>
+              <span data-i18n-label="patient.clinic_code"></span> <span class="required" aria-hidden="true">*</span>
             </label>
             <input
               type="text"
               id="reg-clinicCode"
               name="clinicCode"
-              placeholder="Örn: MOON, CLINIC01"
               pattern="[A-Z0-9]+"
               style="text-transform: uppercase;"
               required
@@ -347,15 +403,12 @@
             <div class="help-text">Klinik kodunuzu girin</div>
           </div>
 
-          <div class="form-group">
-            <label for="referralCode">
-              Referans Kodu (İsteğe Bağlı)
-            </label>
+          <div class="field">
+            <label for="referralCode"><span data-i18n-label="patient.referral"></span></label>
             <input
               type="text"
               id="referralCode"
               name="referralCode"
-              placeholder="Referans kodunuz varsa buraya girin"
             />
           </div>
 
@@ -373,14 +426,41 @@
 
   <script>
     const API =
-      window.location.hostname === "localhost"
+      (typeof cliniflowApiBase === "function" && cliniflowApiBase()) ||
+      (window.location.hostname === "localhost"
         ? "http://localhost:10000"
-        : "https://cliniflow-backend-dg8a.onrender.com";
+        : "https://cliniflow-backend-dg8a.onrender.com");
     
-    try {
-      if (!localStorage.getItem("lang")) localStorage.setItem("lang", "tr");
-    } catch (e) {}
-    
+    /** API → existing localStorage → navigator; never default to Turkish in code. */
+    function resolveLangAfterAuth(json) {
+      var allowed = window.CLINIFLOW_ALLOWED_LANGS || ["tr", "en", "ru", "ka"];
+      function norm(v) {
+        if (v == null || String(v).trim() === "") return "";
+        var t = String(v).trim().slice(0, 2).toLowerCase();
+        return allowed.includes(t) ? t : "";
+      }
+      var existing = "";
+      try {
+        existing = norm(localStorage.getItem("lang"));
+      } catch (_e) {}
+      var fromApi = "";
+      if (json) {
+        var raw =
+          json.language != null && String(json.language).trim() !== ""
+            ? json.language
+            : json.lang != null && String(json.lang).trim() !== ""
+              ? json.lang
+              : "";
+        fromApi = norm(raw);
+      }
+      var nav = "en";
+      try {
+        var n = (navigator.language || "en").slice(0, 2).toLowerCase();
+        nav = norm(n) || "en";
+      } catch (_e2) {}
+      return fromApi || existing || nav || "en";
+    }
+
     function showAlert(message, type = "error") {
       const container = document.getElementById("alert-container");
       container.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
@@ -389,94 +469,281 @@
       }, type === "error" ? 5000 : 3000);
     }
 
+    let previousMainTab = "login";
+
     function switchTab(tab) {
-      // Update tab buttons
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      if (tab === 'login') {
-        document.querySelector('.tab:first-child').classList.add('active');
-      } else {
-        document.querySelector('.tab:last-child').classList.add('active');
+      if (tab === "login" && previousMainTab === "register") {
+        resetLoginFlow();
       }
-      
-      // Update tab content
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      document.getElementById(`${tab}-tab`).classList.add('active');
-      
-      // Update page title
-      const heading = document.getElementById('pageHeading');
-      const subtitle = document.getElementById('pageSubtitle');
-      if (tab === 'login') {
-        heading.textContent = 'Hasta Girişi';
-        subtitle.textContent = 'Kliniğinize güvenli şekilde bağlanın';
+      previousMainTab = tab;
+
+      document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+      if (tab === "login") {
+        document.querySelector(".tab:first-child").classList.add("active");
       } else {
-        heading.textContent = 'Hasta Kaydı';
-        subtitle.textContent = 'Kliniğinize kayıt olun';
+        document.querySelector(".tab:last-child").classList.add("active");
+      }
+
+      document.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
+      document.getElementById(`${tab}-tab`).classList.add("active");
+
+      const heading = document.getElementById("pageHeading");
+      const subtitle = document.getElementById("pageSubtitle");
+      if (tab === "login") {
+        heading.textContent = "Hasta Girişi";
+        subtitle.textContent = "Kliniğinize güvenli şekilde bağlanın";
+      } else {
+        heading.textContent = "Hasta Kaydı";
+        subtitle.textContent = "Kliniğinize kayıt olun";
       }
     }
 
-    // Login form submission
-    document.getElementById("login-form").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      
-      const submitBtn = document.getElementById("login-submit-btn");
-      const phone = document.getElementById("phone").value.trim();
-      const clinicCode = document.getElementById("clinicCode").value.trim().toUpperCase();
-      
-      if (!phone) {
-        showAlert("Telefon numarası gereklidir");
-        return;
-      }
-      
-      if (!clinicCode) {
-        showAlert("Klinik kodu gereklidir");
-        return;
-      }
-      
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Giriş yapılıyor...";
-      
+    function L(key) {
+      return typeof window.cliniflowAuthLabel === "function"
+        ? window.cliniflowAuthLabel(key)
+        : key;
+    }
+
+    let pendingPhone = "";
+    let pendingClinicCode = "";
+
+    function stripAuthFieldPlaceholders() {
+      document.querySelectorAll(".field input, .field textarea").forEach(function (el) {
+        el.removeAttribute("placeholder");
+        el.removeAttribute("data-i18n-placeholder");
+      });
+    }
+
+    function restoreLoginButtonLabels() {
       try {
-        const res = await fetch(`${API}/api/patient/login`, {
+        if (typeof window.cliniflowApplyAuthFieldLabels === "function") {
+          cliniflowApplyAuthFieldLabels();
+        }
+      } catch (_e) {}
+    }
+
+    function resetLoginFlow() {
+      pendingPhone = "";
+      pendingClinicCode = "";
+      const s1 = document.getElementById("login-step-identify");
+      const s2 = document.getElementById("login-step-otp");
+      if (s1) s1.hidden = false;
+      if (s2) s2.hidden = true;
+      const otp = document.getElementById("login-otp");
+      if (otp) otp.value = "";
+      const msg = document.getElementById("otp-delivery-msg");
+      if (msg) {
+        msg.hidden = true;
+        msg.textContent = "";
+      }
+      const sb = document.getElementById("send-otp-btn");
+      const vb = document.getElementById("verify-otp-btn");
+      if (sb) sb.disabled = false;
+      if (vb) vb.disabled = false;
+      restoreLoginButtonLabels();
+      stripAuthFieldPlaceholders();
+    }
+
+    function showOtpStep(deliveryMessage) {
+      document.getElementById("login-step-identify").hidden = true;
+      document.getElementById("login-step-otp").hidden = false;
+      const hint = document.getElementById("otp-delivery-msg");
+      if (hint && deliveryMessage) {
+        hint.textContent = deliveryMessage;
+        hint.hidden = false;
+      } else if (hint) {
+        hint.hidden = true;
+        hint.textContent = "";
+      }
+      restoreLoginButtonLabels();
+      stripAuthFieldPlaceholders();
+    }
+
+    document.getElementById("send-otp-btn").addEventListener("click", async function () {
+      const submitBtn = document.getElementById("send-otp-btn");
+      const span = submitBtn.querySelector("[data-auth-i18n]");
+      const phone = document.getElementById("phone").value.trim();
+      const clinicRaw = document.getElementById("clinicCode").value.trim().toUpperCase();
+
+      if (!phone) {
+        showAlert(L("patient.login_err_phone"));
+        return;
+      }
+      if (!clinicRaw) {
+        showAlert(L("patient.login_err_clinic"));
+        return;
+      }
+
+      pendingPhone = phone;
+      pendingClinicCode = clinicRaw;
+
+      submitBtn.disabled = true;
+      if (span) span.textContent = L("patient.login_sending");
+
+      try {
+        const res = await fetch(`${API}/auth/request-otp`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone, clinicCode }),
+          body: JSON.stringify({ role: "PATIENT", phone }),
         });
-        
-        const json = await res.json();
-        
-        if (!res.ok) {
-          let errorMsg = json.message || json.error || "Giriş başarısız";
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok || !json.ok) {
+          let err =
+            json.message ||
+            json.error ||
+            "request_failed";
           if (json.error === "patient_not_found") {
-            errorMsg = "Bu telefon numarasıyla hasta bulunamadı. Lütfen önce kayıt olun.";
+            err =
+              json.message ||
+              "Bu telefon numarasıyla hasta bulunamadı. Önce kayıt olun.";
+          } else if (json.error === "email_not_found") {
+            err = L("patient.login_email_missing");
           }
-          showAlert(errorMsg);
+          showAlert(typeof err === "string" ? err : L("patient.login_err_verify"));
           submitBtn.disabled = false;
-          submitBtn.textContent = "Giriş Yap";
+          restoreLoginButtonLabels();
           return;
         }
-        
-        // Store patient token
-        localStorage.setItem("patient_token", json.token);
+
+        submitBtn.disabled = false;
+        restoreLoginButtonLabels();
+        showOtpStep(typeof json.message === "string" ? json.message : "");
+      } catch (error) {
+        console.error("[LOGIN] request-otp:", error);
+        showAlert(String(error.message || error));
+        submitBtn.disabled = false;
+        restoreLoginButtonLabels();
+      }
+    });
+
+    document.getElementById("verify-otp-btn").addEventListener("click", async function () {
+      const verifyBtn = document.getElementById("verify-otp-btn");
+      const verifySpan = verifyBtn.querySelector("[data-auth-i18n]");
+      const otpRaw = (document.getElementById("login-otp").value || "").trim();
+
+      if (!pendingPhone || !pendingClinicCode) {
+        showAlert(L("patient.login_err_verify"));
+        resetLoginFlow();
+        return;
+      }
+      if (otpRaw.length !== 6 || !/^\d{6}$/.test(otpRaw)) {
+        showAlert(L("patient.login_err_otp_format"));
+        return;
+      }
+
+      verifyBtn.disabled = true;
+      if (verifySpan) verifySpan.textContent = L("patient.login_verifying");
+
+      try {
+        const res = await fetch(`${API}/auth/verify-otp-patient`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: pendingPhone, otp: otpRaw }),
+        });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok || !json.ok || !json.token) {
+          const msg = json.message || json.error || L("patient.login_err_verify");
+          showAlert(typeof msg === "string" ? msg : L("patient.login_err_verify"));
+          verifyBtn.disabled = false;
+          restoreLoginButtonLabels();
+          return;
+        }
+
+        const token = json.token;
+        const meRes = await fetch(`${API}/api/patient/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const me = await meRes.json().catch(() => ({}));
+
+        if (!meRes.ok || !me.ok) {
+          try {
+            localStorage.removeItem("patient_token");
+            localStorage.removeItem("patient_id");
+            localStorage.removeItem("clinic_id");
+          } catch (_r) {}
+          showAlert((me && me.message) || L("patient.login_err_verify"));
+          verifyBtn.disabled = false;
+          restoreLoginButtonLabels();
+          return;
+        }
+
+        const want = pendingClinicCode.toUpperCase();
+        const got = String(me.clinicCode || "")
+          .trim()
+          .toUpperCase();
+
+        if (!got) {
+          try {
+            localStorage.removeItem("patient_token");
+            localStorage.removeItem("patient_id");
+            localStorage.removeItem("clinic_id");
+          } catch (_r) {}
+          showAlert(L("patient.login_clinic_unlinked"));
+          verifyBtn.disabled = false;
+          restoreLoginButtonLabels();
+          return;
+        }
+        if (want && got && want !== got) {
+          try {
+            localStorage.removeItem("patient_token");
+            localStorage.removeItem("patient_id");
+            localStorage.removeItem("clinic_id");
+          } catch (_r) {}
+          showAlert(L("patient.login_clinic_mismatch"));
+          verifyBtn.disabled = false;
+          restoreLoginButtonLabels();
+          return;
+        }
+
+        localStorage.setItem("patient_token", token);
         localStorage.setItem("patient_id", json.patientId);
-        localStorage.setItem("clinic_id", json.clinicId);
+        if (me.clinic_id) localStorage.setItem("clinic_id", String(me.clinic_id));
+
+        var plang = resolveLangAfterAuth(json);
         try {
-          var plang = json.language || json.lang || "tr";
-          localStorage.setItem("lang", String(plang).trim().slice(0, 2).toLowerCase());
+          localStorage.setItem("lang", plang);
         } catch (e) {}
-        
-        showAlert("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
-        
-        // Redirect to chat or patient dashboard
-        setTimeout(() => {
+
+        if (typeof cliniflowUpdatePatientLanguage === "function") {
+          try {
+            await cliniflowUpdatePatientLanguage(plang, token);
+            const resLang = await fetch(`${API}/api/patient/language`, {
+              method: "PATCH",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ language: plang }),
+            });
+            const data = await resLang.json();
+            if (!data || data.ok !== true) {
+              console.warn("[login] language verify", resLang.status, data);
+            }
+          } catch (e) {
+            console.warn("[login] language sync", e);
+          }
+        }
+
+        showAlert(L("patient.login_success"), "success");
+        setTimeout(function () {
           window.location.href = "/chat.html";
         }, 1500);
-        
       } catch (error) {
-        console.error("[LOGIN] Error:", error);
-        showAlert("Giriş sırasında hata oluştu: " + error.message);
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Giriş Yap";
+        console.error("[LOGIN] verify:", error);
+        showAlert(String(error.message || error));
+        verifyBtn.disabled = false;
+        restoreLoginButtonLabels();
       }
+    });
+
+    document.getElementById("login-back-btn").addEventListener("click", function () {
+      resetLoginFlow();
+    });
+
+    document.getElementById("login-otp").addEventListener("input", function () {
+      this.value = String(this.value || "").replace(/\D/g, "").slice(0, 6);
     });
 
     // Register form submission
@@ -575,10 +842,33 @@
         if (json.token) localStorage.setItem("patient_token", json.token);
         if (json.patientId) localStorage.setItem("patient_id", json.patientId);
         if (json.clinicId) localStorage.setItem("clinic_id", json.clinicId);
+        console.log("🌍 LANG BEFORE REGISTER:", (function(){ try{return localStorage.getItem("lang");}catch(_e){return null;} })());
+        console.log("🌍 LANG FROM API:", json.language != null ? json.language : json.lang);
+        var plang2 = resolveLangAfterAuth(json);
         try {
-          var plang2 = json.language || json.lang || "tr";
-          localStorage.setItem("lang", String(plang2).trim().slice(0, 2).toLowerCase());
+          localStorage.setItem("lang", plang2);
         } catch (e) {}
+        console.log("🌍 LANG AFTER REGISTER:", (function(){ try{return localStorage.getItem("lang");}catch(_e){return null;} })());
+        if (typeof cliniflowUpdatePatientLanguage === "function" && json.token) {
+          try {
+            await cliniflowUpdatePatientLanguage(plang2, json.token);
+            const res = await fetch(`${API}/api/patient/language`, {
+              method: "PATCH",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${json.token}`,
+              },
+              body: JSON.stringify({ language: plang2 }),
+            });
+            const data = await res.json();
+            console.log("🌍 LANGUAGE RESPONSE:", data);
+            if (!data || data.ok !== true) {
+              console.warn("🌍 Language verify: unexpected", res.status, data);
+            }
+          } catch (e) {
+            console.warn("[register] language sync", e);
+          }
+        }
 
         if (json.email_sent === false) {
           showAlert(
@@ -610,6 +900,13 @@
     document.getElementById('reg-clinicCode').addEventListener('input', function() {
       this.value = this.value.toUpperCase();
     });
+
+    try {
+      if (typeof cliniflowApplyAuthFieldLabels === "function") {
+        cliniflowApplyAuthFieldLabels();
+      }
+    } catch (_e) {}
+    stripAuthFieldPlaceholders();
   </script>
 </body>
 </html>

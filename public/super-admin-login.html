@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
+  <script src="/i18n.js"></script>
+  <script src="/auth-field-labels.js?v=2"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Super Admin – Login</title>
   <style>
@@ -56,12 +58,12 @@
     .form-group{
       margin-bottom:20px;
     }
-    label{
+    .field-label-muted{
       display:block;
-      font-size:14px;
-      font-weight:600;
-      color:#e6eaf2;
-      margin-bottom:8px;
+      font-size:13px;
+      font-weight:500;
+      color:#94a3b8;
+      margin-bottom:6px;
     }
     .required{
       color:var(--r);
@@ -80,9 +82,6 @@
     input:focus{
       outline:none;
       border-color:var(--p);
-    }
-    input::placeholder{
-      color:#6b7280;
     }
     .help-text{
       font-size:12px;
@@ -146,8 +145,8 @@
 <body>
   <div class="container">
     <div class="header">
-      <h1>🔐 Super Admin Login</h1>
-      <p class="subtitle">Sistem yöneticisi girişi</p>
+      <h1 data-auth-i18n="super_admin.title">🔐 Super Admin Login</h1>
+      <p class="subtitle" data-auth-i18n="super_admin.subtitle">System administrator access</p>
     </div>
 
     <div id="alert-container"></div>
@@ -155,36 +154,37 @@
     <div class="form-container">
       <form id="login-form">
         <div class="form-group">
-          <label>
-            Email <span class="required">*</span>
+          <label class="field-label-muted" for="email">
+            <span data-i18n-label="auth.email"></span> <span class="required">*</span>
           </label>
           <input
             type="email"
             id="email"
             name="email"
-            placeholder="superadmin@clinifly.net"
+            autocomplete="email"
+            inputmode="email"
             required
             autofocus
           />
-          <div class="help-text">Super admin email adresi</div>
+          <div class="help-text"><span data-i18n-label="patient.super_admin.help_email"></span></div>
         </div>
 
         <div class="form-group">
-          <label>
-            Password <span class="required">*</span>
+          <label class="field-label-muted" for="password">
+            <span data-i18n-label="auth.password"></span> <span class="required">*</span>
           </label>
           <input
             type="password"
             id="password"
             name="password"
-            autocomplete="off"
+            autocomplete="current-password"
             required
           />
-          <div class="help-text">Super admin şifresi</div>
+          <div class="help-text"><span data-i18n-label="patient.super_admin.help_password"></span></div>
         </div>
 
-        <button type="submit" class="btn btn-primary" id="submit-btn">
-          Login
+        <button type="submit" class="btn btn-primary" id="submit-btn" data-auth-i18n="super_admin.btn_login">
+          Log in
         </button>
       </form>
     </div>
@@ -192,6 +192,12 @@
 
 <script>
   const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+
+  function L(key) {
+    return typeof cliniflowAuthLabel === "function"
+      ? cliniflowAuthLabel(key)
+      : key;
+  }
   
   function setMsg(msg, type = "ok") {
     const container = document.getElementById("alert-container");
@@ -199,6 +205,11 @@
     setTimeout(() => {
       container.innerHTML = "";
     }, 5000);
+  }
+
+  function resetSubmitBtn(btn) {
+    btn.disabled = false;
+    btn.textContent = L("super_admin.btn_login");
   }
 
   document.getElementById("login-form").addEventListener("submit", async (e) => {
@@ -209,17 +220,17 @@
     const password = document.getElementById("password").value;
     
     if (!email) {
-      setMsg("Email gereklidir.", "error");
+      setMsg(L("super_admin.err_email_required"), "error");
       return;
     }
     
     if (!password) {
-      setMsg("Şifre gereklidir.", "error");
+      setMsg(L("super_admin.err_password_required"), "error");
       return;
     }
     
     submitBtn.disabled = true;
-    submitBtn.textContent = "Giriş yapılıyor...";
+    submitBtn.textContent = L("super_admin.btn_loading");
     
     try {
       const res = await fetch(`${API}/api/super-admin/login`, {
@@ -231,37 +242,39 @@
       const json = await res.json();
       
       if (!res.ok) {
-        let errorMsg = json.message || json.error || "Giriş başarısız";
+        let errorMsg = json.message || json.error || L("super_admin.err_login_failed");
         if (json.error === "invalid_credentials") {
-          errorMsg = "Geçersiz email veya şifre";
+          errorMsg = L("super_admin.err_invalid_credentials");
         } else if (json.error === "missing_credentials") {
-          errorMsg = "Email ve şifre gereklidir";
+          errorMsg = L("super_admin.err_missing_credentials");
         } else if (json.error === "configuration_error") {
-          errorMsg = "Super admin yapılandırılmamış";
+          errorMsg = L("super_admin.err_configuration");
         }
         setMsg(errorMsg, "error");
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Login";
+        resetSubmitBtn(submitBtn);
         return;
       }
       
       if (json.ok && json.token) {
         localStorage.setItem("super_admin_token", json.token);
-        setMsg("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
+        setMsg(L("super_admin.success_redirect"), "success");
         
         setTimeout(() => {
           window.location.href = "/super-admin.html";
         }, 1000);
       } else {
-        setMsg("Giriş başarısız", "error");
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Login";
+        setMsg(L("super_admin.err_login_failed"), "error");
+        resetSubmitBtn(submitBtn);
       }
     } catch (error) {
       console.error("Login error:", error);
-      setMsg("Bağlantı hatası: " + (error.message || "Bilinmeyen hata"), "error");
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Login";
+      setMsg(
+        L("super_admin.err_network") +
+          " " +
+          (error && error.message ? error.message : L("super_admin.err_unknown")),
+        "error"
+      );
+      resetSubmitBtn(submitBtn);
     }
   });
 

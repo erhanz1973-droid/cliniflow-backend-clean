@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title id="pageTitle"></title>
+  <script src="/api-base.js?v=202604275"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #020617;
+      --b: #1f2937;
+      --p: #2563eb;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: #e6eaf2;
+    }
+    .top {
+      padding: 16px;
+      border-bottom: 1px solid var(--b);
+      background: #0b1220;
+    }
+    .top-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin: 0 0 4px 0;
+    }
+    .lang-bar {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .lang-bar button {
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 8px;
+      border: 1px solid #374151;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .lang-bar button.is-active {
+      background: var(--p);
+      color: #fff;
+      border-color: var(--p);
+    }
+    .search-wrap {
+      margin-top: 12px;
+      margin-bottom: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .search-wrap .field-label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .search-wrap input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--b);
+      background: var(--card);
+      color: #e6eaf2;
+      font-size: 15px;
+    }
+    .actions {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .btn {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      background: var(--p);
+      color: #fff;
+    }
+    .btn.secondary {
+      background: transparent;
+      border: 1px solid var(--b);
+      color: var(--muted);
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .muted {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    #statusLine.status-warn {
+      color: #fbbf24;
+    }
+    #statusLine.status-err {
+      color: #fca5a5;
+    }
+    .list-wrap {
+      padding: 16px;
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--b);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+    .card h3 {
+      margin: 0 0 6px 0;
+      font-size: 16px;
+    }
+    .card .meta {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .card .code {
+      margin-top: 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+      color: #93c5fd;
+    }
+    .empty, .error-box {
+      text-align: center;
+      padding: 40px 16px;
+      color: var(--muted);
+    }
+    .error-box {
+      color: #fca5a5;
+    }
+    .nav-foot {
+      text-align: center;
+      padding: 24px;
+    }
+    .nav-foot a {
+      color: var(--muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="top-row">
+      <div>
+        <h1 id="findTitle"></h1>
+        <p class="muted" id="findSubtitle"></p>
+      </div>
+      <div class="lang-bar" id="langBar" role="group" aria-labelledby="findTitle">
+        <button type="button" class="lang-pick" data-lang="tr">TR</button>
+        <button type="button" class="lang-pick" data-lang="en">EN</button>
+        <button type="button" class="lang-pick" data-lang="ru">RU</button>
+        <button type="button" class="lang-pick" data-lang="ka">KA</button>
+      </div>
+    </div>
+    <div class="search-wrap">
+      <label class="field-label" id="searchFieldLabel" for="searchInput"></label>
+      <input type="search" id="searchInput" autocomplete="off" />
+    </div>
+    <div class="actions">
+      <button type="button" class="btn" id="nearbyBtn"></button>
+      <button type="button" class="btn secondary" id="retryBtn" style="display:none;"></button>
+    </div>
+  </div>
+
+  <div class="list-wrap">
+    <div id="statusLine" class="muted" style="margin-bottom:12px;display:none;"></div>
+    <div id="listContainer"></div>
+  </div>
+
+  <div class="nav-foot">
+    <a href="/patient-login.html" id="backLogin"></a>
+  </div>
+
+  <!-- Load order: api-base.js (head) defines cliniflowApiBase; shared i18n then find-clinic UI only -->
+  <script src="/i18n.js"></script>
+  <script src="/find-clinic.js"></script>
+</body>
+</html>

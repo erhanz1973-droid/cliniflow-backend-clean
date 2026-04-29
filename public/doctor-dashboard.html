@@ -184,6 +184,55 @@
       `;
     }
 
+    function normalizeMedicalUi(fd) {
+      if (!fd || typeof fd !== "object") return null;
+      var a = fd.allergies;
+      var m = fd.medications;
+      var cd = fd.chronicDiseases;
+      function yn(field) {
+        if (field && typeof field === "object" && "value" in field) return !!field.value;
+        return undefined;
+      }
+      function detailOf(field) {
+        if (field && typeof field === "object" && field.detail != null) return String(field.detail).trim();
+        return "";
+      }
+      function triFlat(flatBool, canonFn) {
+        if (typeof flatBool === "boolean") return flatBool;
+        var u = canonFn();
+        return u === undefined ? false : !!u;
+      }
+      var out = {
+        conditions: Array.isArray(fd.conditions) ? fd.conditions : [],
+        medicationsList: fd.medicationsList != null ? String(fd.medicationsList).trim() : "",
+        notes: fd.notes != null ? String(fd.notes).trim() : "",
+        submittedAt: fd.submittedAt != null ? String(fd.submittedAt).trim() : "",
+        has_allergy: triFlat(fd.has_allergy, function () {
+          return yn(a);
+        }),
+        allergy_details:
+          String(fd.allergy_details || fd.allergy_detail || "").trim() ||
+          detailOf(a) ||
+          "",
+        takes_medication: triFlat(fd.takes_medication, function () {
+          return yn(m);
+        }),
+        medication_details:
+          String(fd.medication_details || fd.medication_detail || "").trim() ||
+          detailOf(m) ||
+          "",
+        has_chronic_disease: triFlat(fd.has_chronic_disease, function () {
+          return yn(cd);
+        }),
+        chronic_details:
+          String(fd.chronic_details || fd.chronic_disease_detail || "").trim() ||
+          detailOf(cd) ||
+          "",
+      };
+      console.log("FINAL FORM STATE:", out);
+      return out;
+    }
+
     async function toggleMedicalHistory(idx, patientId) {
       const panel = document.getElementById("med-panel-" + idx);
       const btn = document.getElementById("hist-btn-" + idx);
@@ -207,9 +256,13 @@
       try {
         const r = await apiFetch("/api/patient/" + patientId + "/medical-form");
         const j = await r.json();
-        const form = (j.ok && j.isComplete) ? j.form : null;
-        medHistCache[patientId] = form;
-        renderMedHistory(form, panel);
+        console.log("GET PATIENT ID:", patientId);
+        console.log("HEALTH GET RESPONSE:", j);
+        const fd = j.ok ? (j.form ?? j.formData) : null;
+        const form = fd && typeof fd === "object" ? fd : null;
+        const formState = form ? normalizeMedicalUi(form) : null;
+        medHistCache[patientId] = formState;
+        renderMedHistory(formState, panel);
       } catch (e) {
         panel.innerHTML = '<div class="med-loading" style="color:#fca5a5;">Yüklenemedi: ' + escHtml(e.message) + '</div>';
       }
@@ -223,12 +276,11 @@
 
       const yesNo = (v) => v === true || v === "true" || v === "yes" || v === "evet";
 
-      // Risk flags
-      const hasAllergy = yesNo(form.hasAllergy || form.has_allergy);
-      const hasChronicDisease = yesNo(form.hasChronicDisease || form.has_chronic_disease || form.chronicDisease);
+      const hasAllergy = form.has_allergy === true;
+      const hasChronicDisease = form.has_chronic_disease === true;
       const isSmoker = yesNo(form.isSmoker || form.is_smoker || form.smoker);
       const isPregnant = yesNo(form.isPregnant || form.is_pregnant || form.pregnant);
-      const takingMedication = yesNo(form.takingMedication || form.taking_medication || form.medication);
+      const takingMedication = form.takes_medication === true;
 
       const risks = [];
       if (hasAllergy) risks.push("⚠️ Alerji");
@@ -243,39 +295,36 @@
         html += `<div class="risk-banner">⚠️ Risk Faktörleri: ${risks.join(" &nbsp;|&nbsp; ")}</div>`;
       }
 
-      // Allergies
-      const allergyDetail = form.allergyDetail || form.allergy_detail || form.allergies || "";
+      const allergyDetail = String(form.allergy_details || "").trim();
       if (allergyDetail) {
         html += `<div class="med-section"><div class="med-section-title">Alerji Detayı</div><div class="med-value">${escHtml(allergyDetail)}</div></div>`;
       }
 
-      // Medications
-      const medications = form.medications || form.medicationList || form.medication_list || "";
+      let medications = String(form.medicationsList || form.medications_list || form.medicationList || "").trim();
+      if (!medications) medications = String(form.medication_details || "").trim();
+
       if (medications) {
         html += `<div class="med-section"><div class="med-section-title">Kullandığı İlaçlar</div><div class="med-value">${escHtml(medications)}</div></div>`;
       }
 
-      // Chronic diseases
-      const chronicDetail = form.chronicDiseaseDetail || form.chronic_disease_detail || form.chronicDetail || "";
+      let chronicDetail = String(form.chronic_details || "").trim();
+
       if (chronicDetail) {
         html += `<div class="med-section"><div class="med-section-title">Kronik Hastalık Detayı</div><div class="med-value">${escHtml(chronicDetail)}</div></div>`;
       }
 
-      // Medical conditions (checkboxes / tags)
-      const conditions = form.medicalConditions || form.medical_conditions || form.conditions || [];
-      if (Array.isArray(conditions) && conditions.length > 0) {
+      const conditions = Array.isArray(form.conditions) ? form.conditions : [];
+      if (conditions.length > 0) {
         const tags = conditions.map(c => `<span class="tag tag-red">${escHtml(String(c))}</span>`).join("");
         html += `<div class="med-section"><div class="med-section-title">Tıbbi Durumlar</div><div class="tag-list">${tags}</div></div>`;
       }
 
-      // Additional notes
-      const notes = form.additionalNotes || form.additional_notes || form.notes || "";
+      const notes = String(form.notes || "").trim();
       if (notes) {
         html += `<div class="med-section"><div class="med-section-title">Ek Notlar</div><div class="med-value">${escHtml(notes)}</div></div>`;
       }
 
       if (!html) {
-        // Form exists but no notable data
         html = '<div class="no-form-msg" style="padding:8px 0;">Form doldurulmuş ancak belirtilecek özel bir durum yok.</div>';
       }
 

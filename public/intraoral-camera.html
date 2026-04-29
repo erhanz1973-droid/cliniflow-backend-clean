@@ -2,7 +2,8 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <script src="/api-base.js?v=202604272"></script>
+  <script src="/api-base.js?v=202604275"></script>
+  <script src="/i18n.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http:; media-src 'self' https: http: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http:; style-src 'self' 'unsafe-inline' https: http:;">
   <title>İntraoral Fotoğraf Çekimi - Clinifly</title>
@@ -288,10 +289,49 @@
       color: rgba(255, 255, 255, 0.8);
       z-index: 50;
     }
+
+    #patient-lang-bar {
+      position: absolute;
+      top: max(12px, env(safe-area-inset-top, 12px));
+      right: 12px;
+      z-index: 100;
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 10px;
+      border: 1px solid #334155;
+      pointer-events: auto;
+      touch-action: manipulation;
+    }
+    #patient-lang-bar button.lang-pick {
+      padding: 6px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: #94a3b8;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    #patient-lang-bar button.lang-pick:hover {
+      color: #e2e8f0;
+    }
+    #patient-lang-bar button.lang-pick.is-active {
+      background: #2563eb;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
   <div id="cameraContainer">
+    <div id="patient-lang-bar" role="group" aria-label="Language">
+      <button type="button" class="lang-pick" data-lang="tr">TR</button>
+      <button type="button" class="lang-pick" data-lang="en">EN</button>
+      <button type="button" class="lang-pick" data-lang="ru">RU</button>
+      <button type="button" class="lang-pick" data-lang="ka">KA</button>
+    </div>
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" style="display: none;"></canvas>
     
@@ -348,9 +388,48 @@
   </script>
   
   <script>
-    try {
-      if (!localStorage.getItem("lang")) localStorage.setItem("lang", "tr");
-    } catch (e) {}
+    // Lang: /i18n.js — do not force "tr" here
+    (function syncPatientLang() {
+      try {
+        const saved = localStorage.getItem("lang");
+        const t = localStorage.getItem("patient_token");
+        console.log("🌍 CURRENT LANG:", saved);
+        if (saved && t && typeof cliniflowSyncSavedPatientLanguage === "function") {
+          setTimeout(function () {
+            cliniflowSyncSavedPatientLanguage();
+          }, 1000);
+        }
+      } catch (e) {}
+    })();
+
+    function updatePatientLangBarActive() {
+      var cur = "";
+      try {
+        cur = (typeof window.getFindClinicLang === "function"
+          ? window.getFindClinicLang()
+          : (localStorage.getItem("lang") || "en")
+        ).trim().slice(0, 2).toLowerCase();
+      } catch (e) {}
+      document.querySelectorAll("#patient-lang-bar .lang-pick").forEach(function (btn) {
+        var code = (btn.getAttribute("data-lang") || "").toLowerCase();
+        btn.classList.toggle("is-active", code === cur);
+      });
+    }
+    document.querySelectorAll("#patient-lang-bar .lang-pick").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var lang = btn.getAttribute("data-lang");
+        if (typeof cliniflowOnPatientLanguageChange === "function") {
+          cliniflowOnPatientLanguageChange(lang).then(function () {
+            console.log("FINAL LANG:", (localStorage.getItem("lang") || "").trim());
+            updatePatientLangBarActive();
+          }).catch(function (e) {
+            console.warn("Language update failed:", e);
+          });
+        }
+      });
+    });
+    updatePatientLangBarActive();
+
     // MediaPipe Face Mesh setup
     let faceMesh = null;
     let camera = null;

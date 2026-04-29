@@ -74,7 +74,7 @@ const AI_RATE_LIMIT_WINDOW = parseInt(process.env.AI_RATE_LIMIT_WINDOW || "60000
 const _aiRateBuckets = new Map(); // patientId → [timestamp, …]
 
 function aiRateLimitMiddleware(req, res, next) {
-  const pid = String(req.patientId || req.body?.patientId || "").trim();
+  const pid = String(req.patientUuid || req.patientId || req.body?.patientId || "").trim();
   if (!pid) return next();
 
   const now  = Date.now();
@@ -242,7 +242,21 @@ const { fillIcdRowFromStatic, searchStaticDentalIcd } = require("./lib/icd10Stat
 const { SPECIALITY_SEED_NAMES, LANGUAGE_SEED_NAMES } = require("./lib/profileReferenceSeeds");
 const { resolveClinicCoords, hasFiniteCoords, buildGeocodeQuery } = require("./lib/clinicCoords.cjs");
 const { fetchPatientVisibleClinicRows } = require("./lib/patientClinicListing.cjs");
-const { filterClinicsWithinRadiusKm, nearbyBoundingBoxDeg } = require("./lib/clinicHaversine.cjs");
+const {
+  clinicCityPayloadFromRow,
+  parseCityQueryParam,
+  normalizeManualCityInput,
+  listKnownCityCodes,
+  slugifyCatalogCode,
+} = require("./lib/cityCodes.cjs");
+const { getMergedCityCatalogSet, invalidateCityCatalogCache } = require("./lib/cityCatalogLoader.cjs");
+const { logPatientDebug, warnInvalidPatientData } = require("./lib/patientDebugLog.cjs");
+const {
+  filterClinicsWithinRadiusKm,
+  nearbyBoundingBoxDeg,
+  haversineDistanceKm,
+  clinicLatLng,
+} = require("./lib/clinicHaversine.cjs");
 const { countryPriorityScore, sortNearbyMatchesByUserCountry } = require("./lib/clinicCountryPriority.cjs");
 const {
   calculatePrices,
@@ -297,6 +311,7 @@ app.disable("x-powered-by");
 console.log("🔥 BACKEND CLEAN NEW VERSION DEPLOYED");
 console.log("🚀 build:", new Date().toISOString());
 console.log("🚀 BACKEND CLEAN RUNNING");
+console.log("🔥 BACKEND VERSION UPDATED");
 // Avoid 304 Not Modified on JSON APIs — clients that always JSON.parse() break on empty 304 bodies
 app.set("etag", false);
 console.log("SERVER ENTRY:", __filename);
@@ -795,7 +810,13 @@ app.param("patientId", (req, res, next, value) => {
 
 /** messages.patient_id FK → patients.id (UUID). Token may carry legacy patients.patient_id (e.g. p_…). */
 async function resolveMessagesPatientDbId(patientId) {
-  const raw = String(patientId || "").trim();
+  const rawIn = String(patientId || "").trim();
+  if (!rawIn) return null;
+  const rawNorm = /^[pP]_([0-9a-f-]{36})$/i.exec(rawIn)
+    ? rawIn.slice(2).trim()
+    : rawIn;
+  const raw =
+    UUID_RE.test(rawNorm) ? String(rawNorm).toLowerCase() : rawNorm;
   if (!raw) return null;
   if (!isSupabaseEnabled()) {
     if (UUID_RE.test(raw)) return raw;
@@ -836,6 +857,9 @@ async function resolveMessagesPatientDbId(patientId) {
   }
 }
 
+const { createResolvePatientUuid } = require("./middleware/resolvePatientUuid.js");
+const canonicalPatientUuid = createResolvePatientUuid(resolveMessagesPatientDbId);
+
 /**
  * treatment_requests / ratings rows use patients.id (UUID) after POST normalization, while JWT may still
  * carry legacy patients.patient_id or p_<uuid>. Query with both so list + badge endpoints match inserts.
@@ -853,6 +877,13 @@ async function patientIdsMatchForToken(tokenPid, paramPatientIdResolved) {
   const b = String(paramPatientIdResolved || "").trim();
   if (!a || !b) return false;
   if (a === b) return true;
+  if (
+    UUID_RE.test(a) &&
+    UUID_RE.test(b) &&
+    String(a).replace(/-/g, "").toLowerCase() === String(b).replace(/-/g, "").toLowerCase()
+  ) {
+    return true;
+  }
   const ia = await resolveMessagesPatientDbId(a);
   const ib = await resolveMessagesPatientDbId(b);
   return Boolean(ia && ib && ia === ib);
@@ -954,6 +985,36 @@ async function fetchMessagesFromSupabase(patientId) {
     return { data: [], error: mgRes.error, preMapped: true };
   }
   return { data: [], error: null, preMapped: true };
+}
+
+/**
+ * Unread inbound messages from clinic/staff (patient-side badge polling).
+ * Uses the same merge + legacy mapping as GET /api/patient/:id/messages; counts CLINIC rows with no readAt
+ * newer than optional `since` (ms epoch, query param mirrors client badge polling).
+ */
+async function countUnreadClinicMessagesForPatient(resolvedPatientId, sinceMs) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id) return 0;
+
+  const sinceTs = Number(sinceMs);
+  const sinceBoundary = Number.isFinite(sinceTs) && sinceTs > 0 ? sinceTs : null;
+
+  try {
+    const merged = await fetchMessagesFromSupabase(id);
+    if (merged?.error || !Array.isArray(merged.data)) return 0;
+    let c = 0;
+    for (const m of merged.data) {
+      if (!m || m.from !== "CLINIC") continue;
+      const t = typeof m.createdAt === "number" ? m.createdAt : 0;
+      if (sinceBoundary != null && t <= sinceBoundary) continue;
+      if (m.readAt != null) continue;
+      c++;
+    }
+    return c;
+  } catch (e) {
+    console.warn("[unread-count] merged tally failed:", e?.message || e);
+    return 0;
+  }
 }
 
 /** Generic insert with column pruning for heterogeneous Supabase schemas (patients, patient_chat_threads, …). */
@@ -1952,6 +2013,35 @@ function splitFullNameToFirstLast(fullName) {
 }
 
 /**
+ * Registration / health-form body → consistent first_name, last_name, name (+ payload sans patientName).
+ * Merges explicit lastName/last_name when the combined raw string only contained the first token.
+ */
+function normalizeIncomingPatientNameForDb(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const rawName =
+    b.firstName ||
+    b.first_name ||
+    b.name ||
+    b.patientName ||
+    "";
+
+  const parts = String(rawName).trim().split(/\s+/).filter(Boolean);
+  let first_name = parts[0] || null;
+  let last_name = parts.length > 1 ? parts.slice(1).join(" ") || null : null;
+
+  const lastExplicit = String(b.lastName || b.last_name || "").trim();
+  const firstExplicit = String(b.firstName || b.first_name || "").trim();
+  if (lastExplicit && !last_name) last_name = lastExplicit;
+  if (!first_name && firstExplicit) first_name = firstExplicit;
+
+  const name = [first_name, last_name].filter(Boolean).join(" ");
+  const payload = { ...b, first_name, last_name, name, full_name: name };
+  delete payload.patientName;
+
+  return { first_name, last_name, name, payload };
+}
+
+/**
  * Merge split name with optional existing row (UPDATE). first_name: regF || exF || "Unknown" + CRITICAL log if still empty.
  * last_name: null for single-word new name; non-empty string when multiple tokens.
  */
@@ -2145,6 +2235,19 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ── Static files FIRST — must run before /api routes so GET requests for /onboarding.js, /i18n.js, etc. never hit JSON catch-alls ──
+const publicDir = path.join(__dirname, "public");
+console.log("STATIC DIR:", publicDir);
+app.use(express.static(publicDir));
+
+/**
+ * Canonical path without `.html`.
+ * Explicit route so /clinic-onboarding always serves the SPA-style page after static skips (no file named "clinic-onboarding").
+ */
+app.get("/clinic-onboarding", (req, res) => {
+  res.sendFile(path.join(publicDir, "clinic-onboarding.html"));
+});
 
 if (!IS_PROD) {
   app.use((req, res, next) => {
@@ -2351,8 +2454,6 @@ async function calculateClinicOralHealthAverage(clinicId) {
 }
 
 // ================== SUPER ADMIN GUARD ==================
-const publicDir = path.join(__dirname, "public");
-console.log("STATIC DIR:", publicDir);
 
 // Canonical admin HTML routes (cliniflow-admin/public only — no repo-root public/)
 app.get("/admin-patients.html", (req, res) => {
@@ -2625,7 +2726,7 @@ const rid = (p) => p + "_" + randomUUID();
 const makeToken = () => "t_" + crypto.randomBytes(10).toString("base64url");
 
 // ================== PATIENT LANGUAGE ==================
-const ALLOWED_PATIENT_LANGUAGES = new Set(["tr", "en"]);
+const ALLOWED_PATIENT_LANGUAGES = new Set(["tr", "en", "ru", "ka"]);
 function normalizePatientLanguage(input) {
   const raw = String(input || "").trim().toLowerCase();
   return ALLOWED_PATIENT_LANGUAGES.has(raw) ? raw : "en";
@@ -4499,23 +4600,20 @@ async function runPatientRegister(req, res, route, otpMode) {
     supabase: isSupabaseEnabled(),
   });
 
-  const rawName =
-    body.firstName ||
-    body.first_name ||
-    body.name ||
-    body.patientName ||
-    "";
-
-  const safeName = String(rawName).trim();
-  const parts = safeName.split(/\s+/).filter(Boolean);
-  const first_name = parts[0];
-  const last_name = parts.length > 1 ? parts.slice(1).join(" ") : null;
+  const { first_name, last_name, name } = normalizeIncomingPatientNameForDb(body);
 
   if (!first_name) {
-    return res.status(400).json({ error: "first_name_required" });
+    return res.status(400).json({
+      ok: false,
+      error: "first_name_required",
+    });
   }
 
-  const name = `${first_name} ${last_name || ""}`.trim();
+  console.log("🧠 HEALTH FORM PAYLOAD:", {
+    first_name,
+    last_name,
+    name,
+  });
   console.log("CHECKPOINT 1: after name parse", { route, hasFirst: !!first_name, nameLen: String(name).length });
 
   let nameForReferral = name;
@@ -4572,7 +4670,7 @@ async function runPatientRegister(req, res, route, otpMode) {
     /** Merge buildInsertPayload row with forced name fields (only object passed to .insert()). */
     const applyNameOverrides = (p) => {
       if (!p || typeof p !== "object") return p;
-      const nn = `${first_name} ${last_name || ""}`.trim();
+      const nn = name;
       return {
         ...p,
         first_name,
@@ -5484,8 +5582,14 @@ app.post("/api/lead-contact", async (req, res) => {
 
 // ================== AUTH ==================
 function requireToken(req, res, next) {
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const auth = String(req.headers.authorization || "").trim();
+  const bearerMatch = auth.match(/^Bearer\s+(.+)$/i);
+  const token =
+    bearerMatch && bearerMatch[1]
+      ? bearerMatch[1].trim()
+      : auth.startsWith("eyJ")
+        ? auth
+        : "";
   // Also check x-patient-token header (for compatibility)
   const altToken = req.headers["x-patient-token"] || "";
   const finalToken = token || altToken;
@@ -5501,9 +5605,16 @@ function requireToken(req, res, next) {
     if (finalToken.startsWith("eyJ")) {
       try {
         const decoded = jwt.verify(finalToken, JWT_SECRET);
-        const pid = decoded?.patientId;
+        const pid =
+          decoded?.patientId ||
+          decoded?.patientUuid ||
+          decoded?.patient_uuid ||
+          (typeof decoded?.sub === "string" &&
+          UUID_RE.test(String(decoded.sub || "").trim()) &&
+          String(decoded.sub).trim()) ||
+          null;
         if (pid) {
-          req.patientId = pid;
+          req.patientId = typeof pid === "string" ? pid.trim() : String(pid).trim();
           req.role = (decoded?.role || decoded?.status || "PENDING").toUpperCase(); // 🔥 NORMALIZE ROLE TO UPPERCASE
           req.tokenType = "jwt_patient";
           return next();
@@ -5526,6 +5637,42 @@ function requireToken(req, res, next) {
   req.role = (t.role || "PENDING").toUpperCase(); // 🔥 NORMALIZE ROLE TO UPPERCASE
   req.tokenType = "legacy_patient";
   next();
+}
+
+/** Guest-safe browse: sets req.patientId when Bearer valid; otherwise proceeds without patient. */
+function optionalPatientTokenForBrowse(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const altToken = req.headers["x-patient-token"] || "";
+  const finalToken = token || altToken;
+  if (!finalToken) {
+    req.patientId = undefined;
+    return next();
+  }
+  const tokens = readJson(TOK_FILE, {});
+  const t = tokens[finalToken];
+  if (t?.patientId) {
+    req.patientId = t.patientId;
+    req.role = (t.role || "PENDING").toUpperCase();
+    req.tokenType = "legacy_patient";
+    return next();
+  }
+  if (finalToken.startsWith("eyJ")) {
+    try {
+      const decoded = jwt.verify(finalToken, JWT_SECRET);
+      const pid = decoded?.patientId;
+      if (pid) {
+        req.patientId = pid;
+        req.role = (decoded?.role || decoded?.status || "PENDING").toUpperCase();
+        req.tokenType = "jwt_patient";
+        return next();
+      }
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  req.patientId = undefined;
+  return next();
 }
 
 // POST /api/leads — AI ekranından “teklif al” (patient intent → clinics)
@@ -6374,6 +6521,31 @@ app.post("/api/doctor/verify-otp", async (req, res) => {
 // POST /api/doctor/login
 // Frontend login endpoint for doctors (email + clinic code) - for Expo app
 app.post("/api/doctor/login", async (req, res) => {
+  const doctorPendingMessages = Object.freeze({
+    en: "Your account is pending clinic approval. Please wait until your clinic approves your account.",
+    tr: "Kliniğiniz henüz hesabınızı onaylamadı. Lütfen onay sürecini bekleyin.",
+    ru: "Ваша учётная запись ожидает одобрения клиникой.",
+    ka: "თქვენი ანგარიში კლინიკის მიერ დამტკიცებას ელოდება.",
+  });
+
+  /** @returns {"en"|"tr"|"ru"|"ka"} */
+  function resolveDoctorLoginUiLang(body, headers) {
+    const hdr = headers && typeof headers === "object" ? headers : {};
+    const fromBody = String(body?.language || "")
+      .trim()
+      .toLowerCase()
+      .slice(0, 2);
+    if (["en", "tr", "ru", "ka"].includes(fromBody)) return fromBody;
+    const xLang = String(hdr["x-lang"] || "").trim().toLowerCase().slice(0, 2);
+    if (["en", "tr", "ru", "ka"].includes(xLang)) return xLang;
+    const accept = String(hdr["accept-language"] || "").split(",")[0] || "";
+    const low = accept.toLowerCase();
+    if (low.startsWith("tr")) return "tr";
+    if (low.startsWith("ru")) return "ru";
+    if (low.startsWith("ka")) return "ka";
+    return "en";
+  }
+
   try {
     const { email, clinicCode } = req.body || {};
 
@@ -6517,6 +6689,17 @@ app.post("/api/doctor/login", async (req, res) => {
     }
 
     const effectiveClinicCode = doctorClinicCode || code;
+
+    const doctorStatus = String(foundDoctor.status || "").trim().toUpperCase();
+    if (doctorStatus === "PENDING") {
+      const langKey = resolveDoctorLoginUiLang(req.body, req.headers);
+      const msg = doctorPendingMessages[langKey] || doctorPendingMessages.en;
+      return res.status(403).json({
+        ok: false,
+        error: "doctor_pending_approval",
+        message: msg,
+      });
+    }
 
     // Generate JWT token
     const tokenExpiry = Math.floor(Date.now() / 1000) + (TOKEN_EXPIRY_DAYS * 24 * 60 * 60);
@@ -7637,7 +7820,7 @@ app.post("/api/patient/login", async (req, res) => {
 
       // Always use UUID as patientId — TEXT patient_id is only a display label
       const foundPatientId = patientRow.id;
-      const foundLanguage = patientRow.language || 'tr';
+      const foundLanguage = patientRow.language || 'en';
       const foundName = patientRow.name || '';
       console.log('[PATIENT LOGIN] uuid:', foundPatientId, '| name:', foundName, '| phone:', patientRow.phone);
 
@@ -7900,25 +8083,67 @@ function buildClinicRatingMapWeighted(ratingRows) {
 
 // ================== PATIENT: BROWSE CLINICS ("Find a clinic") ==================
 // Priority: (1) Supabase RPC nearby_clinics(lat,lng) — (2) same country — (3) all (cap 20).
-// Avoid PostgREST .or(status...) — filter suspended/inactive in JS instead.
-// GET /api/patient/clinics?lat=&lng=&country= — pass country (e.g. Georgia or GE) to prioritize same-country clinics
-app.get("/api/patient/clinics", requireToken, async (req, res) => {
+// GET /api/patient/clinics OR /api/clinics ?lat=&lng=&country=&city=|city_code=&query= ...
+async function handleBrowseClinicList(req, res) {
   try {
     if (!isSupabaseEnabled()) {
       return res.json({ ok: true, clinics: [] });
     }
 
-    const selFull = "id, name, city, country, clinic_code, latitude, longitude, status";
-    const selLite = "id, name, city, country, clinic_code, status";
+    const catalogSet = await getMergedCityCatalogSet(supabase);
+    const rawCityParam =
+      req.query.city ??
+      req.query.city_code ??
+      req.query.cityCode ??
+      "";
+    const cityParse = parseCityQueryParam(rawCityParam, catalogSet);
+    if (!cityParse.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_city",
+        message: "Unknown city. Use a catalog slug or known alias — see GET /api/city-catalog.",
+      });
+    }
 
-    const { rows } = await fetchPatientVisibleClinicRows(supabase, {
+    const selFull =
+      "id, name, city, city_code, pending_city_raw, country, clinic_code, latitude, longitude, status";
+    const selLite = "id, name, city, city_code, pending_city_raw, country, clinic_code, status";
+
+    let { rows } = await fetchPatientVisibleClinicRows(supabase, {
       patientId: req.patientId,
       lat: req.query.lat,
       lng: req.query.lng,
       country: req.query.country || req.query.userCountry,
+      cityCanonical: cityParse.canonical,
       selectFull: selFull,
       selectLite: selLite,
     });
+
+    const rawSearch =
+      req.query.query != null
+        ? String(req.query.query)
+        : req.query.q != null
+          ? String(req.query.q)
+          : "";
+    const searchQ = rawSearch.trim().toLowerCase();
+    if (searchQ) {
+      rows = (rows || []).filter((c) => {
+        const geoLike = clinicCityPayloadFromRow(c);
+        const blob = [
+          c.name,
+          c.country,
+          c.clinic_code,
+          c.city,
+          geoLike.city,
+          geoLike.city_code,
+          geoLike.pending_city_raw,
+        ]
+          .filter((x) => x != null && String(x).trim() !== "")
+          .join(" ")
+          .toLowerCase();
+        return blob.includes(searchQ);
+      });
+    }
 
     const ids = rows.map((c) => c.id).filter((id) => id != null && String(id).trim() !== "");
     let ratingMap = {};
@@ -7929,60 +8154,344 @@ app.get("/api/patient/clinics", requireToken, async (req, res) => {
           .select("clinic_id, overall, type")
           .in("clinic_id", ids);
         if (ratingErr) {
-          console.warn("[GET /api/patient/clinics] ratings query skipped:", ratingErr.message);
+          console.warn("[GET browse clinics] ratings query skipped:", ratingErr.message);
         } else if (ratingRows?.length) {
           ratingMap = buildClinicRatingMapWeighted(ratingRows);
         }
       } catch (re) {
-        console.warn("[GET /api/patient/clinics] ratings exception:", re?.message);
+        console.warn("[GET browse clinics] ratings exception:", re?.message);
       }
     }
 
-    const clinics = rows.map((c) => ({
-      id: c.id,
-      name: c.name || "Klinik",
-      city: c.city || null,
-      country: c.country || null,
-      clinicCode: c.clinic_code || null,
-      rating: ratingMap[c.id] ?? null,
-      latitude: c.latitude ?? null,
-      longitude: c.longitude ?? null,
-    }));
+    const clinics = rows.map((c) => {
+      const geo = clinicCityPayloadFromRow(c);
+      return {
+        id: c.id,
+        name: c.name || "Klinik",
+        city: geo.city,
+        city_code: geo.city_code,
+        pending_city_raw: geo.pending_city_raw ?? null,
+        country: c.country || null,
+        clinicCode: c.clinic_code || null,
+        rating: ratingMap[c.id] ?? null,
+        latitude: c.latitude ?? null,
+        longitude: c.longitude ?? null,
+      };
+    });
 
     return res.json({ ok: true, clinics });
   } catch (e) {
-    console.error("[GET /api/patient/clinics]", e?.message, e?.details || e?.hint || "");
+    console.error("[GET browse clinics]", e?.message, e?.details || e?.hint || "");
     return res.status(500).json({
       ok: false,
       error: "db_error",
       message: "Klinik listesi yüklenemedi. Lütfen daha sonra tekrar deneyin.",
     });
   }
-});
+}
 
-// GET /api/clinics/nearby — Haversine distance filter (no auth; optional Bearer for future use)
-// Query: lat, lng (required), radius (km, default 10, max 200), optional country|userCountry (prioritize same country, then distance).
-app.get("/api/clinics/nearby", async (req, res) => {
+app.get("/api/patient/clinics", requireToken, handleBrowseClinicList);
+app.get("/api/clinics", optionalPatientTokenForBrowse, handleBrowseClinicList);
+
+// ----- City catalog & onboarding (i18n labels: city.<slug> in Expo)
+app.get("/api/city-catalog", async (_req, res) => {
   try {
     if (!isSupabaseEnabled()) {
-      return res.json({ ok: true, clinics: [], radius_km: 10, center: null });
+      return res.json({ ok: true, codes: listKnownCityCodes() });
     }
-    const lat = parseFloat(String(req.query.lat ?? "").replace(",", "."));
-    const lng = parseFloat(String(req.query.lng ?? "").replace(",", "."));
-    const radiusRaw = parseFloat(String(req.query.radius ?? "").replace(",", "."));
+    const merged = await getMergedCityCatalogSet(supabase);
+    return res.json({ ok: true, codes: [...merged].sort() });
+  } catch (e) {
+    console.error("[GET /api/city-catalog]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "city_catalog_failed" });
+  }
+});
+
+app.post("/api/patient/city-onboarding-input", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const body = req.body || {};
+    const raw = body.raw != null ? body.raw : body.city;
+    const catalog = await getMergedCityCatalogSet(supabase);
+    const norm = normalizeManualCityInput(raw, catalog);
+    if (norm.error === "empty") {
+      return res.status(400).json({ ok: false, error: "empty" });
+    }
+    if (norm.error === "too_long") {
+      return res.status(400).json({ ok: false, error: "too_long" });
+    }
+    if (norm.city_code) {
+      return res.json({ ok: true, resolved: norm.city_code, pending: false });
+    }
+    const pendingRaw = norm.pending_city_raw;
+    if (!pendingRaw) {
+      return res.status(400).json({ ok: false, error: "invalid" });
+    }
+    const { data: ins, error: insErr } = await supabase
+      .from("city_suggestions")
+      .insert({
+        raw_input: pendingRaw,
+        patient_id: req.patientId || null,
+        status: "pending",
+      })
+      .select("id")
+      .maybeSingle();
+    if (insErr) {
+      console.warn("[POST /api/patient/city-onboarding-input]", insErr.message);
+      return res.status(500).json({ ok: false, error: "suggestion_save_failed" });
+    }
+    return res.json({
+      ok: true,
+      pending: true,
+      raw_saved: pendingRaw,
+      suggestion_id: ins?.id || null,
+    });
+  } catch (e) {
+    console.error("[POST /api/patient/city-onboarding-input]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+app.get("/api/super-admin/cities/pending", superAdminGuard, async (_req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, clinics: [], suggestions: [] });
+    }
+    const [clinicsR, suggR] = await Promise.all([
+      supabase
+        .from("clinics")
+        .select("id, name, clinic_code, city, city_code, pending_city_raw, country, created_at")
+        .not("pending_city_raw", "is", null)
+        .is("city_code", null)
+        .order("created_at", { ascending: false })
+        .limit(200),
+      supabase
+        .from("city_suggestions")
+        .select("id, raw_input, patient_id, status, mapped_to_code, created_at")
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(200),
+    ]);
+    return res.json({
+      ok: true,
+      clinics_with_pending: clinicsR.error ? [] : clinicsR.data || [],
+      suggestions: suggR.error ? [] : suggR.data || [],
+    });
+  } catch (e) {
+    console.error("[GET /api/super-admin/cities/pending]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+app.post("/api/super-admin/cities/catalog", superAdminGuard, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const code = slugifyCatalogCode((req.body || {}).code);
+    if (!code) {
+      return res.status(400).json({ ok: false, error: "invalid_code" });
+    }
+    const { error } = await supabase.from("city_catalog").insert({ code }).select("code").maybeSingle();
+    if (error && !/duplicate|unique/i.test(String(error.message || ""))) {
+      console.error("[POST /api/super-admin/cities/catalog]", error);
+      return res.status(500).json({ ok: false, error: error.message || "insert_failed" });
+    }
+    invalidateCityCatalogCache();
+    return res.json({ ok: true, code });
+  } catch (e) {
+    console.error("[POST /api/super-admin/cities/catalog]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+app.patch("/api/super-admin/clinics/:clinicId/city-resolve", superAdminGuard, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const { clinicId } = req.params;
+    const catalog = await getMergedCityCatalogSet(supabase);
+    const raw = (req.body || {}).city_code ?? (req.body || {}).mapToCode;
+    const norm = normalizeManualCityInput(raw, catalog);
+    if (!norm.city_code) {
+      return res.status(400).json({ ok: false, error: "unknown_or_invalid_city_code" });
+    }
+    const { data, error } = await supabase
+      .from("clinics")
+      .update({
+        city_code: norm.city_code,
+        city: norm.city_code,
+        pending_city_raw: null,
+      })
+      .eq("id", clinicId)
+      .select("id, city_code, pending_city_raw")
+      .maybeSingle();
+    if (error) {
+      console.error("[PATCH clinic city-resolve]", error);
+      return res.status(500).json({ ok: false, error: error.message || "update_failed" });
+    }
+    invalidateCityCatalogCache();
+    return res.json({ ok: true, clinic: data });
+  } catch (e) {
+    console.error("[PATCH clinic city-resolve]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+app.patch("/api/super-admin/cities/suggestions/:suggestionId", superAdminGuard, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const { suggestionId } = req.params;
+    const body = req.body || {};
+    let mapTo =
+      slugifyCatalogCode(body.map_to ?? body.city_code ?? "") ||
+      slugifyCatalogCode(body.new_city_code ?? "");
+    if (!mapTo && body.dismiss) {
+      const { error } = await supabase
+        .from("city_suggestions")
+        .update({ status: "dismissed" })
+        .eq("id", suggestionId);
+      if (error) return res.status(500).json({ ok: false, error: error.message });
+      return res.json({ ok: true, dismissed: true });
+    }
+    if (!mapTo) {
+      return res.status(400).json({ ok: false, error: "map_to_required" });
+    }
+    await supabase.from("city_catalog").insert({ code: mapTo }).select("code");
+    invalidateCityCatalogCache();
+    const { error: upErr } = await supabase
+      .from("city_suggestions")
+      .update({ status: "mapped", mapped_to_code: mapTo })
+      .eq("id", suggestionId);
+    if (upErr) {
+      return res.status(500).json({ ok: false, error: upErr.message });
+    }
+    return res.json({ ok: true, mapped_to: mapTo });
+  } catch (e) {
+    console.error("[PATCH city suggestion]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+/** Promise.race wrapper for bounded Supabase / async work on public routes */
+async function withTimeout(promise, ms, label) {
+  const m = Math.max(1, Number(ms) || 25000);
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => {
+        const err = new Error(label || "timeout");
+        err.code = "TIMEOUT";
+        reject(err);
+      }, m),
+    ),
+  ]);
+}
+
+// GET /api/clinics/nearby — Haversine distance filter (no auth; optional Bearer for future use)
+// Query: lat, lng OR lon (required), radius (km, default 50, max 200), optional country|userCountry (prioritize same country, then distance).
+app.get("/api/clinics/nearby", async (req, res) => {
+  const t0 = Date.now();
+  const reqId = Math.random().toString(36).slice(2, 8);
+  try {
+    console.log("QUERY DEBUG:", req.query);
+
+    function parseGeoQueryNumber(v) {
+      const s = String(v ?? "").trim();
+      if (!s) return NaN;
+      return Number(String(s).replace(",", "."));
+    }
+
+    const lat = parseGeoQueryNumber(req.query.lat);
+    const lng = parseGeoQueryNumber(req.query.lng ?? req.query.lon);
+
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      console.error("INVALID LAT/LNG:", req.query);
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid lat/lng",
+        query: req.query,
+      });
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      console.error("INVALID LAT/LNG (range):", req.query);
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid lat/lng",
+        query: req.query,
+      });
+    }
+
+    const center = { lat, lng };
+
+    console.log("🔥 nearby HIT", { reqId, lat, lng, center });
+
+    const radiusRaw = parseGeoQueryNumber(req.query.radius);
     const radiusKm =
-      Number.isFinite(radiusRaw) && radiusRaw > 0 ? Math.min(Math.max(radiusRaw, 0.5), 200) : 10;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return res.status(400).json({ ok: false, error: "lat_lng_required" });
+      Number.isFinite(radiusRaw) && radiusRaw > 0
+        ? Math.min(Math.max(radiusRaw, 0.5), 200)
+        : 50;
+
+    const MAX = 50;
+    const limParsed = parseInt(String(req.query.limit ?? MAX), 10);
+    const maxResults = Number.isFinite(limParsed) && limParsed > 0 ? Math.min(MAX, limParsed) : MAX;
+
+    if (!isSupabaseEnabled()) {
+      console.warn("NO CLINICS FOUND NEAR:", center);
+      const payload = {
+        ok: true,
+        clinics: [],
+        radius_km: radiusKm,
+        center,
+        max_results: maxResults,
+        timeout: false,
+        ratings_timeout: false,
+        req_id: reqId,
+      };
+      console.log("📍 nearby result", {
+        reqId,
+        returned: 0,
+        radius_km: radiusKm,
+        center,
+        timeout: false,
+      });
+      return res.json(payload);
     }
 
     const selects = [
+      "id, name, city, city_code, pending_city_raw, country, clinic_code, latitude, longitude, lat, lng, status",
+      "id, name, city, city_code, pending_city_raw, country, clinic_code, latitude, longitude, status",
       "id, name, city, country, clinic_code, latitude, longitude, lat, lng, status",
       "id, name, city, country, clinic_code, latitude, longitude, status",
     ];
 
-    /** Load candidate rows: same source order as patient browse — RPC first, then geo bbox (not a random .limit). */
+    /** Load candidate rows: prefer DB-side RPC when available, then legacy nearby_clinics / bbox / capped scan. */
     async function loadNearbyCandidateRows() {
+      try {
+        const { data: geoData, error: geoErr } = await supabase.rpc("clinics_nearby", {
+          lat,
+          lng,
+          radius_km: radiusKm,
+          limit: maxResults,
+        });
+        if (!geoErr && Array.isArray(geoData) && geoData.length) {
+          return { raw: geoData, source: "rpc_clinics_nearby" };
+        }
+        if (
+          geoErr &&
+          !/does not exist|could not find|undefined function/i.test(String(geoErr.message || ""))
+        ) {
+          console.warn("[GET /api/clinics/nearby] clinics_nearby RPC:", geoErr.message);
+        }
+      } catch (re) {
+        // Function may not exist until migration; fall through.
+      }
+
       try {
         const { data: rpcData, error: rpcErr } = await supabase.rpc("nearby_clinics", {
           user_lat: lat,
@@ -8055,50 +8564,169 @@ app.get("/api/clinics/nearby", async (req, res) => {
       return { raw, source: "scan_fallback" };
     }
 
-    const { raw } = await loadNearbyCandidateRows();
+    const NEARBY_CANDIDATE_MS = Math.min(
+      Math.max(parseInt(String(process.env.CLINICS_NEARBY_TIMEOUT_MS || "25000"), 10) || 25000, 3000),
+      60000,
+    );
+    let slowWarn = null;
+    let raw = [];
+    let loadSource = "none";
+    try {
+      slowWarn = setTimeout(() => {
+        console.warn("⚠️ /api/clinics/nearby candidates still loading (>" + 5000 + "ms)", { reqId });
+      }, 5000);
+      const result = await withTimeout(
+        loadNearbyCandidateRows(),
+        NEARBY_CANDIDATE_MS,
+        "nearby_candidates_timeout",
+      );
+      if (!Array.isArray(result?.raw)) {
+        console.warn("⚠️ invalid clinics payload");
+        raw = [];
+        loadSource = result?.source || "unknown";
+      } else {
+        raw = result.raw;
+        loadSource = result?.source || "unknown";
+      }
+    } catch (raceErr) {
+      if (raceErr && raceErr.code === "TIMEOUT") {
+        console.warn("⏱️ nearby timeout", { reqId });
+        const timeoutPayload = {
+          ok: true,
+          clinics: [],
+          radius_km: radiusKm,
+          center,
+          max_results: maxResults,
+          timeout: true,
+          ratings_timeout: false,
+          req_id: reqId,
+        };
+        console.log("📍 nearby result", {
+          reqId,
+          returned: 0,
+          radius_km: radiusKm,
+          center,
+          timeout: true,
+        });
+        return res.json(timeoutPayload);
+      } else {
+        throw raceErr;
+      }
+    } finally {
+      if (slowWarn) clearTimeout(slowWarn);
+    }
 
-    let matched = filterClinicsWithinRadiusKm(raw, lat, lng, radiusKm);
+    let candidatesForHaversine = raw;
+    if (loadSource === "scan_fallback" && Array.isArray(raw) && raw.length > Math.max(maxResults * 10, 200)) {
+      const box = nearbyBoundingBoxDeg(lat, lng, radiusKm);
+      const rough = [];
+      for (const row of raw) {
+        const c = clinicLatLng(row);
+        if (
+          c &&
+          c.lat >= box.latMin &&
+          c.lat <= box.latMax &&
+          c.lng >= box.lngMin &&
+          c.lng <= box.lngMax
+        ) {
+          rough.push(row);
+        }
+      }
+      if (rough.length) {
+        candidatesForHaversine = rough;
+      }
+    }
+
+    let matched = filterClinicsWithinRadiusKm(candidatesForHaversine, lat, lng, radiusKm);
     const userCountryNearby = req.query.country || req.query.userCountry;
     if (userCountryNearby) {
       matched = sortNearbyMatchesByUserCountry(matched, String(userCountryNearby));
     }
-    const ids = matched.map((m) => m.row.id).filter(Boolean);
+
+    const matchedForResponse = matched.slice(0, maxResults);
+
+    const ids = matchedForResponse.map((m) => m.row.id).filter(Boolean);
     let ratingMap = {};
+    let ratingsTimedOut = false;
     if (ids.length) {
       try {
-        const { data: ratingRows, error: ratingErr } = await supabase
-          .from("ratings")
-          .select("clinic_id, overall, type")
-          .in("clinic_id", ids);
-        if (!ratingErr && ratingRows?.length) {
-          ratingMap = buildClinicRatingMapWeighted(ratingRows);
-        }
+        await withTimeout(
+          (async () => {
+            const { data: ratingRows, error: ratingErr } = await supabase
+              .from("ratings")
+              .select("clinic_id, overall, type")
+              .in("clinic_id", ids);
+            if (!ratingErr && ratingRows?.length) {
+              ratingMap = buildClinicRatingMapWeighted(ratingRows);
+            }
+          })(),
+          12000,
+          "ratings_timeout",
+        );
       } catch (re) {
-        console.warn("[GET /api/clinics/nearby] ratings:", re?.message);
+        if (re && re.code === "TIMEOUT") {
+          ratingsTimedOut = true;
+          console.warn("[GET /api/clinics/nearby] ratings timeout — skipped", { reqId });
+        } else {
+          console.warn("[GET /api/clinics/nearby] ratings:", re?.message || re);
+        }
       }
     }
 
-    const clinics = matched.map(({ row, distance_km }) => ({
-      id: row.id,
-      name: row.name || "Klinik",
-      city: row.city || null,
-      country: row.country || null,
-      clinicCode: row.clinic_code || null,
-      rating: ratingMap[row.id] ?? null,
-      latitude: row.latitude ?? row.lat ?? null,
-      longitude: row.longitude ?? row.lng ?? null,
-      distance_km: Math.round(distance_km * 10) / 10,
-    }));
+    const clinics = matchedForResponse.map(({ row, distance_km }) => {
+      const cc = clinicLatLng(row);
+      const dkm =
+        cc != null
+          ? Number(haversineDistanceKm(lat, lng, cc.lat, cc.lng).toFixed(1))
+          : Number(Number(distance_km).toFixed(1));
+      const cityPayload = clinicCityPayloadFromRow(row);
+      return {
+        id: row.id,
+        name: row.name || "Klinik",
+        city: cityPayload.city,
+        city_code: cityPayload.city_code,
+        pending_city_raw: cityPayload.pending_city_raw,
+        country: row.country || null,
+        clinicCode: row.clinic_code || null,
+        rating: ratingMap[row.id] ?? null,
+        latitude: row.latitude ?? row.lat ?? null,
+        longitude: row.longitude ?? row.lng ?? null,
+        distance_km: dkm,
+      };
+    });
+
+    if (!clinics.length) {
+      console.warn("NO CLINICS FOUND NEAR:", center);
+    }
+
+    console.log("📍 nearby result", {
+      reqId,
+      returned: clinics.length,
+      radius_km: radiusKm,
+      center,
+      timeout: false,
+      ratings_timeout: ratingsTimedOut,
+      ms: Date.now() - t0,
+      source: loadSource,
+      candidates: raw.length,
+      matched_in_radius: matched.length,
+    });
 
     return res.json({
       ok: true,
       clinics,
       radius_km: radiusKm,
-      center: { lat, lng },
+      center,
+      max_results: maxResults,
+      timeout: false,
+      ratings_timeout: !!ratingsTimedOut,
+      req_id: reqId,
     });
   } catch (e) {
-    console.error("[GET /api/clinics/nearby]", e?.message || e);
-    return res.status(500).json({ ok: false, error: "internal_error" });
+    console.error("[GET /api/clinics/nearby]", { reqId, err: e?.message || e });
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, error: "server_error", message: String(e?.message || e || "error").slice(0, 400) });
+    }
   }
 });
 
@@ -8322,6 +8950,73 @@ app.delete("/api/patient/clinic", requireToken, async (req, res) => {
     });
   } catch (e) {
     console.error("[DELETE /api/patient/clinic]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// PATCH /api/patient/language — persist app language (en | tr | ru | ka) for AI + profile
+// After canonicalPatientUuid: body + DB use only req.patientUuid (patients.id)
+app.patch("/api/patient/language", requireToken, canonicalPatientUuid, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+
+    const { patientId: bodyPatientId, language } = req.body || {};
+    if (language == null || String(language).trim() === "") {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+    if (bodyPatientId != null && String(bodyPatientId).trim() !== "") {
+      const b = String(bodyPatientId).trim();
+      if (b !== String(req.patientUuid)) {
+        const bResolved = await resolveMessagesPatientDbId(b);
+        if (String(bResolved) !== String(req.patientUuid)) {
+          return res.status(403).json({ ok: false, error: "unauthorized" });
+        }
+      }
+    }
+
+    const key = String(language).trim().toLowerCase().slice(0, 2);
+    if (!ALLOWED_PATIENT_LANGUAGES.has(key)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_language",
+        allowed: Array.from(ALLOWED_PATIENT_LANGUAGES),
+      });
+    }
+
+    const up = await updatePatientRowWithColumnPruning(String(req.patientUuid), {
+      language: key,
+      updated_at: new Date().toISOString(),
+    });
+
+    if (!up.ok) {
+      console.error("❌ LANGUAGE UPDATE FAILED:", up.error?.message || up.error);
+      return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    console.log("🌍 PATIENT LANGUAGE UPDATED:", key, "for patient:", req.patientUuid);
+
+    const { data: verifyRow, error: verifyErr } = await supabase
+      .from("patients")
+      .select("id, language")
+      .eq("id", String(req.patientUuid))
+      .maybeSingle();
+    if (verifyErr) {
+      console.warn("🔎 DB VERIFY (patients.id=patientUuid):", verifyErr?.message || verifyErr);
+    } else {
+      console.log("🔎 DB VERIFY:", verifyRow);
+      if (verifyRow && String(verifyRow.id) !== String(req.patientUuid)) {
+        console.warn("⚠️ DB VERIFY id does not match req.patientUuid");
+      }
+      if (verifyRow && String(verifyRow.language || "").toLowerCase().slice(0, 2) !== key) {
+        console.warn("🔎 DB VERIFY mismatch: expected language", key, "got", verifyRow.language);
+      }
+    }
+
+    return res.json({ ok: true, language: key });
+  } catch (err) {
+    console.error("🔥 LANGUAGE ENDPOINT ERROR:", err?.message || err);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
@@ -13619,32 +14314,304 @@ function ensureHealthDir() {
   return HEALTH_DIR;
 }
 
+/**
+ * DB inspection (Supabase SQL): `select patient_id, form_data from patient_medical_forms;`
+ * Rows may contain legacy/snake_case/nested `{ formData: {...} }` blobs — normalize → RN `medical-form.tsx` keys.
+ */
+
+function unwrapMedicalRawObject(raw) {
+  if (raw == null || raw === "") return {};
+  if (typeof raw === "string") {
+    try {
+      const p = JSON.parse(raw);
+      return typeof p === "object" && p && !Array.isArray(p) ? { ...p } : {};
+    } catch (_e) {
+      return {};
+    }
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) return {};
+  const o = { ...raw };
+  const inner =
+    o.formData && typeof o.formData === "object" && !Array.isArray(o.formData)
+      ? o.formData
+      : null;
+  if (inner) {
+    Object.assign(o, inner);
+  }
+  delete o.formData;
+  return o;
+}
+
+function coerceYesNoMedicalField(val) {
+  if (val == null || val === "") return { value: null, detail: "" };
+  if (typeof val === "object" && (Object.prototype.hasOwnProperty.call(val, "value") || Object.prototype.hasOwnProperty.call(val, "detail"))) {
+    let value = val.value;
+    if (typeof value !== "boolean" && value !== null) {
+      const s = String(value).trim().toLowerCase();
+      if (s === "yes" || s === "true" || s === "1") value = true;
+      else if (s === "no" || s === "false" || s === "0") value = false;
+      else value = null;
+    }
+    return {
+      value: value === undefined ? null : value,
+      detail: String(val.detail != null ? val.detail : val.text != null ? val.text : "").trim(),
+    };
+  }
+  if (typeof val === "boolean") return { value: val, detail: "" };
+  if (typeof val === "number") return { value: val !== 0, detail: "" };
+  if (typeof val === "string") {
+    const t = val.trim();
+    if (!t) return { value: null, detail: "" };
+    return { value: true, detail: t };
+  }
+  return { value: null, detail: "" };
+}
+
+function coerceMedicalConditionsArray(primary, legacyFlat) {
+  const out = [];
+  const add = (x) => {
+    let k = String(x || "").trim();
+    if (!k || k === "__proto__" || k === "constructor") return;
+    if (k === "bleeding_disorder") k = "bleeding_disorders";
+    out.push(k);
+  };
+
+  let v = primary;
+  if (Array.isArray(v)) v.forEach(add);
+  else if (v && typeof v === "object") {
+    Object.entries(v).forEach(([k, val]) => {
+      if (val === true) add(k);
+    });
+  }
+
+  const u =
+    legacyFlat && typeof legacyFlat === "object" && !Array.isArray(legacyFlat) ? legacyFlat : {};
+  if (u.diabetes === true) add("diabetes");
+  if (u.hasDiabetes === true) add("diabetes");
+  if (u.heart_disease === true) add("heart_disease");
+  if (u.hasHeartDisease === true) add("heart_disease");
+  if (u.high_blood_pressure === true) add("high_blood_pressure");
+  if (u.asthma === true) add("asthma");
+  if (u.bleeding_disorders === true || u.bleeding_disorder === true) add("bleeding_disorders");
+
+  return [...new Set(out)];
+}
+
+/**
+ * Canonical medical questionnaire blob (RN `medical-form.tsx`): allergies/medications/chronicDiseases ({ value, detail }),
+ * conditions[], medicationsList string, notes, optional submittedAt.
+ */
+function canonicalMedicalFormData(raw) {
+  const u = unwrapMedicalRawObject(raw);
+
+  let allergies = u.allergies;
+  if (allergies == null && u.allergy !== undefined) allergies = u.allergy;
+  if (
+    allergies == null &&
+    (u.hasAllergy === true || u.has_allergy === true) &&
+    (u.allergyDetail || u.allergy_detail)
+  ) {
+    allergies = { value: true, detail: String(u.allergyDetail || u.allergy_detail || "").trim() };
+  } else if (allergies == null && u.hasAllergy === true) {
+    allergies = { value: true, detail: "" };
+  }
+
+  let medications = u.medications !== undefined ? u.medications : u.medication;
+  let chronicDiseases = u.chronicDiseases !== undefined ? u.chronicDiseases : u.chronic_diseases;
+  if (chronicDiseases == null && u.chronicDisease !== undefined) chronicDiseases = u.chronicDisease;
+
+  const medsListRaw =
+    u.medicationsList ??
+    u.medications_list ??
+    u.medicationList ??
+    u.medication_list ??
+    "";
+
+  const notesRaw = u.notes ?? u.note ?? u.additional_notes ?? "";
+
+  const conditions = coerceMedicalConditionsArray(u.conditions, u);
+
+  const submitted =
+    u.submittedAt ??
+    u.submitted_at ??
+    u.completed_at ??
+    "";
+
+  /** @type {Record<string, unknown>} */
+  const out = {
+    allergies: coerceYesNoMedicalField(allergies),
+    medications: coerceYesNoMedicalField(medications),
+    chronicDiseases: coerceYesNoMedicalField(chronicDiseases),
+    conditions,
+    medicationsList: String(medsListRaw).trim(),
+    notes: String(notesRaw).trim(),
+  };
+  if (submitted) {
+    out.submittedAt = String(submitted).trim();
+  }
+  return out;
+}
+
+/**
+ * Health routes — token ↔ URL `:patientId` when same canonical patient (UUID or legacy p_/patient_id).
+ *
+ * @returns {{
+ *   ok: true;
+ *   tokenPatientId: string;
+ *   bodyPatientId: string;
+ * } | {
+ *   ok: false;
+ *   status: number;
+ *   body: { ok: false; error: string };
+ * }}
+ * After `gate.ok`, use **`gate.tokenPatientId`** (canonical `patients.id` UUID under Supabase) for all DB / file access.
+ * `bodyPatientId` exists only for validation inside this helper; do not use it for queries.
+ */
+async function assertAuthorizedPatientHealthRoute(req) {
+  const rawParam = String(req.params.patientId || req.params.id || "").trim();
+  const tokenRaw = String(req.patientId || "").trim();
+
+  /** Both resolve to patients.id (FK) whether JWT/URL carries UUID, patients.patient_id, or legacy p_/p_<uuid>. */
+  let resolvedFromParam = "";
+  let resolvedFromToken = "";
+  if (isSupabaseEnabled()) {
+    resolvedFromParam = (await resolveMessagesPatientDbId(rawParam)) || "";
+    resolvedFromToken = (await resolveMessagesPatientDbId(tokenRaw)) || "";
+  } else {
+    resolvedFromParam = rawParam;
+    resolvedFromToken = tokenRaw;
+  }
+
+  let tokenPatientId = String(req.patientUuid || "").trim();
+  if (!tokenPatientId && tokenRaw) {
+    if (UUID_RE.test(tokenRaw)) tokenPatientId = tokenRaw;
+    else if (isSupabaseEnabled()) tokenPatientId = resolvedFromToken || "";
+    else tokenPatientId = tokenRaw;
+  }
+
+  let bodyPatientId = "";
+  if (rawParam) {
+    if (UUID_RE.test(rawParam)) bodyPatientId = rawParam;
+    else if (isSupabaseEnabled()) bodyPatientId = resolvedFromParam || "";
+    else bodyPatientId = rawParam;
+  }
+
+  const patient = {
+    urlParam: rawParam,
+    tokenRaw,
+    resolvedFromParam,
+    resolvedFromToken,
+    tokenPatientId,
+    bodyPatientId,
+  };
+
+  if (!tokenRaw || !rawParam) {
+    console.warn("AUTH FAIL REASON:", "missing_token_patient_or_url_param", {
+      ...patient,
+      tokenRawEmpty: !tokenRaw,
+      urlParamEmpty: !rawParam,
+    });
+    return { ok: false, status: 401, body: { ok: false, error: "invalid_patient" } };
+  }
+
+  if (!tokenPatientId) {
+    console.warn("AUTH FAIL REASON:", "missing_canonical_token_patient", patient);
+    return { ok: false, status: 401, body: { ok: false, error: "invalid_patient" } };
+  }
+
+  const matchStrict = Boolean(
+    isSupabaseEnabled() &&
+      resolvedFromParam &&
+      resolvedFromToken &&
+      resolvedFromParam === resolvedFromToken,
+  );
+  /** Same DB row despite legacy id / casing / JWT claim shape (see resolveMessagesPatientDbId). */
+  let matchFlex = false;
+  if (isSupabaseEnabled() && !matchStrict) {
+    matchFlex = await patientIdsMatchForToken(tokenRaw, rawParam);
+  }
+
+  let match = false;
+  if (isSupabaseEnabled()) {
+    match = matchStrict || matchFlex;
+  } else {
+    match = tokenRaw === rawParam;
+  }
+
+  console.log("[HEALTH GATE]", {
+    urlParam: rawParam,
+    tokenPatient: tokenRaw,
+    resolvedFromParam,
+    resolvedFromToken,
+    matchStrict,
+    matchFlex,
+    matched: match,
+  });
+
+  if (!match) {
+    console.warn("AUTH FAIL REASON:", "patient_id_mismatch", {
+      ...patient,
+      supabase: isSupabaseEnabled(),
+      matchStrict,
+      matchFlex,
+      note:
+        "Resolved URL :patientId and token patientId must denote the same patients.id (canonical UUID).",
+    });
+    return { ok: false, status: 403, body: { ok: false, error: "patient_mismatch" } };
+  }
+
+  /** Canonical DB UUID for reads/writes: URL param resolves to FK patients.id used by patient_medical_forms etc. */
+  const canonicalPatientId = isSupabaseEnabled()
+    ? (resolvedFromParam || resolvedFromToken || "").trim()
+    : String(req.patientUuid || "").trim() || rawParam || tokenRaw;
+
+  if (isSupabaseEnabled() && !canonicalPatientId) {
+    console.warn("AUTH FAIL REASON:", "empty_canonical_after_match", patient);
+    return { ok: false, status: 500, body: { ok: false, error: "internal_error" } };
+  }
+
+  return {
+    ok: true,
+    tokenPatientId: canonicalPatientId,
+    bodyPatientId: bodyPatientId || canonicalPatientId,
+  };
+}
+
 async function patientHealthGetHandler(req, res) {
   try {
-    const patientId = String(req.params.patientId || "").trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: "patient_id_required" });
-    if (req.patientId !== patientId) {
-      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
+    const gate = await assertAuthorizedPatientHealthRoute(req);
+
+    if (!gate.ok) {
+      return res.status(gate.status).json(gate.body);
     }
+
+    const patientId = gate.tokenPatientId;
+
+    let resolvedFromParamG = "";
+    let resolvedFromTokenG = "";
+    if (isSupabaseEnabled()) {
+      resolvedFromParamG = (await resolveMessagesPatientDbId(String(req.params.patientId || "").trim())) || "";
+      resolvedFromTokenG = (await resolveMessagesPatientDbId(String(req.patientId || "").trim())) || "";
+    }
+
+    console.log("[HEALTH GET] IDS:", {
+      urlParamPatientId: req.params.patientId,
+      resolvedDbId: patientId,
+      resolvedFromParam: resolvedFromParamG || undefined,
+      resolvedFromToken: resolvedFromTokenG || undefined,
+      fkReadsUseResolvedDbId: patientId,
+      matchParamAndTokenResolved:
+        !(isSupabaseEnabled() && resolvedFromParamG && resolvedFromTokenG) ||
+        resolvedFromParamG === resolvedFromTokenG,
+      matchResolvedDbVsParamFk: !resolvedFromParamG || String(patientId) === String(resolvedFromParamG),
+    });
 
     // patient_medical_forms is single source of truth
     if (isSupabaseEnabled()) {
-      // Resolve canonical UUID
-      const { data: patRowG } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("patient_id", patientId)
-        .maybeSingle();
-      const patientUuidG = patRowG?.id || (UUID_RE.test(patientId) ? patientId : null);
-
-      if (!patientUuidG) {
-        return res.json({ ok: true, form: {}, formData: {}, isComplete: false, completedAt: null, updatedAt: null });
-      }
-
       const { data: hfRecord } = await supabase
         .from("patient_medical_forms")
         .select("patient_id, form_data, is_complete, submitted_at, created_at, updated_at")
-        .eq("patient_id", patientUuidG)
+        .eq("patient_id", patientId)
         .maybeSingle();
 
       if (!hfRecord) {
@@ -13655,10 +14622,12 @@ async function patientHealthGetHandler(req, res) {
         ? (() => { try { return JSON.parse(hfRecord.form_data); } catch { return {}; } })()
         : (hfRecord.form_data || {});
 
+      const canon = canonicalMedicalFormData(fd);
+
       return res.json({
         ok: true,
-        form: fd,
-        formData: fd,
+        form: canon,
+        formData: canon,
         isComplete: hfRecord.is_complete || false,
         completedAt: hfRecord.submitted_at || null,
         updatedAt: hfRecord.updated_at || null,
@@ -13678,9 +14647,11 @@ async function patientHealthGetHandler(req, res) {
       return res.json({ ok: true, formData: null, isComplete: false });
     }
     const data = readJson(filePath, {});
+    const canonFile = canonicalMedicalFormData(data.formData || {});
     return res.json({
       ok: true,
-      formData: data.formData || {},
+      form: canonFile,
+      formData: canonFile,
       isComplete: data.isComplete || false,
       completedAt: data.completedAt || null,
       updatedAt: data.updatedAt || null,
@@ -13693,24 +14664,32 @@ async function patientHealthGetHandler(req, res) {
 }
 
 async function patientHealthPostHandler(req, res) {
-  // Health form is patient-only. Admin can view but not submit.
-  return res.status(403).json({ ok: false, error: "form_patient_only", message: "Health form can only be submitted by the patient." });
   try {
+    console.log("POST AUTH HEADER:", req.headers.authorization);
 
+    const gate = await assertAuthorizedPatientHealthRoute(req);
 
-
-
-    const patientId = String(req.params.patientId || "").trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: "patient_id_required" });
-    if (req.patientId !== patientId) {
-      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
+    if (!gate.ok) {
+      return res.status(gate.status).json(gate.body);
     }
+
+    const patientId = gate.tokenPatientId;
+
+    console.log("[HEALTH POST] IDS:", {
+      urlParamPatientId: req.params.patientId,
+      tokenPatientReq: req.patientId,
+      resolvedDbId: patientId,
+      gateTokenPatientId: gate.tokenPatientId,
+      fkUpsertPatientMedicalForms: patientId,
+    });
+
+    console.log("FORM BODY:", req.body);
 
     // Accept both formats:
     // 1. Legacy: { formData: {...}, isComplete: true }
     // 2. Mobile app: raw fields { allergies, medications, conditions, ... }
     const rawBody = req.body || {};
-    const formData = rawBody.formData
+    const formDataRaw = rawBody.formData
       ? rawBody.formData
       : {
           allergies:       rawBody.allergies,
@@ -13721,6 +14700,7 @@ async function patientHealthPostHandler(req, res) {
           notes:           rawBody.notes,
           submittedAt:     rawBody.submittedAt,
         };
+    const formData = canonicalMedicalFormData(formDataRaw);
 
     // Default isComplete to true when submitting (mobile app doesn't send this field)
     const isComplete = rawBody.isComplete !== undefined
@@ -13739,48 +14719,59 @@ async function patientHealthPostHandler(req, res) {
     };
 
     if (isSupabaseEnabled()) {
-      // Resolve patientUuid — single source of truth is patient_medical_forms with UUID patient_id
-      const { data: patRow } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("patient_id", patientId)
-        .maybeSingle();
-      const patientUuid = patRow?.id || (UUID_RE.test(patientId) ? patientId : null);
-      if (!patientUuid) {
-        return res.status(404).json({ ok: false, error: "patient_not_found" });
-      }
-
       // Upsert into patient_medical_forms (patient_id is PRIMARY KEY)
       const nowIso = new Date().toISOString();
       const { data: existing } = await supabase
         .from("patient_medical_forms")
         .select("patient_id, submitted_at")
-        .eq("patient_id", patientUuid)
+        .eq("patient_id", patientId)
         .maybeSingle();
 
-      const { error: saveErr } = await supabase
+      const upsertPm = await supabase
         .from("patient_medical_forms")
         .upsert({
-          patient_id:  patientUuid,
+          patient_id:  patientId,
           form_data:   formData,
           is_complete: isComplete,
           updated_at:  nowIso,
           created_at:  existing ? undefined : nowIso,
           ...(isComplete && !existing?.submitted_at ? { submitted_at: nowIso } : {}),
         }, { onConflict: "patient_id" });
+      const { data, error } = upsertPm;
+      console.log("UPSERT RESULT:", { data, error });
+      // If RLS blocks service role wrongly, error often mentions policy / permission — test with:
+      // ALTER TABLE patient_medical_forms DISABLE ROW LEVEL SECURITY;
 
+      const saveErr = error;
       if (saveErr) {
         console.error("[HEALTH] patient_medical_forms save failed:", saveErr.message);
         return res.status(500).json({ ok: false, error: "health_save_failed", details: saveErr.message });
       }
 
-      return res.json({
-        ok: true,
-        formData,
-        isComplete,
-        completedAt: isComplete ? nowIso : null,
-        updatedAt: nowIso,
-      });
+      let healthCol = rawBody.health || {};
+      if (
+        typeof healthCol === "object" &&
+        !Object.keys(healthCol).length &&
+        formData &&
+        typeof formData === "object" &&
+        Object.keys(formData).length
+      ) {
+        healthCol = { formData };
+      }
+
+      const { error: patHealthErr } = await supabase
+        .from("patients")
+        .update({
+          health: healthCol,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", patientId);
+
+      if (patHealthErr) {
+        console.warn("[HEALTH] patients.health update failed:", patHealthErr.message);
+      }
+
+      return res.json({ ok: true });
     }
 
     if (!canUseFileFallback()) {
@@ -13807,66 +14798,85 @@ async function patientHealthPostHandler(req, res) {
 }
 
 async function patientHealthPutHandler(req, res) {
-  // Health form is patient-only. Admin can view but not submit.
-  return res.status(403).json({ ok: false, error: "form_patient_only", message: "Health form can only be submitted by the patient." });
   try {
+    console.log("PUT AUTH HEADER:", req.headers.authorization);
 
+    const gate = await assertAuthorizedPatientHealthRoute(req);
 
-
-
-    const patientId = String(req.params.patientId || "").trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: "patient_id_required" });
-    if (req.patientId !== patientId) {
-      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
+    if (!gate.ok) {
+      return res.status(gate.status).json(gate.body);
     }
 
-    const formData = req.body?.formData || {};
+    const patientId = gate.tokenPatientId;
+
+    console.log("[HEALTH PUT] IDS:", {
+      urlParamPatientId: req.params.patientId,
+      tokenPatientReq: req.patientId,
+      resolvedDbId: patientId,
+      gateTokenPatientId: gate.tokenPatientId,
+      fkUpsertPatientMedicalForms: patientId,
+    });
+
+    console.log("FORM BODY:", req.body);
+
+    const formData = canonicalMedicalFormData(req.body?.formData || {});
     const isComplete = req.body?.isComplete === true;
     const nowTs = now();
 
     if (isSupabaseEnabled()) {
-      // Resolve patientUuid — single source of truth is patient_medical_forms with UUID patient_id
-      const { data: patRow2 } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("patient_id", patientId)
-        .maybeSingle();
-      const patientUuid2 = patRow2?.id || (UUID_RE.test(patientId) ? patientId : null);
-      if (!patientUuid2) {
-        return res.status(404).json({ ok: false, error: "patient_not_found" });
-      }
-
       // Upsert into patient_medical_forms (patient_id is PRIMARY KEY)
       const nowIso2 = new Date().toISOString();
       const { data: existing2 } = await supabase
         .from("patient_medical_forms")
         .select("patient_id, submitted_at")
-        .eq("patient_id", patientUuid2)
+        .eq("patient_id", patientId)
         .maybeSingle();
 
-      const { error: saveErr2 } = await supabase
+      const upsertPmPut = await supabase
         .from("patient_medical_forms")
         .upsert({
-          patient_id:  patientUuid2,
+          patient_id:  patientId,
           form_data:   formData,
           is_complete: isComplete,
           updated_at:  nowIso2,
           created_at:  existing2 ? undefined : nowIso2,
           ...(isComplete && !existing2?.submitted_at ? { submitted_at: nowIso2 } : {}),
         }, { onConflict: "patient_id" });
+      const { data, error } = upsertPmPut;
+      console.log("UPSERT RESULT:", { data, error });
+      // RLS smoke test (Supabase SQL): ALTER TABLE patient_medical_forms DISABLE ROW LEVEL SECURITY;
 
+      const saveErr2 = error;
       if (saveErr2) {
         console.error("[HEALTH PUT] patient_medical_forms save failed:", saveErr2.message);
         return res.status(500).json({ ok: false, error: "health_save_failed", details: saveErr2.message });
       }
 
-      return res.json({
-        ok: true,
-        formData,
-        isComplete,
-        completedAt: isComplete ? (existing2?.completed_at || nowIso2) : null,
-        updatedAt: nowIso2,
-      });
+      const rb = req.body || {};
+      let healthCol2 = rb.health || {};
+      if (
+        typeof healthCol2 === "object" &&
+        !Object.keys(healthCol2).length &&
+        formData &&
+        typeof formData === "object" &&
+        Object.keys(formData).length
+      ) {
+        healthCol2 = { formData };
+      }
+
+      const { error: patHealthErr2 } = await supabase
+        .from("patients")
+        .update({
+          health: healthCol2,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", patientId);
+
+      if (patHealthErr2) {
+        console.warn("[HEALTH PUT] patients.health update failed:", patHealthErr2.message);
+      }
+
+      return res.json({ ok: true });
     }
 
     if (!canUseFileFallback()) {
@@ -13955,11 +14965,12 @@ app.get("/api/admin/patients/:patientId/health", requireAdminAuth, async (req, r
       const fdA = typeof hfA.form_data === "string"
         ? (() => { try { return JSON.parse(hfA.form_data); } catch { return {}; } })()
         : (hfA.form_data || {});
+      const canonA = canonicalMedicalFormData(fdA);
 
       return res.json({
         ok: true,
-        form: fdA,
-        formData: fdA,
+        form: canonA,
+        formData: canonA,
         isComplete: hfA.is_complete || false,
         completedAt: hfA.submitted_at || null,
         updatedAt: hfA.updated_at || null,
@@ -13987,9 +14998,11 @@ app.get("/api/admin/patients/:patientId/health", requireAdminAuth, async (req, r
       return res.json({ ok: true, formData: null, isComplete: false });
     }
     const data = readJson(filePath, {});
+    const canonAdminFile = canonicalMedicalFormData(data.formData || {});
     return res.json({
       ok: true,
-      formData: data.formData || {},
+      form: canonAdminFile,
+      formData: canonAdminFile,
       isComplete: data.isComplete || false,
       completedAt: data.completedAt || null,
       updatedAt: data.updatedAt || null,
@@ -14306,14 +15319,23 @@ async function requirePatientTreatmentsAuth(req, res, next) {
     origin: headers.origin,
     "user-agent": headers["user-agent"]?.substring(0, 50),
   });
-  
-  // Optional auth: Try admin token first, then patient token
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.substring(7);
+
+  /** Same intent as patient requests elsewhere: Bearer (any case), or raw JWT in Authorization, plus x-patient-token. */
+  const authHeaderRaw = String(req.headers.authorization || "").trim();
+  const altHeader = String(req.headers["x-patient-token"] || "").trim();
+  let bearerOrRaw = "";
+  if (/^Bearer\s+/i.test(authHeaderRaw)) {
+    bearerOrRaw = authHeaderRaw.replace(/^Bearer\s+/i, "").trim();
+  } else if (authHeaderRaw.startsWith("eyJ")) {
+    bearerOrRaw = authHeaderRaw;
+  }
+  const primaryCandidate = bearerOrRaw || altHeader;
+
+  // Optional auth: Try admin token first, then patient token (JWT)
+  if (primaryCandidate && primaryCandidate.startsWith("eyJ")) {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      
+      const decoded = jwt.verify(primaryCandidate, JWT_SECRET);
+
       // Check if it's an admin token (has clinicCode)
       if (decoded.clinicCode) {
 
@@ -14363,12 +15385,12 @@ async function requirePatientTreatmentsAuth(req, res, next) {
         req.isAdmin = true;
         return next();
       }
-      
+
       // Check if it's a patient token (has patientId)
       if (decoded.patientId) {
 
-        // Verify patient can only access their own treatments
-        if (decoded.patientId !== patientId) {
+        const match = await patientIdsMatchForToken(decoded.patientId, patientId);
+        if (!match) {
           return res.status(403).json({ ok: false, error: "patient_id_mismatch", message: "Bu hasta bilgilerine erişim yetkiniz yok." });
         }
         req.patientId = decoded.patientId;
@@ -14377,22 +15399,18 @@ async function requirePatientTreatmentsAuth(req, res, next) {
         return next();
       }
     } catch (jwtError) {
-      // JWT verification failed, try patient token fallback
+      // JWT verification failed — try legacy token store below with same bearer string.
 
     }
   }
-  
-  // Try patient token (legacy tokens.json)
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const altToken = req.headers["x-patient-token"] || "";
-  const finalToken = token || altToken;
-  
-  if (finalToken) {
+
+  // Try legacy patients token (tokens.json)
+  if (primaryCandidate) {
     const tokens = readJson(TOK_FILE, {});
-    const t = tokens[finalToken];
+    const t = tokens[primaryCandidate];
     if (t?.patientId) {
-      if (t.patientId !== patientId) {
+      const matchLegacy = await patientIdsMatchForToken(t.patientId, patientId);
+      if (!matchLegacy) {
         return res.status(403).json({ ok: false, error: "patient_id_mismatch", message: "Bu hasta bilgilerine erişim yetkiniz yok." });
       }
       req.patientId = t.patientId;
@@ -14469,10 +15487,26 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
         if (!adm) {
           return res.status(404).json({ ok: false, error: "patient_not_found" });
         }
+        logPatientDebug("GET /api/patient/:patientId/treatments (admin)", adm);
+        if (adm.clinic_id == null || String(adm.clinic_id).trim() === "") {
+          warnInvalidPatientData(adm, "missing clinic_id on patient row (admin path)");
+        }
         clinicForTreatments = String(req.clinicId);
       } else {
         const prow = await getPatientById(patientId);
-        clinicForTreatments = prow && prow.clinic_id != null ? String(prow.clinic_id) : null;
+        logPatientDebug("GET /api/patient/:patientId/treatments (patient token)", prow);
+        if (!prow || !prow.id) {
+          warnInvalidPatientData(prow || {}, "getPatientById returned null or missing id");
+        } else if (prow.clinic_id == null || String(prow.clinic_id).trim() === "") {
+          warnInvalidPatientData(prow, "missing clinic_id — resolving via thread/fallback");
+        }
+        let clinicForThread = prow && prow.clinic_id != null ? String(prow.clinic_id) : null;
+        const internalPid = prow?.id ? String(prow.id).trim() : String(patientId).trim();
+        if (!clinicForThread && internalPid && UUID_RE.test(internalPid)) {
+          const thr = await resolveClinicFromPatientChatThread(internalPid);
+          if (thr?.clinicId) clinicForThread = String(thr.clinicId).trim();
+        }
+        clinicForTreatments = clinicForThread;
       }
       if (!clinicForTreatments) {
         return res.status(404).json({ ok: false, error: "patient_not_found", message: "clinic_id required" });
@@ -14536,10 +15570,21 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
             .maybeSingle();
 
           if (!legacyError && legacyRow?.treatments_data) {
-            const legacyPayload =
-              typeof legacyRow.treatments_data === "string"
-                ? JSON.parse(legacyRow.treatments_data)
-                : legacyRow.treatments_data;
+            let legacyPayload = null;
+            if (typeof legacyRow.treatments_data === "string") {
+              try {
+                legacyPayload = JSON.parse(legacyRow.treatments_data);
+              } catch (pe) {
+                console.error("PATIENT CRASH (legacy treatments_data JSON.parse):", patientUuidForLegacyTreatments, pe);
+                warnInvalidPatientData(
+                  { id: patientUuidForLegacyTreatments },
+                  "treatments_data string is not valid JSON: " + String(pe && pe.message ? pe.message : pe)
+                );
+                legacyPayload = {};
+              }
+            } else {
+              legacyPayload = legacyRow.treatments_data;
+            }
 
             const hasLegacyTeeth = Array.isArray(legacyPayload?.teeth) && legacyPayload.teeth.length > 0;
             if (hasLegacyTeeth) {
@@ -14587,7 +15632,7 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
         }
       }
     } catch (e) {
-
+      console.error("[TREATMENTS GET] supabase treatments block failed", e?.message || e, e?.stack);
       return res.status(500).json({ ok: false, error: "treatments_fetch_failed" });
     }
   } else if (canUseFileFallback()) {
@@ -14702,35 +15747,50 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
     data.teeth = [];
   }
   
-  // Ensure each tooth has correct structure
-  data.teeth = data.teeth.map(tooth => {
-    if (!tooth.procedures || !Array.isArray(tooth.procedures)) {
-      tooth.procedures = [];
-    }
-    // Ensure procedures have required fields
-    tooth.procedures = tooth.procedures.map(proc => {
-      const procId = proc.procedureId || proc.id || `${patientId}-${tooth.toothId}-${proc.createdAt || now()}`;
-      const type = procedures.normalizeType(proc.type || "");
-      const status = procedures.normalizeStatus(proc.status || "PLANNED");
-      const category = procedures.categoryForType(type);
-      return {
-        id: procId, // backward compatibility
-        procedureId: procId,
-        type,
-        category,
-        status,
-        scheduledAt: proc.scheduledAt ?? null,
-        date: proc.date ?? (proc.scheduledAt ?? null),
-        notes: proc.notes || "",
-        meta: proc.meta || {},
-        replacesProcedureId: proc.replacesProcedureId,
-        createdAt: proc.createdAt || now(),
-        ...proc // Keep any additional fields
-      };
+  // Ensure each tooth has correct structure (per-tooth try/catch — one bad proc must not 500 the whole patient)
+  try {
+    data.teeth = (Array.isArray(data.teeth) ? data.teeth : []).map((tooth, ti) => {
+      try {
+        if (!tooth.procedures || !Array.isArray(tooth.procedures)) {
+          tooth.procedures = [];
+        }
+        // Ensure procedures have required fields
+        tooth.procedures = tooth.procedures.map((proc) => {
+          const procId = proc.procedureId || proc.id || `${patientId}-${tooth.toothId}-${proc.createdAt || now()}`;
+          const type = procedures.normalizeType(proc.type || "");
+          const status = procedures.normalizeStatus(proc.status || "PLANNED");
+          const category = procedures.categoryForType(type);
+          return {
+            id: procId, // backward compatibility
+            procedureId: procId,
+            type,
+            category,
+            status,
+            scheduledAt: proc.scheduledAt ?? null,
+            date: proc.date ?? (proc.scheduledAt ?? null),
+            notes: proc.notes || "",
+            meta: proc.meta || {},
+            replacesProcedureId: proc.replacesProcedureId,
+            createdAt: proc.createdAt || now(),
+            ...proc // Keep any additional fields
+          };
+        });
+        tooth.locked = procedures.isToothLocked(tooth.procedures);
+        return tooth;
+      } catch (te) {
+        console.error("PATIENT CRASH (single tooth normalize):", patientId, "toothIndex=", ti, te);
+        return {
+          ...(tooth && typeof tooth === "object" ? tooth : {}),
+          toothId: String(tooth?.toothId ?? tooth?.id ?? "unknown"),
+          procedures: [],
+          _patientNormalizeError: true,
+        };
+      }
     });
-    tooth.locked = procedures.isToothLocked(tooth.procedures);
-    return tooth;
-  });
+  } catch (e) {
+    console.error("PATIENT CRASH (teeth array normalize):", patientId, e);
+    data.teeth = [];
+  }
   
   // Check if form is completed (backward compatibility)
   // Form is considered complete if at least one procedure exists
@@ -15544,7 +16604,19 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.end(safeStringify(data));
+  try {
+    res.end(safeStringify(data));
+  } catch (fatal) {
+    console.error("PATIENT CRASH (safeStringify / res.end):", patientId, fatal);
+    if (!res.headersSent) {
+      res.status(500).json({
+        ok: false,
+        error: "treatments_response_encoding_failed",
+        patientId: String(patientId || ""),
+        message: String(fatal && fatal.message ? fatal.message : fatal),
+      });
+    }
+  }
 });
 
 /** patients.treatments prosedür id: encounter-treatment-<uuid> veya düz encounter_treatments.id */
@@ -16725,6 +17797,45 @@ async function postPatientMeMessagesHandler(req, res) {
 app.post("/api/patient/me/messages", requireToken, postPatientMeMessagesHandler);
 // Alias: some apps use /api/patient/messages (must NOT use /api/register/patient for chat)
 app.post("/api/patient/messages", requireToken, postPatientMeMessagesHandler);
+
+// GET /api/patient/:patientId/messages/unread-count — patient app tab badge (polls with ?since= ms)
+app.get("/api/patient/:patientId/messages/unread-count", requireToken, async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    const rawPid = String(req.params.patientId || "").trim();
+    if (!rawPid || rawPid.toLowerCase() === "me") {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_patient_id",
+        message: "Provide patients.id (UUID) in the path.",
+      });
+    }
+    const tokenPid = String(req.patientId || "").trim();
+    if (!(await patientIdsMatchForToken(tokenPid, rawPid))) {
+      return res.status(403).json({ ok: false, error: "patient_id_mismatch" });
+    }
+    const resolved = await resolveMessagesPatientDbId(rawPid);
+    if (!resolved) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+    const sinceRaw = req.query?.since;
+    const sinceMs =
+      sinceRaw != null && String(sinceRaw).trim() !== "" ? Number(sinceRaw) : NaN;
+    const count = await countUnreadClinicMessagesForPatient(
+      resolved,
+      Number.isFinite(sinceMs) ? sinceMs : NaN
+    );
+    return res.json({
+      ok: true,
+      count,
+      unreadCount: count,
+      since: Number.isFinite(sinceMs) ? sinceMs : null,
+    });
+  } catch (e) {
+    console.error("[MESSAGES unread-count] failed", e?.message || e);
+    return res.status(500).json({ ok: false, error: "unread_count_failed" });
+  }
+});
 
 // GET /api/patient/:patientId/messages
 app.get("/api/patient/:patientId/messages", (req, res) => {
@@ -18609,15 +19720,14 @@ const DENTAL_AI_LANG_MAP = {
   ru: "Russian",
 };
 
+const DENTAL_APP_SUPPORTED_LANGS = ["en", "tr", "ru", "ka"];
+
 function normalizeAiDentalLang(input) {
-  const raw = String(input || "tr")
+  const raw = String(input || "en")
     .trim()
     .toLowerCase();
   const key = raw.slice(0, 2);
-  const k = DENTAL_AI_LANG_MAP[key] ? key : "tr";
-  /** Turkish-first product: treat English locale the same as unset — never ship en as display lang for this API. */
-  if (k === "en") return "tr";
-  return k;
+  return DENTAL_AI_LANG_MAP[key] ? key : "en";
 }
 
 function dentalLangNameFor(key) {
@@ -18655,36 +19765,8 @@ function getDentalAiFallback(langKey) {
 }
 
 /**
- * @param {string|undefined} patientId
- * @returns {Promise<string|null>}
- */
-async function fetchPatientLanguageForAiAnalyze(patientId) {
-  if (!patientId || !isSupabaseEnabled()) return null;
-  const pid = String(patientId).trim();
-  if (!pid) return null;
-  try {
-    if (UUID_RE.test(pid)) {
-      const { data, error } = await supabase.from("patients").select("language").eq("id", pid).maybeSingle();
-      if (!error && data?.language != null && String(data.language).trim() !== "") {
-        return String(data.language).trim();
-      }
-    }
-    const { data: d2, error: e2 } = await supabase
-      .from("patients")
-      .select("language")
-      .eq("patient_id", pid)
-      .maybeSingle();
-    if (!e2 && d2?.language != null && String(d2.language).trim() !== "") {
-      return String(d2.language).trim();
-    }
-  } catch (e) {
-    console.warn("[ai-analyze] patient language lookup failed", e?.message || e);
-  }
-  return null;
-}
-
-/**
- * Single source of truth for POST /api/chat/ai-upload and POST /api/chat/ai-analyze.
+ * Single source of truth for POST /api/chat/ai-analyze (language resolution).
+ * Patient row language is loaded by UUID in route handlers (req.patientUuid).
  * @param {import("express").Request} req
  * @param {{ language?: string } | null | undefined} patient
  */
@@ -18694,15 +19776,46 @@ function resolveLang(req, patient) {
     req.body?.lang ||
     req.headers["x-lang"] ||
     patient?.language ||
-    "tr";
+    "";
 
-  let lang = String(raw)
+  const l2 = String(raw)
     .toLowerCase()
+    .trim()
     .slice(0, 2);
+  if (!l2) return "en";
+  if (DENTAL_APP_SUPPORTED_LANGS.includes(l2)) return l2;
+  return "en";
+}
 
-  if (!lang || lang === "en") return "tr";
-
-  return lang;
+/**
+ * AI upload / analyze: warn on missing stored language; optionally persist `language: "en"`; return normalized DB-based lang.
+ * @returns {{ dbSnapshot: string | null, finalFromDb: string }}
+ */
+async function applyAiPatientDbLanguageGuards(patient, patientId) {
+  const pid = String(patientId || "").trim();
+  if (!patient) {
+    return { dbSnapshot: null, finalFromDb: "en" };
+  }
+  if (patient.language == null || String(patient.language ?? "").trim() === "") {
+    console.warn("⚠️ Missing patient language in DB for UUID:", pid);
+    if (isSupabaseEnabled() && pid) {
+      try {
+        const up = await updatePatientRowWithColumnPruning(pid, {
+          language: "en",
+          updated_at: new Date().toISOString(),
+        });
+        if (!up.ok) {
+          console.warn("[AI] Persist default language en failed:", up.error?.message || up.error);
+        }
+      } catch (e) {
+        console.warn("[AI] Persist default language en exception:", e?.message || e);
+      }
+    }
+    return { dbSnapshot: patient.language != null ? String(patient.language) : null, finalFromDb: "en" };
+  }
+  const norm = String(patient.language).trim().toLowerCase().slice(0, 2);
+  const finalFromDb = DENTAL_APP_SUPPORTED_LANGS.includes(norm) ? norm : "en";
+  return { dbSnapshot: String(patient.language), finalFromDb };
 }
 
 // ── Vague / generic phrases to reject (Turkish + English, case-insensitive) ──
@@ -24226,10 +25339,14 @@ app.post('/api/chat/smile-scenarios', requireToken, async (req, res) => {
 // Returns { ok, imageUrl, url, path, language } — imageUrl = signed URL; language: body|x-lang|patient|tr
 // Stores the photo in Supabase Storage and returns a long-lived signed URL that
 // the ai-analyze endpoint can fetch.
-app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (req, res) => {
+app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.single('file'), async (req, res) => {
   try {
-    const patientId = String(req.patientId || '').trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
+    const patientId = String(req.patientUuid || '').trim();
+    if (!patientId) {
+      console.error("❌ Missing canonical patient UUID in ai-upload");
+      return res.status(401).json({ ok: false, error: "invalid_patient" });
+    }
+    console.log("🧠 AI UPLOAD UUID:", patientId);
 
     const file = req.file;
     if (!file) return res.status(400).json({ ok: false, error: 'no_file', message: 'No file received' });
@@ -24250,6 +25367,20 @@ app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (
     if (!isSupabaseEnabled()) {
       return res.status(503).json({ ok: false, error: 'supabase_required', message: 'AI upload requires Supabase storage' });
     }
+
+    const { data: patient, error: patientLookupErr } = await supabase
+      .from("patients")
+      .select("language")
+      .eq("id", patientId)
+      .maybeSingle();
+    if (patientLookupErr) {
+      console.warn("[ai-upload] patient lookup:", patientLookupErr?.message || patientLookupErr);
+    }
+    if (!patient) {
+      console.error("❌ PATIENT NOT FOUND FOR UUID:", patientId);
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+    const { dbSnapshot, finalFromDb } = await applyAiPatientDbLanguageGuards(patient, patientId);
 
     const fileName = `${Date.now()}-${crypto.randomBytes(5).toString('hex')}.jpg`;
     const storagePath = `ai-photos/${patientId}/${fileName}`;
@@ -24273,22 +25404,21 @@ app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (
       return res.status(500).json({ ok: false, error: 'sign_failed', message: signErr?.message });
     }
 
-    const pl = await fetchPatientLanguageForAiAnalyze(patientId);
-    const patient = pl != null ? { language: pl } : null;
-    const language =
-      req.body?.language ||
-      req.body?.lang ||
-      req.headers["x-lang"] ||
-      patient?.language ||
-      "tr";
-    const l2 = String(language).toLowerCase().trim().slice(0, 2) || "tr";
-    const languageOut = !l2 || l2 === "en" ? "tr" : l2;
+    const l2req = String(req.body?.language || req.body?.lang || req.headers["x-lang"] || "")
+      .toLowerCase()
+      .trim()
+      .slice(0, 2);
+    const languageOut =
+      l2req && DENTAL_APP_SUPPORTED_LANGS.includes(l2req) ? l2req : finalFromDb;
+    console.log("🌍 FINAL LANGUAGE DECISION:", { db: dbSnapshot ?? null, final: languageOut });
     console.log("🌍 UPLOAD LANG FINAL:", {
       body: req.body?.language,
       header: req.headers["x-lang"],
-      patient: patient?.language,
+      patient: dbSnapshot,
       final: languageOut,
+      tokenPatientId: req.patientUuid,
     });
+    console.log("🌍 FINAL LANGUAGE:", languageOut);
     return res.json({
       ok: true,
       imageUrl: signed.signedUrl,
@@ -24307,14 +25437,28 @@ app.post('/api/chat/ai-upload', requireToken, chatUpload.single('file'), async (
 // Single Replicate img2img on one image URL (upper or lower mouth strip from client split flow).
 // Body: { patientId, imageUrl, arch?: 'upper' | 'lower' } — lower strip gets slightly higher strength + alignment suffix.
 // → { ok, url, output: [url] }
-app.post('/api/chat/replicate-teeth-strip', requireToken, async (req, res) => {
+app.post('/api/chat/replicate-teeth-strip', requireToken, canonicalPatientUuid, async (req, res) => {
   try {
     if (!ENABLE_SMILE_SIMULATION) {
       return res.status(503).json({ ok: false, error: 'simulation_disabled' });
     }
-    const { patientId, imageUrl, arch } = req.body || {};
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
+    const patientId = String(req.patientUuid || "").trim();
+    if (!patientId) {
+      console.error("❌ Missing canonical patient UUID in replicate-teeth-strip");
+      return res.status(401).json({ ok: false, error: "invalid_patient" });
+    }
+    console.log("🧠 REPLICATE TEETH STRIP UUID:", patientId);
+
+    const { patientId: bodyPid, imageUrl, arch } = req.body || {};
+    if (bodyPid != null && String(bodyPid).trim() !== "") {
+      const b = String(bodyPid).trim();
+      if (b !== patientId) {
+        const br = await resolveMessagesPatientDbId(b);
+        if (String(br) !== String(patientId)) {
+          return res.status(403).json({ ok: false, error: "patient_mismatch" });
+        }
+      }
+    }
     if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl_required' });
     if (!process.env.REPLICATE_API_TOKEN || !process.env.REPLICATE_IMG2IMG_VERSION) {
       return res.status(503).json({ ok: false, error: 'replicate_not_configured' });
@@ -24511,7 +25655,7 @@ async function applyMergeMicroPostProcess(jpegBuf) {
 //   original — upload unmodified original only (proves this handler ran; no AI teeth in output)
 //   black      — solid black JPEG same size as original (proves merge output is what client displays)
 //   Also: SIM_MERGE_DEBUG_RETURN_ORIGINAL=1  /  SIM_MERGE_DEBUG_BLACK=1
-app.post('/api/chat/merge-teeth-strips', requireToken, async (req, res) => {
+app.post('/api/chat/merge-teeth-strips', requireToken, canonicalPatientUuid, async (req, res) => {
   try {
     console.log('MERGE STARTED');
     console.log('SIGMA:', process.env.SIM_MERGE_EDGE_FEATHER_SIGMA);
@@ -24519,9 +25663,23 @@ app.post('/api/chat/merge-teeth-strips', requireToken, async (req, res) => {
     console.log(
       '[MERGE TEETH] strip-merge endpoint — SIM_MERGE_* env vars apply here (not /api/chat/smile-simulation)'
     );
-    const { patientId, originalImageUrl, upperImageUrl, lowerImageUrl, mouth } = req.body || {};
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
+    const patientId = String(req.patientUuid || "").trim();
+    if (!patientId) {
+      console.error("❌ Missing canonical patient UUID in merge-teeth-strips");
+      return res.status(401).json({ ok: false, error: "invalid_patient" });
+    }
+    console.log("🧠 MERGE TEETH STRIPS UUID:", patientId);
+
+    const { patientId: bodyPid, originalImageUrl, upperImageUrl, lowerImageUrl, mouth } = req.body || {};
+    if (bodyPid != null && String(bodyPid).trim() !== "") {
+      const b = String(bodyPid).trim();
+      if (b !== patientId) {
+        const br = await resolveMessagesPatientDbId(b);
+        if (String(br) !== String(patientId)) {
+          return res.status(403).json({ ok: false, error: "patient_mismatch" });
+        }
+      }
+    }
     if (!originalImageUrl || !upperImageUrl || !lowerImageUrl || !mouth) {
       return res.status(400).json({ ok: false, error: 'missing_fields' });
     }
@@ -25043,12 +26201,10 @@ function buildDentalTreatmentPlan(
 }
 
 // POST /api/chat/ai-analyze
-// Accepts: { patientId, imageUrl, photoType?, language? | lang?, userLocation?, ... }
-// Language: single source of truth — {@link resolveLang} + {@link fetchPatientLanguageForAiAnalyze} → {@link normalizeAiDentalLang} (missing / "en" → tr).
-// Feature flags: ENABLE_AI_ANALYSIS, ENABLE_SMILE_SIMULATION
-// Timeouts:      AI_TIMEOUT_MS (default 30 000 ms)
-// Images are processed in-memory as base64 — no external storage required
-app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req, res) => {
+// Accepts: { patientId?, imageUrl, photoType?, language? | lang?, userLocation?, ... }
+// Canonical identity: req.patientUuid (token; optional body.patientId must match)
+// Language: {@link resolveLang} + patients.language via req.patientUuid
+app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimitMiddleware, async (req, res) => {
   const _t0 = Date.now();
   try {
     // ── Feature flag guard ──────────────────────────────────────────────
@@ -25056,8 +26212,15 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       return res.status(503).json({ ok: false, error: 'ai_disabled', message: 'AI analysis is disabled via ENABLE_AI_ANALYSIS=false' });
     }
 
+    const patientId = String(req.patientUuid || "").trim();
+    if (!patientId) {
+      console.error("❌ Missing canonical patient UUID in ai-analyze");
+      return res.status(401).json({ ok: false, error: "invalid_patient" });
+    }
+    console.log("🧠 AI ANALYZE UUID:", patientId);
+
     const {
-      patientId,
+      patientId: bodyPatientId,
       imageUrl,
       photoType = "general",
       userLocation = null,
@@ -25065,18 +26228,39 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       userCountry = null,
     } = req.body || {};
 
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patientId_required' });
-    if (req.patientId !== patientId) return res.status(403).json({ ok: false, error: 'unauthorized' });
+    if (bodyPatientId != null && String(bodyPatientId).trim() !== "") {
+      const b = String(bodyPatientId).trim();
+      if (b !== patientId) {
+        const bResolved = await resolveMessagesPatientDbId(b);
+        if (String(bResolved) !== String(patientId)) {
+          return res.status(403).json({ ok: false, error: "patient_mismatch" });
+        }
+      }
+    }
     if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl_required' });
 
-    const pl = await fetchPatientLanguageForAiAnalyze(patientId);
-    const patient = pl != null ? { language: pl } : null;
-    const lang = normalizeAiDentalLang(resolveLang(req, patient));
+    const { data: patient, error } = await supabase
+      .from("patients")
+      .select("language")
+      .eq("id", patientId)
+      .maybeSingle();
+    if (error) {
+      console.warn("[ai-analyze] patient lookup:", error?.message || error);
+    }
+    if (!patient) {
+      console.error("❌ PATIENT NOT FOUND FOR UUID:", patientId);
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+    const { dbSnapshot, finalFromDb } = await applyAiPatientDbLanguageGuards(patient, patientId);
+    const patientLang = { language: finalFromDb };
+    const lang = normalizeAiDentalLang(resolveLang(req, patientLang));
+    console.log("🌍 FINAL LANGUAGE DECISION:", { db: dbSnapshot ?? null, final: lang });
     console.log("🌍 RESOLVED LANG:", {
       body: req.body?.language,
       header: req.headers["x-lang"],
-      patient: patient?.language,
+      patient: dbSnapshot,
       final: lang,
+      tokenPatientId: req.patientUuid,
     });
     console.log("AI LANG RECEIVED:", lang);
     console.log("AI LANG INPUT:", lang);
@@ -25422,7 +26606,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
     const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
     if (isTimeout) {
       logAI('warn', 'analyze_timeout', {
-        patientId: req.body?.patientId,
+        patientId: req.patientUuid || req.body?.patientId,
         elapsedMs: Date.now() - _t0,
       });
       return res.status(504).json({
@@ -25432,7 +26616,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       });
     }
     console.error('[AI BACKEND ERROR]', {
-      patientId: req.body?.patientId,
+      patientId: req.patientUuid || req.body?.patientId,
       imageUrl:  req.body?.imageUrl,
       photoType: req.body?.photoType,
       error:     err?.message,
@@ -25440,7 +26624,7 @@ app.post('/api/chat/ai-analyze', requireToken, aiRateLimitMiddleware, async (req
       elapsedMs: Date.now() - _t0,
     });
     logAI('error', 'analyze_exception', {
-      patientId: req.body?.patientId,
+      patientId: req.patientUuid || req.body?.patientId,
       message:   err?.message,
       stack:     process.env.NODE_ENV !== 'production' ? err?.stack : undefined,
       elapsedMs: Date.now() - _t0,
@@ -31666,8 +32850,25 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
       return res.status(400).json({ ok: false, error: "lat_lng_required" });
     }
 
-    const cityStr = city != null ? String(city).trim() : "";
+    const cityTrim = city != null ? String(city).trim() : "";
     const countryStr = country != null ? String(country).trim().toUpperCase() : "";
+
+    const catalog = await getMergedCityCatalogSet(supabase);
+    let cityCol = null;
+    let cityCodeCol = null;
+    let pendingCityRawCol = null;
+    if (cityTrim) {
+      const n = normalizeManualCityInput(cityTrim, catalog);
+      if (n.error === "too_long") {
+        return res.status(400).json({ ok: false, error: "city_too_long" });
+      }
+      if (n.city_code) {
+        cityCodeCol = n.city_code;
+        cityCol = n.city_code;
+      } else if (n.pending_city_raw) {
+        pendingCityRawCol = n.pending_city_raw;
+      }
+    }
 
     let clinicCode =
       body.clinic_code != null ? String(body.clinic_code).trim().toUpperCase() : "";
@@ -31689,7 +32890,9 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
       name: nameTrim,
       phone: "",
       address: "",
-      city: cityStr || null,
+      city: cityCol,
+      city_code: cityCodeCol,
+      pending_city_raw: pendingCityRawCol,
       country: countryStr || null,
       latitude: latN,
       longitude: lngN,
@@ -36466,18 +37669,19 @@ app.get('/api/doctor/patient/:patientId/health-form', requireDoctorAuth, async (
           isComplete = hf.is_complete === true;
           meta = { completedAt: hf.submitted_at, updatedAt: hf.updated_at };
         }
-        // dummy block to match closing braces below
       }
     }
 
-    const hasData = fd && Object.values(fd).some(function(v) {
+    const fdCanon = canonicalMedicalFormData(fd);
+
+    const hasData = fd && Object.values(fdCanon).some(function(v) {
       return v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0);
     });
 
     return res.json({
       ok: true,
-      form: fd,
-      formData: fd,
+      form: fdCanon,
+      formData: fdCanon,
       isComplete: isComplete || hasData,
       completedAt: meta.completedAt || null,
       updatedAt: meta.updatedAt || null,
@@ -38465,7 +39669,7 @@ app.get('/api/doctor/recent-activities', requireDoctorAuth, async (req, res) => 
 });
 
 function icdDisplayDescriptionFromRow(row, langRaw) {
-  const lang = String(langRaw || 'tr').toLowerCase().trim().slice(0, 2) || 'tr';
+  const lang = String(langRaw || 'en').toLowerCase().trim().slice(0, 2) || 'en';
   const t = (v) => (v != null && String(v).trim() ? String(v).trim() : '');
   const seq = [];
   if (lang === 'en') {
@@ -46202,11 +47406,7 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-// ── Static assets (after all API routes; avoids shadowing POST/PATCH /api/* on some hosts) ──
-app.use(express.static("public"));
-app.use(express.static(publicDir));
-
-// ── Global JSON 404 — unknown paths (never HTML/plain text for unhandled routes) ─
+// ── Unmatched routes (LAST). Static middleware is registered earlier. ─────────────────
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.path });
 });
@@ -46242,6 +47442,7 @@ console.log("[STARTUP] http.Server.listen", {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
+  console.log("🚀 BACKEND STARTED ON PORT:", PORT);
   console.log("Server running on port " + PORT);
   console.log(`✅ Server listening on 0.0.0.0:${PORT} (process.env.PORT=${JSON.stringify(process.env.PORT ?? null)})`);
   console.log(
