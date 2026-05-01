@@ -37097,7 +37097,7 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
   const doctorKeysUuidFk = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
   if (!doctorKeysUuidFk.length) return empty;
 
-  const planDayTz = "Asia/Tbilisi";
+  const planDayTz = "UTC";
   const todayStr = ymdInTimeZone(new Date(), planDayTz);
   const tomorrowStr = addCalendarDaysYmd(todayStr, 1);
   const todayR = zonedCivilDayRangeMs(todayStr, planDayTz);
@@ -37409,7 +37409,7 @@ async function fetchDoctorDashboardTreatmentPlansForDay(
   clinicIdRaw,
   doctorKeysRawForTeam
 ) {
-  const planDayTz = "Asia/Tbilisi";
+  const planDayTz = "UTC";
   const cid = clinicIdRaw ? String(clinicIdRaw).trim() : "";
   const docKeys = (doctorKeysUuidFk || []).map((x) => String(x || "").trim()).filter(Boolean);
   if (docKeys.length === 0) return [];
@@ -40419,8 +40419,8 @@ const getDoctorTodayAppointmentsHandler = async (req, res) => {
       return res.status(403).json({ ok: false, error: 'doctor_mismatch' });
     }
 
-    /** Same civil calendar as doctor dashboard (treatment plan list): Asia/Tbilisi; appointments filtered by `start_time` in [dayStart, dayEnd). */
-    const planDayTz = "Asia/Tbilisi";
+    /** Civil calendar in UTC so local-no-Z datetimes (stored by the app) are classified by their written date, not UTC offset. */
+    const planDayTz = "UTC";
     const todayYmd = ymdInTimeZone(new Date(), planDayTz);
     const { startIso: dayStartIso, endIso: dayEndIso } = zonedCivilDayRangeIso(todayYmd, planDayTz);
     const todayLocal = todayYmd;
