@@ -2910,7 +2910,7 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }) {
       channelId: "chat",
       data: { ...payloadBase, unreadBadge: badgeNum },
     };
-    if (useSound) msg.sound = "default";
+    if (useSound) msg.sound = "notification.mp3"; // custom sound (Android: via channelId; iOS: bundle file)
     msg.badge = badgeNum;
     messages.push(msg);
   }
