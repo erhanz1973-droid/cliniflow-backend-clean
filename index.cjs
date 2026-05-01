@@ -45836,7 +45836,7 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
         : offerQ.in('patient_id', patientIdFilters);
     const { count: newOffers, error: offerErr } = await offerQ;
 
-    if (offerErr) console.warn('[INBOX-SUMMARY offers]', offerErr.message);
+    if (offerErr) console.warn('[INBOX-SUMMARY offers] error:', offerErr?.message || JSON.stringify(offerErr));
 
     // Count unread doctor messages across all offer threads belonging to this patient
     // offer_messages.sender_role = 'doctor' AND read_at IS NULL for messages in the
