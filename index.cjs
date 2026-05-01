@@ -37226,15 +37226,18 @@ async function fetchDoctorDashboardAppointmentsIsolated(supabaseClient, req) {
 
   /** encounter_treatments — randevu zamanı genelde burada (treatment_plans tarihsiz olsa bile) */
   const etSelectAttempts = [
-    "id, encounter_id, scheduled_at, status, procedure_type, tooth_number, chair, assigned_doctor_id",
+    "id, encounter_id, scheduled_at, status, procedure_type, tooth_number, chair, assigned_doctor_id, created_by_doctor_id",
+    "id, encounter_id, scheduled_at, status, procedure_type, tooth_number, assigned_doctor_id, created_by_doctor_id",
     "id, encounter_id, scheduled_at, status, procedure_type, tooth_number, assigned_doctor_id",
   ];
+  const doctorKeysCsv = doctorKeysUuidFk.map((k) => `"${k}"`).join(",");
   let etRows = [];
   for (const sel of etSelectAttempts) {
+    // fetch by assigned_doctor_id OR created_by_doctor_id so treatments saved without explicit assignment are included
     const { data, error } = await supabaseClient
       .from("encounter_treatments")
       .select(sel)
-      .in("assigned_doctor_id", doctorKeysUuidFk)
+      .or(`assigned_doctor_id.in.(${doctorKeysCsv}),created_by_doctor_id.in.(${doctorKeysCsv})`)
       .not("scheduled_at", "is", null)
       .limit(400);
     const code = String(error?.code || "");
@@ -42414,11 +42417,12 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
       procedure_type: procType,
       status: 'planned',
       created_by_doctor_id: doctorUuid || req.doctorId,
+      // default to creating doctor if not explicitly assigned — required for dashboard visibility
+      assigned_doctor_id: assigned_doctor_id ? String(assigned_doctor_id) : (doctorUuid || req.doctorId || null),
     };
     if (procedureIdCol) insertRow.procedure_id = procedureIdCol;
     if (scheduled_at) insertRow.scheduled_at = scheduled_at;
     if (chair) insertRow.chair = String(chair);
-    if (assigned_doctor_id) insertRow.assigned_doctor_id = String(assigned_doctor_id);
 
     const insertAttempts = [insertRow, { ...insertRow }];
     delete insertAttempts[1].assigned_doctor_id;
