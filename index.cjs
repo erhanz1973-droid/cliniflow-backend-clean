@@ -42692,17 +42692,42 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
       return res.json({ ok: true, treatments: [] });
     }
 
-    let encQ = supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
-    if (docCid) encQ = encQ.eq("clinic_id", docCid);
-    let { data: encounters, error: encErr } = await encQ;
-    if (encErr && docCid) {
-      ({ data: encounters, error: encErr } = await supabase
-        .from("patient_encounters")
-        .select("id, clinic_id")
-        .in("patient_id", encounterPidKeys));
+    // Try with clinic_id first; fall back to id-only if the column doesn't exist yet
+    let encounters = null;
+    let encErr = null;
+
+    // Attempt 1: with clinic_id column + optional clinic filter
+    {
+      let q = supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
+      if (docCid) q = q.eq("clinic_id", docCid);
+      const r1 = await q;
+      if (!r1.error) {
+        encounters = r1.data;
+      } else if (isMissingColumnError(r1.error, "clinic_id")) {
+        // clinic_id column doesn't exist yet — retry without it
+        const r2 = await supabase.from("patient_encounters").select("id").in("patient_id", encounterPidKeys);
+        if (!r2.error) {
+          encounters = r2.data;
+        } else {
+          encErr = r2.error;
+        }
+      } else if (docCid) {
+        // Non-column error with clinic filter — retry without clinic filter
+        const r3 = await supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
+        if (!r3.error) {
+          encounters = (r3.data || []).filter((e) => rowBelongsToClinic(e, docCid));
+        } else if (isMissingColumnError(r3.error, "clinic_id")) {
+          const r4 = await supabase.from("patient_encounters").select("id").in("patient_id", encounterPidKeys);
+          encounters = r4.error ? [] : (r4.data || []);
+        } else {
+          encErr = r3.error;
+        }
+      } else {
+        encErr = r1.error;
+      }
     }
-    if (!encErr && docCid) {
-      encounters = (encounters || []).filter((e) => rowBelongsToClinic(e, docCid));
+    if (!encErr && docCid && encounters) {
+      encounters = encounters.filter((e) => !e.clinic_id || rowBelongsToClinic(e, docCid));
     }
 
     if (encErr) {
@@ -42946,17 +42971,38 @@ app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (r
       return res.json({ ok: true, diagnoses: [] });
     }
 
-    let encDiagQ = supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
-    if (docCid) encDiagQ = encDiagQ.eq("clinic_id", docCid);
-    let { data: encounters, error: encErr } = await encDiagQ;
-    if (encErr && docCid) {
-      ({ data: encounters, error: encErr } = await supabase
-        .from("patient_encounters")
-        .select("id, clinic_id")
-        .in("patient_id", encounterPidKeys));
+    // Fetch encounters with clinic_id if available; fall back to id-only when column missing
+    let encounters = null;
+    let encErr = null;
+    {
+      let q = supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
+      if (docCid) q = q.eq("clinic_id", docCid);
+      const r1 = await q;
+      if (!r1.error) {
+        encounters = r1.data;
+      } else if (isMissingColumnError(r1.error, "clinic_id")) {
+        const r2 = await supabase.from("patient_encounters").select("id").in("patient_id", encounterPidKeys);
+        if (!r2.error) {
+          encounters = r2.data;
+        } else {
+          encErr = r2.error;
+        }
+      } else if (docCid) {
+        const r3 = await supabase.from("patient_encounters").select("id, clinic_id").in("patient_id", encounterPidKeys);
+        if (!r3.error) {
+          encounters = (r3.data || []).filter((e) => rowBelongsToClinic(e, docCid));
+        } else if (isMissingColumnError(r3.error, "clinic_id")) {
+          const r4 = await supabase.from("patient_encounters").select("id").in("patient_id", encounterPidKeys);
+          encounters = r4.error ? [] : (r4.data || []);
+        } else {
+          encErr = r3.error;
+        }
+      } else {
+        encErr = r1.error;
+      }
     }
-    if (!encErr && docCid) {
-      encounters = (encounters || []).filter((e) => rowBelongsToClinic(e, docCid));
+    if (!encErr && docCid && encounters) {
+      encounters = encounters.filter((e) => !e.clinic_id || rowBelongsToClinic(e, docCid));
     }
 
     if (encErr) {
