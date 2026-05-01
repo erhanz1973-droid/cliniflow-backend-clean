@@ -39480,6 +39480,8 @@ async function handleDoctorInboxSummary(req, res) {
     const doctorId = req.doctorId || doctorRecord.id || doctorRecord.doctor_id;
     const clinicId = req.clinicId || doctorRecord.clinic_id;
 
+    console.log("[DASHBOARD] doctorId:", doctorId, "clinicId:", clinicId, "doctor.id:", doctorRecord.id, "doctor.doctor_id:", doctorRecord.doctor_id);
+
     if (!doctorId) return res.status(401).json({ ok: false, error: 'doctor_not_found' });
 
     const doctor = {
@@ -39588,8 +39590,8 @@ async function handleDoctorInboxSummary(req, res) {
       }
     }
 
-    // All resolved doctor keys (UUID + legacy), normalized for comparison
-    const doctorKeySet = new Set([currentDoctor, ...doctorKeysUuidFk.map(normalize)]);
+    // All resolved doctor keys (UUID + raw legacy), normalized for comparison
+    const doctorKeySet = new Set([currentDoctor, ...doctorKeysUuidFk.map(normalize), ...doctorKeysRaw.map(normalize)]);
 
     function matchesDoctor(row) {
       const slotDoctorIds = [row?.doctor_id, row?.assigned_doctor_id, row?.assignedDoctorId, row?.doctorId].map(
@@ -39688,26 +39690,12 @@ async function handleDoctorInboxSummary(req, res) {
     /** today/tomorrow: treatment_events (patients) + patient_encounters / encounter_treatments + plan items (admin-aligned). */
     async function fetchAppointmentsForDay(dayYmd) {
       const cid = clinicId ? String(clinicId).trim() : "";
-      if (!cid) {
-        return {
-          rows: [],
-          pipeline: {
-            dayYmd,
-            preMergeBySource: { tev: 0, encounter: 0, tpi: 0 },
-            preMergeTotal: 0,
-            postMerge: 0,
-            mergeDropped: 0,
-            invalidRow: 0,
-            postDoctor: 0,
-            doctorFilteredOut: 0,
-          },
-        };
-      }
-
+      // Even without clinicId, fetchEncounterTreatmentSlots can find appointments
+      // by assigned_doctor_id directly. Only skip the clinic-scoped sub-functions.
       const [teRows, etRows, tpiRows] = await Promise.all([
-        collectDashboardTreatmentEventSlotsForDay(dayYmd),
+        cid ? collectDashboardTreatmentEventSlotsForDay(dayYmd) : Promise.resolve([]),
         fetchEncounterTreatmentSlots(dayYmd),
-        fetchTreatmentPlanItemSlots(dayYmd),
+        cid ? fetchTreatmentPlanItemSlots(dayYmd) : Promise.resolve([]),
       ]);
       const preMergeBySource = { tev: teRows.length, encounter: etRows.length, tpi: tpiRows.length };
       const preMergeTotal = teRows.length + etRows.length + tpiRows.length;
@@ -39799,7 +39787,9 @@ async function handleDoctorInboxSummary(req, res) {
             .limit(400);
           addEnc(byClinic);
         }
-        for (const key of doctorKeysUuidFk) {
+        // Use all keys (UUID + raw legacy) so doctors with non-UUID IDs are covered
+        const allKeysForEnc = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
+        for (const key of allKeysForEnc) {
           try {
             const { data: byDoc } = await supabase
               .from("patient_encounters")
@@ -39810,10 +39800,11 @@ async function handleDoctorInboxSummary(req, res) {
           } catch (_) {}
         }
         // Fallback: find encounters via encounter_treatments.assigned_doctor_id or created_by_doctor_id
-        // This handles doctors whose patient_encounters have no clinic_id or created_by_doctor_id set
-        if (doctorKeysUuidFk.length > 0) {
+        // Use all doctor keys (UUID + raw) so doctors with legacy/non-UUID IDs are covered too
+        const allDoctorKeys = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
+        if (allDoctorKeys.length > 0) {
           try {
-            const keysCsv = doctorKeysUuidFk.map((k) => `"${k}"`).join(",");
+            const keysCsv = allDoctorKeys.map((k) => `"${k}"`).join(",");
             const { data: etEnc } = await supabase
               .from("encounter_treatments")
               .select("encounter_id")
