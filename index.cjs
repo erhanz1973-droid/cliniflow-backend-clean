@@ -45784,6 +45784,8 @@ app.post("/api/offer-messages", async (req, res) => {
             patient_id: patientUuid,
             from_role: "doctor",
             message_text: inserted.text || "[attachment]",
+            // patient_messages.message_id is NOT NULL — use same pattern as insertPatientMessageViaPatientMessages
+            message_id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
             ...(clinicUuid && UUID_RE.test(clinicUuid) ? { clinic_id: clinicUuid } : {}),
             offer_id: offerId,
             offer_message_id: inserted.id,
