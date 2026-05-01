@@ -39588,15 +39588,19 @@ async function handleDoctorInboxSummary(req, res) {
       }
     }
 
+    // All resolved doctor keys (UUID + legacy), normalized for comparison
+    const doctorKeySet = new Set([currentDoctor, ...doctorKeysUuidFk.map(normalize)]);
+
     function matchesDoctor(row) {
       const slotDoctorIds = [row?.doctor_id, row?.assigned_doctor_id, row?.assignedDoctorId, row?.doctorId].map(
         normalize
       );
       const hasAnyAssignment = slotDoctorIds.some((v) => v);
       if (hasAnyAssignment) {
-        return slotDoctorIds.includes(currentDoctor);
+        return slotDoctorIds.some((id) => id && doctorKeySet.has(id));
       }
-      return normalize(row?.created_by_doctor_id) === currentDoctor;
+      const cbdId = normalize(row?.created_by_doctor_id);
+      return cbdId ? doctorKeySet.has(cbdId) : false;
     }
 
     /**
@@ -39803,6 +39807,31 @@ async function handleDoctorInboxSummary(req, res) {
               .eq("created_by_doctor_id", key)
               .limit(200);
             addEnc(byDoc);
+          } catch (_) {}
+        }
+        // Fallback: find encounters via encounter_treatments.assigned_doctor_id or created_by_doctor_id
+        // This handles doctors whose patient_encounters have no clinic_id or created_by_doctor_id set
+        if (doctorKeysUuidFk.length > 0) {
+          try {
+            const keysCsv = doctorKeysUuidFk.map((k) => `"${k}"`).join(",");
+            const { data: etEnc } = await supabase
+              .from("encounter_treatments")
+              .select("encounter_id")
+              .or(`assigned_doctor_id.in.(${keysCsv}),created_by_doctor_id.in.(${keysCsv})`)
+              .not("scheduled_at", "is", null)
+              .limit(400);
+            const missingEncIds = [...new Set((etEnc || []).map((r) => String(r.encounter_id || "").trim()).filter(Boolean))]
+              .filter((id) => !encById.has(id));
+            if (missingEncIds.length > 0) {
+              for (let i = 0; i < missingEncIds.length; i += 80) {
+                const chunk = missingEncIds.slice(i, i + 80);
+                const { data: encRows } = await supabase
+                  .from("patient_encounters")
+                  .select("id, patient_id, created_by_doctor_id")
+                  .in("id", chunk);
+                addEnc(encRows);
+              }
+            }
           } catch (_) {}
         }
         const encRows = Array.from(encById.values()).slice(0, 500);
