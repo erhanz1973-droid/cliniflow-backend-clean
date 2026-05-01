@@ -45809,7 +45809,7 @@ app.post("/api/offer-messages", async (req, res) => {
           const mirrorRow = {
             patient_id: patientUuid,
             chat_id: patientUuid,  // patient_messages.chat_id = patient id
-            from_role: "doctor",
+            from_role: "clinic",  // patient_messages only allows clinic/admin/patient — no "doctor"
             message_text: inserted.text || "[attachment]",
             // patient_messages.message_id is NOT NULL — use same pattern as insertPatientMessageViaPatientMessages
             message_id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
