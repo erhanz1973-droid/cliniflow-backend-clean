@@ -47,6 +47,10 @@ const path = require("path");
 const crypto = require("crypto");
 const http = require("http");
 
+// ── DATA_DIR must be defined early — used by constants declared before line 3700 ──
+const DATA_DIR = path.join(__dirname, "data");
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
 // ─── AI config (read once at startup) ────────────────────────────────────────
 const AI_TIMEOUT_MS        = Math.max(5000, parseInt(process.env.AI_TIMEOUT_MS     || "30000", 10));
 const IMAGE_MAX_SIZE_MB    = Math.max(1,    parseInt(process.env.IMAGE_MAX_SIZE_MB  || "10",    10));
@@ -3698,8 +3702,7 @@ app.get("/admin-treatment.html", (req, res) => {
 // Static files: registered late (see end of file) so all /api/* routes match first.
 
 // ================== STORAGE ==================
-const DATA_DIR = path.join(__dirname, "data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// DATA_DIR is defined at the top of the file (early init required).
 
 const REG_FILE = path.join(DATA_DIR, "registrations.json");
 const TOK_FILE = path.join(DATA_DIR, "tokens.json");
