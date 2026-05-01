@@ -5640,10 +5640,15 @@ async function runPatientRegister(req, res, route, otpMode) {
   
   // Target clinic first — patient identity is scoped per clinic (separate row per tenant).
   let supabaseClinicId = null;
+  let clinicReferralDiscountPercent = null;
   if (isSupabaseEnabled() && validatedClinicCode) {
     try {
       const clinic = await getClinicByCode(validatedClinicCode);
       if (clinic?.id) supabaseClinicId = clinic.id;
+      // Read level1 referral discount from clinic settings
+      const levels = clinic?.settings?.referralLevels || clinic?.referralLevels || {};
+      const l1 = Number(levels?.level1 ?? levels?.referralLevel1Percent ?? NaN);
+      if (!isNaN(l1) && l1 > 0) clinicReferralDiscountPercent = l1;
     } catch (_) {}
   }
   let defaultClinicApplied = false;
@@ -6454,9 +6459,9 @@ async function runPatientRegister(req, res, route, otpMode) {
                 invited_patient_id: invitedId,
                 referral_code: generateReferralCodeV2(),
                 status: "PENDING",
-                inviter_discount_percent: null,
-                invited_discount_percent: null,
-                discount_percent: null,
+                inviter_discount_percent: clinicReferralDiscountPercent,
+                invited_discount_percent: clinicReferralDiscountPercent,
+                discount_percent: clinicReferralDiscountPercent,
                 inviter_patient_name: inviter?.name || null,
                 invited_patient_name: nameForReferral || null,
               };
