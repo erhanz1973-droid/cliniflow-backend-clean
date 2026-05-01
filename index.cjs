@@ -45665,12 +45665,14 @@ app.get("/api/offer-messages", async (req, res, next) => {
 
 // POST /api/offer-messages — send text and/or attachment
 app.post("/api/offer-messages", async (req, res) => {
+  const _t0 = Date.now();
   try {
     if (!isSupabaseEnabled()) {
       return res.status(503).json({ ok: false, error: "supabase_disabled" });
     }
     const actor = await resolveOfferMessagingActor(req, res);
     if (!actor) return;
+    console.log(`[offer-msg PERF] actor resolved in ${Date.now()-_t0}ms`);
 
     const body = req.body || {};
     const offerId = String(body.offer_id || body.offerId || "").trim();
@@ -45678,7 +45680,9 @@ app.post("/api/offer-messages", async (req, res) => {
       return res.status(400).json({ ok: false, error: "invalid_offer_id" });
     }
 
+    const _t1 = Date.now();
     const access = await assertOfferMessagingAccess(actor, offerId);
+    console.log(`[offer-msg PERF] access check in ${Date.now()-_t1}ms`);
     if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
@@ -45730,11 +45734,13 @@ app.post("/api/offer-messages", async (req, res) => {
     };
 
     // Prod tables may predate sender_name / attachment_*; prune missing columns like other inserts.
+    const _t2 = Date.now();
     const { data: inserted, error: insErr } = await insertIntoTableWithColumnPruning(
       "offer_messages",
       insertRow,
       "*"
     );
+    console.log(`[offer-msg PERF] offer_messages insert in ${Date.now()-_t2}ms | total so far ${Date.now()-_t0}ms`);
 
     if (insErr || !inserted) {
       console.error("[OFFER-MESSAGES POST]", insErr?.message || insErr);
