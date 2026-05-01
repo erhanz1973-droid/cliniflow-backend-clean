@@ -4,10 +4,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 
@@ -46,7 +49,13 @@ async function readOptionalPatientJwt() {
   return null;
 }
 
-/** @param {{ initialCityCode?: string }} [props] Hydrate from geo / profile when available (still no permission prompt). */
+/** Top inset for header back row (status bar / notch) when not using SafeAreaProvider. */
+const HEADER_TOP_PAD =
+  Platform.OS === "ios"
+    ? 52
+    : (typeof StatusBar.currentHeight === "number" ? StatusBar.currentHeight : 24) + 8;
+
+/** @param {{ initialCityCode?: string, onGoBack?: () => void }} [props] Hydrate from geo / profile when available (still no permission prompt). */
 export default function FindClinicScreen(props) {
   const { t, currentLanguage } = useLanguage();
   const initial =
@@ -159,6 +168,20 @@ export default function FindClinicScreen(props) {
 
   return (
     <View style={styles.container}>
+      {typeof props?.onGoBack === "function" ? (
+        <View style={[styles.topHeader, { paddingTop: HEADER_TOP_PAD }]}>
+          <TouchableOpacity
+            onPress={props.onGoBack}
+            style={styles.topBackBtn}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Text style={styles.topBackText}>← Back</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <Pressable style={styles.pinRow} hitSlop={8} disabled>
         <Text style={styles.pinEmoji} accessibilityLabel={cityLabel}>
           📍
@@ -204,7 +227,17 @@ export default function FindClinicScreen(props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, gap: 12, backgroundColor: "#020617" },
+  container: { flex: 1, paddingHorizontal: 16, paddingBottom: 16, gap: 12, backgroundColor: "#020617" },
+  topHeader: {
+    marginHorizontal: -16,
+    marginBottom: 4,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#1e293b",
+  },
+  topBackBtn: { alignSelf: "flex-start", paddingVertical: 6, paddingRight: 12 },
+  topBackText: { fontSize: 16, fontWeight: "600", color: "#93c5fd" },
   pinRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   pinEmoji: { fontSize: 18 },
   pinText: { color: "#e2e8f0", fontSize: 16, fontWeight: "700" },

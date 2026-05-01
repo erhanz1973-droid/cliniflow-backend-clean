@@ -826,7 +826,8 @@
         defaultClinic: "Klinik",
         defaultPhoto: "Fotoğraf",
         defaultFile: "Dosya",
-        navClinicSettings: "Klinik Ayarları"
+        navClinicSettings: "Klinik Ayarları",
+        patientAssignedBanner: "Bu hasta Dr. {doctorName}'e atandı",
       },
       leads: {
         documentTitle: "Mesajlar / Potansiyel / Atanmamış — Clinifly Admin",
@@ -845,7 +846,11 @@
         assign: "Ata",
         errChooseDoctor: "Önce bir doktor seçin.",
         successAssigned: "Başarıyla atandı.",
-        errLoad: "Yükleme hatası"
+        errLoad: "Yükleme hatası",
+        showAssignedToggle: "Atanmışları da göster",
+        assignedBadgePrefix: "Dr.",
+        assignedOk: "Atandı:",
+        assignDisabledHint: "Önce bu atamayı kaldırmak için destek veya doktor uygulamasını kullanın.",
       }
     },
 
@@ -1624,7 +1629,8 @@
         defaultClinic: "Clinic",
         defaultPhoto: "Photo",
         defaultFile: "File",
-        navClinicSettings: "Clinic settings"
+        navClinicSettings: "Clinic settings",
+        patientAssignedBanner: "This patient is assigned to Dr. {doctorName}.",
       },
       leads: {
         documentTitle: "Messages / Leads / Unassigned — Clinifly Admin",
@@ -1643,11 +1649,12 @@
         assign: "Assign",
         errChooseDoctor: "Choose a doctor first.",
         successAssigned: "Assigned successfully.",
-        errLoad: "Load error"
+        errLoad: "Load error",
+        showAssignedToggle: "Show assigned threads",
+        assignedBadgePrefix: "Dr.",
+        assignedOk: "Assigned:",
+        assignDisabledHint: "This lead is already assigned to a doctor.",
       }
-    },
-
-    ru: {
       common: {
         loading: "Загрузка...", save: "Сохранить", cancel: "Отмена", delete: "Удалить",
         edit: "Редактировать", search: "Поиск", filter: "Фильтр", close: "Закрыть",

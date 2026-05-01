@@ -300,6 +300,7 @@ const {
   deleteAdminToken: deleteAdminTokenFromDB,
   createReferral: createReferralInDB,
   getReferralsByClinic: getReferralsByClinicFromDB,
+  enrichReferralRowsWithPatientNames,
   savePushSubscription,
   getPushSubscriptionsByPatient,
 } = require("./lib/supabase");
@@ -30134,6 +30135,10 @@ function mapReferralRowToLegacyItem(r) {
     invitedPatientName: r.invitedPatientName || r.invited_patient_name || null,
     referralCode: r.referral_code,
     createdAt,
+    // Discount fields
+    discountPercent: r.discount_percent ?? null,
+    inviterDiscountPercent: r.inviter_discount_percent ?? r.discount_percent ?? null,
+    invitedDiscountPercent: r.invited_discount_percent ?? r.discount_percent ?? null,
     // v2 reward fields (optional)
     rewardAmount: r.reward_amount ?? null,
     rewardCurrency: r.reward_currency ?? "EUR",
@@ -30518,46 +30523,23 @@ app.get("/api/patient/:patientId/referrals", requireAdminOrPatientToken, async (
 
       let lastError = null;
       for (const orClause of queryVariants) {
-        let q = supabase.from("referrals").select(`
-          *,
-          inviter_patient:patients!fk_referrals_inviter (
-            patientId:patient_id,
-            name
-          ),
-          invited_patient:patients!fk_referrals_invited (
-            patientId:patient_id,
-            name
-          )
-        `).or(orClause);
+        // Use plain select("*") — FK join names (patients!fk_referrals_inviter) may not exist.
+        // Patient names are enriched separately via enrichReferralRowsWithPatientNames.
+        let q = supabase.from("referrals").select("*").or(orClause);
         if (req.isAdmin && req.clinicId) q = q.eq("clinic_id", req.clinicId);
         const { data, error } = await q.order("created_at", { ascending: false });
         if (!error) {
-          let items = (data || []).map(ref => {
-            const legacyItem = mapReferralRowToLegacyItem(ref);
-            if (legacyItem) {
-              const result = {
-                ...legacyItem,
-                inviterPatientName: ref.inviter_patient?.name || null,
-                invitedPatientName: ref.invited_patient?.name || null
-              };
-              console.log(`[REFERRALS] Patient endpoint - processed referral ${ref.id}:`, {
-                inviterPatientId: ref.inviter_patient_id,
-                invitedPatientId: ref.invited_patient_id,
-                inviterPatientName: result.inviterPatientName,
-                invitedPatientName: result.invitedPatientName,
-                discountPercent: ref.discount_percent,
-                inviterDiscountPercent: ref.inviter_discount_percent,
-                invitedDiscountPercent: ref.invited_discount_percent,
-                legacyDiscountPercent: legacyItem.discountPercent
-              });
-              return result;
-            }
-            return null;
-          }).filter(Boolean);
-          if (status) items = items.filter((x) => x.status === status);
-          if (items.length === 0) {
-            return respondFromFile();
+          // Enrich with patient names separately (no FK join required)
+          let enriched = data || [];
+          try {
+            enriched = await enrichReferralRowsWithPatientNames(enriched);
+          } catch (enrichErr) {
+            console.warn("[REFERRALS] enrichReferralRowsWithPatientNames failed (non-fatal):", enrichErr?.message);
           }
+
+          let items = enriched.map(ref => mapReferralRowToLegacyItem(ref)).filter(Boolean);
+          if (status) items = items.filter((x) => x.status === status);
+          // Return Supabase result even if empty (don't fall back to stale file)
           return res.json({ ok: true, items, source: "supabase" });
         }
         lastError = error;
@@ -44574,6 +44556,7 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         clinic_name: cid ? clinicNameById[cid] ?? null : null,
         doctor_name: docId ? doctorNameById[docId] ?? null : null,
         treatment_type: offer.treatment_type,
+        price_text: offer.price_text || offer.price_range || null,
         price_range: offer.price_range || null,
         duration: offer.duration || null,
         note: offer.note || null,
@@ -46081,6 +46064,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
 
     let allOffers = [];
     const offerSelectVariants = [
+      "id, request_id, doctor_id, treatment_type, price_text, price_range, duration, note, created_at, clinic_id",
       "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at, clinic_id",
       "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at",
       "id, request_id, doctor_id, created_at",
@@ -46146,6 +46130,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
           ? {
               id: String(mine.id),
               treatment_type: mine.treatment_type != null ? String(mine.treatment_type) : null,
+              price_text: mine.price_text != null ? String(mine.price_text) : (mine.price_range != null ? String(mine.price_range) : null),
               price_range: mine.price_range != null ? String(mine.price_range) : null,
               duration: mine.duration != null ? String(mine.duration) : null,
               note: mine.note != null ? String(mine.note) : null,
@@ -46197,12 +46182,14 @@ app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, a
     }
 
     const body = req.body || {};
+    const priceText = body.price_text != null ? String(body.price_text) : (body.price_range != null ? String(body.price_range) : null);
     const insert = {
       request_id: requestId,
       doctor_id: doctorKey,
       clinic_id: clinicId && UUID_RE.test(clinicId) ? clinicId : null,
       treatment_type: body.treatment_type != null ? String(body.treatment_type) : null,
-      price_range: body.price_range != null ? String(body.price_range) : null,
+      price_text: priceText,
+      price_range: priceText,
       duration: body.duration != null ? String(body.duration) : null,
       note: body.note != null ? String(body.note) : null,
       created_at: new Date().toISOString(),
