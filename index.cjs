@@ -49140,21 +49140,29 @@ try {
           if (typeof ack === "function") ack({ ok: false, error: "token_required" });
           return;
         }
-        let decoded;
+        // Verify token — patient tokens may be file-based (tokens.json) or JWT
+        let decoded = null;
         try {
           decoded = jwt.verify(tok, JWT_SECRET);
         } catch {
-          if (typeof ack === "function") ack({ ok: false, error: "invalid_token" });
-          return;
+          // Not a JWT — check if it's a file-based patient token
+          const storedTokens = readJson(TOK_FILE, {});
+          if (storedTokens[tok]?.patientId) {
+            decoded = { patientId: storedTokens[tok].patientId, role: "PATIENT" };
+          } else {
+            if (typeof ack === "function") ack({ ok: false, error: "invalid_token" });
+            return;
+          }
         }
         const offerId = String(payload?.offerId ?? payload?.offer_id ?? "").trim();
         if (!UUID_RE.test(offerId)) {
           if (typeof ack === "function") ack({ ok: false, error: "offer_id_required" });
           return;
         }
-        // Light auth: must be PATIENT or DOCTOR token
+        // Light auth: PATIENT or DOCTOR (patient tokens may have patientId without role field)
         const role = String(decoded.role || "").toUpperCase();
-        if (role !== "PATIENT" && role !== "DOCTOR") {
+        const hasPatientId = !!(decoded.patientId || decoded.patient_id);
+        if (role !== "PATIENT" && role !== "DOCTOR" && !hasPatientId) {
           if (typeof ack === "function") ack({ ok: false, error: "forbidden" });
           return;
         }
