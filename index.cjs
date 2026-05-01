@@ -337,6 +337,8 @@ process.on("uncaughtException", (err) => {
 });
 
 const server = http.createServer(app);
+/** Set before `server.listen`; used by realtime chat (Socket.IO). */
+let chatSocketIo = null;
 /** Railway/Render set PORT; must be 1–65535. */
 function resolveListenPort() {
   const raw = process.env.PORT;
@@ -659,7 +661,7 @@ function mapDbMessageToLegacyMessage(row) {
       if (!Number.isNaN(p)) readAt = p;
     } else if (readRaw instanceof Date) readAt = readRaw.getTime();
   }
-  return {
+  const out = {
     id: String(row.id || row.message_id || row.messageId || ""),
     text: String(text || ""),
     from,
@@ -669,6 +671,9 @@ function mapDbMessageToLegacyMessage(row) {
     patientId: row.patient_id || undefined,
     ...(readAt != null ? { readAt } : {}),
   };
+  const tidRaw = row.thread_id ?? row.threadId;
+  if (tidRaw != null && String(tidRaw).trim()) out.thread_id = String(tidRaw).trim();
+  return out;
 }
 
 /** patient_messages row → same legacy shape as admin-chat / mobile */
@@ -710,7 +715,7 @@ function mapPatientMessagesRowToLegacy(row) {
     row.message_text ??
     row.body ??
     "";
-  return {
+  const outPm = {
     id: String(row.message_id || row.id || ""),
     text: String(bodyText || ""),
     from,
@@ -720,6 +725,9 @@ function mapPatientMessagesRowToLegacy(row) {
     patientId: row.patient_id || undefined,
     ...(readAt != null ? { readAt } : {}),
   };
+  const tidRawPm = row.thread_id ?? row.threadId;
+  if (tidRawPm != null && String(tidRawPm).trim()) outPm.thread_id = String(tidRawPm).trim();
+  return outPm;
 }
 
 /** Insert is either `messages` or `patient_messages` — map once (avoid double-mapping POST bodies). */
@@ -989,6 +997,61 @@ async function fetchMessagesFromSupabase(patientId) {
 }
 
 /**
+ * Lead thread doctor assignment for patient chat UI (one row per patient+clinic).
+ * Optional clinicId: query ?clinic_id from client; else falls back to patients.clinic_id.
+ */
+async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFromQuery) {
+  if (!isSupabaseEnabled() || !patientResolvedId) return null;
+  let clinicId = String(clinicIdFromQuery || "").trim();
+  if (!UUID_RE.test(clinicId)) {
+    const { data: prow } = await supabase.from("patients").select("clinic_id").eq("id", patientResolvedId).maybeSingle();
+    clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
+  }
+  if (!UUID_RE.test(clinicId)) return null;
+  try {
+    const { data: thr, error } = await supabase
+      .from("patient_chat_threads")
+      .select("id, assigned_doctor_id, assigned_at")
+      .eq("patient_id", patientResolvedId)
+      .eq("clinic_id", clinicId)
+      .eq("is_lead", true)
+      .maybeSingle();
+    if (error && isPatientChatThreadsTableUnavailable(error)) return null;
+    if (error || !thr?.id) return null;
+    const threadId = String(thr.id).trim();
+    if (!UUID_RE.test(threadId)) return null;
+
+    let assignedDoctorId = null;
+    let doctorName = null;
+    let assignedDoctor = null;
+    if (thr.assigned_doctor_id) {
+      const did = String(thr.assigned_doctor_id).trim();
+      assignedDoctorId = did;
+      const { data: doc } = await supabase
+        .from("doctors")
+        .select("id, full_name, name")
+        .eq("id", did)
+        .maybeSingle();
+      doctorName = String(doc?.full_name || doc?.name || "").trim() || null;
+      assignedDoctor = { id: did, name: doctorName };
+    }
+
+    return {
+      clinicId,
+      threadId,
+      assignedDoctorId,
+      doctorName,
+      ...(assignedDoctor ? { assignedDoctor } : {}),
+      assignedAt: thr.assigned_at != null ? String(thr.assigned_at) : null,
+    };
+  } catch (e) {
+    if (isPatientChatThreadsTableUnavailable(e)) return null;
+    console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient:", e?.message || e);
+    return null;
+  }
+}
+
+/**
  * Unread inbound messages from clinic/staff (patient-side badge polling).
  * Uses the same merge + legacy mapping as GET /api/patient/:id/messages; counts CLINIC rows with no readAt
  * newer than optional `since` (ms epoch, query param mirrors client badge polling).
@@ -1015,6 +1078,171 @@ async function countUnreadClinicMessagesForPatient(resolvedPatientId, sinceMs) {
   } catch (e) {
     console.warn("[unread-count] merged tally failed:", e?.message || e);
     return 0;
+  }
+}
+
+/** Sync merged unread tally → incremental column so push/badge paths avoid full merges. Safe if column missing (pruned). */
+async function persistPatientChatUnreadMergedTally(resolvedPatientId, tally) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id || !isSupabaseEnabled()) return;
+  const n = Math.min(999999, Math.max(0, Math.floor(Number(tally) || 0)));
+  try {
+    const up = await updatePatientRowWithColumnPruning(id, { chat_unread_from_clinic: n });
+    if (!up.ok && String(up.error?.message || "").toLowerCase().includes("does not exist")) return;
+  } catch (_) {
+    /* non-fatal */
+  }
+}
+
+/** Doctor total unread synced from same query as unread-count endpoint (totalUnread). */
+async function persistDoctorChatUnreadMergedTally(doctorUuid, tally) {
+  const id = String(doctorUuid || "").trim();
+  if (!id || !isSupabaseEnabled() || !UUID_RE.test(id)) return;
+  const n = Math.min(999999, Math.max(0, Math.floor(Number(tally) || 0)));
+  try {
+    const { error } = await updateDoctorRowByAdminId(id, { chat_unread_from_patients: n });
+    if (error && isSupabaseSchemaMissingColumnError(error)) return;
+    if (error) console.warn("[doctors chat_unread_from_patients] sync:", error.message || error);
+  } catch (_) {
+    /* non-fatal */
+  }
+}
+
+async function incrementPatientUnreadOnClinicMessage(resolvedPatientId) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id || !isSupabaseEnabled()) return;
+  try {
+    const { error } = await supabase.rpc("increment_patient_clinic_unread", { pid: id });
+    if (!error) return;
+    const fb = await supabase
+      .from("patients")
+      .select("chat_unread_from_clinic")
+      .eq("id", id)
+      .maybeSingle();
+    const bump = Math.min(
+      999999,
+      Math.max(0, Number(fb.data?.chat_unread_from_clinic) || 0) + 1
+    );
+    await updatePatientRowWithColumnPruning(id, { chat_unread_from_clinic: bump });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+async function incrementDoctorUnreadForAssignedDoctor(doctorUuid) {
+  const did = String(doctorUuid || "").trim();
+  if (!did || !UUID_RE.test(did) || !isSupabaseEnabled()) return;
+  try {
+    const { error } = await supabase.rpc("increment_doctor_patients_unread", { did });
+    if (!error) return;
+    const fb = await supabase
+      .from("doctors")
+      .select("chat_unread_from_patients")
+      .eq("id", did)
+      .maybeSingle();
+    const bump = Math.min(
+      999999,
+      Math.max(0, Number(fb.data?.chat_unread_from_patients) || 0) + 1
+    );
+    await updateDoctorRowByAdminId(did, { chat_unread_from_patients: bump });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/**
+ * Persisted tally for push payloads (cheap SELECT). Prefer column; approximate when missing.
+ */
+async function getPatientChatUnreadForPushBadge(resolvedPatientId) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id) return 0;
+  try {
+    if (isSupabaseEnabled()) {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("chat_unread_from_clinic")
+        .eq("id", id)
+        .maybeSingle();
+      if (
+        !error &&
+        data &&
+        Number.isFinite(Number(data.chat_unread_from_clinic)) &&
+        data.chat_unread_from_clinic !== null
+      ) {
+        return Math.min(999999, Math.max(0, Number(data.chat_unread_from_clinic)));
+      }
+    }
+  } catch (_) {
+    /* fall through */
+  }
+  try {
+    return await countUnreadClinicMessagesForPatient(id);
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function getDoctorChatUnreadForPushBadge(doctorUuid) {
+  const id = String(doctorUuid || "").trim();
+  if (!id) return 0;
+  try {
+    if (isSupabaseEnabled()) {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("chat_unread_from_patients")
+        .eq("id", id)
+        .maybeSingle();
+      if (
+        !error &&
+        data &&
+        Number.isFinite(Number(data.chat_unread_from_patients)) &&
+        data.chat_unread_from_patients !== null
+      ) {
+        return Math.min(999999, Math.max(0, Number(data.chat_unread_from_patients)));
+      }
+    }
+  } catch (_) {
+    /* fall through */
+  }
+  try {
+    const { data: doc } = await supabase
+      .from("doctors")
+      .select("clinic_id, clinic_code")
+      .eq("id", id)
+      .maybeSingle();
+    const cid = doc?.clinic_id ? String(doc.clinic_id).trim() : "";
+    const ccode =
+      doc?.clinic_code != null ? String(doc.clinic_code).trim().toUpperCase() : "";
+    return await computeDoctorUnreadInboundForPush(id, cid, ccode);
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTableHint) {
+  try {
+    const fromPatient = String(opts?.sender || "").toLowerCase() === "patient";
+    const pidSrc = insertedRow?.patient_id || opts?.patientId;
+    const resolved = pidSrc ? await resolveMessagesPatientDbId(String(pidSrc)) : null;
+    if (!resolved) return;
+    const clinicUuid =
+      insertedRow?.clinic_id != null ? String(insertedRow.clinic_id).trim() : "";
+    if (!fromPatient) {
+      await incrementPatientUnreadOnClinicMessage(resolved);
+      return;
+    }
+    if (!UUID_RE.test(clinicUuid)) return;
+    const { data } = await supabase
+      .from("patient_chat_threads")
+      .select("assigned_doctor_id")
+      .eq("patient_id", resolved)
+      .eq("clinic_id", clinicUuid)
+      .eq("is_lead", true)
+      .maybeSingle();
+    const aid = String(data?.assigned_doctor_id || "").trim();
+    if (UUID_RE.test(aid)) await incrementDoctorUnreadForAssignedDoctor(aid);
+  } catch (e) {
+    console.warn("[MESSAGES unread bump]", e?.message || e);
   }
 }
 
@@ -1507,7 +1735,7 @@ async function assignDoctorToLeadPatientRowFallback(patientId, clinicId, doctorU
     if (String(prow.clinic_id || "").trim() !== String(clinicId).trim()) {
       return { ok: false, reason: "patient_clinic_mismatch" };
     }
-    let patch = { assigned_doctor_id: doctorUuid, updated_at: assignedAtIso };
+    let patch = { assigned_doctor_id: doctorUuid, last_assigned_doctor_id: doctorUuid, updated_at: assignedAtIso };
     for (let attempt = 0; attempt < 14; attempt += 1) {
       const { data, error } = await supabase
         .from("patients")
@@ -1546,6 +1774,7 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
       .from("patient_chat_threads")
       .select("id, is_lead, assigned_doctor_id, status, clinic_id")
       .eq("patient_id", resolvedPatientId)
+      .eq("clinic_id", clinicId)
       .order("created_at", { ascending: false })
       .limit(3);
     if (qErr && isPatientChatThreadsTableUnavailable(qErr)) {
@@ -1611,6 +1840,304 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
     clinic_id: clinicId,
   });
   return { threadId: ins?.id, error: null };
+}
+
+function parseClinicSettingsJson(raw) {
+  let s = raw;
+  if (typeof s === "string") {
+    try {
+      s = JSON.parse(s);
+    } catch {
+      s = {};
+    }
+  }
+  return s && typeof s === "object" ? s : {};
+}
+
+function normalizeClinicInboundAutoAssignSettings(settingsRaw) {
+  const s = parseClinicSettingsJson(settingsRaw);
+  const def = s.default_doctor_id != null ? String(s.default_doctor_id).trim() : "";
+  const rawMode = s.auto_assign_fallback_mode != null ? String(s.auto_assign_fallback_mode).trim().toLowerCase() : "";
+  let auto_assign_fallback_mode = "least_recent";
+  if (rawMode === "random") auto_assign_fallback_mode = "random";
+  else if (rawMode === "least_recent" || rawMode === "least_recent_assignment" || rawMode === "fair_load") {
+    auto_assign_fallback_mode = "least_recent";
+  }
+  return {
+    auto_assign_enabled: s.auto_assign_enabled === true || String(s.auto_assign_enabled || "").toLowerCase() === "true",
+    default_doctor_id: def && UUID_RE.test(def) ? def : null,
+    sticky_assignment_enabled:
+      s.sticky_assignment_enabled === true || String(s.sticky_assignment_enabled || "").toLowerCase() === "true",
+    auto_assign_fallback_to_first_doctor: s.auto_assign_fallback_to_first_doctor !== false,
+    auto_assign_fallback_mode,
+  };
+}
+
+function doctorStatusEligibleForInboundAssignment(statusRaw) {
+  const st = String(statusRaw || "").trim().toUpperCase();
+  return st === "APPROVED" || st === "ACTIVE";
+}
+
+function doctorRowEligibleForInboundAssignment(row, clinicId) {
+  if (!row?.id) return false;
+  if (String(row.clinic_id || "").trim() !== String(clinicId || "").trim()) return false;
+  if (Object.prototype.hasOwnProperty.call(row, "is_active") && row.is_active === false) return false;
+  return doctorStatusEligibleForInboundAssignment(row.status);
+}
+
+async function loadDoctorRowForInboundAssignment(doctorUuid) {
+  if (!doctorUuid) return { row: null, error: null };
+  const id = String(doctorUuid).trim();
+  let sel = "id, clinic_id, status, is_active";
+  let { data, error } = await supabase.from("doctors").select(sel).eq("id", id).maybeSingle();
+  if (error && (isMissingColumnError(error, "is_active") || String(error.message || "").toLowerCase().includes("is_active"))) {
+    const r2 = await supabase.from("doctors").select("id, clinic_id, status").eq("id", id).maybeSingle();
+    return { row: r2.data, error: r2.error };
+  }
+  return { row: data, error };
+}
+
+/** Sticky / default / routing: same clinic, APPROVED or ACTIVE, not explicitly inactive */
+async function getEligibleDoctorIdForInboundAssignment(doctorUuid, clinicId) {
+  if (!doctorUuid || !UUID_RE.test(String(doctorUuid))) return null;
+  const { row, error } = await loadDoctorRowForInboundAssignment(String(doctorUuid).trim());
+  if (error || !row?.id) return null;
+  return doctorRowEligibleForInboundAssignment(row, clinicId) ? String(row.id) : null;
+}
+
+async function listEligibleDoctorsForInboundAssignment(clinicId) {
+  const run = async (sel) => supabase.from("doctors").select(sel).eq("clinic_id", clinicId).in("status", ["APPROVED", "ACTIVE"]);
+  let r = await run("id, clinic_id, status, is_active");
+  if (r.error && (isMissingColumnError(r.error, "is_active") || String(r.error.message || "").toLowerCase().includes("is_active"))) {
+    r = await run("id, clinic_id, status");
+  }
+  if (r.error) {
+    console.warn("[MESSAGES] listEligibleDoctorsForInboundAssignment:", r.error.message || r.error);
+    return [];
+  }
+  const rows = Array.isArray(r.data) ? r.data : [];
+  return rows.filter((row) => doctorRowEligibleForInboundAssignment(row, clinicId));
+}
+
+/**
+ * Fair fallback: least-recently-assigned (by latest thread assigned_at per doctor) or random among eligible.
+ */
+async function pickFallbackDoctorForInboundAssignment(clinicId, fallbackMode) {
+  const mode = fallbackMode === "random" ? "random" : "least_recent";
+  const eligible = await listEligibleDoctorsForInboundAssignment(clinicId);
+  if (!eligible.length) return { doctorId: null, via: null };
+
+  if (mode === "random") {
+    const pick = eligible[Math.floor(Math.random() * eligible.length)];
+    return { doctorId: pick?.id ? String(pick.id) : null, via: "fallback_random" };
+  }
+
+  const doctorIds = eligible.map((d) => String(d.id));
+  const { data: thrRows, error: thrErr } = await supabase
+    .from("patient_chat_threads")
+    .select("assigned_doctor_id, assigned_at")
+    .eq("clinic_id", clinicId)
+    .not("assigned_doctor_id", "is", null)
+    .limit(5000);
+
+  if (thrErr) {
+    console.warn("[MESSAGES] fallback least_recent thread scan:", thrErr.message || thrErr);
+  }
+
+  const lastByDoctor = new Map();
+  for (const row of Array.isArray(thrRows) ? thrRows : []) {
+    const dr = row?.assigned_doctor_id != null ? String(row.assigned_doctor_id).trim() : "";
+    if (!dr) continue;
+    const at = row.assigned_at ? new Date(row.assigned_at).getTime() : 0;
+    const prev = lastByDoctor.get(dr);
+    if (prev == null || at > prev) lastByDoctor.set(dr, at);
+  }
+
+  const scored = doctorIds.map((id) => ({
+    id,
+    last: lastByDoctor.has(id) ? lastByDoctor.get(id) : null,
+  }));
+
+  let minT = Infinity;
+  for (const s of scored) {
+    const t = s.last == null ? -Infinity : s.last;
+    if (t < minT) minT = t;
+  }
+
+  const pool = scored.filter((s) => (s.last == null ? -Infinity : s.last) === minT).map((s) => s.id);
+  if (!pool.length) return { doctorId: null, via: null };
+  const chosen = pool[Math.floor(Math.random() * pool.length)];
+  return { doctorId: chosen, via: "fallback_least_recent" };
+}
+
+async function tryClaimInboundThreadAssignmentAtomic(threadIdStr, chosenDoctorUuid, assignedAtIso) {
+  try {
+    const { data, error } = await supabase.rpc("cliniflow_try_claim_thread_assignment", {
+      p_thread_id: threadIdStr,
+      p_doctor_id: chosenDoctorUuid,
+      p_assigned_at: assignedAtIso,
+      p_updated_at: assignedAtIso,
+    });
+    if (!error && data === true) return { result: "claimed", usedRpc: true };
+    /* DB function returns false when no row matched assigned_doctor_id IS NULL — concurrent assign finished first */
+    if (!error && data === false) return { result: "skipped_already_assigned", usedRpc: true };
+    const em = String(error?.message || error || "").toLowerCase();
+    const c = String(error?.code || "");
+    if (
+      c === "42883" ||
+      c === "PGRST204" ||
+      em.includes("could not find") ||
+      em.includes("does not exist") ||
+      em.includes("unknown function")
+    ) {
+      return { result: "rpc_unavailable", usedRpc: false };
+    }
+    console.warn("[MESSAGES] tryClaimInboundThreadAssignmentAtomic rpc:", error?.message || error);
+    return { result: "rpc_failed", usedRpc: true, rpcError: error };
+  } catch (e) {
+    const em = String(e?.message || e || "").toLowerCase();
+    if (em.includes("does not exist") || em.includes("unknown function")) {
+      return { result: "rpc_unavailable", usedRpc: false };
+    }
+    console.warn("[MESSAGES] tryClaimInboundThreadAssignmentAtomic:", e?.message || e);
+    return { result: "rpc_failed", usedRpc: false, rpcError: e };
+  }
+}
+
+async function loadPatientLastAssignedDoctorIdSafe(resolvedPatientId) {
+  if (!resolvedPatientId) return null;
+  const { data: prow, error } = await supabase
+    .from("patients")
+    .select("last_assigned_doctor_id")
+    .eq("id", resolvedPatientId)
+    .maybeSingle();
+  if (error || !prow || prow.last_assigned_doctor_id == null) return null;
+  const u = String(prow.last_assigned_doctor_id).trim();
+  return UUID_RE.test(u) ? u : null;
+}
+
+/** After manual or inbound assign: persist sticky pointer + clinic-facing assigned_doctor where columns exist */
+async function patchPatientAssignmentPointersSticky(resolvedPatientId, doctorUuid) {
+  if (!resolvedPatientId || !doctorUuid || !UUID_RE.test(String(doctorUuid))) return { ok: true };
+  const at = new Date().toISOString();
+  const patch = {
+    assigned_doctor_id: String(doctorUuid).trim(),
+    last_assigned_doctor_id: String(doctorUuid).trim(),
+    updated_at: at,
+  };
+  const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patch);
+  if (!up.ok) {
+    console.warn("[MESSAGES] patchPatientAssignmentPointersSticky failed", up.error?.message || up.error);
+  }
+  return up;
+}
+
+/**
+ * When clinic enables auto-assign: inbound lead routing (sticky → default → weighted fallback).
+ * Claim uses RPC when deployed, else conditional UPDATE assigned_doctor_id IS NULL for race safety.
+ * Does nothing if thread already assigned or clinic has auto-assign off (default false).
+ */
+async function maybeAutoAssignInboundLeadThread(resolvedPatientId, inboundClinicId, threadId) {
+  if (!isSupabaseEnabled() || !resolvedPatientId || !inboundClinicId || !threadId) return;
+  const tid = String(threadId).trim();
+  if (!UUID_RE.test(tid)) return;
+
+  let trow = null;
+  try {
+    const { data: tr, error: te } = await supabase
+      .from("patient_chat_threads")
+      .select("id, assigned_doctor_id, patient_id, clinic_id")
+      .eq("id", tid)
+      .maybeSingle();
+    if (te || !tr?.id) return;
+    trow = tr;
+  } catch (e) {
+    if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[MESSAGES] auto_assign fetch thread:", e?.message || e);
+    return;
+  }
+
+  if (String(trow.patient_id) !== String(resolvedPatientId)) return;
+  if (String(trow.clinic_id || "").trim() !== String(inboundClinicId).trim()) return;
+  if (trow.assigned_doctor_id) return;
+
+  const { data: crow } = await supabase.from("clinics").select("settings").eq("id", inboundClinicId).maybeSingle();
+  const cfg = normalizeClinicInboundAutoAssignSettings(crow?.settings);
+  if (!cfg.auto_assign_enabled) return;
+
+  let chosen = null;
+  let via = null;
+
+  if (!chosen && cfg.sticky_assignment_enabled) {
+    const lastRaw = await loadPatientLastAssignedDoctorIdSafe(resolvedPatientId);
+    if (lastRaw) {
+      const v = await getEligibleDoctorIdForInboundAssignment(lastRaw, inboundClinicId);
+      if (v) {
+        chosen = v;
+        via = "sticky";
+      }
+    }
+  }
+
+  if (!chosen && cfg.default_doctor_id) {
+    const v = await getEligibleDoctorIdForInboundAssignment(cfg.default_doctor_id, inboundClinicId);
+    if (v) {
+      chosen = v;
+      via = "default";
+    }
+  }
+
+  if (!chosen && cfg.auto_assign_fallback_to_first_doctor) {
+    const fb = await pickFallbackDoctorForInboundAssignment(inboundClinicId, cfg.auto_assign_fallback_mode);
+    if (fb.doctorId) {
+      chosen = fb.doctorId;
+      via = fb.via || "fallback_least_recent";
+    }
+  }
+
+  if (!chosen) return;
+
+  const assignedAtIso = new Date().toISOString();
+  const updPayload = {
+    status: "assigned",
+    assigned_doctor_id: chosen,
+    assigned_at: assignedAtIso,
+    updated_at: assignedAtIso,
+  };
+
+  const claim = await tryClaimInboundThreadAssignmentAtomic(tid, chosen, assignedAtIso);
+  let claimed = claim.result === "claimed";
+
+  if (claim.result === "skipped_already_assigned") return;
+
+  if (
+    !claimed &&
+    (claim.result === "rpc_unavailable" || claim.result === "rpc_failed")
+  ) {
+    const { data: urows, error: upErr } = await supabase
+      .from("patient_chat_threads")
+      .update(updPayload)
+      .eq("id", tid)
+      .is("assigned_doctor_id", null)
+      .select("id, assigned_doctor_id");
+
+    if (upErr) {
+      console.warn("[MESSAGES] auto_assign thread update:", upErr.message || upErr);
+      return;
+    }
+    claimed = Array.isArray(urows) && Boolean(urows[0]?.id);
+  }
+
+  if (!claimed) return;
+
+  await patchPatientAssignmentPointersSticky(resolvedPatientId, chosen);
+
+  console.log("inbound_auto_assigned_doctor", {
+    thread_id: tid,
+    patient_id: resolvedPatientId,
+    clinic_id: inboundClinicId,
+    assigned_doctor_id: chosen,
+    via,
+  });
 }
 
 /**
@@ -1729,6 +2256,9 @@ async function _insertMessageToSupabaseCore({
       };
     }
     inboundThreadId = thr.threadId || null;
+    if (inboundThreadId && !thr.error) {
+      await maybeAutoAssignInboundLeadThread(resolvedPatientId, inboundClinicId, inboundThreadId);
+    }
   }
 
   // Text-only fast path: patient_messages. Skip when photos/files present — those rows need attachments JSON.
@@ -1791,10 +2321,19 @@ async function _insertMessageToSupabaseCore({
     };
   }
 
-  const threadOpt =
+  let outboundThreadFromClinic = null;
+  if (!fromPatient && clinicId && UUID_RE.test(String(clinicId).trim())) {
+    const ot = await ensureInboundLeadThread(resolvedPatientId, String(clinicId).trim());
+    outboundThreadFromClinic = ot.threadId || null;
+  }
+
+  const effectiveThreadId =
     inboundThreadId && UUID_RE.test(String(inboundThreadId).trim())
-      ? { thread_id: String(inboundThreadId).trim() }
-      : {};
+      ? String(inboundThreadId).trim()
+      : outboundThreadFromClinic && UUID_RE.test(String(outboundThreadFromClinic).trim())
+        ? String(outboundThreadFromClinic).trim()
+        : null;
+  const threadOpt = effectiveThreadId ? { thread_id: effectiveThreadId } : {};
 
   const clinicFields = {
     ...(clinicId ? { clinic_id: clinicId } : {}),
@@ -1987,8 +2526,675 @@ async function _insertMessageToSupabaseCore({
   return fb || primaryResult;
 }
 
+// ── Expo push tokens (patient + doctor) — Supabase push_tokens + legacy file fallback ─────────
+const EXPO_PUSH_STORE_FILE = path.join(DATA_DIR, "expoPushTokens.json");
+
+let pushTokensDbAvailableMemo = undefined;
+let chatPushDispatchesDbAvailableMemo = undefined;
+
+async function probePushTokensDbAvailable() {
+  if (pushTokensDbAvailableMemo !== undefined) return pushTokensDbAvailableMemo;
+  pushTokensDbAvailableMemo = false;
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return false;
+  try {
+    const { error } = await supabase.from("push_tokens").select("id").limit(1);
+    if (!error) {
+      pushTokensDbAvailableMemo = true;
+    } else {
+      const c = String(error.code || "");
+      const m = String(error.message || "").toLowerCase();
+      const missingTbl =
+        ["42P01", "PGRST205"].includes(c) || (m.includes("relation") && m.includes("does not exist"));
+      pushTokensDbAvailableMemo = missingTbl ? false : true;
+    }
+  } catch (_) {
+    pushTokensDbAvailableMemo = false;
+  }
+  return pushTokensDbAvailableMemo;
+}
+
+async function probeChatPushDispatchesDbAvailable() {
+  if (chatPushDispatchesDbAvailableMemo !== undefined) return chatPushDispatchesDbAvailableMemo;
+  chatPushDispatchesDbAvailableMemo = false;
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return false;
+  try {
+    const { error } = await supabase.from("chat_push_dispatches").select("message_row_id").limit(1);
+    if (!error) {
+      chatPushDispatchesDbAvailableMemo = true;
+    } else {
+      const c = String(error.code || "");
+      const m = String(error.message || "").toLowerCase();
+      const missingTbl =
+        ["42P01", "PGRST205"].includes(c) || (m.includes("relation") && m.includes("does not exist"));
+      chatPushDispatchesDbAvailableMemo = missingTbl ? false : true;
+    }
+  } catch (_) {
+    chatPushDispatchesDbAvailableMemo = false;
+  }
+  return chatPushDispatchesDbAvailableMemo;
+}
+
+async function tryClaimChatPushDispatch(stableMessageId) {
+  const id = String(stableMessageId || "").trim();
+  if (!id) return true;
+  if (!(await probeChatPushDispatchesDbAvailable())) return true;
+  try {
+    const { error } = await supabase.from("chat_push_dispatches").insert({
+      message_row_id: id,
+      kind: "chat",
+    });
+    if (!error) return true;
+    const c = String(error.code || "");
+    const m = String(error.message || "").toLowerCase();
+    if (c === "23505" || m.includes("duplicate") || m.includes("unique")) return false;
+    console.warn("[chat_push_dispatches]", error?.message || error);
+    return true;
+  } catch (e) {
+    const m = String(e?.message || e || "").toLowerCase();
+    if (m.includes("duplicate") || m.includes("unique")) return false;
+    console.warn("[chat_push_dispatches]", e?.message || e);
+    return true;
+  }
+}
+
+/**
+ * Canonical id for chat_push_dispatches dedupe across file fallback, messages, patient_messages.
+ * UUID primary keys lowercase; opaque message_id strings prefixed with `m:` (no legacy file:/pm: split).
+ */
+function stableChatDedupeMessageKey(insertedRow, insertedTableHint) {
+  if (!insertedRow || typeof insertedRow !== "object") return null;
+  const pkRaw = insertedRow.id != null ? String(insertedRow.id).trim() : "";
+  if (UUID_RE.test(pkRaw)) return pkRaw.toLowerCase();
+  const midRaw =
+    insertedRow.message_id != null
+      ? String(insertedRow.message_id).trim()
+      : insertedRow.messageId != null
+        ? String(insertedRow.messageId).trim()
+        : "";
+  const cand = midRaw || pkRaw;
+  if (!cand) return null;
+  if (UUID_RE.test(cand)) return cand.toLowerCase();
+  return `m:${cand}`;
+}
+
+function extractStableMessageIdForChatPush(insertedRow, insertedTableHint) {
+  return stableChatDedupeMessageKey(insertedRow, insertedTableHint);
+}
+
+function readExpoPushStore() {
+  return readJson(EXPO_PUSH_STORE_FILE, { entities: {} });
+}
+
+function writeExpoPushStore(store) {
+  writeJson(EXPO_PUSH_STORE_FILE, store);
+}
+
+function expoEntityKey(kind, uuid) {
+  return `${kind}:${String(uuid || "").trim()}`;
+}
+
+/** notifications_muted on patients/doctors (per user). File store mirrors `muted` on entity when DB unavailable. */
+async function fetchUserNotificationsMuted(kind, uuidRaw) {
+  const u = String(uuidRaw || "").trim();
+  if (!UUID_RE.test(u)) return false;
+  if (isSupabaseEnabled()) {
+    try {
+      const tbl = kind === "doctor" ? "doctors" : "patients";
+      const { data, error } = await supabase.from(tbl).select("notifications_muted").eq("id", u).maybeSingle();
+      if (!error && data?.notifications_muted === true) return true;
+      if (!error && data?.notifications_muted === false) return false;
+    } catch (_) {
+      /* file fallback below */
+    }
+  }
+  const k = expoEntityKey(kind, u);
+  return readExpoPushStore().entities?.[k]?.muted === true;
+}
+
+async function patchExpoUserNotificationsMuted(kind, uuidRaw, mutedEnabled) {
+  const uuid = String(uuidRaw || "").trim();
+  if (!uuid) return { ok: false };
+  const muted = mutedEnabled === true;
+  if (isSupabaseEnabled()) {
+    try {
+      const tbl = kind === "doctor" ? "doctors" : "patients";
+      const resp = await supabase.from(tbl).update({ notifications_muted: muted }).eq("id", uuid);
+      if (resp?.error && !isSupabaseSchemaMissingColumnError(resp.error)) {
+        console.warn("[notifications_muted]", resp.error.message || resp.error);
+      }
+    } catch (e) {
+      console.warn("[notifications_muted]", e?.message || e);
+    }
+  }
+  const store = readExpoPushStore();
+  if (!store.entities) store.entities = {};
+  const k = expoEntityKey(kind, uuid);
+  const prev = store.entities[k] || { tokens: [], messageSound: true };
+  store.entities[k] = {
+    ...prev,
+    muted,
+  };
+  writeExpoPushStore(store);
+  return { ok: true };
+}
+
+async function pruneExpoInvalidTokens(kind, ownerUuid, invalidTokens) {
+  const u = String(ownerUuid || "").trim();
+  if (!u || !Array.isArray(invalidTokens)) return;
+  const bad = [...new Set(invalidTokens.map((x) => String(x || "").trim()).filter(Boolean))];
+  if (!bad.length) return;
+  if (await probePushTokensDbAvailable()) {
+    for (const tok of bad) {
+      try {
+        await supabase
+          .from("push_tokens")
+          .delete()
+          .eq("owner_kind", kind === "doctor" ? "doctor" : "patient")
+          .eq("owner_id", u)
+          .eq("expo_push_token", tok);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+  try {
+    const store = readExpoPushStore();
+    const k = expoEntityKey(kind, u);
+    const ent = store.entities?.[k];
+    if (ent && Array.isArray(ent.tokens)) {
+      ent.tokens = ent.tokens.filter((t) => !bad.includes(t));
+      store.entities[k] = ent;
+      writeExpoPushStore(store);
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function expoReceiptsYieldInvalidTokens(expoBody, originalMessagesSlice) {
+  const out = [];
+  const receipts = expoBody?.data;
+  if (!Array.isArray(receipts) || !Array.isArray(originalMessagesSlice)) return out;
+  for (let i = 0; i < receipts.length; i++) {
+    const receipt = receipts[i];
+    const orig = originalMessagesSlice[i];
+    const tok = orig?.to ? String(orig.to) : "";
+    if (!tok) continue;
+    const st = String(receipt?.status || "").toLowerCase();
+    let errCode = "";
+    const detail = receipt?.details;
+    if (detail && typeof detail === "object") {
+      if (detail.error != null) errCode = String(detail.error).toUpperCase();
+      else if (detail.apns?.reason) errCode = String(detail.apns.reason).toUpperCase();
+    }
+    const msg = String(receipt?.message || "").toLowerCase();
+    if (
+      st === "error" ||
+      errCode === "DEVICENOTREGISTERED" ||
+      errCode.includes("UNREGISTER") ||
+      msg.includes("not registered") ||
+      msg.includes("devicenotregistered")
+    ) {
+      out.push(tok);
+    }
+  }
+  return out;
+}
+
+async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
+  const uuid = String(uuidRaw || "").trim();
+  const token = String(tokenRaw || "").trim();
+  if (!uuid || !token.startsWith("ExponentPushToken[")) return { ok: false, error: "invalid_expo_token" };
+  const soundOn =
+    body && Object.prototype.hasOwnProperty.call(body, "messageSound")
+      ? body.messageSound !== false
+      : true;
+  const muted =
+    Boolean(body?.muted === true || String(body?.muted || "").toLowerCase() === "true");
+  const platform = body?.platform || body?.devicePlatform || body?.os || body?.Platform || null;
+
+  const useDb = await probePushTokensDbAvailable();
+  if (useDb && isSupabaseEnabled()) {
+    const row = {
+      owner_kind: kind === "doctor" ? "doctor" : "patient",
+      owner_id: uuid,
+      expo_push_token: token,
+      message_sound: soundOn !== false,
+      platform: platform != null ? String(platform).slice(0, 64) : null,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabase.from("push_tokens").upsert(row, {
+      onConflict: "owner_kind,owner_id,expo_push_token",
+    });
+    if (!error) {
+      if (body && Object.prototype.hasOwnProperty.call(body, "muted")) {
+        void patchExpoUserNotificationsMuted(kind, uuid, muted);
+      }
+      return { ok: true };
+    }
+    console.warn("[push_tokens] upsert failed — using file fallback:", error?.message || error);
+  }
+
+  const store = readExpoPushStore();
+  if (!store.entities) store.entities = {};
+  const k = expoEntityKey(kind, uuid);
+  const prev = store.entities[k] || { tokens: [], messageSound: true, muted: false };
+  const tokens = Array.isArray(prev.tokens) ? [...prev.tokens] : [];
+  if (!tokens.includes(token)) tokens.push(token);
+  if (tokens.length > 12) tokens.splice(0, tokens.length - 12);
+  store.entities[k] = {
+    tokens,
+    messageSound: soundOn !== false,
+    muted,
+  };
+  writeExpoPushStore(store);
+  if (body && Object.prototype.hasOwnProperty.call(body, "muted")) {
+    void patchExpoUserNotificationsMuted(kind, uuid, muted);
+  }
+  return { ok: true };
+}
+
+async function patchExpoEntityMessageSound(kind, uuidRaw, messageSoundEnabled) {
+  const uuid = String(uuidRaw || "").trim();
+  if (!uuid) return { ok: false };
+  const on = messageSoundEnabled !== false;
+  const useDb = await probePushTokensDbAvailable();
+  if (useDb && isSupabaseEnabled()) {
+    const { error } = await supabase
+      .from("push_tokens")
+      .update({ message_sound: on, updated_at: new Date().toISOString() })
+      .eq("owner_kind", kind === "doctor" ? "doctor" : "patient")
+      .eq("owner_id", uuid);
+    if (error && !["42P01", "PGRST205"].includes(String(error.code || ""))) {
+      console.warn("[push_tokens] message_sound patch:", error?.message || error);
+    }
+  }
+  const store = readExpoPushStore();
+  if (!store.entities) store.entities = {};
+  const k = expoEntityKey(kind, uuid);
+  const prev = store.entities[k] || { tokens: [], messageSound: true };
+  store.entities[k] = {
+    ...prev,
+    messageSound: on,
+  };
+  writeExpoPushStore(store);
+  return { ok: true };
+}
+
+async function patchExpoEntityMuted(kind, uuidRaw, mutedEnabled) {
+  return patchExpoUserNotificationsMuted(kind, uuidRaw, mutedEnabled);
+}
+
+async function loadExpoTokenRows(kind, uuidRaw) {
+  const u = String(uuidRaw || "").trim();
+  if (!u) return [];
+  if (await probePushTokensDbAvailable()) {
+    try {
+      const { data, error } = await supabase
+        .from("push_tokens")
+        .select("expo_push_token, message_sound")
+        .eq("owner_kind", kind === "doctor" ? "doctor" : "patient")
+        .eq("owner_id", u);
+      if (!error && Array.isArray(data) && data.length) {
+        return data
+          .map((r) => ({
+            token: String(r.expo_push_token || "").trim(),
+            messageSound: r.message_sound !== false,
+          }))
+          .filter((r) => r.token.startsWith("ExponentPushToken["));
+      }
+    } catch (e) {
+      console.warn("[push_tokens] load:", e?.message || e);
+    }
+  }
+  const k = expoEntityKey(kind, uuidRaw);
+  const rows = readExpoPushStore().entities?.[k];
+  if (!rows || !Array.isArray(rows.tokens)) return [];
+  const ms = rows.messageSound !== false;
+  return [...new Set(rows.tokens.filter(Boolean))].map((token) => ({
+    token,
+    messageSound: ms,
+  }));
+}
+
+async function postExpoNotificationsBatch(messagesSlice) {
+  if (!messagesSlice || !messagesSlice.length) return { ok: true, body: {} };
+  try {
+    const headers = {
+      Accept: "application/json",
+      "Accept-Encoding": "gzip, deflate",
+      "Content-Type": "application/json",
+    };
+    const bearer = String(process.env.EXPO_ACCESS_TOKEN || "").trim();
+    if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    const res = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(messagesSlice),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.warn("[expo-push] send HTTP", res.status, j?.errors?.[0] || j?.data || "");
+    }
+    return { ok: res.ok, body: j, status: res.status };
+  } catch (e) {
+    console.warn("[expo-push]", e?.message || e);
+    return { ok: false, body: {}, status: 0 };
+  }
+}
+
+async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }) {
+  const u = String(uuidRaw || "").trim();
+  if (await fetchUserNotificationsMuted(kind, u)) return;
+  const rows = await loadExpoTokenRows(kind, u);
+  if (!rows.length) return;
+  const t = String(title || "Clinifly").slice(0, 120);
+  const b = String(body || "").slice(0, 380);
+  const payloadBase = typeof data === "object" && data ? data : {};
+  let badgeNum = 0;
+  if (badge != null && Number.isFinite(Number(badge)) && Number(badge) >= 0) {
+    badgeNum = Math.min(999999, Math.floor(Number(badge)));
+  }
+  const messages = [];
+  for (const row of rows) {
+    const useSound = row.messageSound !== false;
+    const msg = {
+      to: row.token,
+      title: t,
+      body: b,
+      priority: "high",
+      channelId: "chat",
+      data: { ...payloadBase, unreadBadge: badgeNum },
+    };
+    if (useSound) msg.sound = "default";
+    msg.badge = badgeNum;
+    messages.push(msg);
+  }
+  for (let i = 0; i < messages.length; i += 90) {
+    const chunk = messages.slice(i, i + 90);
+    const { body: expoBody } = await postExpoNotificationsBatch(chunk);
+    const invalid = expoReceiptsYieldInvalidTokens(expoBody, chunk);
+    if (invalid.length) void pruneExpoInvalidTokens(kind, u, invalid);
+  }
+}
+
+function truncateChatPreview(txt) {
+  const s = String(txt || "").replace(/\s+/g, " ").trim();
+  return s.length > 220 ? `${s.slice(0, 217)}...` : s;
+}
+
+async function fetchPatientDisplayNameForPush(resolvedPatientId) {
+  const pid = String(resolvedPatientId || "").trim();
+  if (!UUID_RE.test(pid) || !isSupabaseEnabled()) return "Hasta";
+  try {
+    const { data } = await supabase
+      .from("patients")
+      .select("full_name, name, first_name, last_name")
+      .eq("id", pid)
+      .maybeSingle();
+    const n = [data?.first_name, data?.last_name].filter(Boolean).join(" ").trim();
+    const cand = String(data?.full_name || data?.name || n || "").trim();
+    return cand ? cand.slice(0, 120) : "Hasta";
+  } catch (_) {
+    return "Hasta";
+  }
+}
+
+async function resolveClinicOutboundSenderLabel(resolvedPatientId, clinicUuid) {
+  if (!UUID_RE.test(String(resolvedPatientId || "")) || !UUID_RE.test(String(clinicUuid || ""))) return "Klinik";
+  try {
+    const la = await fetchLeadThreadAssignmentForPatient(resolvedPatientId, clinicUuid);
+    const dn = la?.doctorName ? String(la.doctorName).trim() : "";
+    if (dn) return dn.slice(0, 120);
+    const { data: c } = await supabase.from("clinics").select("name").eq("id", clinicUuid).maybeSingle();
+    const nm = String(c?.name || "").trim();
+    return nm ? nm.slice(0, 120) : "Klinik";
+  } catch (_) {
+    return "Klinik";
+  }
+}
+
+/** Lead thread assigned doctor — used for push payload composer id (foreground self-send skip). */
+async function resolveLeadAssignedDoctorForPatientClinic(resolvedPatientId, clinicUuid) {
+  const pid = String(resolvedPatientId || "").trim();
+  const cid = String(clinicUuid || "").trim();
+  if (!UUID_RE.test(pid) || !UUID_RE.test(cid) || !isSupabaseEnabled()) return null;
+  try {
+    const { data } = await supabase
+      .from("patient_chat_threads")
+      .select("assigned_doctor_id")
+      .eq("patient_id", pid)
+      .eq("clinic_id", cid)
+      .eq("is_lead", true)
+      .maybeSingle();
+    const aid = String(data?.assigned_doctor_id || "").trim();
+    return UUID_RE.test(aid) ? aid : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function deliverClinicInboundPatientNotifications(meta) {
+  const { patientLookupId, previewRaw, clinicUuid, senderHint } = meta;
+  const pv = truncateChatPreview(previewRaw || "Yeni mesaj");
+  let resolvedDb = null;
+  try {
+    resolvedDb = await resolveMessagesPatientDbId(String(patientLookupId || ""));
+  } catch (_) {
+    resolvedDb = null;
+  }
+  let senderLabel =
+    senderHint && String(senderHint).trim().length ? String(senderHint).trim().slice(0, 120) : null;
+  if (!senderLabel && resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
+    senderLabel = await resolveClinicOutboundSenderLabel(resolvedDb, clinicUuid);
+  }
+  if (!senderLabel) senderLabel = "Klinik";
+  const title = `${senderLabel}`;
+  let badge;
+  try {
+    if (resolvedDb) badge = await getPatientChatUnreadForPushBadge(resolvedDb);
+  } catch (_) {}
+  let messageComposerRole = "clinic";
+  let messageComposerId = null;
+  if (resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
+    const aid = await resolveLeadAssignedDoctorForPatientClinic(resolvedDb, clinicUuid);
+    if (aid) {
+      messageComposerRole = "doctor";
+      messageComposerId = aid;
+    }
+  }
+  try {
+    void sendPushNotification(patientLookupId, title, pv, {
+      url: "/chat",
+      data: { type: "chat_message", senderName: senderLabel, preview: pv },
+    });
+  } catch (_) {}
+  if (resolvedDb) {
+    void sendExpoToEntity("patient", resolvedDb, {
+      title,
+      body: pv,
+      badge,
+      data: {
+        type: "chat_message",
+        patientId: resolvedDb,
+        senderName: senderLabel,
+        preview: pv,
+        clinicId: clinicUuid || null,
+        messageComposerRole,
+        messageComposerId,
+      },
+    });
+  }
+}
+
+async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra = {}) {
+  const {
+    messageStableId = null,
+    clinicUuid = null,
+    senderHint = null,
+    skipDispatchClaim = false,
+  } = extra || {};
+  if (!skipDispatchClaim && !(await tryClaimChatPushDispatch(messageStableId))) return;
+  await deliverClinicInboundPatientNotifications({
+    patientLookupId,
+    previewRaw,
+    clinicUuid,
+    senderHint,
+  });
+}
+
+async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, previewRaw) {
+  if (!isSupabaseEnabled() || !resolvedPatientId || !clinicUuid || !UUID_RE.test(clinicUuid)) return;
+  const pv = truncateChatPreview(previewRaw || "");
+  try {
+    const { data } = await supabase
+      .from("patient_chat_threads")
+      .select("assigned_doctor_id")
+      .eq("patient_id", resolvedPatientId)
+      .eq("clinic_id", clinicUuid)
+      .eq("is_lead", true)
+      .maybeSingle();
+    const did = String(data?.assigned_doctor_id || "").trim();
+    if (!did || !UUID_RE.test(did)) return;
+
+    let clinicCode = "";
+    const { data: clRow } = await supabase.from("clinics").select("clinic_code").eq("id", clinicUuid).maybeSingle();
+    if (clRow?.clinic_code) clinicCode = String(clRow.clinic_code).trim().toUpperCase();
+
+    let patientName = "Hasta";
+    try {
+      patientName = await fetchPatientDisplayNameForPush(resolvedPatientId);
+    } catch (_) {}
+    let badge = 0;
+    try {
+      badge = await getDoctorChatUnreadForPushBadge(did);
+    } catch (_) {}
+    void sendExpoToEntity("doctor", did, {
+      title: patientName.slice(0, 80),
+      body: pv || "Yeni mesaj",
+      badge,
+      data: {
+        type: "chat_message",
+        patientId: resolvedPatientId,
+        patientName,
+        clinicId: clinicUuid,
+        preview: pv,
+        messageComposerRole: "patient",
+        messageComposerId: resolvedPatientId,
+      },
+    });
+  } catch (e) {
+    console.warn("[expo-push] doctor notify skipped:", e?.message || e);
+  }
+}
+
+async function resolveClinicIdForChatPush(opts, insertedRow) {
+  let cid = insertedRow?.clinic_id != null ? String(insertedRow.clinic_id).trim() : "";
+  if (UUID_RE.test(cid)) return cid;
+  const ctx =
+    opts?.contextClinicId != null ? String(opts.contextClinicId).trim() : "";
+  if (UUID_RE.test(ctx)) return ctx;
+  return null;
+}
+
+/** Fire-and-forget: patient inbound → notify assigned doctor; clinic inbound → notify patient (+ web push). Deduped via chat_push_dispatches. */
+function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHint) {
+  void (async () => {
+    try {
+      const fromPatient = String(opts?.sender || "").toLowerCase() === "patient";
+      const pidSrc = insertedRow?.patient_id || opts?.patientId;
+      const resolved = pidSrc ? await resolveMessagesPatientDbId(String(pidSrc)) : null;
+      if (!resolved) return;
+      const clip = truncateChatPreview(opts?.message ?? insertedRow?.message ?? insertedRow?.text ?? "");
+      const stableId = extractStableMessageIdForChatPush(insertedRow, insertedTableHint);
+      if (!(await tryClaimChatPushDispatch(stableId))) return;
+      const clinicUuid = await resolveClinicIdForChatPush(opts, insertedRow || {});
+      if (fromPatient) {
+        if (clinicUuid) await notifyAssignedDoctorExpoInbound(resolved, clinicUuid, clip);
+        return;
+      }
+      await notifyPatientInboundChannels(pidSrc, clip, {
+        messageStableId: null,
+        clinicUuid,
+        senderHint: null,
+        skipDispatchClaim: true,
+      });
+    } catch (e) {
+      console.warn("[MESSAGES notify]", e?.message || e);
+    }
+  })();
+}
+
+/** Realtime broadcast room — only `patient_chat_threads.id` (never patient+clinic). */
+function threadChatRoomId(threadId) {
+  const t = String(threadId || "").trim();
+  if (!UUID_RE.test(t)) return null;
+  return `chat:${t}`;
+}
+
+async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableHint) {
+  try {
+    if (!chatSocketIo || !insertedRow) return;
+    const legacy = legacyMessageFromInsertedRow(insertedRow, insertedTableHint);
+    if (!legacy || !legacy.id) return;
+    const raw = insertedRow.thread_id ?? insertedRow.threadId;
+    let tid = raw != null && UUID_RE.test(String(raw).trim()) ? String(raw).trim() : null;
+
+    // Fallback: thread_id not stored on the row (e.g. patient_messages table without thread_id column).
+    // Look up patient_chat_threads by patient_id so the socket room can still be resolved.
+    if (!tid && opts?.patientId && isSupabaseEnabled()) {
+      try {
+        const pid = await resolveMessagesPatientDbId(String(opts.patientId));
+        if (pid) {
+          const { data: thr } = await supabase
+            .from("patient_chat_threads")
+            .select("id")
+            .eq("patient_id", pid)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (thr?.id && UUID_RE.test(String(thr.id).trim())) {
+            tid = String(thr.id).trim();
+            console.log("[chat-socket] thread_id resolved from patient_chat_threads fallback", tid);
+          }
+        }
+      } catch (_) {
+        /* non-fatal */
+      }
+    }
+
+    if (!tid) return;
+    const roomId = threadChatRoomId(tid);
+    if (!roomId) return;
+
+    try {
+      const before = await chatSocketIo.in(roomId).fetchSockets();
+      console.log("[chat-socket] ROOM SIZE (before emit)", roomId, before.length);
+    } catch (_) {
+      /* non-fatal */
+    }
+
+    const emitAt = Date.now();
+    console.log("[chat-socket] EMIT TIME", emitAt, {
+      roomId,
+      legacyMessageId: legacy?.id,
+    });
+    chatSocketIo.to(roomId).emit("new_message", legacy);
+  } catch (e) {
+    console.warn("[chat-socket] emit failed:", e?.message || e);
+  }
+}
+
 async function insertMessageToSupabase(opts) {
-  return _insertMessageToSupabaseCore(opts);
+  const result = await _insertMessageToSupabaseCore(opts);
+  try {
+    if (!result?.error && result?.data) {
+      void bumpChatUnreadCountersAfterInsert(opts, result.data, result.insertedTable || "");
+      enqueueChatMessagePushNotifications(opts, result.data, result.insertedTable || "");
+      void emitRealtimeChatMessageToThread(opts, result.data, result.insertedTable || "");
+    }
+  } catch (_) {}
+  return result;
 }
 
 function normalize(value) {
@@ -9841,6 +11047,11 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       return res.status(503).json({ ok: false, error: "supabase_required" });
     }
 
+    const includeAssigned =
+      req.query.includeAssigned === "1" ||
+      req.query.include_assigned === "1" ||
+      String(req.query.includeAssigned || "").toLowerCase() === "true";
+
     const ignorableMissing = (err) => {
       const code = String(err?.code || "");
       const msg = String(err?.message || "").toLowerCase();
@@ -9862,14 +11073,15 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
     };
 
     let rows = [];
-    const qFull = await supabase
+    let qb = supabase
       .from("patient_chat_threads")
-      .select("id, patient_id, clinic_id, status, assigned_doctor_id, assigned_at, admin_notes, is_lead, created_at, updated_at")
+      .select(
+        "id, patient_id, clinic_id, status, assigned_doctor_id, assigned_at, admin_notes, is_lead, created_at, updated_at"
+      )
       .eq("clinic_id", clinicId)
-      .eq("is_lead", true)
-      .is("assigned_doctor_id", null)
-      .order("created_at", { ascending: false })
-      .limit(200);
+      .eq("is_lead", true);
+    if (!includeAssigned) qb = qb.is("assigned_doctor_id", null);
+    const qFull = await qb.order("created_at", { ascending: false }).limit(200);
 
     if (!qFull.error && Array.isArray(qFull.data)) {
       rows = qFull.data;
@@ -9882,13 +11094,12 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       });
     } else if (qFull.error && ignorableColumn(qFull.error)) {
       // Migration not fully applied or older schema: retry without is_lead / optional columns
-      const qMin = await supabase
+      let qMin = supabase
         .from("patient_chat_threads")
         .select("id, patient_id, clinic_id, status, assigned_doctor_id, assigned_at, created_at, updated_at")
-        .eq("clinic_id", clinicId)
-        .is("assigned_doctor_id", null)
-        .order("created_at", { ascending: false })
-        .limit(200);
+        .eq("clinic_id", clinicId);
+      if (!includeAssigned) qMin = qMin.is("assigned_doctor_id", null);
+      qMin = await qMin.order("created_at", { ascending: false }).limit(200);
       if (qMin.error) {
         if (ignorableMissing(qMin.error)) return res.json({ ok: true, messages: [] });
         console.warn("[ADMIN unassigned-messages] fallback:", qMin.error.message);
@@ -9912,6 +11123,25 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
         for (const p of prow) {
           patientById[String(p.id)] = p;
         }
+      }
+    }
+
+    const docIds = [
+      ...new Set(
+        rows
+          .map((r) => (r.assigned_doctor_id ? String(r.assigned_doctor_id).trim() : ""))
+          .filter((id) => UUID_RE.test(id))
+      ),
+    ];
+    const doctorNameById = {};
+    if (docIds.length) {
+      const { data: drows } = await supabase
+        .from("doctors")
+        .select("id, full_name, name")
+        .in("id", docIds.slice(0, 300));
+      for (const d of drows || []) {
+        const id = String(d.id || "").trim();
+        if (id) doctorNameById[id] = String(d.full_name || d.name || "").trim() || null;
       }
     }
 
@@ -9957,6 +11187,12 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
         phone: p?.phone || null,
         status: t.status || "unassigned",
         assignedDoctorId: t.assigned_doctor_id || null,
+        assignedDoctor: (() => {
+          const aid = t.assigned_doctor_id ? String(t.assigned_doctor_id).trim() : null;
+          if (!aid || !UUID_RE.test(aid)) return null;
+          const nm = doctorNameById[aid] || null;
+          return { id: aid, name: nm };
+        })(),
         assignedAt: t.assigned_at || null,
         adminNotes: t.admin_notes || null,
         previewMessageId: previewMessageId || null,
@@ -9975,7 +11211,11 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       });
     }
 
-    return res.json({ ok: true, messages });
+    return res.json({
+      ok: true,
+      messages,
+      meta: includeAssigned ? { includeAssigned: true } : undefined,
+    });
   } catch (e) {
     console.error("[ADMIN unassigned-messages]", e);
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -10013,19 +11253,17 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "invalid_doctor_id" });
     }
 
-    const { data: doc } = await supabase
-      .from("doctors")
-      .select("id, clinic_id, status, full_name, name, email")
-      .eq("id", doctorUuid)
-      .maybeSingle();
-    if (!doc?.id) {
+    const { row: docRow, error: docErr } = await loadDoctorRowForInboundAssignment(doctorUuid);
+    if (docErr || !docRow?.id) {
       return res.status(404).json({ ok: false, error: "doctor_not_found" });
     }
-    if (String(doc.clinic_id || "").trim() !== clinicId) {
-      return res.status(403).json({ ok: false, error: "doctor_clinic_mismatch" });
-    }
-    if (String(doc.status || "").toUpperCase() !== "APPROVED") {
-      return res.status(400).json({ ok: false, error: "doctor_not_approved" });
+    if (!doctorRowEligibleForInboundAssignment(docRow, clinicId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "doctor_not_eligible_for_assignment",
+        message:
+          "Doctor must belong to this clinic with status APPROVED or ACTIVE and must not be disabled (inactive).",
+      });
     }
 
     const assignedAtIso = new Date().toISOString();
@@ -10043,7 +11281,6 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       .eq("patient_id", patientId)
       .eq("clinic_id", clinicId)
       .eq("is_lead", true)
-      .is("assigned_doctor_id", null)
       .select("id, patient_id, assigned_doctor_id, status, assigned_at")
       .maybeSingle();
 
@@ -10057,6 +11294,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
           assignedAtIso
         );
         if (fb.ok) {
+          await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
           return res.json({
             ok: true,
             threadId: null,
@@ -10085,7 +11323,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         .update(upd)
         .eq("patient_id", patientId)
         .eq("clinic_id", clinicId)
-        .is("assigned_doctor_id", null)
+        .eq("is_lead", true)
         .select("id, patient_id, assigned_doctor_id, status, assigned_at")
         .maybeSingle();
       if (!up2 && upd2?.id) {
@@ -10109,6 +11347,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         "id, patient_id, assigned_doctor_id, status, assigned_at"
       );
       if (!insErr && insRow?.id) {
+        await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
         return res.json({
           ok: true,
           threadId: insRow.id,
@@ -10126,6 +11365,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
           assignedAtIso
         );
         if (fb2.ok) {
+          await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
           return res.json({
             ok: true,
             threadId: null,
@@ -10152,6 +11392,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       });
     }
 
+    await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
     return res.json({
       ok: true,
       threadId: updated.id,
@@ -17635,8 +18876,15 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
     if (!patientId) return res.status(401).json({ ok: false, error: "unauthorized" });
 
     if (isSupabaseEnabled()) {
-      fetchMessagesFromSupabase(patientId)
-        .then(({ data, error, preMapped }) => {
+      const clinicQP = String(req.query?.clinic_id || req.query?.clinicId || "").trim();
+      (async () => {
+        try {
+          const resolvedDbId = await resolveMessagesPatientDbId(patientId);
+          const [pack, leadAssignment] = await Promise.all([
+            fetchMessagesFromSupabase(patientId),
+            fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
+          ]);
+          const { data, error, preMapped } = pack;
           if (error) {
             const supabasePublic = supabaseErrorPublic(error);
             console.error("[MESSAGES] Supabase fetch failed", {
@@ -17659,12 +18907,11 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
               ? data
               : []
             : (data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
-          return res.json({ ok: true, messages });
-        })
-        .catch((e) => {
-
+          return res.json({ ok: true, messages, leadAssignment: leadAssignment || null });
+        } catch (e) {
           return res.status(500).json({ ok: false, error: "messages_fetch_failed", exception: String(e?.message || e) });
-        });
+        }
+      })();
       return;
     }
 
@@ -17678,7 +18925,7 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
     const chatFile = path.join(CHAT_DIR, `${patientId}.json`);
     const existing = readJson(chatFile, { messages: [] });
     const messages = Array.isArray(existing.messages) ? existing.messages : [];
-    return res.json({ ok: true, messages });
+    return res.json({ ok: true, messages, leadAssignment: null });
   } catch (error) {
 
     return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
@@ -17825,6 +19072,7 @@ app.get("/api/patient/:patientId/messages/unread-count", requireToken, async (re
       resolved,
       Number.isFinite(sinceMs) ? sinceMs : NaN
     );
+    void persistPatientChatUnreadMergedTally(resolved, count);
     return res.json({
       ok: true,
       count,
@@ -17866,8 +19114,15 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
     }
 
     if (isSupabaseEnabled()) {
-      fetchMessagesFromSupabase(patientId)
-        .then(({ data, error, preMapped }) => {
+      const clinicQP = String(req.query?.clinic_id || req.query?.clinicId || "").trim();
+      (async () => {
+        try {
+          const resolvedDbId = await resolveMessagesPatientDbId(patientId);
+          const [pack, leadAssignment] = await Promise.all([
+            fetchMessagesFromSupabase(patientId),
+            fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
+          ]);
+          const { data, error, preMapped } = pack;
           if (error) {
             const supabasePublic = supabaseErrorPublic(error);
             console.error("[MESSAGES] Supabase fetch failed", {
@@ -17890,12 +19145,12 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
             const messages = preMapped
               ? data
               : data.map(mapDbMessageToLegacyMessage).filter(Boolean);
-            return res.json({ ok: true, messages });
+            return res.json({ ok: true, messages, leadAssignment: leadAssignment || null });
           }
 
           // Optional fallback: only if explicitly enabled and Supabase has no messages yet
           if (!canUseFileFallback()) {
-            return res.json({ ok: true, messages: [] });
+            return res.json({ ok: true, messages: [], leadAssignment: leadAssignment || null });
           }
 
           const CHAT_DIR = path.join(DATA_DIR, "chats");
@@ -17903,12 +19158,15 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
           const chatFile = path.join(CHAT_DIR, `${patientId}.json`);
           const existing = readJson(chatFile, { messages: [] });
           const messages = Array.isArray(existing.messages) ? existing.messages : [];
-          return res.json({ ok: true, messages });
-        })
-        .catch((e) => {
-
-          return res.status(500).json({ ok: false, error: "messages_fetch_failed", exception: String(e?.message || e) });
-        });
+          return res.json({ ok: true, messages, leadAssignment: leadAssignment || null });
+        } catch (e) {
+          return res.status(500).json({
+            ok: false,
+            error: "messages_fetch_failed",
+            exception: String(e?.message || e),
+          });
+        }
+      })();
       return;
     }
 
@@ -18063,19 +19321,12 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
       return res.status(400).json({ ok: false, error: "text_required", received: body });
     }
 
-    const sendAndRespond = (legacyMsg, rawRow) => {
-      const mid = String(legacyMsg?.id || "").trim();
-      const messagePreview = text.length > 100 ? text.substring(0, 100) + "..." : text;
-      sendPushNotification(patientId, "Klinikten Yeni Mesaj", messagePreview, {
-        url: "/chat",
-        data: { messageId: mid || undefined },
-      }).catch(() => {});
-      return res.json({
+    const respondSuccess = (legacyMsg, rawRow) =>
+      res.json({
         ok: true,
         message: rawRow != null ? rawRow : legacyMsg,
         legacyMessage: legacyMsg,
       });
-    };
 
     if (!isSupabaseEnabled()) {
       if (!canUseFileFallback()) return res.status(500).json(supabaseDisabledPayload("messages"));
@@ -18093,7 +19344,15 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
       };
       messages.push(newMessage);
       writeJson(chatFile, { patientId, messages, updatedAt: now() });
-      return sendAndRespond(newMessage, null);
+      void (async () => {
+        await notifyPatientInboundChannels(patientId, text, {
+          messageStableId: stableChatDedupeMessageKey(
+            { message_id: newMessage.id },
+            "patient_messages"
+          ),
+        });
+      })();
+      return respondSuccess(newMessage, null);
     }
 
     (async () => {
@@ -18110,7 +19369,35 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
             from: "CLINIC",
             createdAt: now(),
           };
-          return sendAndRespond(leg, pmTry.data);
+          const stable = extractStableMessageIdForChatPush(pmTry.data, "patient_messages");
+          let clinicUuidNotify = null;
+          try {
+            const rpid = await resolveMessagesPatientDbId(patientId);
+            if (rpid) {
+              const { data: pr } = await supabase
+                .from("patients")
+                .select("clinic_id")
+                .eq("id", rpid)
+                .maybeSingle();
+              clinicUuidNotify = pr?.clinic_id ? String(pr.clinic_id).trim() : null;
+              if (!clinicUuidNotify) {
+                const { data: th } = await supabase
+                  .from("patient_chat_threads")
+                  .select("clinic_id")
+                  .eq("patient_id", rpid)
+                  .eq("is_lead", true)
+                  .maybeSingle();
+                clinicUuidNotify = th?.clinic_id ? String(th.clinic_id).trim() : null;
+              }
+            }
+          } catch (_) {
+            /* optional clinic for sender label */
+          }
+          await notifyPatientInboundChannels(patientId, text, {
+            messageStableId: stable,
+            clinicUuid: clinicUuidNotify,
+          });
+          return respondSuccess(leg, pmTry.data);
         }
         const { data, error, insertedTable } = await insertMessageToSupabase({
           patientId,
@@ -18143,7 +19430,7 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
             from: "CLINIC",
             createdAt: now(),
           };
-        return sendAndRespond(msg, data);
+        return respondSuccess(msg, data);
       } catch (e) {
         return res.status(500).json({ ok: false, error: "messages_save_failed", exception: String(e?.message || e) });
       }
@@ -18205,6 +19492,62 @@ app.post("/api/patient/:patientId/push-subscription", requireToken, (req, res) =
     res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
 });
+
+// POST /api/patient/me/expo-push-token — Expo device token (mobile); optional messageSound/muted (default sounds on)
+app.post("/api/patient/me/expo-push-token", requireToken, async (req, res) => {
+  try {
+    const pid = String(req.patientId || "").trim();
+    if (!pid) return res.status(401).json({ ok: false, error: "unauthorized" });
+    const token = req.body?.expoPushToken || req.body?.token || req.body?.data?.token;
+    const result = await registerExpoTokenEntry("patient", pid, token, req.body || {});
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error || "register_failed" });
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
+// PATCH — toggle push sound and optional mute-all for inbound chat
+app.patch("/api/patient/me/notification-preferences", requireToken, async (req, res) => {
+  try {
+    const pid = String(req.patientId || "").trim();
+    if (!pid) return res.status(401).json({ ok: false, error: "unauthorized" });
+    const raw = req.body?.messageSound ?? req.body?.message_sound;
+    const enabled = raw !== false && String(raw || "").toLowerCase() !== "false";
+    await patchExpoEntityMessageSound("patient", pid, enabled);
+    let mutedApplied = undefined;
+    if (req.body != null && "muted" in req.body) {
+      const muted =
+        req.body.muted === true || String(req.body.muted || "").toLowerCase() === "true";
+      await patchExpoEntityMuted("patient", pid, muted);
+      mutedApplied = muted;
+    } else if (req.body != null && "mute_notifications" in req.body) {
+      const muted =
+        req.body.mute_notifications === true ||
+        String(req.body.mute_notifications || "").toLowerCase() === "true";
+      await patchExpoEntityMuted("patient", pid, muted);
+      mutedApplied = muted;
+    }
+    return res.json({ ok: true, messageSound: enabled, ...(mutedApplied !== undefined ? { muted: mutedApplied } : {}) });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
+// Patient opened chat — reset incremental unread for push badge + icon
+app.post("/api/patient/me/chat/ack-open", requireToken, async (req, res) => {
+  try {
+    const raw = String(req.patientId || "").trim();
+    if (!raw) return res.status(401).json({ ok: false, error: "unauthorized" });
+    const resolved = await resolveMessagesPatientDbId(raw);
+    if (!resolved) return res.status(400).json({ ok: false, error: "patient_not_resolved" });
+    await persistPatientChatUnreadMergedTally(resolved, 0);
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
 //================== INTRAORAL PHOTOS UPLOAD ==================
 // Dedicated endpoint for patient intraoral photos (separate from chat uploads)
 // POST /api/patient/upload-intraoral-photos
@@ -27614,6 +28957,7 @@ app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
     safe.chairCount = chairCount;
     safe.chair_count = chairCount;
     const showTreatmentPrices = (safe.settings || {}).showTreatmentPrices !== false;
+    const inboundAutoRead = normalizeClinicInboundAutoAssignSettings(safe.settings);
     safe.settings = {
       ...(safe.settings || {}),
       chairCount,
@@ -27623,6 +28967,11 @@ app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
       referralLevel2Percent: levels.level2 ?? null,
       referralLevel3Percent: levels.level3 ?? null,
       showTreatmentPrices,
+      auto_assign_enabled: inboundAutoRead.auto_assign_enabled,
+      default_doctor_id: inboundAutoRead.default_doctor_id,
+      sticky_assignment_enabled: inboundAutoRead.sticky_assignment_enabled,
+      auto_assign_fallback_to_first_doctor: inboundAutoRead.auto_assign_fallback_to_first_doctor,
+      auto_assign_fallback_mode: inboundAutoRead.auto_assign_fallback_mode,
     };
 
     // Single source for UI + limits: DB often has `plan` but not `subscriptionPlan` (legacy / partial writes)
@@ -27742,6 +29091,12 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       body.settings && Object.prototype.hasOwnProperty.call(body.settings, "showTreatmentPrices")
         ? Boolean(body.settings.showTreatmentPrices)
         : existing.settings?.showTreatmentPrices !== false;
+
+    const mergedInboundSettingsPayload = {
+      ...(existing.settings || {}),
+      ...(body.settings && typeof body.settings === "object" ? body.settings : {}),
+    };
+    const inboundAutoAssignCfg = normalizeClinicInboundAutoAssignSettings(mergedInboundSettingsPayload);
     
     // Handle password change
     let passwordHash = existing.password;
@@ -27804,6 +29159,11 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         googleReviews: Array.isArray(body.googleReviews) ? body.googleReviews : (existing.googleReviews || []),
         trustpilotReviews: Array.isArray(body.trustpilotReviews) ? body.trustpilotReviews : (existing.trustpilotReviews || []),
         showTreatmentPrices,
+        auto_assign_enabled: inboundAutoAssignCfg.auto_assign_enabled,
+        default_doctor_id: inboundAutoAssignCfg.default_doctor_id,
+        sticky_assignment_enabled: inboundAutoAssignCfg.sticky_assignment_enabled,
+        auto_assign_fallback_to_first_doctor: inboundAutoAssignCfg.auto_assign_fallback_to_first_doctor,
+        auto_assign_fallback_mode: inboundAutoAssignCfg.auto_assign_fallback_mode,
       },
       googleReviews: Array.isArray(body.googleReviews) ? body.googleReviews : (existing.googleReviews || []),
       trustpilotReviews: Array.isArray(body.trustpilotReviews) ? body.trustpilotReviews : (existing.trustpilotReviews || []),
@@ -27861,6 +29221,11 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
             logoUrl: updated.logoUrl,
             googleMapsUrl: updated.googleMapsUrl,
             showTreatmentPrices,
+            auto_assign_enabled: inboundAutoAssignCfg.auto_assign_enabled,
+            default_doctor_id: inboundAutoAssignCfg.default_doctor_id,
+            sticky_assignment_enabled: inboundAutoAssignCfg.sticky_assignment_enabled,
+            auto_assign_fallback_to_first_doctor: inboundAutoAssignCfg.auto_assign_fallback_to_first_doctor,
+            auto_assign_fallback_mode: inboundAutoAssignCfg.auto_assign_fallback_mode,
           }
         };
         
@@ -37193,6 +38558,57 @@ app.get("/api/doctor/me", requireDoctorAuth, async (req, res) => {
   }
 });
 
+// Expo push (doctor mobile)
+app.post("/api/doctor/me/expo-push-token", requireDoctorAuth, async (req, res) => {
+  try {
+    const did = String(req.doctorId || "").trim();
+    if (!did) return res.status(400).json({ ok: false, error: "doctor_id_missing" });
+    const token = req.body?.expoPushToken || req.body?.token;
+    const result = await registerExpoTokenEntry("doctor", did, token, req.body || {});
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error || "register_failed" });
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
+app.patch("/api/doctor/me/notification-preferences", requireDoctorAuth, async (req, res) => {
+  try {
+    const did = String(req.doctorId || "").trim();
+    const raw = req.body?.messageSound ?? req.body?.message_sound;
+    const enabled = raw !== false && String(raw || "").toLowerCase() !== "false";
+    await patchExpoEntityMessageSound("doctor", did, enabled);
+    let mutedApplied = undefined;
+    if (req.body != null && "muted" in req.body) {
+      const muted =
+        req.body.muted === true || String(req.body.muted || "").toLowerCase() === "true";
+      await patchExpoEntityMuted("doctor", did, muted);
+      mutedApplied = muted;
+    } else if (req.body != null && "mute_notifications" in req.body) {
+      const muted =
+        req.body.mute_notifications === true ||
+        String(req.body.mute_notifications || "").toLowerCase() === "true";
+      await patchExpoEntityMuted("doctor", did, muted);
+      mutedApplied = muted;
+    }
+    return res.json({ ok: true, messageSound: enabled, ...(mutedApplied !== undefined ? { muted: mutedApplied } : {}) });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
+// Doctor opened chat — reset incremental unread for push badge + icon
+app.post("/api/doctor/me/chat/ack-open", requireDoctorAuth, async (req, res) => {
+  try {
+    const did = String(req.doctorId || "").trim();
+    if (!did) return res.status(401).json({ ok: false, error: "unauthorized" });
+    await persistDoctorChatUnreadMergedTally(did, 0);
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
 async function handleDoctorMeUpdateCliniflow(req, res) {
   try {
     if (!isSupabaseEnabled()) {
@@ -37266,6 +38682,68 @@ async function getDoctorVisiblePatientIdSet(req) {
   for (const pid of fromCalendar) visiblePatientIds.add(pid);
   await expandPatientIdSetForDoctorMatching(visiblePatientIds);
   return visiblePatientIds;
+}
+
+/** Same row query as GET /api/doctor/messages/unread-counts — for Expo badge on push. */
+async function computeDoctorUnreadInboundForPush(doctorUuid, clinicIdParam, clinicCodeParam) {
+  try {
+    if (!isSupabaseEnabled() || !doctorUuid || !UUID_RE.test(String(doctorUuid).trim())) return 0;
+    let clinicId = String(clinicIdParam || "").trim();
+    let clinicCode = String(clinicCodeParam || "").trim().toUpperCase();
+    if (UUID_RE.test(clinicId) && !clinicCode) {
+      const { data: clRow } = await supabase.from("clinics").select("clinic_code").eq("id", clinicId).maybeSingle();
+      if (clRow?.clinic_code) clinicCode = String(clRow.clinic_code).trim().toUpperCase();
+    }
+    const stubReq = {
+      doctorId: String(doctorUuid).trim(),
+      doctor: {
+        clinic_id: clinicId,
+        clinic_code: clinicCode,
+      },
+      clinicId,
+    };
+    const visible = await getDoctorVisiblePatientIdSet(stubReq);
+    if (!visible.size) return 0;
+
+    let data = [];
+    let fetchError = null;
+    outerRows: for (const [field, value] of [[`clinic_code`, clinicCode], [`clinic_id`, clinicId]]) {
+      if (!value) continue;
+      for (const unreadOnly of [true, false]) {
+        let q = supabase
+          .from("messages")
+          .select("patient_id")
+          .eq("from_patient", true)
+          .eq(field, value);
+        if (unreadOnly) q = q.is("read_at", null);
+        const r = await q;
+        if (!r.error) {
+          data = r.data || [];
+          break outerRows;
+        }
+        fetchError = r.error;
+        if (unreadOnly && isSupabaseSchemaMissingColumnError(r.error)) continue;
+        const rowEc = String(r.error?.code || "");
+        if (["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) || isSupabaseSchemaMissingColumnError(r.error) || !rowEc) {
+          continue;
+        }
+        if (!["42P01", "42703", "PGRST204"].includes(rowEc)) break outerRows;
+      }
+    }
+
+    if (fetchError && !["42P01", "42703", "PGRST204"].includes(String(fetchError.code || ""))) {
+      return 0;
+    }
+
+    const rows = (Array.isArray(data) ? data : []).filter((r) => {
+      const p = String(r.patient_id || "");
+      return p && visible.has(p);
+    });
+    return rows.length;
+  } catch (e) {
+    console.warn("[expo-push] doctor badge count:", e?.message || e);
+    return 0;
+  }
 }
 
 async function getDoctorVisiblePatientIdSetCached(req) {
@@ -37342,6 +38820,7 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
 
     if (totalOnly) {
       const t = rows.length;
+      void persistDoctorChatUnreadMergedTally(did, t);
       const body = { ok: true, total: t, totalUnread: t, counts: {}, byPatient: [] };
       unreadCountsDoctorCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
       return res.json(body);
@@ -37353,6 +38832,7 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
       if (pid) counts[pid] = (counts[pid] || 0) + 1;
     });
     const total = Object.values(counts).reduce((s, n) => s + n, 0);
+    void persistDoctorChatUnreadMergedTally(did, total);
     const byPatient = Object.entries(counts).map(([patientId, count]) => ({ patientId, count }));
     const body = { ok: true, total, totalUnread: total, counts, byPatient };
     unreadCountsDoctorCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
@@ -37771,7 +39251,16 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
         ? data
         : []
       : (data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
-    return res.json({ ok: true, messages });
+
+    let leadAssignment = null;
+    try {
+      const doctorClinicQP = String(req.query?.clinic_id || req.query?.clinicId || "").trim();
+      leadAssignment = await fetchLeadThreadAssignmentForPatient(pid, doctorClinicQP || req.clinicId || "");
+    } catch (_) {
+      leadAssignment = null;
+    }
+
+    return res.json({ ok: true, messages, leadAssignment });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -44258,6 +45747,7 @@ app.post("/api/offer-messages", async (req, res) => {
 
     const message = {
       id: String(inserted.id),
+      offer_id: offerId,
       sender_id: String(inserted.sender_id || ""),
       sender_role: inserted.sender_role,
       sender_name: String(inserted.sender_name != null ? inserted.sender_name : sender_name || "").trim(),
@@ -44267,6 +45757,17 @@ app.post("/api/offer-messages", async (req, res) => {
       attachment_type: inserted.attachment_type,
       created_at: inserted.created_at,
     };
+
+    // Emit real-time event via Socket.IO so both parties receive instantly
+    // (fallback when Supabase Realtime publication is not yet configured)
+    try {
+      if (chatSocketIo) {
+        const offerRoom = `offer:${offerId}`;
+        chatSocketIo.to(offerRoom).emit("offer_new_message", message);
+        console.log("[offer-socket] EMIT offer_new_message", offerRoom, message.id);
+      }
+    } catch (_) { /* non-fatal */ }
+
     return res.json({ ok: true, message });
   } catch (e) {
     console.error("[OFFER-MESSAGES POST]", e);
@@ -47480,6 +48981,199 @@ app.use((err, req, res, next) => {
   return res.status(status).json({ ok: false, error: "bad_request", message });
 });
 
+// ── Socket.IO (realtime patient↔clinic chat; JWT on join_chat) ───────────────────
+try {
+  const { Server } = require("socket.io");
+  chatSocketIo = new Server(server, {
+    path: "/socket.io/",
+    cors: { origin: "*", credentials: false },
+    // Allow Engine.IO polling handshake + upgrade to websocket (matches mobile / proxy-friendly clients).
+  });
+
+  function leaveChatSocketRooms(socket) {
+    try {
+      for (const r of [...socket.rooms]) {
+        if (r && r !== socket.id && String(r).startsWith("chat:")) socket.leave(r);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  chatSocketIo.on("connection", (socket) => {
+    console.log("[chat-socket] CONNECTION OPEN TIME", Date.now(), "socket=", socket.id);
+    socket.on("join_chat", async (payload, ack) => {
+      const joinReceivedAt = Date.now();
+      console.log("[chat-socket] JOIN RECEIVED TIME", joinReceivedAt, payload);
+      try {
+        leaveChatSocketRooms(socket);
+
+        const tokenRaw =
+          socket.handshake.auth?.token ||
+          (typeof socket.handshake.headers?.authorization === "string"
+            ? socket.handshake.headers.authorization.replace(/^Bearer\s+/i, "").trim()
+            : "");
+        const tok = String(tokenRaw || "").trim();
+        if (!tok) {
+          socket.emit("chat_join_error", { error: "token_required" });
+          if (typeof ack === "function") ack({ ok: false, error: "token_required" });
+          return;
+        }
+        let decoded;
+        try {
+          decoded = jwt.verify(tok, JWT_SECRET);
+        } catch {
+          socket.emit("chat_join_error", { error: "invalid_token" });
+          if (typeof ack === "function") ack({ ok: false, error: "invalid_token" });
+          return;
+        }
+
+        const threadIdJoined = String(payload?.threadId ?? payload?.thread_id ?? "").trim();
+        const roomId = threadChatRoomId(threadIdJoined);
+
+        if (!UUID_RE.test(threadIdJoined) || !roomId) {
+          socket.emit("chat_join_error", { error: "thread_id_required" });
+          if (typeof ack === "function") ack({ ok: false, error: "thread_id_required" });
+          return;
+        }
+
+        if (!isSupabaseEnabled()) {
+          socket.emit("chat_join_error", { error: "thread_lookup_unavailable" });
+          if (typeof ack === "function") ack({ ok: false, error: "thread_lookup_unavailable" });
+          return;
+        }
+
+        let threadRow;
+        try {
+          const { data } = await supabase
+            .from("patient_chat_threads")
+            .select("id, patient_id")
+            .eq("id", threadIdJoined)
+            .maybeSingle();
+          threadRow = data;
+        } catch (_) {
+          threadRow = null;
+        }
+
+        const threadPid =
+          threadRow?.patient_id != null
+            ? await resolveMessagesPatientDbId(String(threadRow.patient_id))
+            : null;
+        if (!threadPid || !UUID_RE.test(threadPid)) {
+          socket.emit("chat_join_error", { error: "thread_not_found" });
+          if (typeof ack === "function") ack({ ok: false, error: "thread_not_found" });
+          return;
+        }
+
+        const role = String(decoded.role || "").toUpperCase();
+        let authorized = false;
+        if (role === "PATIENT") {
+          const tokenPid = decoded.patientId || decoded.sub || decoded.patient_uuid || decoded.patientUuid;
+          const tokResolved = tokenPid ? await resolveMessagesPatientDbId(String(tokenPid)) : null;
+          authorized = !!(tokResolved && tokResolved === threadPid);
+        } else if (role === "DOCTOR") {
+          const fakeReq = {
+            doctorId: String(decoded.doctorId || decoded.id || ""),
+            clinicId: String(decoded.clinicId || "").trim(),
+            doctor: {
+              id: decoded.doctorId || decoded.id,
+              clinic_id: decoded.clinicId || null,
+            },
+          };
+          const access = await resolveDoctorPatientMessagingAccess(threadPid, fakeReq);
+          authorized = !!(access.ok && access.patientId === threadPid);
+        }
+
+        if (!authorized) {
+          socket.emit("chat_join_error", { error: "forbidden" });
+          if (typeof ack === "function") ack({ ok: false, error: "forbidden" });
+          return;
+        }
+
+        await socket.join(roomId);
+        try {
+          const fetched = await chatSocketIo.in(roomId).fetchSockets();
+          const elapsedMs = Date.now() - joinReceivedAt;
+          console.log(
+            "[chat-socket] JOINED ROOM",
+            roomId,
+            "threadIdJoined=",
+            threadIdJoined,
+            "ROOM_SIZE",
+            fetched.length,
+            "(2 = patient + doctor in same Socket.IO room)",
+            "latency_ms_since_join_received",
+            elapsedMs,
+          );
+        } catch (roomErr) {
+          console.warn("[chat-socket] fetchSockets:", roomErr?.message || roomErr);
+        }
+        if (typeof ack === "function") {
+          ack({
+            ok: true,
+            room: roomId,
+            threadId: threadIdJoined,
+            serverAckTime: Date.now(),
+            joinReceivedTime: joinReceivedAt,
+          });
+        }
+      } catch (e) {
+        console.warn("[chat-socket] join_chat:", e?.message || e);
+        socket.emit("chat_join_error", { error: "join_exception" });
+        if (typeof ack === "function") ack({ ok: false, error: "exception" });
+      }
+    });
+
+    // join_offer — patient or doctor joins offer room `offer:{offerId}`
+    socket.on("join_offer", async (payload, ack) => {
+      try {
+        const tokenRaw =
+          socket.handshake.auth?.token ||
+          (typeof socket.handshake.headers?.authorization === "string"
+            ? socket.handshake.headers.authorization.replace(/^Bearer\s+/i, "").trim()
+            : "");
+        const tok = String(tokenRaw || "").trim();
+        if (!tok) {
+          if (typeof ack === "function") ack({ ok: false, error: "token_required" });
+          return;
+        }
+        let decoded;
+        try {
+          decoded = jwt.verify(tok, JWT_SECRET);
+        } catch {
+          if (typeof ack === "function") ack({ ok: false, error: "invalid_token" });
+          return;
+        }
+        const offerId = String(payload?.offerId ?? payload?.offer_id ?? "").trim();
+        if (!UUID_RE.test(offerId)) {
+          if (typeof ack === "function") ack({ ok: false, error: "offer_id_required" });
+          return;
+        }
+        // Light auth: must be PATIENT or DOCTOR token
+        const role = String(decoded.role || "").toUpperCase();
+        if (role !== "PATIENT" && role !== "DOCTOR") {
+          if (typeof ack === "function") ack({ ok: false, error: "forbidden" });
+          return;
+        }
+        const offerRoom = `offer:${offerId}`;
+        // Leave any previous offer rooms
+        for (const r of [...socket.rooms]) {
+          if (r !== socket.id && String(r).startsWith("offer:")) socket.leave(r);
+        }
+        await socket.join(offerRoom);
+        console.log("[offer-socket] JOINED", offerRoom, "socket=", socket.id);
+        if (typeof ack === "function") ack({ ok: true, room: offerRoom });
+      } catch (e) {
+        console.warn("[offer-socket] join_offer:", e?.message || e);
+        if (typeof ack === "function") ack({ ok: false, error: "exception" });
+      }
+    });
+  });
+  console.log("[chat-socket] Socket.IO ready at path /socket.io/");
+} catch (e) {
+  console.warn("[chat-socket] init failed — HTTP polling only:", e?.message || e);
+}
+
 console.log("[STARTUP] http.Server.listen", {
   port: PORT,
   host: "0.0.0.0",
@@ -47499,7 +49193,7 @@ server.listen(PORT, "0.0.0.0", () => {
     "admin.html=" + fs.existsSync(path.join(publicDir, "admin.html"))
   );
   console.log('🚀 ============================================');
-  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v85');
+  console.log('🚀  CLINIFLOW BACKEND  —  BUILD VERSION v98');
   console.log('🚀  SIM: 3-mode dental pipeline (whitening/alignment/full)');
   console.log('🚀  SIM: mask-accurate RGBA composite — zero non-teeth leakage');
   console.log('🚀  ROUTES: patient/treatment-requests, ratings, inbox-summary');
