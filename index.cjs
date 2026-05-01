@@ -45771,6 +45771,36 @@ app.post("/api/offer-messages", async (req, res) => {
       }
     } catch (_) { /* non-fatal */ }
 
+    // When doctor sends an offer message, also mirror it to patient_messages so the
+    // patient's regular messages tab shows an unread indicator and the message is visible
+    // even if they never navigate to offer-chat.
+    if (actor.kind === "doctor" && isSupabaseEnabled()) {
+      try {
+        const patientUuid = String(tr.patient_id || "").trim();
+        const clinicUuidRaw = actor.doctor?.clinic_id;
+        const clinicUuid = clinicUuidRaw ? String(clinicUuidRaw).trim() : null;
+        if (patientUuid && UUID_RE.test(patientUuid)) {
+          const mirrorRow = {
+            patient_id: patientUuid,
+            from_role: "doctor",
+            message_text: inserted.text || "[attachment]",
+            ...(clinicUuid && UUID_RE.test(clinicUuid) ? { clinic_id: clinicUuid } : {}),
+            offer_id: offerId,
+            offer_message_id: inserted.id,
+          };
+          // Best-effort: ignore errors so the main response is never blocked
+          const { error: mirrorErr } = await insertIntoTableWithColumnPruning("patient_messages", mirrorRow);
+          if (mirrorErr) {
+            console.warn("[offer-mirror] patient_messages insert failed (non-fatal):", mirrorErr.message);
+          } else {
+            console.log("[offer-mirror] mirrored to patient_messages for patient", patientUuid);
+          }
+        }
+      } catch (mirrorEx) {
+        console.warn("[offer-mirror] exception (non-fatal):", mirrorEx?.message || mirrorEx);
+      }
+    }
+
     return res.json({ ok: true, message });
   } catch (e) {
     console.error("[OFFER-MESSAGES POST]", e);
