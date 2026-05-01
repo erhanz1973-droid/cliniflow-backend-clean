@@ -45466,7 +45466,17 @@ function formatTreatmentRequestDescriptionForChat(raw) {
 }
 
 /** Fetch offer + treatment_requests row for messaging access checks and related flows. */
+// Cache for offer messaging context — keyed by offerId, TTL 5 minutes.
+// Avoids repeated Supabase round-trips on every message send.
+const _offerMessagingContextCache = new Map();
+const _OFFER_CTX_TTL_MS = 5 * 60 * 1000;
+
 async function loadOfferMessagingContext(offerId) {
+  const cached = _offerMessagingContextCache.get(offerId);
+  if (cached && Date.now() - cached.ts < _OFFER_CTX_TTL_MS) {
+    return cached.ctx;
+  }
+
   const { data: offer, error: oErr } = await supabase
     .from("treatment_offers")
     .select("id, request_id, doctor_id")
@@ -45474,36 +45484,19 @@ async function loadOfferMessagingContext(offerId) {
     .maybeSingle();
   if (oErr || !offer) return null;
 
-  // Prefer columns that exist on minimal schemas first — avoid `photo_urls` until last (many DBs never had that column).
-  const trSelects = [
-    "id, patient_id, description, budget, preferred_treatment, created_at",
-    "id, patient_id, description, budget, preferred_treatment, created_at, updated_at",
-    "id, patient_id, description, budget, preferred_treatment, photos, created_at",
-    "id, patient_id, description, budget, preferred_treatment, attachment_urls, created_at",
-    "id, patient_id, description, budget, preferred_treatment, photos, attachment_urls, created_at, updated_at",
-    "id, patient_id, description, created_at",
-    "id, patient_id",
-    "id, patient_id, description, budget, preferred_treatment, photo_urls, photos, attachment_urls, created_at, updated_at",
-    "id, patient_id, description, budget, preferred_treatment, photo_urls, photos, created_at",
-    "id, patient_id, description, budget, preferred_treatment, photo_urls, created_at",
-    "id, patient_id, description, photo_urls, photos, created_at",
-    "id, patient_id, description, photo_urls, created_at",
-  ];
+  // Only id + patient_id are needed for access checks and mirror inserts.
+  // Avoid column-probing loops that add ~7s per failed attempt.
+  const { data: tr, error: tErr } = await supabase
+    .from("treatment_requests")
+    .select("id, patient_id")
+    .eq("id", offer.request_id)
+    .maybeSingle();
 
-  let tr = null;
-  for (const sel of trSelects) {
-    const { data: t, error: tErr } = await supabase
-      .from("treatment_requests")
-      .select(sel)
-      .eq("id", offer.request_id)
-      .maybeSingle();
-    if (!tErr && t?.patient_id) {
-      tr = t;
-      break;
-    }
-  }
-  if (!tr?.patient_id) return null;
-  return { offer, tr };
+  if (tErr || !tr?.patient_id) return null;
+
+  const ctx = { offer, tr };
+  _offerMessagingContextCache.set(offerId, { ctx, ts: Date.now() });
+  return ctx;
 }
 
 /**
