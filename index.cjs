@@ -39554,7 +39554,8 @@ async function handleDoctorInboxSummary(req, res) {
       }
     }
 
-    // Bugün / yarın — yerel takvim (toISOString UTC kayması yüzünden yanlış güne düşmesin)
+    // Use client-supplied local dates when available — prevents UTC-offset misclassification
+    const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
     const localYmd = (d) => {
       const x = d instanceof Date ? d : new Date(d);
       const y = x.getFullYear();
@@ -39562,10 +39563,12 @@ async function handleDoctorInboxSummary(req, res) {
       const day = String(x.getDate()).padStart(2, "0");
       return `${y}-${m}-${day}`;
     };
-    const todayStr = localYmd(new Date());
-    const tomorrowD = new Date();
-    tomorrowD.setDate(tomorrowD.getDate() + 1);
-    const tomorrowStr = localYmd(tomorrowD);
+    const clientToday = String(req.query?.localToday || "").trim();
+    const clientTomorrow = String(req.query?.localTomorrow || "").trim();
+    const todayStr = ymdRe.test(clientToday) ? clientToday : localYmd(new Date());
+    const tomorrowD = new Date(); tomorrowD.setDate(tomorrowD.getDate() + 1);
+    const tomorrowStr = ymdRe.test(clientTomorrow) ? clientTomorrow : localYmd(tomorrowD);
+    console.log("[DASHBOARD] todayStr:", todayStr, "tomorrowStr:", tomorrowStr, "(client:", clientToday, clientTomorrow, ")");
 
     const normalize = (id) => String(id || "").replace(/^p_/i, "").trim().toLowerCase();
     const currentDoctor = normalize(doctorId);
@@ -39869,7 +39872,10 @@ async function handleDoctorInboxSummary(req, res) {
             const eid = String(row.encounter_id || "");
             const pid = encToPatient.get(eid);
             if (!pid) continue;
-            const timeStr = new Date(t).toTimeString().slice(0, 5);
+            // Extract time from raw string when no-Z (local datetime) to avoid UTC offset shift in display
+            const rawSched = String(row.scheduled_at || "");
+            const isLocalStr = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawSched) && !rawSched.endsWith("Z") && !rawSched.includes("+");
+            const timeStr = isLocalStr ? rawSched.slice(11, 16) : new Date(t).toTimeString().slice(0, 5);
             const proc = String(row.procedure_type || "TREATMENT").trim();
             const tooth = row.tooth_number != null ? ` · 🦷 ${row.tooth_number}` : "";
             const encDoc = encToEncounterDoctor.get(eid) || null;
