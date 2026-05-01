@@ -45790,13 +45790,18 @@ app.post("/api/offer-messages", async (req, res) => {
             offer_id: offerId,
             offer_message_id: inserted.id,
           };
-          // Best-effort: ignore errors so the main response is never blocked
-          const { error: mirrorErr } = await insertIntoTableWithColumnPruning("patient_messages", mirrorRow);
-          if (mirrorErr) {
-            console.warn("[offer-mirror] patient_messages insert failed (non-fatal):", mirrorErr.message);
-          } else {
-            console.log("[offer-mirror] mirrored to patient_messages for patient", patientUuid);
-          }
+          // Fire-and-forget — never block the main response or the socket emit
+          insertIntoTableWithColumnPruning("patient_messages", mirrorRow)
+            .then(({ error: mirrorErr }) => {
+              if (mirrorErr) {
+                console.warn("[offer-mirror] patient_messages insert failed (non-fatal):", mirrorErr.message);
+              } else {
+                console.log("[offer-mirror] mirrored to patient_messages for patient", patientUuid);
+              }
+            })
+            .catch(mirrorEx => {
+              console.warn("[offer-mirror] exception (non-fatal):", mirrorEx?.message || mirrorEx);
+            });
         }
       } catch (mirrorEx) {
         console.warn("[offer-mirror] exception (non-fatal):", mirrorEx?.message || mirrorEx);
