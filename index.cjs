@@ -45818,17 +45818,31 @@ app.post("/api/offer-messages", async (req, res) => {
             offer_message_id: inserted.id,
           };
           // Fire-and-forget — never block the main response or the socket emit
-          insertIntoTableWithColumnPruning("patient_messages", mirrorRow)
-            .then(({ error: mirrorErr }) => {
-              if (mirrorErr) {
-                console.warn("[offer-mirror] patient_messages insert failed (non-fatal):", mirrorErr.message);
-              } else {
-                console.log("[offer-mirror] mirrored to patient_messages for patient", patientUuid);
+          // Try multiple from_role values (constraint varies by DB schema)
+          (async () => {
+            const fromRoles = ["admin", "clinic", "CLINIC", "clinic_staff"];
+            let mirrored = false;
+            for (const from_role of fromRoles) {
+              const { error: mirrorErr } = await insertIntoTableWithColumnPruning(
+                "patient_messages",
+                { ...mirrorRow, from_role },
+              );
+              if (!mirrorErr) {
+                console.log("[offer-mirror] mirrored to patient_messages for patient", patientUuid, "from_role=", from_role);
+                mirrored = true;
+                break;
               }
-            })
-            .catch(mirrorEx => {
-              console.warn("[offer-mirror] exception (non-fatal):", mirrorEx?.message || mirrorEx);
-            });
+              const msg = String(mirrorErr?.message || "").toLowerCase();
+              const code = String(mirrorErr?.code || "");
+              const isConstraint = code === "23514" || code === "22P02" ||
+                msg.includes("check constraint") || msg.includes("enum") || msg.includes("invalid input");
+              if (!isConstraint) {
+                console.warn("[offer-mirror] patient_messages insert failed (non-fatal):", mirrorErr.message);
+                break;
+              }
+            }
+            if (!mirrored) console.warn("[offer-mirror] all from_role values failed for patient", patientUuid);
+          })().catch(ex => console.warn("[offer-mirror] exception (non-fatal):", ex?.message || ex));
         }
       } catch (mirrorEx) {
         console.warn("[offer-mirror] exception (non-fatal):", mirrorEx?.message || mirrorEx);
