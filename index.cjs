@@ -36656,16 +36656,16 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req) {
     if (match) {
       return { ok: true, patientId: resolvedPatientId };
     }
-    if (thread.is_lead) {
-      return { ok: false, status: 403, error: "not_assigned_doctor" };
-    }
+    // Not the assigned thread doctor — but still allow if they have treatment-team access
+    // (e.g. doctor assigned a treatment to this patient but not the lead thread)
   } else if (thread?.is_lead) {
-    return { ok: false, status: 403, error: "lead_unassigned" };
+    // Lead thread exists but unassigned — allow treatment-team doctors through
   }
 
   const allowed = await doctorHasTreatmentTeamAccessToPatientId(patientIdParam, req);
   if (!allowed) {
-    return { ok: false, status: 403, error: "patient_access_denied" };
+    const error = thread?.assigned_doctor_id && thread?.is_lead ? "not_assigned_doctor" : "patient_access_denied";
+    return { ok: false, status: 403, error };
   }
   return { ok: true, patientId: resolvedPatientId };
 }
