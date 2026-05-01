@@ -8296,6 +8296,7 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
     markOTPVerified(emailNormalized);
 
     const foundPhone = String(foundPatient?.phone || "").trim();
+    const foundName = String(foundPatient?.full_name || foundPatient?.name || "").trim();
     const patientStatus = String(foundPatient?.status || "PENDING").toUpperCase();
     
     // 🔥 CLEAN SEPARATION: Generate PATIENT JWT token with REQUIRED payload
@@ -8309,6 +8310,7 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
         email: emailNormalized || "",
         language: foundLanguage,
         ...(foundPhone ? { phone: foundPhone } : {}),
+        ...(foundName ? { name: foundName } : {}),
       },
       JWT_SECRET,
       { expiresIn: `${TOKEN_EXPIRY_DAYS}d` }
@@ -8324,6 +8326,7 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
       email: emailNormalized || "",
       language: foundLanguage,
       ...(foundPhone ? { phone: foundPhone } : {}),
+      ...(foundName ? { name: foundName } : {}),
     };
     writeJson(TOK_FILE, tokens);
     
@@ -45726,7 +45729,8 @@ app.post("/api/offer-messages", async (req, res) => {
     if (actor.kind === "patient") {
       sender_role = "patient";
       sender_id = String(tr.patient_id);
-      // Use name from actor if already resolved (avoids extra DB round-trip)
+      // Use name from actor if already resolved (avoids extra DB round-trip).
+      // Fallback to DB if actor has no name (old JWT tokens without name field).
       const actorName = String(actor.name || actor.patientName || "").trim();
       if (actorName) {
         sender_name = actorName;
@@ -45737,6 +45741,8 @@ app.post("/api/offer-messages", async (req, res) => {
           .eq("id", tr.patient_id)
           .maybeSingle();
         sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
+        // Cache name back on actor to avoid repeat lookups in same session
+        actor.name = sender_name;
       }
     } else {
       sender_role = "doctor";
@@ -45802,6 +45808,7 @@ app.post("/api/offer-messages", async (req, res) => {
         if (patientUuid && UUID_RE.test(patientUuid)) {
           const mirrorRow = {
             patient_id: patientUuid,
+            chat_id: patientUuid,  // patient_messages.chat_id = patient id
             from_role: "doctor",
             message_text: inserted.text || "[attachment]",
             // patient_messages.message_id is NOT NULL — use same pattern as insertPatientMessageViaPatientMessages
