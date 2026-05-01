@@ -45018,13 +45018,22 @@ async function resolveOfferMessagingActor(req, res) {
 
   const tokens = readJson(TOK_FILE, {});
   if (tokens[token]?.patientId) {
-    return { kind: "patient", patientId: String(tokens[token].patientId).trim() };
+    const rec = tokens[token];
+    return {
+      kind: "patient",
+      patientId: String(rec.patientId).trim(),
+      name: String(rec.name || rec.patientName || "").trim() || undefined,
+    };
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     if (decoded?.patientId) {
-      return { kind: "patient", patientId: String(decoded.patientId).trim() };
+      return {
+        kind: "patient",
+        patientId: String(decoded.patientId).trim(),
+        name: String(decoded.name || decoded.patientName || "").trim() || undefined,
+      };
     }
     const roleNorm = String(decoded?.role || "").toUpperCase();
     if (roleNorm === "DOCTOR") {
@@ -45073,9 +45082,15 @@ async function assertOfferMessagingAccess(actor, offerId) {
   const { offer, tr } = ctx;
 
   if (actor.kind === "patient") {
-    const resolvedUuid = await resolveMessagesPatientDbId(actor.patientId);
-    const filters = treatmentRequestPatientIdFilters(actor.patientId, resolvedUuid);
-    if (!filters.includes(String(tr.patient_id))) return { error: "forbidden" };
+    // Fast path: if patientId is already a UUID and matches tr.patient_id, skip DB lookup
+    const pid = String(actor.patientId || "").trim();
+    const trPid = String(tr.patient_id || "").trim();
+    if (UUID_RE.test(pid) && pid.toLowerCase() === trPid.toLowerCase()) {
+      return { ok: true, offer, tr };
+    }
+    const resolvedUuid = await resolveMessagesPatientDbId(pid);
+    const filters = treatmentRequestPatientIdFilters(pid, resolvedUuid);
+    if (!filters.includes(trPid)) return { error: "forbidden" };
     return { ok: true, offer, tr };
   }
 
@@ -45711,12 +45726,18 @@ app.post("/api/offer-messages", async (req, res) => {
     if (actor.kind === "patient") {
       sender_role = "patient";
       sender_id = String(tr.patient_id);
-      const { data: prow } = await supabase
-        .from("patients")
-        .select("name, full_name")
-        .eq("id", tr.patient_id)
-        .maybeSingle();
-      sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
+      // Use name from actor if already resolved (avoids extra DB round-trip)
+      const actorName = String(actor.name || actor.patientName || "").trim();
+      if (actorName) {
+        sender_name = actorName;
+      } else {
+        const { data: prow } = await supabase
+          .from("patients")
+          .select("name, full_name")
+          .eq("id", tr.patient_id)
+          .maybeSingle();
+        sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
+      }
     } else {
       sender_role = "doctor";
       sender_id = String(actor.doctor?.id || actor.doctorId || "").trim();
