@@ -39295,6 +39295,25 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
 
     const msgType = String(req.body?.type || "text").trim() || "text";
     const doctorUuid = String(req.doctor?.id || "").trim();
+
+    // Try the same simple path the admin endpoint uses — patient_messages table
+    // (doesn't require clinic_id on the patient row, which may not be populated yet)
+    const pmTry = await insertClinicMessageViaPatientMessages(patientId, text, msgType);
+    if (!pmTry.error && pmTry.data) {
+      try {
+        const ts = new Date().toISOString();
+        await supabase.from("patient_chat_threads").update({ updated_at: ts }).eq("patient_id", patientId);
+      } catch (_) { /* non-fatal */ }
+      const leg = mapPatientMessagesRowToLegacy(pmTry.data) || { text, from: "CLINIC", createdAt: now() };
+      void emitRealtimeChatMessageToThread(
+        { patientId, sender: "clinic", message: text, senderId: doctorUuid, contextClinicId: req.clinicId || null },
+        pmTry.data,
+        "patient_messages"
+      );
+      return res.json({ ok: true, message: pmTry.data, legacyMessage: leg });
+    }
+
+    // Fallback: full messages table path (handles clinic_id lookup, thread creation, etc.)
     const { data, error, insertedTable } = await insertMessageToSupabase({
       patientId,
       sender: "clinic",
@@ -39307,7 +39326,8 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     });
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
-      return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic });
+      console.error("[DOCTOR REPLY] messages_save_failed", { message: error.message, code: error.code, details: error.details, patientId, doctorId: req.doctorId });
+      return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic, detail: error.message });
     }
     try {
       const ts = new Date().toISOString();
