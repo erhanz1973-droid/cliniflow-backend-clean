@@ -31503,9 +31503,185 @@ app.get("/api/admin/referral-events", requireAdminAuth, async (req, res) => {
   }
 });
 
-// GET /api/admin/events
-// Get all events from all patients (travel events + treatment events)
-// Filters: upcoming (next 14 days, excluding today), overdue (past but not completed)
+/**
+ * Admin takvim (/api/admin/appointments): `appointments` tablosunda kayıt olmadan oluşan
+ * doktor tarafı `encounter_treatments.scheduled_at` kayıtlarını aynı API şekline döner.
+ */
+async function fetchAdminEncounterTreatmentAppointmentsForRange({
+  clinicId,
+  clinicCode,
+  rangeStartIso,
+  rangeEndExclusiveIso,
+}) {
+  const cid = clinicId ? String(clinicId).trim() : "";
+  if (!cid) return [];
+
+  let encRows = [];
+  try {
+    const { data, error } = await supabase
+      .from("patient_encounters")
+      .select("id, patient_id")
+      .eq("clinic_id", cid)
+      .limit(1000);
+    if (error && !["42P01", "PGRST205", "PGRST204"].includes(String(error.code || ""))) {
+      console.warn("[ADMIN APPOINTMENTS ET] patient_encounters:", error.message);
+      return [];
+    }
+    encRows = Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.warn("[ADMIN APPOINTMENTS ET] encounters ex:", e?.message || e);
+    return [];
+  }
+
+  const encToPatient = new Map(
+    encRows.map((e) => [String(e?.id || "").trim(), String(e?.patient_id || "").trim()]).filter(([a]) => a)
+  );
+  const encIds = [...encToPatient.keys()].filter(Boolean);
+  if (!encIds.length) return [];
+
+  /** @type {any[]} */
+  const etMerged = [];
+  for (let i = 0; i < encIds.length; i += 100) {
+    const chunk = encIds.slice(i, i + 100);
+    let etList = null;
+    for (const sel of [
+      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_at, updated_at",
+      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id",
+      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number",
+    ]) {
+      const { data: etData, error: etErr } = await supabase
+        .from("encounter_treatments")
+        .select(sel)
+        .in("encounter_id", chunk)
+        .not("scheduled_at", "is", null)
+        .gte("scheduled_at", rangeStartIso)
+        .lt("scheduled_at", rangeEndExclusiveIso);
+      const ec = String(etErr?.code || "");
+      if (!etErr && Array.isArray(etData)) {
+        etList = etData;
+        break;
+      }
+      if (["42703", "PGRST204", "PGRST205", "42P01"].includes(ec)) continue;
+      break;
+    }
+    for (const row of etList || []) {
+      etMerged.push(row);
+    }
+  }
+
+  const patientIds = new Set(
+    [...encToPatient.values()].map((p) => String(p || "").trim()).filter(Boolean)
+  );
+  const doctorIds = new Set(
+    etMerged.map((r) => String(r?.assigned_doctor_id || r?.doctor_id || "").trim()).filter(Boolean)
+  );
+
+  /** @type {Map<string,string>} */
+  const patientMap = new Map();
+  if (patientIds.size) {
+    const pidList = [...patientIds].slice(0, 800);
+    for (const run of [
+      () => supabase.from("patients").select("id,name,full_name").in("id", pidList),
+      () => supabase.from("patients").select("id,name,full_name").in("patient_id", pidList),
+    ]) {
+      const { data, error } = await run();
+      if (error) continue;
+      for (const p of data || []) {
+        const id = String(p?.id || "").trim();
+        const label = String(p?.full_name || p?.name || id).trim();
+        if (id) patientMap.set(id, label || id);
+      }
+      break;
+    }
+    if ((clinicCode || cid) && patientMap.size < patientIds.size) {
+      try {
+        const q = supabase.from("patients").select("id,name,full_name,patient_id").eq("clinic_id", cid).limit(800);
+        const { data, error } = await q;
+        if (!error && Array.isArray(data)) {
+          for (const p of data) {
+            const id = String(p?.id || "").trim();
+            const label = String(p?.full_name || p?.name || id).trim();
+            if (id) patientMap.set(id, label || id);
+            const lp = String(p?.patient_id || "").trim();
+            if (lp) patientMap.set(lp, label || lp);
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  /** @type {Map<string,string>} */
+  const doctorMap = new Map();
+  if (doctorIds.size) {
+    const didList = [...doctorIds].slice(0, 200);
+    const { data, error } = await supabase.from("doctors").select("id, doctor_id, name, full_name, email").in("id", didList);
+    if (!error) {
+      for (const doc of data || []) {
+        const ka = String(doc?.id || "").trim();
+        const kb = String(doc?.doctor_id || "").trim();
+        const label = String(doc?.name || doc?.full_name || doc?.email || ka || "").trim();
+        if (ka) doctorMap.set(ka, label);
+        if (kb) doctorMap.set(kb, label);
+      }
+    }
+  }
+
+  const toIsoSafe = (value) => {
+    if (!value) return null;
+    const ts = Date.parse(String(value));
+    if (!Number.isFinite(ts)) return null;
+    return new Date(ts).toISOString();
+  };
+
+  const out = [];
+  for (const row of etMerged) {
+    const st = String(row.status || "").toUpperCase();
+    if (st === "CANCELLED" || st === "CANCELED") continue;
+    const eid = String(row.encounter_id || "").trim();
+    const pid = encToPatient.get(eid);
+    if (!pid) continue;
+    const startAt = toIsoSafe(row.scheduled_at);
+    if (!startAt) continue;
+    const assignDoc = String(row.assigned_doctor_id || row.doctor_id || "").trim();
+    const procType = String(row.procedure_type || "TREATMENT").trim();
+    const toothRaw = row.tooth_number;
+    const tooth_number = (() => {
+      if (toothRaw == null || toothRaw === "") return "";
+      const s = String(toothRaw).trim();
+      const digits = s.replace(/\D/g, "");
+      const n = digits.length >= 2 ? Number.parseInt(digits.slice(0, 2), 10) : NaN;
+      if (Number.isFinite(n) && n >= 11 && n <= 48) return String(n);
+      return s;
+    })();
+    const appointmentDate = startAt.slice(0, 10);
+    out.push({
+      doctor: doctorMap.get(assignDoc) || assignDoc || "",
+      patient: patientMap.get(pid) || pid,
+      chair: String(row.chair || "").trim(),
+      startAt,
+      endAt: null,
+      status: st || "PLANNED",
+      treatment: procType,
+      ...(tooth_number ? { tooth_number } : {}),
+      duration_minutes: 0,
+      break_minutes: 0,
+      _appointmentDate: appointmentDate,
+      _source: "encounter_treatments",
+      _sourceId: String(row.id || "").trim(),
+    });
+  }
+
+  out.sort((a, b) => {
+    const at = a.startAt ? Date.parse(a.startAt) : 0;
+    const bt = b.startAt ? Date.parse(b.startAt) : 0;
+    return at - bt;
+  });
+  return out;
+}
+
+// GET /api/admin/appointments — randevular + doktor kaynaklı encounter_treatments birleştirmesi.
+// Sonraki blok: GET /api/admin/events (timeline)
+// Filters on events route: overdue / today / upcoming (extended horizon)
 app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
   try {
     const date = String(req.query.date || "").trim();
@@ -31560,7 +31736,6 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
           if (p?.id) clinicPatientIds.add(String(p.id));
           if (p?.patient_id) clinicPatientIds.add(String(p.patient_id));
         });
-        if (clinicPatientIds.size > 0) break;
       }
     } catch (e) {
       console.warn("[ADMIN APPOINTMENTS] clinic patient preload skipped:", e?.message || e);
@@ -31742,7 +31917,7 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
       }
     }
 
-    const appointments = rows
+    let appointments = rows
       .map((row) => {
         const doctorId = String(getField(row, ["doctor_id", "doctorId"]) || "");
         const patientId = String(getField(row, ["patient_id", "patientId"]) || "");
@@ -31840,6 +32015,36 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
       })
       .map(({ _appointmentDate, ...item }) => item);
 
+    try {
+      const etSlots = await fetchAdminEncounterTreatmentAppointmentsForRange({
+        clinicId: req.clinicId,
+        clinicCode: req.clinicCode,
+        rangeStartIso: dayStartIso,
+        rangeEndExclusiveIso: dayEndIso,
+      });
+      const dedupeEt = new Set(
+        appointments.map((a) => `${a.startAt}|${String(a.patient || "")}|${String(a.treatment || "")}`)
+      );
+      for (const slot of etSlots) {
+        const ad = slot._appointmentDate || (slot.startAt ? String(slot.startAt).slice(0, 10) : "");
+        if (isSingleDate) {
+          if (ad !== rangeStartDate) continue;
+        } else if (ad < rangeStartDate || ad > rangeEndDate) continue;
+        const k = `${slot.startAt}|${String(slot.patient || "")}|${String(slot.treatment || "")}`;
+        if (dedupeEt.has(k)) continue;
+        dedupeEt.add(k);
+        const { _appointmentDate, _source, _sourceId, ...rest } = slot;
+        appointments.push(rest);
+      }
+      appointments.sort((a, b) => {
+        const at = a.startAt ? Date.parse(a.startAt) : 0;
+        const bt = b.startAt ? Date.parse(b.startAt) : 0;
+        return at - bt;
+      });
+    } catch (etMerErr) {
+      console.warn("[ADMIN APPOINTMENTS] encounter_treatments merge:", etMerErr?.message || etMerErr);
+    }
+
     return res.json({
       ok: true,
       ...(isSingleDate ? { date: rangeStartDate } : { startDate: rangeStartDate, endDate: rangeEndDate }),
@@ -31888,9 +32093,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     today.setHours(0, 0, 0, 0);
     const todayStart = today.getTime();
     
-    // Calculate date range for upcoming (next 14 days, excluding today)
+    // Admin timeline: yaklaşan pencere (kısa süreli planlar kayboluyordu; 14→180 gün)
     const upcomingEnd = new Date(today);
-    upcomingEnd.setDate(upcomingEnd.getDate() + 14);
+    upcomingEnd.setDate(upcomingEnd.getDate() + 180);
     upcomingEnd.setHours(23, 59, 59, 999);
     const upcomingEndTs = upcomingEnd.getTime();
     
@@ -32014,27 +32219,47 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         ? [_eventsPatientSelectClause, ...patientSelectCandidates.filter(c => c !== _eventsPatientSelectClause)]
         : patientSelectCandidates;
       for (const selectClause of patientClausesToTry) {
-        const result = await supabase
+        /** @type {Map<string, any>} */
+        const accById = new Map();
+        const ingestPatients = (rows) => {
+          for (const r of rows || []) {
+            const id = String(r?.id || "").trim();
+            if (!id) continue;
+            if (!accById.has(id)) accById.set(id, r);
+          }
+        };
+        const r1 = await supabase
           .from("patients")
           .select(selectClause)
           .eq("clinic_id", req.clinicId)
           .order("created_at", { ascending: false });
 
-        if (!result.error) {
-          _eventsPatientSelectClause = selectClause; // cache the working clause
-          list = Array.isArray(result.data) ? result.data : [];
-          break;
+        if (r1.error) {
+          if (!isMissingColumnError(r1.error, "travel") &&
+              !isMissingColumnError(r1.error, "treatments") &&
+              !isMissingColumnError(r1.error, "treatment_events") &&
+              !["42703", "PGRST204"].includes(String(r1.error.code || ""))) {
+            console.error("[ADMIN EVENTS] patients query failed", r1.error);
+            break;
+          }
+          continue;
         }
-
-        if (!isMissingColumnError(result.error, "travel") &&
-            !isMissingColumnError(result.error, "treatments") &&
-            !isMissingColumnError(result.error, "treatment_events") &&
-            !["42703", "PGRST204"].includes(String(result.error.code || ""))) {
-          console.error("[ADMIN EVENTS] patients query failed", result.error);
+        ingestPatients(r1.data);
+        const codeUpper = String(req.clinicCode || "").trim();
+        if (codeUpper) {
+          const r2 = await supabase
+            .from("patients")
+            .select(selectClause)
+            .eq("clinic_code", codeUpper)
+            .order("created_at", { ascending: false });
+          if (!r2.error) ingestPatients(r2.data);
+        }
+        if (accById.size > 0) {
+          _eventsPatientSelectClause = selectClause; // cache the working clause
+          list = [...accById.values()];
           break;
         }
       }
-
       const doctorNameById = new Map();
       const clinicDoctorIds = [...new Set(
         (list || [])
