@@ -39834,16 +39834,18 @@ async function handleDoctorInboxSummary(req, res) {
         }
         // Fallback: find encounters via encounter_treatments.assigned_doctor_id or created_by_doctor_id
         // Use all doctor keys (UUID + raw) so doctors with legacy/non-UUID IDs are covered too
+        // NOTE: do NOT filter by scheduled_at here — we want all encounters where this doctor is assigned,
+        // even if some treatments have no scheduled_at (they'll be filtered in the main date-range loop below)
         const allDoctorKeys = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
         if (allDoctorKeys.length > 0) {
           try {
             const keysCsv = allDoctorKeys.map((k) => `"${k}"`).join(",");
-            const { data: etEnc } = await supabase
+            const { data: etEnc, error: etEncErr } = await supabase
               .from("encounter_treatments")
               .select("encounter_id")
               .or(`assigned_doctor_id.in.(${keysCsv}),created_by_doctor_id.in.(${keysCsv})`)
-              .not("scheduled_at", "is", null)
               .limit(400);
+            console.log("[DASHBOARD-ET-FALLBACK] dayYmd:", dayYmd, "doctorKeys:", allDoctorKeys, "etEnc count:", (etEnc || []).length, "error:", etEncErr?.message || null);
             const missingEncIds = [...new Set((etEnc || []).map((r) => String(r.encounter_id || "").trim()).filter(Boolean))]
               .filter((id) => !encById.has(id));
             if (missingEncIds.length > 0) {
@@ -39859,6 +39861,7 @@ async function handleDoctorInboxSummary(req, res) {
           } catch (_) {}
         }
         const encRows = Array.from(encById.values()).slice(0, 500);
+        console.log("[DASHBOARD-ET] dayYmd:", dayYmd, "encRows found:", encRows.length, "clinicId:", clinicId, "doctorKeys:", [...doctorKeySet].slice(0, 3));
         if (encRows.length === 0) return [];
         const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
         const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
@@ -39895,9 +39898,9 @@ async function handleDoctorInboxSummary(req, res) {
             const createdMs = row.created_at ? Date.parse(String(row.created_at)) : NaN;
             const updatedMs = row.updated_at ? Date.parse(String(row.updated_at)) : NaN;
             const startIso = toDashboardStartIso(primaryMs, createdMs, updatedMs);
-            if (!startIso) continue;
+            if (!startIso) { console.log("[DASHBOARD-ET] row skip: no startIso, id:", row.id, "scheduled_at:", row.scheduled_at); continue; }
             const t = Date.parse(startIso);
-            if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) continue;
+            if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) { console.log("[DASHBOARD-ET] row skip: out of range, id:", row.id, "scheduled_at:", row.scheduled_at, "t:", new Date(t).toISOString(), "range:", new Date(startMs).toISOString(), "-", new Date(endMsExclusive).toISOString()); continue; }
             const st = String(row.status || "").toLowerCase();
             if (st === "cancelled" || st === "canceled") continue;
             const eid = String(row.encounter_id || "");
