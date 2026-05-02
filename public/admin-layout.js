@@ -8,7 +8,7 @@
     console.error('❌ i18n not loaded — check script order');
   }
 
-  console.log('I18N FILE VERSION (layout):', 'v17');
+  console.log('I18N FILE VERSION (layout):', 'v18');
 
   const t = (key) => (window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key) : key);
 
@@ -225,6 +225,10 @@
     if (typeof window.rebindAdminLangButtons === 'function') {
       window.rebindAdminLangButtons();
     }
+    // Ensure any data-i18n elements in page content get translated
+    setTimeout(function () {
+      if (typeof window.applyI18n === 'function') window.applyI18n();
+    }, 0);
   }
 
   /* ── Load clinic name ────────────────────────────────────── */

@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v19');
+  console.log('I18N FILE VERSION:', 'v20');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -132,6 +132,12 @@
       // Dashboard (admin.html)
       dashboard: {
         title: "Clinifly Admin – Dashboard",
+        sidebar: {
+          mainMenu: "Ana Menü",
+          management: "Yönetim",
+          logout: "Çıkış",
+          clinic: "Klinik"
+        },
         nav: {
           dashboard: "Dashboard",
           patients: "Hastalar",
@@ -430,7 +436,7 @@
         inlineChairPh: "Chair No",
         inlineDoctorPick: "-- Doktor Seç --",
         deleteTitle: "Sil",
-        selToothHintActive: "Dişe tıkla, işlem ekle.",
+        selToothHintActive: "Diş seçin",
         status: {
           PLANNED: "Planlandı",
           ACTIVE: "Devam Ediyor",
@@ -931,15 +937,21 @@
       // Dashboard (admin.html)
       dashboard: {
         title: "Clinifly Admin – Dashboard",
+        sidebar: {
+          mainMenu: "Main Menu",
+          management: "Management",
+          logout: "Logout",
+          clinic: "Clinic"
+        },
         nav: {
           dashboard: "Dashboard",
           patients: "Patients",
           travel: "Travel",
           treatment: "Treatments",
-          schedule: "Calendar",
+          schedule: "Schedule",
           doctors: "Doctors",
-          chat: "Messages",
-          leads: "Leads / Unassigned",
+          chat: "Chat",
+          leads: "Leads",
           files: "Files",
           referrals: "Referrals",
           health: "Health",
@@ -1229,7 +1241,7 @@
         inlineChairPh: "Chair No",
         inlineDoctorPick: "-- Select doctor --",
         deleteTitle: "Delete",
-        selToothHintActive: "Click a tooth to add a procedure.",
+        selToothHintActive: "Select a tooth",
         status: {
           PLANNED: "Planned",
           ACTIVE: "In progress",
@@ -1696,7 +1708,13 @@
       },
       dashboard: {
         title: "Clinifly Admin – Панель управления",
-        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Путешествие", treatment: "Лечение", schedule: "Календарь", doctors: "Врачи", chat: "Сообщения", leads: "Лиды / Без назначения", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
+        sidebar: {
+          mainMenu: "Главное меню",
+          management: "Управление",
+          logout: "Выход",
+          clinic: "Клиника"
+        },
+        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Путешествие", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
         charts: {
           metricTitleMonthlyPatients: "Количество зарегистрированных пациентов по месяцам",
           metricTitleMonthlyProcedures: "Количество процедур по месяцам",
@@ -2178,7 +2196,13 @@
       },
       dashboard: {
         title: "Clinifly Admin – მართვის პანელი",
-        nav: { dashboard: "პანელი", patients: "პაციენტები", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "კალენდარი", doctors: "ექიმები", chat: "შეტყობინებები", leads: "ლიდები / მიუთითებელი", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები" },
+        sidebar: {
+          mainMenu: "მთავარი მენიუ",
+          management: "მართვა",
+          logout: "გასვლა",
+          clinic: "კლინიკა"
+        },
+        nav: { dashboard: "პანელი", patients: "პაციენტები", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "განრიგი", doctors: "ექიმები", chat: "ჩათი", leads: "ლიდები", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები" },
         charts: {
           metricTitleMonthlyPatients: "ყოველთვიული რეგისტრაციის რაოდენობა",
           metricTitleMonthlyProcedures: "ყოველთვიული პროცედურების რაოდენობა",
