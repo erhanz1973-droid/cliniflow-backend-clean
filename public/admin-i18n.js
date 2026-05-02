@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v20');
+  console.log('I18N FILE VERSION:', 'v21');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -1666,7 +1666,7 @@
         assignedBadgePrefix: "Dr.",
         assignedOk: "Assigned:",
         assignDisabledHint: "This lead is already assigned to a doctor.",
-      }
+      },
       common: {
         loading: "Загрузка...", save: "Сохранить", cancel: "Отмена", delete: "Удалить",
         edit: "Редактировать", search: "Поиск", filter: "Фильтр", close: "Закрыть",
