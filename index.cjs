@@ -31512,30 +31512,60 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
   clinicCode,
   rangeStartIso,
   rangeEndExclusiveIso,
+  clinicPatientIds = null,
 }) {
   const cid = clinicId ? String(clinicId).trim() : "";
   if (!cid) return [];
 
-  let encRows = [];
+  /** encounter id → patient_id (merge: clinic_id match ∪ patients of this clinic) */
+  const encToPatient = new Map();
+  const ingestEncounterRows = (rows) => {
+    for (const e of rows || []) {
+      const eid = String(e?.id || "").trim();
+      const pid = String(e?.patient_id || "").trim();
+      if (eid && pid) encToPatient.set(eid, pid);
+    }
+  };
+
   try {
     const { data, error } = await supabase
       .from("patient_encounters")
       .select("id, patient_id")
       .eq("clinic_id", cid)
-      .limit(1000);
+      .limit(8000);
     if (error && !["42P01", "PGRST205", "PGRST204"].includes(String(error.code || ""))) {
-      console.warn("[ADMIN APPOINTMENTS ET] patient_encounters:", error.message);
-      return [];
+      console.warn("[ADMIN APPOINTMENTS ET] patient_encounters clinic_id:", error.message);
+    } else if (Array.isArray(data)) {
+      ingestEncounterRows(data);
     }
-    encRows = Array.isArray(data) ? data : [];
   } catch (e) {
-    console.warn("[ADMIN APPOINTMENTS ET] encounters ex:", e?.message || e);
-    return [];
+    console.warn("[ADMIN APPOINTMENTS ET] encounters clinic_id ex:", e?.message || e);
   }
 
-  const encToPatient = new Map(
-    encRows.map((e) => [String(e?.id || "").trim(), String(e?.patient_id || "").trim()]).filter(([a]) => a)
-  );
+  // Çoğu klinikte encounter satırında clinic_id boş kalıyor; doktor ekranı yine patient_id ile buluyor.
+  // Admin takvim yalnızca clinic_id ile sorguladığı için tüm encounter_treatments düşüyordu.
+  try {
+    const raw = clinicPatientIds
+      ? clinicPatientIds instanceof Set
+        ? [...clinicPatientIds]
+        : [...(clinicPatientIds || [])]
+      : [];
+    const uniq = [...new Set(raw.map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 2500);
+    for (let i = 0; i < uniq.length; i += 80) {
+      const chunk = uniq.slice(i, i + 80);
+      const { data, error } = await supabase.from("patient_encounters").select("id, patient_id").in("patient_id", chunk);
+      if (error) {
+        if (!["42P01", "PGRST205", "PGRST204"].includes(String(error.code || ""))) {
+          console.warn("[ADMIN APPOINTMENTS ET] patient_encounters patient_id:", error.message);
+        }
+        continue;
+      }
+      ingestEncounterRows(data);
+    }
+  } catch (e2) {
+    console.warn("[ADMIN APPOINTMENTS ET] encounters by patient ex:", e2?.message || e2);
+  }
+
   const encIds = [...encToPatient.keys()].filter(Boolean);
   if (!encIds.length) return [];
 
@@ -31595,6 +31625,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     }
     if ((clinicCode || cid) && patientMap.size < patientIds.size) {
       try {
+        const codeUpper = String(clinicCode || "").trim().toUpperCase();
         const q = supabase.from("patients").select("id,name,full_name,patient_id").eq("clinic_id", cid).limit(800);
         const { data, error } = await q;
         if (!error && Array.isArray(data)) {
@@ -31606,6 +31637,22 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
             if (lp) patientMap.set(lp, label || lp);
           }
         }
+        if (codeUpper && patientMap.size < patientIds.size) {
+          const { data: d2, error: e2 } = await supabase
+            .from("patients")
+            .select("id,name,full_name,patient_id")
+            .eq("clinic_code", codeUpper)
+            .limit(800);
+          if (!e2 && Array.isArray(d2)) {
+            for (const p of d2) {
+              const id = String(p?.id || "").trim();
+              const label = String(p?.full_name || p?.name || id).trim();
+              if (id) patientMap.set(id, label || id);
+              const lp = String(p?.patient_id || "").trim();
+              if (lp) patientMap.set(lp, label || lp);
+            }
+          }
+        }
       } catch (_) {}
     }
   }
@@ -31614,15 +31661,21 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
   const doctorMap = new Map();
   if (doctorIds.size) {
     const didList = [...doctorIds].slice(0, 200);
-    const { data, error } = await supabase.from("doctors").select("id, doctor_id, name, full_name, email").in("id", didList);
-    if (!error) {
-      for (const doc of data || []) {
+    const applyDocRows = (docs) => {
+      for (const doc of docs || []) {
         const ka = String(doc?.id || "").trim();
         const kb = String(doc?.doctor_id || "").trim();
         const label = String(doc?.name || doc?.full_name || doc?.email || ka || "").trim();
         if (ka) doctorMap.set(ka, label);
         if (kb) doctorMap.set(kb, label);
       }
+    };
+    const rA = await supabase.from("doctors").select("id, doctor_id, name, full_name, email").in("id", didList);
+    if (!rA.error) applyDocRows(rA.data);
+    const missing = didList.filter((id) => !doctorMap.has(String(id).trim()));
+    if (missing.length) {
+      const rB = await supabase.from("doctors").select("id, doctor_id, name, full_name, email").in("doctor_id", missing);
+      if (!rB.error) applyDocRows(rB.data);
     }
   }
 
@@ -32021,6 +32074,7 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
         clinicCode: req.clinicCode,
         rangeStartIso: dayStartIso,
         rangeEndExclusiveIso: dayEndIso,
+        clinicPatientIds,
       });
       const dedupeEt = new Set(
         appointments.map((a) => `${a.startAt}|${String(a.patient || "")}|${String(a.treatment || "")}`)
@@ -32344,8 +32398,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             const { data: encRows, error: encQErr } = await supabase
               .from("patient_encounters")
               .select("id, patient_id, clinic_id")
-              .in("patient_id", chunk)
-              .eq("clinic_id", req.clinicId);
+              .in("patient_id", chunk);
             if (encQErr) {
               if (!["42P01", "PGRST205", "PGRST204"].includes(String(encQErr.code || ""))) {
                 console.error("[EVENTS] patient_encounters:", encQErr.message);
@@ -32353,7 +32406,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               continue;
             }
             (encRows || []).forEach((row) => {
-              if (!rowBelongsToClinic(row, req.clinicId)) return;
+              const expCid = String(req.clinicId || "").trim();
+              const cidOnEnc =
+                row && row.clinic_id != null && String(row.clinic_id).trim() !== ""
+                  ? String(row.clinic_id).trim()
+                  : "";
+              if (cidOnEnc && expCid && cidOnEnc !== expCid) return;
               const pid = String(row.patient_id || "");
               if (!encountersByPatientId.has(pid)) encountersByPatientId.set(pid, []);
               encountersByPatientId.get(pid).push(row);
