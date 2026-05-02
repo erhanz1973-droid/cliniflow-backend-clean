@@ -12770,6 +12770,7 @@ function mergeEncounterTreatmentRowsIntoPatientTeethPayload(
     const schedMs = row.scheduled_at ? new Date(row.scheduled_at).getTime() : null;
     const encKey = String(row?.encounter_id ?? "").trim();
     const planFromEnc = planMap && encKey ? planMap.get(encKey) : null;
+    const rawSchedStr = row.scheduled_at ? String(row.scheduled_at).trim() : null;
     const nextProc = {
       id: procId,
       procedureId: procId,
@@ -12777,6 +12778,7 @@ function mergeEncounterTreatmentRowsIntoPatientTeethPayload(
       category: procedures.categoryForType(type),
       status: mappedStatus,
       scheduledAt: Number.isFinite(schedMs) ? schedMs : null,
+      scheduled_at: rawSchedStr || null,
       date: Number.isFinite(schedMs) ? schedMs : createdAt,
       createdAt,
       notes: "",
@@ -39869,6 +39871,7 @@ async function handleDoctorInboxSummary(req, res) {
           const chunk = encIds.slice(i, i + 80);
           let etList = null;
           for (const sel of [
+            "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_by_doctor_id, created_at, updated_at, doctor_id",
             "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_at, updated_at, doctor_id",
             "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_at, updated_at",
             "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, created_at, updated_at",
@@ -39909,13 +39912,14 @@ async function handleDoctorInboxSummary(req, res) {
             const encDoc = encToEncounterDoctor.get(eid) || null;
             const adoc = row.assigned_doctor_id != null ? String(row.assigned_doctor_id).trim() : null;
             const midDoc = row.doctor_id != null && String(row.doctor_id).trim() !== "" ? String(row.doctor_id).trim() : null;
+            const etCreatedByDoc = row.created_by_doctor_id != null && String(row.created_by_doctor_id).trim() !== "" ? String(row.created_by_doctor_id).trim() : null;
             const slot = {
               id: `et-${row.id}`,
               patient_id: pid,
               start_time: startIso,
               assigned_doctor_id: adoc,
               _midDoctor: midDoc,
-              created_by_doctor_id: encDoc,
+              created_by_doctor_id: etCreatedByDoc || encDoc,
               doctorId: row.doctorId,
               appointment_time: timeStr,
               status: row.status,
@@ -40064,7 +40068,9 @@ async function handleDoctorInboxSummary(req, res) {
               const eid = String(plan.encounter_id || "").trim();
               let pid = (eid && encToPatient.get(eid)) || String(plan.patient_id || "").trim();
               if (!pid) continue;
-              const timeStr = new Date(t).toTimeString().slice(0, 5);
+              const rawSchedTpi = String(row.scheduled_at || "");
+              const isLocalStrTpi = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawSchedTpi) && !rawSchedTpi.endsWith("Z") && !rawSchedTpi.includes("+");
+              const timeStr = isLocalStrTpi ? rawSchedTpi.slice(11, 16) : new Date(t).toTimeString().slice(0, 5);
               const proc = String(row.procedure_name || row.procedure_code || "TREATMENT").trim();
               const toothRaw = row.tooth_number != null ? row.tooth_number : row.tooth_fdi_code;
               const tooth =
