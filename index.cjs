@@ -48442,6 +48442,16 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       return u;
     };
 
+    // Normalize a DB timestamp to a no-timezone civil time string ("YYYY-MM-DDTHH:MM")
+    // so the device displays the same time as the dashboard (which slices time from the raw DB string).
+    // Without this, +00:00 timestamps get shifted by the device timezone offset on display.
+    const normalizeDueDateForDisplay = (raw) => {
+      if (!raw) return null;
+      const s = String(raw).trim();
+      // Strip timezone offset (+HH:MM, +00:00, Z) and sub-seconds, keep YYYY-MM-DDTHH:MM
+      return s.replace(/(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, '').slice(0, 16) || null;
+    };
+
     const tasksFromPlans = (treatmentItems || [])
       .map((item) => {
         const treatmentPlanId = String(item?.treatment_plan_id || '');
@@ -48469,7 +48479,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           type: String(item?.type || 'PROCEDURE').toUpperCase(),
           procedure_name: String(item?.procedure_name || item?.procedure_code || 'Procedure'),
           procedure_category: String(item?.category || ''),
-          due_date:
+          due_date: normalizeDueDateForDisplay(
             item?.due_date ||
             item?.scheduled_at ||
             item?.appointment_date ||
@@ -48477,8 +48487,8 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
             item?.updated_at ||
             item?.created_at ||
             plan?.created_at ||
-            encounter?.created_at ||
-            null,
+            encounter?.created_at
+          ),
           scheduled_by: 'DOCTOR',
           priority: String(item?.priority || 'MEDIUM').toUpperCase(),
           high_priority: item?.high_priority === true,
@@ -48621,7 +48631,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           type: 'PROCEDURE',
           procedure_name: procLabel,
           procedure_category: '',
-          due_date: et?.scheduled_at || et?.created_at || null,
+          due_date: normalizeDueDateForDisplay(et?.scheduled_at || et?.created_at),
           scheduled_by: 'DOCTOR',
           priority: 'MEDIUM',
           high_priority: false,
