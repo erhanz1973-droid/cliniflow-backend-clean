@@ -2309,6 +2309,14 @@ async function _insertMessageToSupabaseCore({
         clinicCode = thr.clinicCode || clinicCode;
       }
     }
+
+    // Last resort: use the clinic from the doctor/admin's own JWT context
+    if (!clinicId && contextClinicId && UUID_RE.test(String(contextClinicId).trim())) {
+      clinicId = String(contextClinicId).trim();
+    }
+    if (!clinicCode && contextClinicCode) {
+      clinicCode = String(contextClinicCode).trim().toUpperCase() || clinicCode;
+    }
   }
 
   if (!clinicId && !clinicCode) {
