@@ -39833,10 +39833,14 @@ async function handleDoctorInboxSummary(req, res) {
           } catch (_) {}
         }
         // Fallback: find encounters via encounter_treatments.assigned_doctor_id or created_by_doctor_id
-        // Use all doctor keys (UUID + raw) so doctors with legacy/non-UUID IDs are covered too
+        // MUST use UUID-only keys — assigned_doctor_id and created_by_doctor_id are uuid columns;
+        // passing legacy short codes (e.g. "SZ45") causes Postgres "invalid input syntax for type uuid" error
+        // which silently returns 0 results for the entire .or() query.
         // NOTE: do NOT filter by scheduled_at here — we want all encounters where this doctor is assigned,
         // even if some treatments have no scheduled_at (they'll be filtered in the main date-range loop below)
-        const allDoctorKeys = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
+        const allDoctorKeys = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(
+          (k) => k && DOCTOR_FK_UUID_RE.test(k)
+        );
         if (allDoctorKeys.length > 0) {
           try {
             const keysCsv = allDoctorKeys.map((k) => `"${k}"`).join(",");
