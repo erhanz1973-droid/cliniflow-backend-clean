@@ -12283,6 +12283,46 @@ async function resolveAdminPatientInternalId(patientId, clinicId) {
   return null;
 }
 
+/**
+ * Resolve request patient_id (slug or UUID) to a full patients row for doctor routes.
+ * Order: try resolveAdminPatientInternalId (slug→UUID within clinic) via getPatientById, then inbound id(s).
+ */
+async function resolvePatientRowWithAdminFallback(patient_id, clinicId, logPrefix = "[ENCOUNTER]") {
+  const originalPid = String(patient_id || "").trim();
+  if (!originalPid) return null;
+
+  const cid = String(clinicId || "").trim();
+  let resolvedId = null;
+  if (cid) {
+    resolvedId = await resolveAdminPatientInternalId(patient_id, cid);
+    if (resolvedId) resolvedId = String(resolvedId).trim();
+  }
+
+  console.log(`${logPrefix} incoming patient_id:`, patient_id);
+  console.log(`${logPrefix} resolved patient_id:`, resolvedId || "(none via admin resolver)");
+
+  const keys = [];
+  if (resolvedId) keys.push(resolvedId);
+  keys.push(originalPid);
+
+  const seen = new Set();
+  for (const key of keys) {
+    const k = String(key || "").trim();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    try {
+      const row = await getPatientById(k);
+      if (row?.id) {
+        console.log(`${logPrefix} matched patients.id:`, row.id, "via key:", k);
+        return row;
+      }
+    } catch (_) {}
+  }
+
+  console.warn(`${logPrefix} patient_not_found; tried keys:`, [...seen]);
+  return null;
+}
+
 /** True if value is safe for Postgres uuid columns (never pass p_… prefix strings). */
 function isPostgresUuidString(s) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || "").trim());
@@ -32143,16 +32183,29 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     const rangeEndTs = hasRangeFilter ? Date.parse(`${endDate}T23:59:59.999Z`) : null;
 
     const now = Date.now();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStart = today.getTime();
-    
-    // Admin timeline: yaklaşan pencere (kısa süreli planlar kayboluyordu; 14→180 gün)
-    const upcomingEnd = new Date(today);
-    upcomingEnd.setDate(upcomingEnd.getDate() + 180);
-    upcomingEnd.setHours(23, 59, 59, 999);
-    const upcomingEndTs = upcomingEnd.getTime();
-    
+    /** Dashboard gün kovaları: sunucu UTC iken TR klinikleri için yerel takvim günü (varsayılan Europe/Istanbul). */
+    const EVENTS_CAL_TZ = String(process.env.ADMIN_EVENTS_CALENDAR_TZ || "Europe/Istanbul").trim() || "Europe/Istanbul";
+    const calendarDayKeyInTz = (ms) => {
+      if (!Number.isFinite(ms)) return "";
+      try {
+        const parts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: EVENTS_CAL_TZ,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).formatToParts(new Date(ms));
+        const map = {};
+        for (const p of parts) {
+          if (p.type !== "literal") map[p.type] = p.value;
+        }
+        if (!map.year || !map.month || !map.day) return "";
+        return `${map.year}-${map.month}-${map.day}`;
+      } catch (_) {
+        return "";
+      }
+    };
+    const upcomingInstantLimit = now + 180 * 24 * 60 * 60 * 1000;
+
     const allEvents = [];
     let currentPatientMembershipStartMs = 0;
 
@@ -32170,9 +32223,19 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
     const dateTimeToIso = (dateStr, timeStr) => {
       if (!dateStr) return null;
-      const time = timeStr ? String(timeStr) : "00:00";
-      const iso = `${dateStr}T${time}:00`;
-      const t = Date.parse(iso);
+      const d = String(dateStr).trim();
+      const tm = timeStr != null ? String(timeStr).trim() : "";
+      let wall;
+      if (!tm) {
+        wall = `${d}T00:00:00`;
+      } else if (/^\d{2}:\d{2}:\d{2}$/.test(tm)) {
+        wall = `${d}T${tm}`;
+      } else if (/^\d{2}:\d{2}$/.test(tm)) {
+        wall = `${d}T${tm}:00`;
+      } else {
+        wall = `${d}T${tm}`;
+      }
+      const t = Date.parse(wall);
       if (!Number.isFinite(t)) return null;
       return new Date(t).toISOString();
     };
@@ -32632,7 +32695,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       }
 
       for (const p of list) {
-        if (!p || p.clinic_id == null || String(p.clinic_id) !== String(req.clinicId)) continue;
+        const rowCid = String(p?.clinic_id ?? "").trim();
+        const rowCode = String(p?.clinic_code ?? "").trim().toUpperCase();
+        const idMatch = req.clinicId && rowCid && rowCid === String(req.clinicId).trim();
+        const codeMatch = clinicCode && rowCode && rowCode === clinicCode;
+        if (!p || (!idMatch && !codeMatch)) continue;
         currentPatientMembershipStartMs = p?.created_at ? Date.parse(String(p.created_at)) : 0;
         const patientId = String(p?.patient_id || p?.id || "").trim();
         if (!patientId) continue;
@@ -33221,47 +33288,51 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     const overdue = [];
     const todayEvents = [];
     const upcoming = [];
-    
-    // Calculate today end time
-    const todayEnd = new Date(today);
-    todayEnd.setHours(23, 59, 59, 999);
-    const todayEndTs = todayEnd.getTime();
-    
-    // Treatment event types that should show as overdue
+    const todayKey = calendarDayKeyInTz(now) || new Date(now).toISOString().slice(0, 10);
+
     const treatmentEventTypes = ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB"];
-    
-    allEvents.forEach(evt => {
-      const eventTs = evt.timestamp || (evt.timelineAt ? Date.parse(evt.timelineAt) : 0) || 0;
+
+    allEvents.forEach((evt) => {
+      let eventTs = Number(evt.timestamp);
+      if (!Number.isFinite(eventTs) || eventTs <= 0) {
+        eventTs = evt.timelineAt ? Date.parse(String(evt.timelineAt)) : 0;
+      }
+      if (!Number.isFinite(eventTs) || eventTs <= 0) return;
+
       const status = String(evt.status || "PLANNED").toUpperCase();
       const isCompleted = status === "DONE" || status === "COMPLETED";
-      const isCancelled = status === "CANCELLED";
+      const isCancelled = status === "CANCELLED" || status === "CANCELED";
       const eventType = String(evt.type || "").toUpperCase();
       const isTreatmentEvent = treatmentEventTypes.includes(eventType);
-      
-      // Skip cancelled or completed events from upcoming/overdue lists
-      if (isCancelled || isCompleted) {
-        return; // Don't add to overdue or upcoming
+
+      if (isCancelled || isCompleted) return;
+
+      const eventKey = calendarDayKeyInTz(eventTs) || String(evt.date || "").trim().slice(0, 10);
+      const keyUsable = eventKey && /^\d{4}-\d{2}-\d{2}$/.test(eventKey);
+      const todayUsable = todayKey && /^\d{4}-\d{2}-\d{2}$/.test(todayKey);
+
+      if (keyUsable && todayUsable) {
+        if (eventKey < todayKey && isTreatmentEvent) overdue.push(evt);
+        else if (eventKey === todayKey) todayEvents.push(evt);
+        else if (eventKey > todayKey && eventTs <= upcomingInstantLimit) upcoming.push(evt);
+        return;
       }
-      
-      // Overdue: past date but not completed - ONLY for treatment events
-      // Double check: event must be in the past AND not completed
-      if (eventTs < todayStart && isTreatmentEvent && !isCompleted && !isCancelled) {
-        overdue.push(evt);
-      }
-      // Today: events happening today
-      else if (eventTs >= todayStart && eventTs <= todayEndTs && !isCompleted && !isCancelled) {
-        todayEvents.push(evt);
-      }
-      // Upcoming: next 14 days (excluding today), but only if not completed/cancelled
-      else if (eventTs > todayEndTs && eventTs <= upcomingEndTs && !isCompleted && !isCancelled) {
-        upcoming.push(evt);
-      }
+
+      const todaySrv = new Date(now);
+      todaySrv.setHours(0, 0, 0, 0);
+      const todayStart = todaySrv.getTime();
+      const todayEnd = new Date(todaySrv);
+      todayEnd.setHours(23, 59, 59, 999);
+      const todayEndTsSrv = todayEnd.getTime();
+
+      if (eventTs < todayStart && isTreatmentEvent) overdue.push(evt);
+      else if (eventTs >= todayStart && eventTs <= todayEndTsSrv) todayEvents.push(evt);
+      else if (eventTs > todayEndTsSrv && eventTs <= upcomingInstantLimit) upcoming.push(evt);
     });
-    
-    // Sort overdue by date (oldest first)
+
     overdue.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-    
-    // Sort upcoming by date (soonest first)
+    todayEvents.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
     upcoming.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     
     res.json({
@@ -41744,26 +41815,11 @@ app.post('/api/doctor/encounters', requireDoctorAuth, async (req, res) => {
     }
 
     const clinicIdDoc = String(req?.doctor?.clinic_id || '').trim();
-    let resolvedPatientId = String(patient_id || '').trim();
-    if (clinicIdDoc) {
-      const r = await resolveAdminPatientInternalId(patient_id, clinicIdDoc);
-      if (r) resolvedPatientId = r;
-    }
-    if (!resolvedPatientId || resolvedPatientId === String(patient_id)) {
-      try {
-        const p = await getPatientById(patient_id);
-        if (p?.id) resolvedPatientId = String(p.id);
-      } catch (_) {}
-    }
-    try {
-      const verify = await getPatientById(resolvedPatientId);
-      if (!verify?.id) {
-        return res.status(404).json({ ok: false, error: 'patient_not_found' });
-      }
-      resolvedPatientId = String(verify.id);
-    } catch (_) {
+    const patientRow = await resolvePatientRowWithAdminFallback(patient_id, clinicIdDoc, "[ENCOUNTER]");
+    if (!patientRow?.id) {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
+    const resolvedPatientId = String(patientRow.id);
 
     const safeSelect = 'id, patient_id, created_by_doctor_id, status, created_at';
 
@@ -43033,9 +43089,12 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
     const patientId = String(req.params.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
 
-    const patRow = await getPatientById(patientId).catch(() => null);
     const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
-    if (docCid && patRow && patRow.clinic_id != null && String(patRow.clinic_id).trim() !== docCid) {
+    const patRow = await resolvePatientRowWithAdminFallback(patientId, docCid, "[DOCTOR PATIENT TREATMENTS]");
+    if (!patRow?.id) {
+      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+    }
+    if (docCid && patRow.clinic_id != null && String(patRow.clinic_id).trim() !== docCid) {
       return res.status(404).json({ ok: false, error: "patient_not_found" });
     }
     const internalUuid = String(patRow?.id || "").trim();
@@ -43256,38 +43315,15 @@ app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (r
 
     if (!isSupabaseEnabled()) return res.status(500).json({ ok: false, error: 'supabase_not_configured' });
 
-    const patientSelects = [
-      'id, patient_id, clinic_id, clinic_code, name, full_name, phone, email, status, created_at',
-    ];
-    const findPatientByField = async (fieldName) => {
-      for (const selectClause of patientSelects) {
-        const result = await supabase
-          .from('patients')
-          .select(selectClause)
-          .eq(fieldName, patientId)
-          .maybeSingle();
-        if (!result.error) {
-          return { patient: result.data || null, error: null };
-        }
-        const code = String(result.error?.code || '');
-        if (!['42703', 'PGRST204', 'PGRST205', '22P02'].includes(code)) {
-          break;
-        }
-      }
-      return { patient: null, error: null };
-    };
+    const docCid = String(req.doctor?.clinic_id || req.clinicId || '').trim();
+    const patient =
+      (await resolvePatientRowWithAdminFallback(patientId, docCid, '[DOCTOR PATIENT DIAGNOSES]')) ||
+      null;
 
-    let lookup = await findPatientByField('id');
-    if (!lookup.patient) {
-      lookup = await findPatientByField('patient_id');
-    }
-
-    if (!lookup.patient) {
+    if (!patient) {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
 
-    const patient = lookup.patient;
-    const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
     if (docCid && patient.clinic_id != null && String(patient.clinic_id).trim() !== docCid) {
       return res.status(404).json({ ok: false, error: "patient_not_found" });
     }
