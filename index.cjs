@@ -12323,6 +12323,28 @@ async function resolvePatientRowWithAdminFallback(patient_id, clinicId, logPrefi
   return null;
 }
 
+/** Blocklist aligned with doctor patient list — PENDING/onay bekleyenler okunabilir, arşiv/reddedilenler hayır */
+function isPatientStatusBlockedForDoctorRead(status) {
+  const s = String(status ?? "").trim().toUpperCase();
+  if (!s) return false;
+  return ["ARCHIVED", "INACTIVE", "CANCELLED", "REJECTED"].includes(s);
+}
+
+/** clinic_id uyumsuz olsa bile tedavi takımı / encounter üzerinden erişim varsa okumaya izin ver */
+async function doctorCanReadPatientAcrossClinicMismatch(patient, patientIdParam, req) {
+  const patientKeyForAccess = String(patient?.id || patient?.patient_id || patientIdParam || "").trim();
+  let ok = false;
+  try {
+    ok = await doctorHasTreatmentTeamAccessToPatientId(patientKeyForAccess, req);
+  } catch (_) {}
+  if (!ok) {
+    try {
+      ok = await doctorOwnsAnyEncounterForPatient(patient, req);
+    } catch (_) {}
+  }
+  return !!ok;
+}
+
 /** True if value is safe for Postgres uuid columns (never pass p_… prefix strings). */
 function isPostgresUuidString(s) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || "").trim());
@@ -43095,8 +43117,26 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
     if (docCid && patRow.clinic_id != null && String(patRow.clinic_id).trim() !== docCid) {
-      return res.status(404).json({ ok: false, error: "patient_not_found" });
+      const allowCross = await doctorCanReadPatientAcrossClinicMismatch(patRow, patientId, req);
+      if (!allowCross) {
+        return res.status(404).json({ ok: false, error: "patient_not_found" });
+      }
     }
+
+    const treatmentsAccessKey = String(patRow?.id || patRow?.patient_id || patientId).trim();
+    let treatmentsAssigned = false;
+    try {
+      treatmentsAssigned = await doctorHasTreatmentTeamAccessToPatientId(treatmentsAccessKey, req);
+    } catch (_) {}
+    if (!treatmentsAssigned) {
+      try {
+        treatmentsAssigned = await doctorOwnsAnyEncounterForPatient(patRow, req);
+      } catch (_) {}
+    }
+    if (!treatmentsAssigned) {
+      return res.status(403).json({ ok: false, error: "patient_not_assigned" });
+    }
+
     const internalUuid = String(patRow?.id || "").trim();
     const encounterPidKeys = internalUuid
       ? await encounterPatientIdMatchSet(internalUuid, patientId)
@@ -43325,10 +43365,12 @@ app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (r
     }
 
     if (docCid && patient.clinic_id != null && String(patient.clinic_id).trim() !== docCid) {
-      return res.status(404).json({ ok: false, error: "patient_not_found" });
+      const allowCross = await doctorCanReadPatientAcrossClinicMismatch(patient, patientId, req);
+      if (!allowCross) {
+        return res.status(404).json({ ok: false, error: "patient_not_found" });
+      }
     }
-    const statusRaw = String(patient?.status || '').toUpperCase();
-    if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
+    if (isPatientStatusBlockedForDoctorRead(patient?.status)) {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
 
