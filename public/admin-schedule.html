@@ -234,9 +234,51 @@
       }
     }
 
+    /** Tek giriş noktası: ISO / tarih+süre / sayısal ms / Date */
+    function safeDate(input) {
+      if (input == null || input === "") return null;
+      if (input instanceof Date) return Number.isNaN(input.getTime()) ? null : input;
+      if (typeof input === "number" && Number.isFinite(input)) {
+        const d = new Date(input);
+        return Number.isNaN(d.getTime()) ? null : d;
+      }
+      let s = String(input).trim();
+      if (!s) return null;
+      if (!s.includes("T")) s = s.replace(/\s+/g, "T");
+      const d = new Date(s);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    /** Randevu / timeline satırından başlangıç ham değeri (öncelik sırası). */
+    function calendarItemStartRaw(rawItem) {
+      if (!rawItem || typeof rawItem !== "object") return null;
+      const chain = [
+        rawItem.startAt,
+        rawItem.start_at,
+        rawItem.timelineAt,
+        rawItem.timeline_at,
+        rawItem.timestamp,
+        rawItem.appointment_date,
+        rawItem.appointmentDate,
+        rawItem.created_at,
+        rawItem.createdAt,
+      ];
+      for (const c of chain) {
+        if (c != null && String(c).trim() !== "") return c;
+      }
+      const dd = rawItem.date && String(rawItem.date).trim();
+      if (dd && /^\d{4}-\d{2}-\d{2}$/.test(dd)) {
+        const tm = rawItem.time != null ? String(rawItem.time).trim() : "";
+        if (/^\d{2}:\d{2}:\d{2}$/.test(tm)) return `${dd}T${tm}`;
+        if (/^\d{2}:\d{2}$/.test(tm)) return `${dd}T${tm}:00`;
+        return `${dd}T00:00:00`;
+      }
+      return null;
+    }
+
     function toDateOnly(value) {
-      const d = new Date(value);
-      if (Number.isNaN(d.getTime())) return '';
+      const d = safeDate(value);
+      if (!d) return '';
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
@@ -281,9 +323,9 @@
     function fmtTime(startAt, endAt, lang) {
       const L = lang !== undefined ? lang : currentLanguage();
       const loc = localeMap[L] || 'en-US';
-      const s = startAt ? new Date(startAt) : null;
-      const e = endAt ? new Date(endAt) : null;
-      if (!s || Number.isNaN(s.getTime())) return '-';
+      const s = safeDate(startAt);
+      const e = safeDate(endAt);
+      if (!s) return '-';
       const sText = s.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
       if (!e || Number.isNaN(e.getTime())) return sText;
       const eText = e.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
@@ -392,8 +434,8 @@
         if (mappedTotal > 0) return Math.max(SLOT_MINUTES, mappedTotal);
       }
 
-      const start = item?.startAt ? new Date(item.startAt) : null;
-      const end = item?.endAt ? new Date(item.endAt) : null;
+      const start = safeDate(item.startAt);
+      const end = safeDate(item.endAt);
       if (start && end && Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start) {
         const diffMin = Math.ceil((end.getTime() - start.getTime()) / (60 * 1000));
         return Math.max(SLOT_MINUTES, diffMin);
@@ -533,10 +575,14 @@
     }
 
     function normalizeIncomingAppointment(rawItem) {
-      const startRaw = rawItem?.startAt || rawItem?.start_at || (rawItem?.date ? `${rawItem.date}T${String(rawItem.time || '00:00')}:00` : null);
+      const raw = calendarItemStartRaw(rawItem);
+      const start = safeDate(raw);
+      if (!start) {
+        console.warn("INVALID EVENT DATE:", raw, rawItem);
+        return null;
+      }
       const endRaw = rawItem?.endAt || rawItem?.end_at || null;
-      const startTs = startRaw ? Date.parse(String(startRaw)) : NaN;
-      const endTs = endRaw ? Date.parse(String(endRaw)) : NaN;
+      const end = safeDate(endRaw);
 
       const doctor = String(rawItem?.doctor || rawItem?.doctor_name || rawItem?.doctorName || rawItem?.doctor_id || rawItem?.doctorId || '').trim();
       const patient = String(rawItem?.patient || rawItem?.patient_name || rawItem?.patientName || rawItem?.patient_id || rawItem?.patientId || '').trim();
@@ -545,14 +591,17 @@
       const type = String(rawItem?.type || rawItem?.eventType || rawItem?.procedure_code || '').trim();
       const eventType = String(rawItem?.eventType || rawItem?.type || '').trim();
       const tooth = normalizeToothLabel(rawItem);
+      const id = rawItem?.id != null ? String(rawItem.id) : '';
 
       return {
+        id,
         doctor,
         patient,
         chair,
         tooth,
-        startAt: Number.isFinite(startTs) ? new Date(startTs).toISOString() : null,
-        endAt: Number.isFinite(endTs) ? new Date(endTs).toISOString() : null,
+        startAt: start.toISOString(),
+        endAt: end && !Number.isNaN(end.getTime()) ? end.toISOString() : null,
+        _startDate: start,
         status: String(rawItem?.status || 'PROPOSED').toUpperCase(),
         treatment,
         type,
@@ -561,6 +610,7 @@
         break_minutes: parseMinuteValue(rawItem?.break_minutes ?? rawItem?.breakMinutes ?? rawItem?.rest_minutes ?? rawItem?.break_duration, 0),
         _doctorNorm: normalizeDoctorName(doctor),
         _chairNorm: normalizeChairText(chair),
+        _source: rawItem?._source || 'appointments',
       };
     }
 
@@ -676,7 +726,7 @@
       const timeHead = t('calendar.timeColumn');
 
       weekFiltered.forEach((item) => {
-        const start = item.startAt ? new Date(item.startAt) : null;
+        const start = safeDate(item.startAt);
         if (!start || Number.isNaN(start.getTime())) return;
         const exactIdx = slotIndexFromDate(start, slots);
         const slotIdx = exactIdx >= 0 ? exactIdx : slotIndexFromDateFloor(start, slots);
@@ -846,64 +896,79 @@
 
       const daySet = daySetFromRange(startDate, endDate);
 
+      let invalidTl = 0;
       const toAppointmentLike = (evt) => {
-        const startRaw = evt?.timelineAt || (evt?.date ? `${evt.date}T${String(evt.time || '00:00')}:00` : null);
-        const startTs = startRaw ? Date.parse(String(startRaw)) : NaN;
-        if (!Number.isFinite(startTs)) return null;
-        const startAt = new Date(startTs).toISOString();
-        const dateKey = toDateOnly(startAt);
+        const raw = calendarItemStartRaw(evt);
+        const start = safeDate(raw);
+        if (!start) {
+          invalidTl++;
+          console.warn("INVALID EVENT DATE (timeline→calendar):", raw, evt);
+          return null;
+        }
+        const startAt = start.toISOString();
+        const dateKey = toDateOnly(start);
         if (!daySet.has(dateKey)) return null;
 
         return {
+          id: evt?.id != null ? String(evt.id) : '',
           doctor: String(evt?.doctor || evt?.doctorName || ''),
           patient: String(evt?.patientName || evt?.patient || evt?.patientId || ''),
           chair: String(evt?.chair || evt?.chairName || ''),
           tooth: normalizeToothLabel(evt),
           startAt,
+          _startDate: start,
           endAt: evt?.endAt || evt?.end_at || null,
           status: String(evt?.status || 'PROPOSED').toUpperCase(),
           treatment: String(evt?.eventType || evt?.treatment || evt?.procedure || evt?.type || ''),
           duration_minutes: Number.parseInt(evt?.duration_minutes ?? evt?.duration ?? 0, 10) || 0,
           break_minutes: Number.parseInt(evt?.break_minutes ?? evt?.rest_minutes ?? 0, 10) || 0,
           _source: 'timeline',
+          _doctorNorm: normalizeDoctorName(String(evt?.doctor || evt?.doctorName || '')),
+          _chairNorm: normalizeChairText(String(evt?.chair || evt?.chairName || '')),
         };
       };
 
-      return all.map(toAppointmentLike).filter(Boolean);
+      const mapped = all.map(toAppointmentLike).filter(Boolean);
+      console.log("[calendar /api/admin/events] RAW LENGTH:", all.length);
+      console.log("[calendar /api/admin/events] EVENTS LENGTH:", mapped.length);
+      console.log("[calendar /api/admin/events] INVALID COUNT:", invalidTl);
+      mapped.__adminEventsRawTotal = all.length;
+      mapped.__adminEventsInvalidTl = invalidTl;
+
+      return mapped;
     }
 
     async function fetchAppointmentsForRange(startDate, endDate) {
       return fetchRangeAppointments(startDate, endDate);
     }
 
+    /**
+     * Aynı slot + hasta + doktor + sandalye altında birden fazla işlem vardı; eski Map birleştirmesi tek karta düşürüyordu.
+     * Artık sadece tam aynı fingerprint tekrarlarını atıyoruz (gerçek kopya).
+     */
     function mergeUniqueAppointments(base, extras) {
-      const keyOf = (item) => `${item?.startAt || ''}|${item?.patient || ''}|${item?.doctor || ''}|${item?.chair || ''}`;
-      const map = new Map();
-      (base || []).forEach((item) => map.set(keyOf(item), item));
-      (extras || []).forEach((item) => {
-        const key = keyOf(item);
-        if (!map.has(key)) {
-          map.set(key, item);
-          return;
-        }
-
-        const current = map.get(key) || {};
-        const merged = { ...current, ...item };
-
-        const currentDuration = parseMinuteValue(current?.duration_minutes, 0);
-        const itemDuration = parseMinuteValue(item?.duration_minutes, 0);
-        const currentBreak = parseMinuteValue(current?.break_minutes, 0);
-        const itemBreak = parseMinuteValue(item?.break_minutes, 0);
-
-        if (itemDuration <= 0 && currentDuration > 0) merged.duration_minutes = currentDuration;
-        if (itemBreak <= 0 && currentBreak > 0) merged.break_minutes = currentBreak;
-        if (!item?.treatment && current?.treatment) merged.treatment = current.treatment;
-        if (!item?.endAt && current?.endAt) merged.endAt = current.endAt;
-        if (!merged.tooth && (current?.tooth || item?.tooth)) merged.tooth = current?.tooth || item?.tooth;
-
-        map.set(key, merged);
-      });
-      return Array.from(map.values());
+      const out = [...(base || []), ...(extras || [])];
+      const seen = new Set();
+      const deduped = [];
+      for (const item of out) {
+        const fp = [
+          item?.startAt || '',
+          item?.patient || '',
+          item?.doctor || '',
+          item?.chair || '',
+          item?.treatment || '',
+          item?.tooth || '',
+          item?.type || '',
+          item?.eventType || '',
+          item?.status || '',
+          item?._source || '',
+          item?.id || '',
+        ].join('\x1e');
+        if (seen.has(fp)) continue;
+        seen.add(fp);
+        deduped.push(item);
+      }
+      return deduped;
     }
 
     function applyScheduleStaticI18n(optionalLang) {
@@ -945,9 +1010,35 @@
           weeklyAppointments = [];
         }
 
-        allAppointments = (weeklyAppointments || [])
-          .map(normalizeIncomingAppointment)
-          .filter((item) => !!item.startAt);
+        try {
+          const sp = new URLSearchParams(location.search || "");
+          if (sp.get("debugCalendar") === "1") {
+            const raw0 = weeklyAppointments && weeklyAppointments[0];
+            const n0 = raw0 ? normalizeIncomingAppointment(raw0) : null;
+            console.log("[debugCalendar]", {
+              rangeStart,
+              rangeEnd,
+              totalRaw: (weeklyAppointments || []).length,
+              sampleRawKeys: raw0 ? Object.keys(raw0) : [],
+              sampleRawStart: raw0?.startAt || raw0?.timelineAt || raw0?.date,
+              sampleNormalized: n0,
+            });
+          }
+        } catch (_) {}
+
+        const rawAppt = weeklyAppointments || [];
+        let invalidAppt = 0;
+        allAppointments = rawAppt
+          .map((row) => {
+            const n = normalizeIncomingAppointment(row);
+            if (!n) invalidAppt++;
+            return n;
+          })
+          .filter(Boolean);
+
+        console.log("[calendar appointments] RAW LENGTH:", rawAppt.length);
+        console.log("[calendar appointments] EVENTS LENGTH:", allAppointments.length);
+        console.log("[calendar appointments] INVALID COUNT:", invalidAppt);
 
         if (requestId !== activeLoadRequestId) return;
 
@@ -970,9 +1061,12 @@
         fetchRangeTimelineEvents(rangeStart, rangeEnd)
           .then((weeklyTimelineEvents) => {
             if (requestId !== activeLoadRequestId) return;
-            const merged = mergeUniqueAppointments(allAppointments, weeklyTimelineEvents)
-              .map(normalizeIncomingAppointment)
-              .filter((item) => !!item.startAt);
+            const merged = mergeUniqueAppointments(allAppointments, weeklyTimelineEvents);
+            const tlRaw = weeklyTimelineEvents.__adminEventsRawTotal != null ? weeklyTimelineEvents.__adminEventsRawTotal : 0;
+            const invTl = weeklyTimelineEvents.__adminEventsInvalidTl || 0;
+            console.log("[calendar pipeline] RAW LENGTH:", rawAppt.length + tlRaw);
+            console.log("[calendar pipeline] EVENTS LENGTH (merged):", merged.length);
+            console.log("[calendar pipeline] INVALID COUNT:", invalidAppt + invTl);
             allAppointments = merged;
             const hasDoctorsAfterMerge = doctorSelect.options.length > 1;
             if (!hasDoctorsAfterMerge) renderDoctors(allAppointments);

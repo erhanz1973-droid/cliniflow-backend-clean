@@ -45,6 +45,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { formatInTimeZone, fromZonedTime } = require("date-fns-tz");
 const http = require("http");
 
 // ── DATA_DIR must be defined early — used by constants declared before line 3700 ──
@@ -826,11 +827,9 @@ app.param("patientId", (req, res, next, value) => {
 async function resolveMessagesPatientDbId(patientId) {
   const rawIn = String(patientId || "").trim();
   if (!rawIn) return null;
-  const rawNorm = /^[pP]_([0-9a-f-]{36})$/i.exec(rawIn)
-    ? rawIn.slice(2).trim()
-    : rawIn;
-  const raw =
-    UUID_RE.test(rawNorm) ? String(rawNorm).toLowerCase() : rawNorm;
+  const prefixedUuidMatch = /^[pP]_([0-9a-f-]{36})$/i.exec(rawIn);
+  const rawNorm = prefixedUuidMatch ? prefixedUuidMatch[1].trim() : rawIn;
+  const raw = UUID_RE.test(rawNorm) ? String(rawNorm).toLowerCase() : String(rawNorm).trim();
   if (!raw) return null;
   if (!isSupabaseEnabled()) {
     if (UUID_RE.test(raw)) return raw;
@@ -844,25 +843,36 @@ async function resolveMessagesPatientDbId(patientId) {
         .eq("id", raw)
         .maybeSingle();
       if (!errId && byId?.id) return String(byId.id);
-    }
 
-    const { data: byPid, error: errPid } = await supabase
-      .from("patients")
-      .select("id")
-      .eq("patient_id", raw)
-      .maybeSingle();
-    if (!errPid && byPid?.id) return String(byPid.id);
+      /** Row may use `patient_id` = bare uuid or literal `p_<uuid>` — match all common shapes. */
+      const pidVariants = new Set([
+        rawIn,
+        String(rawNorm).trim(),
+        raw,
+        `p_${raw}`,
+        `P_${raw}`,
+      ]);
+      const pidList = [...pidVariants].map((x) => String(x).trim()).filter(Boolean);
+      const { data: pidRows, error: errPidIn } = await supabase
+        .from("patients")
+        .select("id")
+        .in("patient_id", pidList)
+        .limit(1);
+      if (!errPidIn && Array.isArray(pidRows) && pidRows[0]?.id) return String(pidRows[0].id);
 
-    if (raw.length > 2 && String(raw[0]).toLowerCase() === "p" && raw[1] === "_") {
-      const rest = raw.slice(2);
-      if (UUID_RE.test(rest)) {
-        const { data: byLegacy, error: errLegacy } = await supabase
-          .from("patients")
-          .select("id")
-          .eq("id", rest)
-          .maybeSingle();
-        if (!errLegacy && byLegacy?.id) return String(byLegacy.id);
-      }
+      const { data: byPidBare, error: errPidBare } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("patient_id", raw)
+        .maybeSingle();
+      if (!errPidBare && byPidBare?.id) return String(byPidBare.id);
+    } else {
+      const { data: byPid, error: errPid } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("patient_id", raw)
+        .maybeSingle();
+      if (!errPid && byPid?.id) return String(byPid.id);
     }
 
     return null;
@@ -12400,8 +12410,8 @@ function doctorTreatmentsListHasDbRowForToothProcedure(treatments, toothNum, pro
   });
 }
 
-/** patient-json / legacy procedure object → ISO scheduled_at */
-function scheduledIsoFromProcedureLikeProc(proc) {
+/** patient-json / legacy procedure object → ISO scheduled_at (UTC-normalized when parseable) */
+function scheduledIsoFromProcedureLikeProc(proc, ianaTzHint = "UTC") {
   if (!proc || typeof proc !== "object") return null;
   const candidates = [
     proc.scheduled_at,
@@ -12412,15 +12422,16 @@ function scheduledIsoFromProcedureLikeProc(proc) {
   ];
   for (const c of candidates) {
     if (c == null || c === "") continue;
-    if (typeof c === "number" && Number.isFinite(c)) {
-      const d = new Date(c);
-      if (!Number.isNaN(d.getTime())) return d.toISOString();
-      continue;
+    try {
+      if (typeof c === "number" && Number.isFinite(c)) {
+        return assertUtcIsoScheduledAt(new Date(c).toISOString(), "scheduled_at");
+      }
+      const s = String(c).trim();
+      if (!s) continue;
+      return coerceScheduledAtInputToUtcIso(s, ianaTzHint, "scheduled_at");
+    } catch (_) {
+      /* try next candidate */
     }
-    const s = String(c).trim();
-    if (!s) continue;
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
   }
   return null;
 }
@@ -14956,15 +14967,108 @@ function getLocalDayWindowBoundsMsFromYmd(ymd) {
   return { startMs, endMsExclusive, _dayWindowRecovered: false };
 }
 
-/** IANA zone for doctor dashboard buckets (pairs with mobile localToday / localTomorrow). */
-function resolveDashboardCalendarTimeZone(rawFromQuery, clinicCodeRaw) {
-  const trimmed = String(rawFromQuery || "").trim();
-  if (trimmed) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(0);
-      return trimmed;
-    } catch (_) {}
+/** Validate IANA time zone id (throws-free). */
+function validateIANATimeZoneId(tzRaw) {
+  const s = String(tzRaw || "").trim();
+  if (!s) return "";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: s }).format(0);
+    return s;
+  } catch (_) {
+    return "";
   }
+}
+
+/** True if string already specifies Zulu or a numeric UTC offset (store via Date.parse → toISOString). */
+function datetimeStringHasExplicitUtcOffset(str) {
+  const s = String(str || "").trim();
+  if (!s) return false;
+  if (/z$/i.test(s)) return true;
+  if (/[+-]\d{2}:\d{2}$/.test(s)) return true;
+  if (/[+-]\d{4}$/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Normalize to Postgres-friendly UTC instant string (RFC3339 …Z).
+ * Throws if the value cannot be interpreted as an instant.
+ */
+function assertUtcIsoScheduledAt(iso, contextLabel = "scheduled_at") {
+  if (iso == null || iso === "") return null;
+  const normalized = typeof iso === "string" ? iso.trim() : String(iso);
+  const ms = Date.parse(normalized);
+  if (!Number.isFinite(ms)) {
+    throw new Error(`${contextLabel}: invalid datetime`);
+  }
+  const out = new Date(ms).toISOString();
+  if (!out.endsWith("Z")) {
+    throw new Error(`${contextLabel} must be UTC`);
+  }
+  return out;
+}
+
+/**
+ * API/body payloads → canonical UTC ISO for `scheduled_at` / timestamptz writes.
+ * Naive date/time strings are interpreted in `ianaTzHint` when it is a valid IANA id; otherwise UTC.
+ * Datetimes with explicit Z or ±offset are normalized without applying the clinic zone.
+ */
+function coerceScheduledAtInputToUtcIso(raw, ianaTzHint, contextLabel = "scheduled_at") {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return assertUtcIsoScheduledAt(new Date(raw).toISOString(), contextLabel);
+  }
+  let sOrig = String(raw).trim();
+  if (!sOrig) return null;
+  let spaceToT = sOrig;
+  if (/^\d{4}-\d{2}-\d{2}\s+\d/.test(spaceToT) && !spaceToT.includes("T")) {
+    spaceToT = spaceToT.replace(/^(\d{4}-\d{2}-\d{2})\s+/, "$1T");
+  }
+  if (datetimeStringHasExplicitUtcOffset(spaceToT)) {
+    return assertUtcIsoScheduledAt(spaceToT, contextLabel);
+  }
+  const zone = validateIANATimeZoneId(ianaTzHint) || "UTC";
+  try {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(spaceToT)) {
+      const utc = fromZonedTime(`${spaceToT}T12:00:00`, zone);
+      if (Number.isNaN(utc.getTime())) throw new Error("invalid date-only");
+      return assertUtcIsoScheduledAt(utc.toISOString(), contextLabel);
+    }
+    const utc = fromZonedTime(spaceToT, zone);
+    if (Number.isNaN(utc.getTime())) throw new Error("invalid zoned datetime");
+    return assertUtcIsoScheduledAt(utc.toISOString(), contextLabel);
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    throw new Error(`${contextLabel}: cannot convert to UTC (${msg})`);
+  }
+}
+
+async function resolveClinicIanaTzForScheduledWrites(clinicId) {
+  const id = String(clinicId || "").trim();
+  if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return "UTC";
+  }
+  try {
+    const row = await getClinicById(id);
+    let raw = row?.iana_timezone != null ? String(row.iana_timezone).trim() : "";
+    if (!raw && row?.settings && typeof row.settings === "object" && row.settings.iana_timezone != null) {
+      raw = String(row.settings.iana_timezone).trim();
+    }
+    const v = validateIANATimeZoneId(raw);
+    if (v) return v;
+  } catch (_) {
+    /* ignore */
+  }
+  return "UTC";
+}
+
+/**
+ * Appointment bucket TZ: clinic DB first (iana_timezone / settings), then query hint, then legacy clinic_code, UTC.
+ */
+function resolveDashboardCalendarTimeZone(clinicDbTzRaw, rawFromQuery, clinicCodeRaw) {
+  const fromDb = validateIANATimeZoneId(clinicDbTzRaw);
+  if (fromDb) return fromDb;
+  const fromQuery = validateIANATimeZoneId(rawFromQuery);
+  if (fromQuery) return fromQuery;
   const cc = String(clinicCodeRaw || "")
     .trim()
     .toUpperCase();
@@ -17988,16 +18092,19 @@ function encounterTreatmentRowIdFromPatientProcedureId(procedureIdRaw) {
   return "";
 }
 
-function patientTreatmentsDateToScheduledIso(dateFinal) {
+function patientTreatmentsDateToScheduledIso(dateFinal, ianaTzHint = "UTC") {
   if (dateFinal == null || dateFinal === "") return null;
-  if (typeof dateFinal === "number" && Number.isFinite(dateFinal)) {
-    return new Date(dateFinal).toISOString();
+  try {
+    if (typeof dateFinal === "number" && Number.isFinite(dateFinal)) {
+      return assertUtcIsoScheduledAt(new Date(dateFinal).toISOString(), "patient_treatments.scheduled_at");
+    }
+    const str = String(dateFinal).trim();
+    if (!str) return null;
+    return coerceScheduledAtInputToUtcIso(str, ianaTzHint, "patient_treatments.scheduled_at");
+  } catch (e) {
+    console.warn("[patientTreatmentsDateToScheduledIso]", e?.message || e);
+    return null;
   }
-  const str = String(dateFinal).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-    return new Date(`${str}T12:00:00.000Z`).toISOString();
-  }
-  return null;
 }
 
 function patientJsonProcedureStatusToEncounterTreatmentDbStatus(statusUpper) {
@@ -18062,7 +18169,23 @@ async function upsertAdminProcedureIntoEncounterTreatments({
   // Normalize fields
   const toothNum = parseInt(String(toothId || ""), 10);
   if (!toothNum || toothNum < 11 || toothNum > 48) return;
-  const schedIso = patientTreatmentsDateToScheduledIso(dateFinal);
+
+  let clinicUuidForTz = String(clinicId || "").trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clinicUuidForTz)) {
+    try {
+      const { data: clinicRowTz } = await supabase
+        .from("clinics")
+        .select("id")
+        .eq("clinic_code", clinicUuidForTz.toUpperCase())
+        .maybeSingle();
+      clinicUuidForTz = clinicRowTz?.id ? String(clinicRowTz.id).trim() : "";
+    } catch (_) {
+      clinicUuidForTz = "";
+    }
+  }
+  const clinicTzWriteUpsert = await resolveClinicIanaTzForScheduledWrites(clinicUuidForTz);
+
+  const schedIso = patientTreatmentsDateToScheduledIso(dateFinal, clinicTzWriteUpsert);
   const dbStatus = patientJsonProcedureStatusToEncounterTreatmentDbStatus(statusFinal);
 
   // Resolve assigned doctor UUID
@@ -18181,7 +18304,21 @@ async function syncEncounterTreatmentRowFromPatientTreatmentsUpsert({
     }
     return;
   }
-  const schedIso = patientTreatmentsDateToScheduledIso(dateFinal);
+  let clinicTzWrite = "UTC";
+  try {
+    const encId = String(existing.encounter_id || "").trim();
+    if (encId) {
+      const { data: pe } = await supabase
+        .from("patient_encounters")
+        .select("clinic_id")
+        .eq("id", encId)
+        .maybeSingle();
+      clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(pe?.clinic_id);
+    }
+  } catch (_) {
+    /* keep UTC */
+  }
+  const schedIso = patientTreatmentsDateToScheduledIso(dateFinal, clinicTzWrite);
   const dbStatus = patientJsonProcedureStatusToEncounterTreatmentDbStatus(statusFinal);
   let docVal =
     assignedDoctorRaw == null || String(assignedDoctorRaw).trim() === ""
@@ -37082,7 +37219,7 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req) {
     // Lead thread exists but unassigned — allow treatment-team doctors through
   }
 
-  const allowed = await doctorHasTreatmentTeamAccessToPatientId(patientIdParam, req);
+  const allowed = await doctorHasTreatmentTeamAccessToPatientId(resolvedPatientId, req);
   if (!allowed) {
     const error = thread?.assigned_doctor_id && thread?.is_lead ? "not_assigned_doctor" : "patient_access_denied";
     return { ok: false, status: 403, error };
@@ -39924,6 +40061,36 @@ async function handleDoctorInboxSummary(req, res) {
 
     if (!doctorId) return res.status(401).json({ ok: false, error: 'doctor_not_found' });
 
+    const clinicCodeStr = String(doctorRecord.clinic_code || doctorRecord.clinicCode || "").trim();
+    let clinicIanaFromRow = "";
+    if (clinicId) {
+      const selTries = ["iana_timezone, settings", "settings", "id"];
+      for (const sel of selTries) {
+        const { data: cr, error } = await supabase.from("clinics").select(sel).eq("id", clinicId).maybeSingle();
+        const code = String(error?.code || "");
+        if (error) {
+          if (["42703", "PGRST204", "42P01"].includes(code)) continue;
+          console.warn("[DASHBOARD] clinics TZ fetch:", error.message);
+          break;
+        }
+        if (!cr || typeof cr !== "object") break;
+        const col = cr.iana_timezone != null ? String(cr.iana_timezone).trim() : "";
+        if (col) {
+          clinicIanaFromRow = col;
+          break;
+        }
+        const st = cr.settings;
+        if (st && typeof st === "object") {
+          const z = st.iana_timezone ?? st.timeZone ?? st.timezone;
+          if (z != null && String(z).trim()) {
+            clinicIanaFromRow = String(z).trim();
+            break;
+          }
+        }
+        break;
+      }
+    }
+
     const doctor = {
       id: doctorRecord.id || doctorId,
       name: doctorRecord.name || doctorRecord.full_name || null,
@@ -39994,7 +40161,6 @@ async function handleDoctorInboxSummary(req, res) {
       }
     }
 
-    // Use client-supplied local dates when available — prevents UTC-offset misclassification
     const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
     const localYmd = (d) => {
       const x = d instanceof Date ? d : new Date(d);
@@ -40003,18 +40169,26 @@ async function handleDoctorInboxSummary(req, res) {
       const day = String(x.getDate()).padStart(2, "0");
       return `${y}-${m}-${day}`;
     };
-    const clientToday = String(req.query?.localToday || "").trim();
-    const clientTomorrow = String(req.query?.localTomorrow || "").trim();
-    const todayStr = ymdRe.test(clientToday) ? clientToday : localYmd(new Date());
-    const tomorrowD = new Date(); tomorrowD.setDate(tomorrowD.getDate() + 1);
-    const tomorrowStr = ymdRe.test(clientTomorrow) ? clientTomorrow : localYmd(tomorrowD);
-    console.log("[DASHBOARD] todayStr:", todayStr, "tomorrowStr:", tomorrowStr, "(client:", clientToday, clientTomorrow, ")");
-    /** Buckets align with client's calendar labels via IANA TZ (not Railway host local / naive YYYY-MM-DD). */
-    const dashboardCalendarTz = resolveDashboardCalendarTimeZone(
-      String(req.query?.localTz ?? req.query?.timeZone ?? req.query?.tz ?? "").trim(),
-      String(doctorRecord.clinic_code || doctorRecord.clinicCode || "").trim()
-    );
-    console.log("[DASHBOARD] bucketCalendarTz:", dashboardCalendarTz);
+    const queryTzHint = String(req.query?.localTz ?? req.query?.timeZone ?? req.query?.tz ?? "").trim();
+    const dashboardCalendarTz = resolveDashboardCalendarTimeZone(clinicIanaFromRow, queryTzHint, clinicCodeStr);
+    console.log("[DASHBOARD] bucketCalendarTz:", dashboardCalendarTz, "clinicIanaDb:", clinicIanaFromRow || null);
+
+    /** Today / tomorrow labels = clinic calendar (not device). Optional query override only when no clinic. */
+    let todayStr;
+    let tomorrowStr;
+    if (clinicId) {
+      const nowUtc = new Date();
+      todayStr = ymdInTimeZone(nowUtc, dashboardCalendarTz);
+      tomorrowStr = addCalendarDaysYmd(todayStr, 1);
+    } else {
+      const clientToday = String(req.query?.localToday || "").trim();
+      const clientTomorrow = String(req.query?.localTomorrow || "").trim();
+      todayStr = ymdRe.test(clientToday) ? clientToday : localYmd(new Date());
+      const tomorrowD = new Date();
+      tomorrowD.setDate(tomorrowD.getDate() + 1);
+      tomorrowStr = ymdRe.test(clientTomorrow) ? clientTomorrow : localYmd(tomorrowD);
+    }
+    console.log("[DASHBOARD] todayStr:", todayStr, "tomorrowStr:", tomorrowStr);
 
     function dayBoundsMs(dayYmd) {
       return getCalendarDayWindowBoundsMsForDashboard(dayYmd, dashboardCalendarTz);
@@ -40699,20 +40873,44 @@ async function handleDoctorInboxSummary(req, res) {
 
     const mapAppointment = (a, fallbackDay) => {
       const startInst = a.start_time || a.startTime || a.start_at;
+      let scheduledAt = null;
+      let displayTime = null;
+      if (startInst != null && String(startInst).trim() !== "") {
+        const sd = new Date(String(startInst));
+        if (Number.isFinite(sd.getTime())) {
+          scheduledAt = sd.toISOString();
+          try {
+            displayTime = formatInTimeZone(sd, dashboardCalendarTz, "yyyy-MM-dd HH:mm");
+          } catch (_) {
+            displayTime = null;
+          }
+        }
+      }
       const dateVal =
+        displayTime?.slice(0, 10) ||
         (startInst ? String(startInst).slice(0, 10) : null) ||
         (a.date ? String(a.date).trim() : null) ||
         fallbackDay;
       let timeVal = a.time || a.appointment_time || "09:00";
-      if (startInst && !a.time && !a.appointment_time) {
+      if (scheduledAt && displayTime && displayTime.length >= 16) {
+        timeVal = displayTime.slice(-5);
+      } else if (startInst && !a.time && !a.appointment_time) {
         const d = new Date(String(startInst));
-        if (Number.isFinite(d.getTime())) timeVal = d.toTimeString().slice(0, 5);
+        if (Number.isFinite(d.getTime()))
+          try {
+            timeVal = formatInTimeZone(d, dashboardCalendarTz, "HH:mm");
+          } catch (_) {
+            timeVal = d.toISOString().slice(11, 16);
+          }
       }
       if (timeVal && String(timeVal).length > 5) timeVal = String(timeVal).slice(0, 5);
       const patient = patientMap.get(a.patient_id) || null;
       const st = String(a.status || "").toLowerCase();
       return {
         appointmentId: String(a.id || ""),
+        scheduledAt,
+        displayTime,
+        timezone: dashboardCalendarTz,
         date: dateVal || fallbackDay,
         time: timeVal,
         chairNumber: String(a.chair_number != null ? a.chair_number : a.chair || ""),
@@ -40836,6 +41034,12 @@ async function handleDoctorInboxSummary(req, res) {
     return res.json({
       ok: true,
       doctor: doctor || { id: doctorId, name: req.doctor?.name || 'Doctor' },
+      dashboardCalendar: {
+        timezone: dashboardCalendarTz,
+        todayYmd: todayStr,
+        tomorrowYmd: tomorrowStr,
+        clinicTimezoneFromDb: clinicIanaFromRow || null,
+      },
       patients,
       notifications,
       stats: {
@@ -42609,6 +42813,15 @@ async function resolvePatientRowForEncounterPatientId(encounterPatientId) {
       if (!['42703', 'PGRST204', 'PGRST205'].includes(code)) break;
     }
   }
+  const canonId = await resolveMessagesPatientDbId(raw);
+  if (canonId && canonId !== raw) {
+    for (const sel of selectFallbacks) {
+      const { data, error } = await trySelect(sel, 'id', canonId);
+      if (!error && data?.id) return data;
+      const code = String(error?.code || '');
+      if (!['42703', 'PGRST204', 'PGRST205'].includes(code)) break;
+    }
+  }
   return null;
 }
 
@@ -42738,6 +42951,7 @@ app.get('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req, 
     if (!allowed) return res.status(404).json({ ok: false, error: 'encounter_not_found' });
 
     const clinicId = String(req?.doctor?.clinic_id || '').trim();
+    const clinicTzMergeTreatmentsGet = await resolveClinicIanaTzForScheduledWrites(clinicId);
 
     const selectAttempts = [
       'id, encounter_id, tooth_number, procedure_type, status, assigned_doctor_id, chair, scheduled_at, created_at, updated_at',
@@ -42825,7 +43039,7 @@ app.get('/api/doctor/encounters/:id/treatments', requireDoctorAuth, async (req, 
               : stRaw === 'PLANNED'
                 ? 'planned'
                 : 'active';
-          const schedIso = scheduledIsoFromProcedureLikeProc(proc);
+          const schedIso = scheduledIsoFromProcedureLikeProc(proc, clinicTzMergeTreatmentsGet);
           const chairVal = chairFromProcedureLikeProc(proc);
           const adFields = assignedDoctorFieldsFromProcedureLikeProc(proc);
           let createdIso = null;
@@ -42939,6 +43153,7 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
     let { tooth_number, procedure_type, procedure_id, scheduled_at, chair, assigned_doctor_id } = req.body || {};
     const doctorUuid = String(req?.doctor?.id || req.doctorId || '').trim();
     const clinicId = String(req?.doctor?.clinic_id || '').trim();
+    const clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(clinicId);
 
     if (
       saasEnforcement.limitsEnabled() &&
@@ -42982,7 +43197,13 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
       assigned_doctor_id: assigned_doctor_id ? String(assigned_doctor_id) : (doctorUuid || req.doctorId || null),
     };
     if (procedureIdCol) insertRow.procedure_id = procedureIdCol;
-    if (scheduled_at) insertRow.scheduled_at = scheduled_at;
+    if (scheduled_at !== undefined && scheduled_at !== null && scheduled_at !== '') {
+      try {
+        insertRow.scheduled_at = coerceScheduledAtInputToUtcIso(scheduled_at, clinicTzWrite, 'scheduled_at');
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: 'invalid_scheduled_at', message: e.message });
+      }
+    }
     if (chair) insertRow.chair = String(chair);
 
     const insertAttempts = [insertRow, { ...insertRow }];
@@ -43135,13 +43356,25 @@ async function handleDoctorEncounterTreatmentPut(req, res) {
     }
 
     const { status, chair, assigned_doctor_id, scheduled_at, notes, encounter_id } = req.body || {};
+    const clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(req?.doctor?.clinic_id);
+
     const updateFields = {
       updated_at: new Date().toISOString(),
     };
     if (status !== undefined)             updateFields.status             = status;
     if (chair !== undefined)              updateFields.chair              = chair;
     if (assigned_doctor_id !== undefined) updateFields.assigned_doctor_id = assigned_doctor_id;
-    if (scheduled_at !== undefined)       updateFields.scheduled_at       = scheduled_at;
+    if (scheduled_at !== undefined) {
+      if (scheduled_at === null || scheduled_at === '') {
+        updateFields.scheduled_at = null;
+      } else {
+        try {
+          updateFields.scheduled_at = coerceScheduledAtInputToUtcIso(scheduled_at, clinicTzWrite, 'scheduled_at');
+        } catch (e) {
+          return res.status(400).json({ ok: false, error: 'invalid_scheduled_at', message: e.message });
+        }
+      }
+    }
     if (notes !== undefined)              updateFields.notes              = notes;
 
     const candidates = encounterTreatmentIdLookupCandidates(treatmentIdParam);
@@ -48127,23 +48360,22 @@ app.post('/api/treatment/plans/:id/items', requireDoctorAuth, async (req, res) =
     const nameValue = String(procedure_name || procedure_description || codeValue || 'Procedure').trim();
     const chairNoValue = String(chair_no || chairNo || chair || '').trim() || null;
 
-    const parseScheduledAtIso = (value) => {
-      if (!value) return null;
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        return new Date(value).toISOString();
-      }
-      const raw = String(value).trim();
-      if (!raw) return null;
-      const parsed = Date.parse(raw);
-      if (!Number.isFinite(parsed)) return null;
-      return new Date(parsed).toISOString();
-    };
+    const clinicTzWritePlanItem = await resolveClinicIanaTzForScheduledWrites(
+      req.clinicId || req?.doctor?.clinic_id || ""
+    );
 
-    const scheduledAtValue =
-      parseScheduledAtIso(scheduled_at) ||
-      parseScheduledAtIso(scheduledAt) ||
-      parseScheduledAtIso(scheduled_date) ||
-      null;
+    let scheduledAtValue = null;
+    try {
+      if (scheduled_at != null && String(scheduled_at).trim() !== "") {
+        scheduledAtValue = coerceScheduledAtInputToUtcIso(scheduled_at, clinicTzWritePlanItem, "scheduled_at");
+      } else if (scheduledAt != null && String(scheduledAt).trim() !== "") {
+        scheduledAtValue = coerceScheduledAtInputToUtcIso(scheduledAt, clinicTzWritePlanItem, "scheduledAt");
+      } else if (scheduled_date != null && String(scheduled_date).trim() !== "") {
+        scheduledAtValue = coerceScheduledAtInputToUtcIso(scheduled_date, clinicTzWritePlanItem, "scheduled_date");
+      }
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: "invalid_scheduled_at", message: e.message });
+    }
 
     if (!toothValue || !codeValue) {
       return res.status(400).json({ ok: false, error: 'missing_required_fields' });
@@ -49356,23 +49588,35 @@ app.put('/api/treatment/treatment-items/:id', requireDoctorAuth, async (req, res
       notes,
     } = req.body || {};
 
-    const parseIso = (value) => {
-      if (!value) return null;
-      const ts = Date.parse(String(value));
-      return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
-    };
+    const clinicTzWriteItemPut = await resolveClinicIanaTzForScheduledWrites(
+      req.clinicId || req?.doctor?.clinic_id || ""
+    );
 
     const normalizedTitle = String(title || procedure_name || '').trim() || null;
     const normalizedCode = String(procedure_code || '').trim() || null;
     const normalizedDoctor = String(doctorId || doctor_id || '').trim() || null;
     const normalizedChair = String(chairNo || chair_no || chair || '').trim() || null;
     const normalizedNote = String(note || notes || '').trim() || null;
-    const normalizedScheduled =
-      parseIso(scheduledDate) ||
-      parseIso(scheduled_at) ||
-      parseIso(scheduled_date) ||
-      parseIso(due_date) ||
-      null;
+
+    const schedOrderedPut = [scheduledDate, scheduled_at, scheduled_date, due_date];
+    const hasSchedFieldUpdate = schedOrderedPut.some((x) => x !== undefined);
+    let normalizedScheduled = null;
+    if (hasSchedFieldUpdate) {
+      let lastSchedErr = null;
+      for (const v of schedOrderedPut) {
+        if (v === undefined || v === null || String(v).trim() === '') continue;
+        try {
+          normalizedScheduled = coerceScheduledAtInputToUtcIso(v, clinicTzWriteItemPut, 'scheduled_at');
+          lastSchedErr = null;
+          break;
+        } catch (e) {
+          lastSchedErr = e;
+        }
+      }
+      if (lastSchedErr) {
+        return res.status(400).json({ ok: false, error: 'invalid_scheduled_at', message: lastSchedErr.message });
+      }
+    }
 
     const normalizedPrice =
       price === undefined || price === null || String(price).trim() === ''

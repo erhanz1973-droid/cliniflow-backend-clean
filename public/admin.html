@@ -1391,8 +1391,52 @@
     }).join("");
   }
 
+  function safeDate(input) {
+    if (input == null || input === "") return null;
+    if (input instanceof Date) return Number.isNaN(input.getTime()) ? null : input;
+    if (typeof input === "number" && Number.isFinite(input)) {
+      const dx = new Date(input);
+      return Number.isNaN(dx.getTime()) ? null : dx;
+    }
+    let s = String(input).trim();
+    if (!s) return null;
+    if (!s.includes("T")) s = s.replace(/\s+/g, "T");
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  function timelineItemStartRaw(item) {
+    if (!item || typeof item !== "object") return null;
+    const chain = [
+      item.startAt,
+      item.timelineAt,
+      item.timestamp,
+      item.appointment_date,
+      item.appointmentDate,
+      item.created_at,
+      item.createdAt,
+    ];
+    for (const c of chain) {
+      if (c != null && String(c).trim() !== "") return c;
+    }
+    const dd = item.date && String(item.date).trim();
+    if (dd && /^\d{4}-\d{2}-\d{2}$/.test(dd)) {
+      const tm = item.time != null ? String(item.time).trim() : "";
+      if (/^\d{2}:\d{2}:\d{2}$/.test(tm)) return `${dd}T${tm}`;
+      if (/^\d{2}:\d{2}$/.test(tm)) return `${dd}T${tm}:00`;
+      return `${dd}T00:00:00`;
+    }
+    return null;
+  }
+
   // Add loading flag to prevent race conditions
   let eventsLoading = false;
+
+  /** Normalize edilmiş timeline anı — safeDate ile. */
+  function adminDashboardEventInstantMs(evt) {
+    const d = safeDate(timelineItemStartRaw(evt));
+    return d ? d.getTime() : NaN;
+  }
 
   async function loadEvents() {
     if (eventsLoading) {
@@ -1441,36 +1485,74 @@
       const data = await r.json();
       console.log("[loadEvents] Response data:", data);
       console.log("[loadEvents] Counts — overdue:", (data.overdue||[]).length, "today:", (data.today||[]).length, "upcoming:", (data.upcoming||[]).length, "total:", data.total);
-    
+
       if (!data.ok) {
         throw new Error(data.error || data.message || "Unknown error");
       }
 
-      // Hide overdue banner (now shown in timeline)
+      try {
+        const sp = new URLSearchParams(window.location.search || "");
+        if (sp.get("debugTimeline") === "1") {
+          const pick = (arr) => (Array.isArray(arr) && arr.length ? arr[0] : null);
+          ["overdue", "today", "upcoming"].forEach((bucket) => {
+            const row = pick(data[bucket]);
+            if (!row) {
+              console.log(`[debugTimeline] ${bucket}: (empty)`);
+              return;
+            }
+            const ms = adminDashboardEventInstantMs(row);
+            console.log(`[debugTimeline] ${bucket} sample`, {
+              keys: Object.keys(row),
+              timelineAt: row.timelineAt,
+              timestamp: row.timestamp,
+              date: row.date,
+              time: row.time,
+              parsedInstantMs: ms,
+              validInstant: Number.isFinite(ms),
+              patientId: row.patientId,
+              type: row.type,
+            });
+          });
+        }
+      } catch (_) {}
+
+      const rawBuckets = [...(data.overdue || []), ...(data.today || []), ...(data.upcoming || [])];
+      let timelineInvalid = 0;
+      const allEvents = [];
+      for (let i = 0; i < rawBuckets.length; i++) {
+        const item = rawBuckets[i];
+        const raw = timelineItemStartRaw(item);
+        const start = raw != null ? safeDate(raw) : null;
+        if (!start) {
+          timelineInvalid++;
+          console.warn("INVALID EVENT DATE:", raw, item);
+          continue;
+        }
+        const iso = start.toISOString();
+        const ts = start.getTime();
+        allEvents.push(Object.assign({}, item, { timelineAt: iso, timestamp: ts }));
+      }
+
+      console.log("[dashboard timeline] RAW LENGTH:", rawBuckets.length);
+      console.log("[dashboard timeline] EVENTS LENGTH:", allEvents.length);
+      console.log("[dashboard timeline] INVALID COUNT:", timelineInvalid);
+
       const bannerEl = document.getElementById("overdueBanner");
       if (bannerEl) bannerEl.style.display = "none";
 
-      // Calculate summary statistics
       const overdueCount = (data.overdue || []).length;
-
-      // Get today and tomorrow events from API response
       const todayEvents = data.today || [];
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       tomorrow.setHours(0, 0, 0, 0);
       const tomorrowStart = tomorrow.getTime();
       const tomorrowEnd = tomorrow.getTime() + (24 * 60 * 60 * 1000) - 1;
-      
-      // Get all events (overdue + today + upcoming) for timeline
-      const allEvents = [...(data.overdue || []), ...(data.today || []), ...(data.upcoming || [])];
-      
-      // Filter events for tomorrow
-      const tomorrowEvents = allEvents.filter(evt => {
-        const ts = evt.timelineAt ? Date.parse(evt.timelineAt) : (evt.timestamp || 0);
-        return ts >= tomorrowStart && ts <= tomorrowEnd;
+
+      const tomorrowEvents = allEvents.filter((evt) => {
+        const ts = adminDashboardEventInstantMs(evt);
+        return Number.isFinite(ts) && ts >= tomorrowStart && ts <= tomorrowEnd;
       });
-      
-      // Count unique patients for today and tomorrow
+
       const todayPatients = new Set(todayEvents.map(evt => evt.patientId).filter(Boolean));
       const tomorrowPatients = new Set(tomorrowEvents.map(evt => evt.patientId).filter(Boolean));
       
@@ -1520,12 +1602,7 @@
         summaryEl.style.display = "block";
       }
 
-      // Sort by timelineAt (oldest first)
-      allEvents.sort((a, b) => {
-        const tsA = a.timelineAt ? Date.parse(a.timelineAt) : (a.timestamp || 0);
-        const tsB = b.timelineAt ? Date.parse(b.timelineAt) : (b.timestamp || 0);
-        return tsA - tsB;
-      });
+      allEvents.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
       // Render timeline (will load patient names if needed)
       await renderUpcomingList(allEvents);
