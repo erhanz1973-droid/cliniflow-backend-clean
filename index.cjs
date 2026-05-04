@@ -14956,6 +14956,40 @@ function getLocalDayWindowBoundsMsFromYmd(ymd) {
   return { startMs, endMsExclusive, _dayWindowRecovered: false };
 }
 
+/** IANA zone for doctor dashboard buckets (pairs with mobile localToday / localTomorrow). */
+function resolveDashboardCalendarTimeZone(rawFromQuery, clinicCodeRaw) {
+  const trimmed = String(rawFromQuery || "").trim();
+  if (trimmed) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(0);
+      return trimmed;
+    } catch (_) {}
+  }
+  const cc = String(clinicCodeRaw || "")
+    .trim()
+    .toUpperCase();
+  if (["CEM"].includes(cc)) return "Europe/Istanbul";
+  return "UTC";
+}
+
+/** Civil calendar day ymd interpreted in IANA TZ → [start, nextDay) in ms — matches UTC-stored timestamps. */
+function getCalendarDayWindowBoundsMsForDashboard(ymd, ianaTz) {
+  try {
+    const { startMs, endMs } = zonedCivilDayRangeMs(ymd, ianaTz);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+      throw new Error("invalid zoned range");
+    }
+    return {
+      startMs,
+      endMsExclusive: endMs,
+      _calendarTz: ianaTz,
+      _dayWindowRecovered: false,
+    };
+  } catch (_) {
+    return { ...getLocalDayWindowBoundsMsFromYmd(ymd), _calendarTzFallback: String(ianaTz || "") };
+  }
+}
+
 function resolveMissingDatePolicy(rawValue) {
   const normalized = String(rawValue || "").trim().toUpperCase();
   return normalized === "AUTO" ? "AUTO" : "MANUAL";
@@ -39975,6 +40009,16 @@ async function handleDoctorInboxSummary(req, res) {
     const tomorrowD = new Date(); tomorrowD.setDate(tomorrowD.getDate() + 1);
     const tomorrowStr = ymdRe.test(clientTomorrow) ? clientTomorrow : localYmd(tomorrowD);
     console.log("[DASHBOARD] todayStr:", todayStr, "tomorrowStr:", tomorrowStr, "(client:", clientToday, clientTomorrow, ")");
+    /** Buckets align with client's calendar labels via IANA TZ (not Railway host local / naive YYYY-MM-DD). */
+    const dashboardCalendarTz = resolveDashboardCalendarTimeZone(
+      String(req.query?.localTz ?? req.query?.timeZone ?? req.query?.tz ?? "").trim(),
+      String(doctorRecord.clinic_code || doctorRecord.clinicCode || "").trim()
+    );
+    console.log("[DASHBOARD] bucketCalendarTz:", dashboardCalendarTz);
+
+    function dayBoundsMs(dayYmd) {
+      return getCalendarDayWindowBoundsMsForDashboard(dayYmd, dashboardCalendarTz);
+    }
 
     const normalize = (id) => String(id || "").replace(/^p_/i, "").trim().toLowerCase();
     const currentDoctor = normalize(doctorId);
@@ -40021,7 +40065,7 @@ async function handleDoctorInboxSummary(req, res) {
     async function collectDashboardTreatmentEventSlotsForDay(dayYmd) {
       const cid = clinicId ? String(clinicId).trim() : "";
       if (!cid) return [];
-      const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
+      const { startMs, endMsExclusive } = dayBoundsMs(dayYmd);
       const out = [];
       const selectTries = [
         "id, treatment_events, primary_doctor_id, doctor_id",
@@ -40287,7 +40331,7 @@ async function handleDoctorInboxSummary(req, res) {
         const encToEncounterDoctor = new Map(
           encRows.map((e) => [String(e.id), e.created_by_doctor_id != null ? String(e.created_by_doctor_id).trim() : ""])
         );
-        const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
+        const { startMs, endMsExclusive } = dayBoundsMs(dayYmd);
         const out = [];
         for (let i = 0; i < encIds.length; i += 80) {
           const chunk = encIds.slice(i, i + 80);
@@ -40494,7 +40538,7 @@ async function handleDoctorInboxSummary(req, res) {
         if (planById.size === 0) return [];
 
         const planIds = [...planById.keys()];
-        const { startMs, endMsExclusive } = getLocalDayWindowBoundsMsFromYmd(dayYmd);
+        const { startMs, endMsExclusive } = dayBoundsMs(dayYmd);
         const out = [];
 
         const trySelects = [
