@@ -40127,7 +40127,46 @@ async function handleDoctorInboxSummary(req, res) {
       if (mergeDroppedCount > 0) {
         console.log("[DOCTOR INBOX-SUMMARY] merge deduplicated duplicate keys", { dayYmd, mergeDropped: mergeDroppedCount, preMergeTotal, postMerge });
       }
-      const filtered = slots.filter((row) => matchesDoctor(row));
+      /** Slot satırında doktor UUID yoksa patients.assigned_doctor_id / last_assigned_doctor_id ile eşle (hasta Dr. X’e atanmışsa Evde görünsün). */
+      let patientDoctorFallback = new Map();
+      if (cid && slots.length > 0) {
+        const pfbIds = [...new Set(slots.map((r) => String(r?.patient_id || "").trim()).filter(Boolean))].slice(0, 280);
+        if (pfbIds.length > 0) {
+          try {
+            const fbSelTries = [
+              "id, assigned_doctor_id, last_assigned_doctor_id",
+              "id, assigned_doctor_id",
+              "id, last_assigned_doctor_id",
+              "id",
+            ];
+            let fbRows = [];
+            for (const sel of fbSelTries) {
+              const q = supabase.from("patients").select(sel).in("id", pfbIds).eq("clinic_id", cid);
+              const { data, error } = await q;
+              const code = String(error?.code || "");
+              if (!error && Array.isArray(data)) {
+                fbRows = data;
+                break;
+              }
+              if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
+            }
+            for (const pr of fbRows || []) {
+              const id = String(pr?.id || "").trim();
+              if (!id) continue;
+              const ad = pr.assigned_doctor_id ?? pr.last_assigned_doctor_id;
+              if (ad != null && String(ad).trim() !== "") patientDoctorFallback.set(id, String(ad).trim());
+            }
+          } catch (_) {}
+        }
+      }
+      function matchesDoctorOrPatientAssign(row) {
+        if (matchesDoctor(row)) return true;
+        const pid = String(row?.patient_id || "").trim();
+        if (!pid || !patientDoctorFallback.has(pid)) return false;
+        const asg = patientDoctorFallback.get(pid);
+        return asg ? doctorKeySet.has(normalize(asg)) : false;
+      }
+      const filtered = slots.filter((row) => matchesDoctorOrPatientAssign(row));
       const doctorFilteredOut = postMerge - filtered.length;
       if (doctorFilteredOut > 0) {
         console.log("[DOCTOR INBOX-SUMMARY] doctor filter excluded slots", { dayYmd, doctorFilteredOut, postDoctor: filtered.length });
@@ -40356,7 +40395,8 @@ async function handleDoctorInboxSummary(req, res) {
             .limit(400);
           addEnc(byClinic);
         }
-        for (const key of doctorKeysUuidFk) {
+        const allKeysForEncTpi = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
+        for (const key of allKeysForEncTpi) {
           try {
             const { data: byDoc } = await supabase
               .from("patient_encounters")
@@ -40366,7 +40406,56 @@ async function handleDoctorInboxSummary(req, res) {
             addEnc(byDoc);
           } catch (_) {}
         }
-        const encRows = Array.from(encById.values()).slice(0, 500);
+        const allDoctorKeysTpi = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(
+          (k) => k && DOCTOR_FK_UUID_RE.test(k)
+        );
+        if (allDoctorKeysTpi.length > 0) {
+          try {
+            const keysCsvTpi = allDoctorKeysTpi.map((k) => `"${k}"`).join(",");
+            const { data: etEncTpi, error: etEncTpiErr } = await supabase
+              .from("encounter_treatments")
+              .select("encounter_id")
+              .or(`assigned_doctor_id.in.(${keysCsvTpi}),created_by_doctor_id.in.(${keysCsvTpi})`)
+              .limit(800);
+            if (etEncTpiErr) {
+              console.log("[DASHBOARD-TPI-ET-FALLBACK] dayYmd:", dayYmd, "err:", etEncTpiErr?.message || etEncTpiErr);
+            } else {
+              const missTpi = [...new Set((etEncTpi || []).map((r) => String(r.encounter_id || "").trim()).filter(Boolean))].filter(
+                (id) => !encById.has(id)
+              );
+              for (let i = 0; i < missTpi.length; i += 80) {
+                const chunk = missTpi.slice(i, i + 80);
+                const { data: encPick } = await supabase
+                  .from("patient_encounters")
+                  .select("id, patient_id, created_by_doctor_id")
+                  .in("id", chunk);
+                addEnc(encPick);
+              }
+            }
+          } catch (_) {}
+        }
+        if (doctorKeysUuidFk.length > 0) {
+          try {
+            const { data: plansForDocRows } = await supabase
+              .from("treatment_plans")
+              .select("id, encounter_id, patient_id")
+              .in("assigned_doctor_id", doctorKeysUuidFk)
+              .not("encounter_id", "is", null)
+              .limit(800);
+            const planEncMiss = [...new Set((plansForDocRows || []).map((p) => String(p.encounter_id || "").trim()).filter(Boolean))].filter(
+              (id) => !encById.has(id)
+            );
+            for (let i = 0; i < planEncMiss.length; i += 80) {
+              const chunk = planEncMiss.slice(i, i + 80);
+              const { data: encPick2 } = await supabase
+                .from("patient_encounters")
+                .select("id, patient_id, created_by_doctor_id")
+                .in("id", chunk);
+              addEnc(encPick2);
+            }
+          } catch (_) {}
+        }
+        const encRows = Array.from(encById.values()).slice(0, 2500);
         if (encRows.length === 0) return [];
         const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
         const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
@@ -40376,7 +40465,7 @@ async function handleDoctorInboxSummary(req, res) {
 
         const patientIdsFromEnc = [
           ...new Set(encRows.map((e) => String(e.patient_id || "").trim()).filter(Boolean)),
-        ].slice(0, 200);
+        ].slice(0, 500);
 
         const planById = new Map();
         const mergePlans = (rows) => {
