@@ -626,7 +626,13 @@ function mapDbMessageToLegacyMessage(row) {
     (row.from_patient !== undefined ? (row.from_patient ? "patient" : "clinic") : "");
   const sender = String(senderRaw || "").toLowerCase();
   const from = sender === "patient" ? "PATIENT" : "CLINIC";
-  const text = row.message ?? row.text ?? row.content ?? "";
+  const text =
+    row.message ??
+    row.message_text ??
+    row.text ??
+    row.content ??
+    row.body ??
+    "";
   const fileAttachment = row.file_url
     ? {
         url: row.file_url,
@@ -1013,56 +1019,177 @@ async function fetchMessagesFromSupabase(patientId) {
 
 /**
  * Lead thread doctor assignment for patient chat UI (one row per patient+clinic).
- * Optional clinicId: query ?clinic_id from client; else falls back to patients.clinic_id.
+ * **`patients.primary_doctor_id` wins over `patient_chat_threads.assigned_doctor_id`** when both exist
+ * (admin banner + hasta UI aynı ismi göstersin). Thread eski atanmış doktor ile kalabiliyor — arka planda uyum güncellenir.
  */
 async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFromQuery) {
   if (!isSupabaseEnabled() || !patientResolvedId) return null;
+
   let clinicId = String(clinicIdFromQuery || "").trim();
-  if (!UUID_RE.test(clinicId)) {
-    const { data: prow } = await supabase.from("patients").select("clinic_id").eq("id", patientResolvedId).maybeSingle();
-    clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
-  }
-  if (!UUID_RE.test(clinicId)) return null;
+  let primaryDoctorUuid = "";
+
   try {
-    const { data: thr, error } = await supabase
+    const { data: prow } = await supabase
+      .from("patients")
+      .select("clinic_id, primary_doctor_id")
+      .eq("id", patientResolvedId)
+      .maybeSingle();
+    if (!UUID_RE.test(clinicId)) {
+      clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
+    }
+    primaryDoctorUuid =
+      prow?.primary_doctor_id != null ? String(prow.primary_doctor_id).trim() : "";
+  } catch (_) {
+    /* non-fatal */
+  }
+
+  if (!UUID_RE.test(clinicId)) return null;
+
+  async function hydrateDoctorDisplay(didRaw) {
+    const did = String(didRaw || "").trim();
+    if (!did || !UUID_RE.test(did)) return null;
+    const { data: doc } = await supabase.from("doctors").select("id, full_name, name").eq("id", did).maybeSingle();
+    if (!doc?.id) return null;
+    const name = String(doc?.full_name || doc?.name || "").trim() || null;
+    return { id: did, doctorName: name, assignedDoctor: { id: did, name } };
+  }
+
+  let thr = null;
+  try {
+    const { data, error } = await supabase
       .from("patient_chat_threads")
       .select("id, assigned_doctor_id, assigned_at")
       .eq("patient_id", patientResolvedId)
       .eq("clinic_id", clinicId)
       .eq("is_lead", true)
       .maybeSingle();
-    if (error && isPatientChatThreadsTableUnavailable(error)) return null;
-    if (error || !thr?.id) return null;
-    const threadId = String(thr.id).trim();
-    if (!UUID_RE.test(threadId)) return null;
+    if (!error && data?.id) thr = data;
+    else if (error && !isPatientChatThreadsTableUnavailable(error))
+      console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient thread:", error?.message || error);
+  } catch (e) {
+    if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient:", e?.message || e);
+  }
 
-    let assignedDoctorId = null;
-    let doctorName = null;
-    let assignedDoctor = null;
-    if (thr.assigned_doctor_id) {
-      const did = String(thr.assigned_doctor_id).trim();
-      assignedDoctorId = did;
-      const { data: doc } = await supabase
-        .from("doctors")
-        .select("id, full_name, name")
-        .eq("id", did)
-        .maybeSingle();
-      doctorName = String(doc?.full_name || doc?.name || "").trim() || null;
-      assignedDoctor = { id: did, name: doctorName };
+  const threadDoctorIdRaw = thr?.assigned_doctor_id != null ? String(thr.assigned_doctor_id).trim() : "";
+  const threadDoctorId = threadDoctorIdRaw && UUID_RE.test(threadDoctorIdRaw) ? threadDoctorIdRaw : "";
+
+  /** Prefer primary clinician for banners; fallback to thread assignee. */
+  let primDisp =
+    primaryDoctorUuid && UUID_RE.test(primaryDoctorUuid)
+      ? await hydrateDoctorDisplay(primaryDoctorUuid)
+      : null;
+  let threadDisp = threadDoctorId ? await hydrateDoctorDisplay(threadDoctorId) : null;
+
+  const effectiveDoctorId = primDisp?.id ?? threadDisp?.id ?? "";
+  const display = primDisp ?? threadDisp;
+
+  if (!thr?.id && !effectiveDoctorId) return null;
+
+  if (
+    primaryDoctorUuid &&
+    UUID_RE.test(primaryDoctorUuid) &&
+    threadDoctorId &&
+    primaryDoctorUuid !== threadDoctorId
+  ) {
+    void syncPatientLeadThreadAssignedDoctor(patientResolvedId, clinicId, primaryDoctorUuid).catch(() => {});
+  }
+
+  const threadId = thr?.id && UUID_RE.test(String(thr.id).trim()) ? String(thr.id).trim() : null;
+
+  return {
+    clinicId,
+    ...(threadId ? { threadId } : {}),
+    assignedDoctorId: effectiveDoctorId || threadDoctorId || null,
+    doctorName: display?.doctorName ?? null,
+    ...(display?.assignedDoctor ? { assignedDoctor: display.assignedDoctor } : {}),
+    assignedAt: thr?.assigned_at != null ? String(thr.assigned_at) : null,
+  };
+}
+
+/**
+ * Keep lead chat thread assignment aligned with patients.primary_doctor_id (best-effort).
+ * Used after PUT /api/admin/patients/assign-doctor so admin chat banner matches hasta listesi.
+ */
+async function syncPatientLeadThreadAssignedDoctor(resolvedPatientId, clinicUuid, doctorUuid) {
+  const pid = String(resolvedPatientId || "").trim();
+  const doc = String(doctorUuid || "").trim();
+  if (!isSupabaseEnabled() || !pid || !doc || !DOCTOR_FK_UUID_RE.test(doc)) {
+    return { ok: false, skipped: true };
+  }
+
+  let clinicId = String(clinicUuid || "").trim();
+  if (!UUID_RE.test(clinicId)) {
+    try {
+      const { data: prow } = await supabase.from("patients").select("clinic_id").eq("id", pid).maybeSingle();
+      clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
+    } catch (e) {
+      return { ok: false, skipped: true, reason: "clinic_resolve_failed" };
+    }
+  }
+  if (!UUID_RE.test(clinicId)) return { ok: false, skipped: true, reason: "no_clinic" };
+
+  const assignedAtIso = new Date().toISOString();
+  const upd = {
+    status: "assigned",
+    assigned_doctor_id: doc,
+    assigned_at: assignedAtIso,
+    updated_at: assignedAtIso,
+  };
+
+  try {
+    let { data: updated, error: upErr } = await supabase
+      .from("patient_chat_threads")
+      .update(upd)
+      .eq("patient_id", pid)
+      .eq("clinic_id", clinicId)
+      .eq("is_lead", true)
+      .select("id, patient_id, assigned_doctor_id, status, assigned_at")
+      .maybeSingle();
+
+    if (upErr) {
+      if (isPatientChatThreadsTableUnavailable(upErr)) return { ok: false, skipped: true, reason: "no_thread_table" };
+      console.warn("[MESSAGES] syncPatientLeadThreadAssignedDoctor update:", upErr.message || upErr);
+      return { ok: false, error: upErr };
     }
 
-    return {
-      clinicId,
-      threadId,
-      assignedDoctorId,
-      doctorName,
-      ...(assignedDoctor ? { assignedDoctor } : {}),
-      assignedAt: thr.assigned_at != null ? String(thr.assigned_at) : null,
-    };
+    if (!updated?.id) {
+      const { data: upd2, error: up2 } = await supabase
+        .from("patient_chat_threads")
+        .update(upd)
+        .eq("patient_id", pid)
+        .eq("clinic_id", clinicId)
+        .eq("is_lead", true)
+        .select("id, patient_id, assigned_doctor_id, status, assigned_at")
+        .maybeSingle();
+      if (!up2 && upd2?.id) updated = upd2;
+    }
+
+    if (!updated?.id) {
+      const insPayload = {
+        patient_id: pid,
+        clinic_id: clinicId,
+        status: "assigned",
+        assigned_doctor_id: doc,
+        assigned_at: assignedAtIso,
+        updated_at: assignedAtIso,
+        is_lead: true,
+      };
+      const { data: insRow, error: insErr } = await insertIntoTableWithColumnPruning(
+        "patient_chat_threads",
+        insPayload,
+        "id, patient_id, assigned_doctor_id, status, assigned_at"
+      );
+      if (!insErr && insRow?.id) return { ok: true, threadId: insRow.id, mode: "inserted" };
+      if (insErr && isPatientChatThreadsTableUnavailable(insErr)) return { ok: false, skipped: true, reason: "no_thread_table" };
+      if (insErr) console.warn("[MESSAGES] syncPatientLeadThreadAssignedDoctor insert:", insErr.message || insErr);
+      return { ok: false, skipped: true, reason: "thread_upsert_unavailable", detail: insErr?.message };
+    }
+
+    return { ok: true, threadId: updated.id };
   } catch (e) {
-    if (isPatientChatThreadsTableUnavailable(e)) return null;
-    console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient:", e?.message || e);
-    return null;
+    if (isPatientChatThreadsTableUnavailable(e)) return { ok: false, skipped: true, reason: "no_thread_table" };
+    console.warn("[MESSAGES] syncPatientLeadThreadAssignedDoctor:", e?.message || e);
+    return { ok: false, error: e };
   }
 }
 
@@ -1397,6 +1524,31 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     };
   }
   const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  let clinicFk = null;
+  try {
+    const { data: prow } = await supabase
+      .from("patients")
+      .select("clinic_id")
+      .eq("id", resolvedPatientId)
+      .maybeSingle();
+    clinicFk =
+      prow?.clinic_id != null && String(prow.clinic_id).trim() ? String(prow.clinic_id).trim() : null;
+    if (!clinicFk) {
+      const { data: thr } = await supabase
+        .from("patient_chat_threads")
+        .select("clinic_id")
+        .eq("patient_id", resolvedPatientId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      clinicFk =
+        thr?.clinic_id != null && String(thr.clinic_id).trim()
+          ? String(thr.clinic_id).trim()
+          : null;
+    }
+  } catch (_) {
+    /* optional — column may differ */
+  }
   const baseRow = {
     patient_id: resolvedPatientId,
     message_id: messageId,
@@ -1404,26 +1556,37 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     text: String(text || "").trim(),
     type: String(msgType || "text").trim() || "text",
     attachment: null,
+    ...(clinicFk ? { clinic_id: clinicFk } : {}),
   };
   const fromRoles = ["admin", "clinic", "CLINIC", "clinic_staff"];
   let lastError = null;
-  for (const from_role of fromRoles) {
-    const { data, error } = await supabase
-      .from("patient_messages")
-      .insert({ ...baseRow, from_role })
-      .select("*")
-      .single();
-    if (!error) return { data, error: null };
-    lastError = error;
-    const msg = String(error?.message || "").toLowerCase();
-    const code = String(error?.code || "");
-    const enumOrCheck =
-      code === "23514" ||
-      code === "22P02" ||
-      msg.includes("enum") ||
-      msg.includes("check constraint") ||
-      msg.includes("invalid input");
-    if (!enumOrCheck) break;
+  const payloadsToTry =
+    clinicFk && Object.prototype.hasOwnProperty.call(baseRow, "clinic_id")
+      ? [baseRow, { ...baseRow, clinic_id: undefined }]
+      : [baseRow];
+  outerPayload: for (const payload of payloadsToTry) {
+    const rowIns = Object.fromEntries(
+      Object.entries({ ...payload }).filter(([, v]) => v !== undefined)
+    );
+    for (const from_role of fromRoles) {
+      const { data, error } = await supabase
+        .from("patient_messages")
+        .insert({ ...rowIns, from_role })
+        .select("*")
+        .single();
+      if (!error) return { data, error: null };
+      lastError = error;
+      const msg = String(error?.message || "").toLowerCase();
+      const code = String(error?.code || "");
+      const enumOrCheck =
+        code === "23514" ||
+        code === "22P02" ||
+        msg.includes("enum") ||
+        msg.includes("check constraint") ||
+        msg.includes("invalid input");
+      if (enumOrCheck) continue;
+      continue outerPayload;
+    }
   }
   if (lastError) {
     console.warn("[MESSAGES] patient_messages clinic insert failed (will try messages table):", lastError.message);
@@ -2038,6 +2201,7 @@ async function patchPatientAssignmentPointersSticky(resolvedPatientId, doctorUui
   const patch = {
     assigned_doctor_id: String(doctorUuid).trim(),
     last_assigned_doctor_id: String(doctorUuid).trim(),
+    primary_doctor_id: String(doctorUuid).trim(),
     updated_at: at,
   };
   const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patch);
@@ -13737,6 +13901,25 @@ app.put('/api/admin/patients/assign-doctor', requireAdminAuth, async (req, res) 
     }
 
     console.log(`[ASSIGN DOCTOR] patient=${patientUuid} → doctor=${canonicalDoctorUuid} (raw=${rawDoc})`);
+
+    let leadThreadSync = { ok: false };
+    try {
+      leadThreadSync = await syncPatientLeadThreadAssignedDoctor(patientUuid, clinicId, canonicalDoctorUuid);
+      if (leadThreadSync.ok) {
+        console.log("[ASSIGN DOCTOR] lead thread sync:", leadThreadSync.threadId || leadThreadSync.mode || "ok");
+      } else if (!leadThreadSync.skipped) {
+        console.warn("[ASSIGN DOCTOR] lead thread sync:", leadThreadSync.reason || leadThreadSync.error);
+      }
+    } catch (e) {
+      console.warn("[ASSIGN DOCTOR] lead thread sync exception:", e?.message || e);
+    }
+
+    try {
+      await patchPatientAssignmentPointersSticky(patientUuid, canonicalDoctorUuid);
+    } catch (e) {
+      console.warn("[ASSIGN DOCTOR] patchPatientAssignmentPointersSticky failed:", e?.message || e);
+    }
+
     let treatmentTeamSync = { ok: false };
     try {
       treatmentTeamSync = await syncAssignedDoctorOnPatientTreatmentPlans(patientUuid, canonicalDoctorUuid);
@@ -13748,6 +13931,7 @@ app.put('/api/admin/patients/assign-doctor', requireAdminAuth, async (req, res) 
       ok: true,
       patientId: patientUuid,
       doctorId: canonicalDoctorUuid,
+      leadThreadSync,
       treatmentTeamSync,
     });
 
@@ -37405,6 +37589,35 @@ async function collectPatientIdsFromTreatmentTeam(doctorKeysRaw) {
   return out;
 }
 
+/** Lead thread `assigned_doctor_id` — doktor inbox ataması hasta listesinde de görünsün (primary’dan bağımsız). */
+async function collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw) {
+  const out = new Set();
+  const keys = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
+  if (!keys.length || !isSupabaseEnabled()) return out;
+  try {
+    const { data, error } = await supabase
+      .from("patient_chat_threads")
+      .select("patient_id")
+      .eq("is_lead", true)
+      .not("assigned_doctor_id", "is", null)
+      .in("assigned_doctor_id", keys)
+      .limit(800);
+    if (error) {
+      const c = String(error.code || "");
+      if (!["42P01", "42703", "PGRST204", "PGRST205"].includes(c))
+        console.warn("[lead_thread_patients] fetch:", error.message || error);
+      return out;
+    }
+    for (const r of data || []) {
+      const pid = String(r?.patient_id || "").trim();
+      if (pid) out.add(pid);
+    }
+  } catch (e) {
+    if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[lead_thread_patients]:", e?.message || e);
+  }
+  return out;
+}
+
 /** Admin / kayıt ataması: patients.primary_doctor_id, assigned_doctor_id, doctor_id — tedavi planı olmadan da listede görünsün. */
 async function collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw) {
   const out = new Set();
@@ -39223,14 +39436,17 @@ async function getDoctorVisiblePatientIdSet(req) {
       String(req?.doctor?.doctor_id || "").trim(),
     ].filter(Boolean)),
   ];
-  const [teamPatientIds, fromPatientTableAssign, fromProcessAssign, fromCalendar] = await Promise.all([
-    collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
-    collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
-    collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-    collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
-  ]);
+  const [teamPatientIds, fromPatientTableAssign, fromLeadThreads, fromProcessAssign, fromCalendar] =
+    await Promise.all([
+      collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
+      collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
+      collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw),
+      collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
+      collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
+    ]);
   const visiblePatientIds = new Set(teamPatientIds);
   for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
+  for (const pid of fromLeadThreads) visiblePatientIds.add(pid);
   for (const pid of fromProcessAssign) visiblePatientIds.add(pid);
   for (const pid of fromCalendar) visiblePatientIds.add(pid);
   await expandPatientIdSetForDoctorMatching(visiblePatientIds);
@@ -39417,15 +39633,18 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       clinicCode
     });
 
-    // Tedavi ekibi + patients tablosu + işlem ataması + bugün/yarın klinik takvimi (dashboard ile aynı)
-    const [teamPatientIds, fromPatientTableAssign, fromProcessAssign, fromCalendar] = await Promise.all([
+    // Tedavi ekibi + patients tablosu + lead thread ataması + işlem / takvim (dashboard ile aynı küme mantığı)
+    const [teamPatientIds, fromPatientTableAssign, fromLeadThreads, fromProcessAssign, fromCalendar] =
+      await Promise.all([
       collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
       collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
+      collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw),
       collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
       collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
     ]);
     const visiblePatientIds = new Set(teamPatientIds);
     for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
+    for (const pid of fromLeadThreads) visiblePatientIds.add(pid);
     for (const pid of fromProcessAssign) visiblePatientIds.add(pid);
     for (const pid of fromCalendar) visiblePatientIds.add(pid);
     const mergedBeforeExpand = visiblePatientIds.size;
@@ -39434,6 +39653,7 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
     console.log("[DOCTOR PATIENTS] visible id keys:", {
       treatment_team: teamPatientIds.size,
       patient_table_assign: fromPatientTableAssign.size,
+      lead_thread_assign: fromLeadThreads.size,
       process_or_appt_assign: fromProcessAssign.size,
       calendar_today_tomorrow: fromCalendar.size,
       merged_before_expand: mergedBeforeExpand,
