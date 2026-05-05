@@ -9446,6 +9446,82 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
   }
 });
 
+// ================== PATIENT: ACTIVE CLINIC (Home / Chat header — switcher-ready) ==================
+app.get("/api/patient/me/clinic", requireToken, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json(null);
+    }
+    const mePatientId = req.patientId;
+    const UUID_RE_ME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const isUuidMe = UUID_RE_ME.test(String(mePatientId || ""));
+    const PSEL = "clinic_id";
+
+    let prow = null;
+    if (isUuidMe) {
+      const r1 = await supabase.from("patients").select(PSEL).eq("id", mePatientId).maybeSingle();
+      if (!r1.error && r1.data) prow = r1.data;
+    }
+    if (!prow) {
+      const r2 = await supabase.from("patients").select(PSEL).eq("patient_id", mePatientId).maybeSingle();
+      if (!r2.error && r2.data) prow = r2.data;
+    }
+
+    const clinicIdRaw = prow?.clinic_id;
+    const cid =
+      clinicIdRaw != null && String(clinicIdRaw).trim() !== "" ? String(clinicIdRaw).trim() : "";
+    if (!cid) return res.json(null);
+
+    const selectTries = [
+      "id,name,country,status,settings,logo_url",
+      "id,name,country,status,settings",
+      "id,name,country,status",
+    ];
+    let c = null;
+    for (const sel of selectTries) {
+      const { data, error } = await supabase.from("clinics").select(sel).eq("id", cid).maybeSingle();
+      const code = String(error?.code || "");
+      if (!error && data) {
+        c = data;
+        break;
+      }
+      if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
+    }
+    if (!c?.id) return res.json(null);
+
+    const st = String(c.status ?? "active").toLowerCase();
+    if (["suspended", "reject", "rejected", "inactive", "closed"].includes(st)) {
+      return res.json(null);
+    }
+
+    let settings = c.settings;
+    if (typeof settings === "string") {
+      try {
+        settings = JSON.parse(settings);
+      } catch {
+        settings = {};
+      }
+    }
+    if (!settings || typeof settings !== "object") settings = {};
+
+    const brand = settings.branding || {};
+    const logoDb = c.logo_url != null ? String(c.logo_url).trim() : "";
+    const logoBrand =
+      String(brand.clinicLogoUrl || "").trim() || String(settings.logoUrl || "").trim();
+    const logo_url = logoDb || logoBrand ? (logoDb || logoBrand) : null;
+
+    return res.json({
+      id: String(c.id),
+      name: String(c.name || "").trim() || "Clinic",
+      logo_url,
+      country: c.country != null ? String(c.country).trim() || null : null,
+    });
+  } catch (e) {
+    console.error("[GET /api/patient/me/clinic]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 /** Display rating per clinic: 80% avg(treatment) + 20% avg(experience); untyped rows fall back to simple average for that bucket. */
 function buildClinicRatingMapWeighted(ratingRows) {
   const ratingMap = {};
@@ -30578,6 +30654,60 @@ function mapReferralRowToLegacyItem(r) {
   };
 }
 
+/** Klinik settings → şu anki seviye 1 oranı (hasta ekranı “yeni davetler” metni). */
+function readReferralLevel1PercentFromClinicSettingsObject(settingsRaw) {
+  const s = settingsRaw && typeof settingsRaw === "object" ? settingsRaw : {};
+  if (s.referralLevels != null && s.referralLevels.level1 != null && String(s.referralLevels.level1) !== "") {
+    const n = Number(s.referralLevels.level1);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (s.referralLevel1Percent != null && String(s.referralLevel1Percent) !== "") {
+    const n = Number(s.referralLevel1Percent);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Referral satırında kayıt/davet anında kilitlenmiş indirim (admin global oranı değiştirse bile). */
+function referralRowFrozenDiscountSnapshot(referralRow) {
+  const n = (v) => {
+    if (v == null || v === "") return null;
+    const x = Number(v);
+    return Number.isFinite(x) ? x : null;
+  };
+  const inv = n(referralRow?.inviter_discount_percent);
+  const ini = n(referralRow?.invited_discount_percent);
+  const comb = n(referralRow?.discount_percent);
+  const hasAny = inv != null || ini != null || comb != null;
+  if (!hasAny) {
+    return { hasSnapshot: false, inviter: null, invited: null, combined: null };
+  }
+  return {
+    hasSnapshot: true,
+    inviter: inv ?? comb ?? ini,
+    invited: ini ?? comb ?? inv,
+    combined: comb ?? inv ?? ini,
+  };
+}
+
+async function getPatientReferralCodeAndClinicLevel1(normalizedPatientId) {
+  const out = { referralCode: null, level1: null };
+  const pid = String(normalizedPatientId || "").trim();
+  if (!pid || !isSupabaseEnabled()) return out;
+  try {
+    const prow = await getPatientById(pid);
+    if (!prow) return out;
+    out.referralCode = prow.referral_code || prow.referralCode || null;
+    const cid = prow.clinic_id != null ? String(prow.clinic_id).trim() : "";
+    if (!cid) return out;
+    const { data: crow } = await supabase.from("clinics").select("settings").eq("id", cid).maybeSingle();
+    out.level1 = readReferralLevel1PercentFromClinicSettingsObject(crow?.settings || {});
+    return out;
+  } catch (_) {
+    return out;
+  }
+}
+
 async function getPatientClinicIdForReferral(patientId) {
   // Best-effort: derive clinic_id from patients table for admin isolation/reporting
   try {
@@ -37365,11 +37495,49 @@ async function resolvePatientIdFromMessageIdentifier(messageIdRaw) {
   return null;
 }
 
+/** Gönderim reddi mesajı — hasta klinik üyesi + lead thread atanmış doktor yazma kuralı. */
+const PATIENT_MESSAGES_ASSIGNED_DOCTOR_ONLY_TR =
+  "Bu hasta artık kliniğinize üyedir ve yalnızca kendisine atanmış doktor ile mesajlaşabilir. Üyelik öncesi tüm doktorların yanıt vermesi mümkündü.";
+
+async function loadPatientMessagingEnrollmentRow(internalPatientUuid) {
+  const id = String(internalPatientUuid || "").trim();
+  if (!id || !UUID_RE.test(id) || !isSupabaseEnabled()) return null;
+  try {
+    const { data } = await supabase
+      .from("patients")
+      .select("status, is_lead, clinic_id")
+      .eq("id", id)
+      .maybeSingle();
+    return data || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** true ⇒ lead konuşmasında yanıt yalnızca thread'deki atanmış doktora (lead dönemi bitti / üye hasta). */
+function patientRowRequiresAssignedDoctorMessagingOnly(prow) {
+  if (!prow) return false;
+  const cid = prow.clinic_id != null ? String(prow.clinic_id).trim() : "";
+  if (!UUID_RE.test(cid)) return false;
+  if (prow.is_lead === true) return false;
+  const status = String(prow.status || "").trim().toUpperCase();
+  if (status === "LEAD") return false;
+  if (
+    prow.is_lead === false ||
+    ["ACTIVE", "PATIENT", "REGISTERED", "MEMBER"].includes(status)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Lead threads (is_lead): only the assigned doctor may read/reply.
  * Other patients: existing treatment-team visibility.
+ * opts.forSend: true on POST replies; enrolled patient + thread assignee mismatch → 403 assigned_doctor_only.
  */
-async function resolveDoctorPatientMessagingAccess(patientIdParam, req) {
+async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
+  const forSend = !!(opts && opts.forSend);
   const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
   const resolvedPatientId = await resolveMessagesPatientDbId(patientIdParam);
   if (!resolvedPatientId) {
@@ -37397,8 +37565,20 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req) {
     if (match) {
       return { ok: true, patientId: resolvedPatientId };
     }
-    // Not the assigned thread doctor — but still allow if they have treatment-team access
-    // (e.g. doctor assigned a treatment to this patient but not the lead thread)
+
+    if (forSend) {
+      const prow = await loadPatientMessagingEnrollmentRow(resolvedPatientId);
+      if (patientRowRequiresAssignedDoctorMessagingOnly(prow)) {
+        return {
+          ok: false,
+          status: 403,
+          error: "assigned_doctor_only",
+          message: PATIENT_MESSAGES_ASSIGNED_DOCTOR_ONLY_TR,
+        };
+      }
+    }
+
+    // Not the assigned thread doctor — but still allow read/send if they have treatment-team access (pre-member / ekip)
   } else if (thread?.is_lead) {
     // Lead thread exists but unassigned — allow treatment-team doctors through
   }
@@ -40057,9 +40237,11 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: "message_not_found" });
     }
 
-    const access = await resolveDoctorPatientMessagingAccess(patientId, req);
+    const access = await resolveDoctorPatientMessagingAccess(patientId, req, { forSend: true });
     if (!access.ok) {
-      return res.status(access.status === 403 ? 403 : access.status).json({ ok: false, error: access.error });
+      const payload = { ok: false, error: access.error };
+      if (access.message) payload.message = access.message;
+      return res.status(access.status === 403 ? 403 : access.status).json(payload);
     }
 
     const msgType = String(req.body?.type || "text").trim() || "text";
