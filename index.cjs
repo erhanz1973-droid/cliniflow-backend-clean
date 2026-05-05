@@ -3629,16 +3629,126 @@ app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   next();
 });
+
+/** Map Stripe Price id → Saas plan (BASIC | PRO). Set STRIPE_PRICE_BASIC / STRIPE_PRICE_PRO on Railway to match Checkout prices. */
+function inferSaasPlanFromStripePriceId(priceId) {
+  const p = String(priceId || "").trim();
+  const basic = String(process.env.STRIPE_PRICE_BASIC || "").trim();
+  const pro = String(process.env.STRIPE_PRICE_PRO || "").trim();
+  if (pro && p === pro) return "PRO";
+  if (basic && p === basic) return "BASIC";
+  return "";
+}
+
+async function updateClinicPlanFromStripeWebhook(clinicId, { plan, stripeSubscriptionId }) {
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+    console.error("[Stripe webhook] Supabase unavailable; skipping plan update");
+    return;
+  }
+  const id = String(clinicId || "").trim();
+  if (!id) return;
+  const norm = saasPlans.normalizePlanKey(plan);
+  const patch = {
+    plan: norm,
+    ...(stripeSubscriptionId
+      ? { stripe_subscription_id: String(stripeSubscriptionId).trim() }
+      : {}),
+  };
+  const { error } = await supabase.from("clinics").update(patch).eq("id", id);
+  if (error) {
+    console.error("[Stripe webhook] clinics update failed:", error.message || error);
+  }
+}
+
+// Stripe webhook must use raw body (before express.json)
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const secret =
+      String(process.env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEB_HOOK_SECRET || "").trim();
+    if (!secret) {
+      console.error("[Stripe webhook] STRIPE_WEBHOOK_SECRET not configured");
+      return res.status(503).send("stripe_webhook_not_configured");
+    }
+    const apiKey = String(process.env.STRIPE_SECRET_KEY || "").trim();
+    if (!apiKey) {
+      console.error("[Stripe webhook] STRIPE_SECRET_KEY missing");
+      return res.status(503).send("stripe_not_configured");
+    }
+    let event;
+    try {
+      const stripe = require("stripe")(apiKey);
+      const sig = req.headers["stripe-signature"];
+      event = stripe.webhooks.constructEvent(req.body, sig, secret);
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        const clinicId = session.metadata && session.metadata.clinicId;
+        if (!clinicId) {
+          console.error("[Stripe webhook] checkout.session.completed missing metadata.clinicId");
+          return res.sendStatus(200);
+        }
+        const subscriptionId =
+          typeof session.subscription === "string"
+            ? session.subscription
+            : session.subscription?.id || null;
+        let planKey =
+          (session.metadata &&
+            String(session.metadata.saasPlan || session.metadata.plan || "").trim()) ||
+          "";
+        if (planKey) {
+          planKey = saasPlans.normalizePlanKey(planKey);
+        } else {
+          let linePriceId = session.line_items?.data?.[0]?.price?.id || "";
+          if (!linePriceId) {
+            try {
+              const expanded = await stripe.checkout.sessions.retrieve(String(session.id), {
+                expand: ["line_items.data.price"],
+              });
+              linePriceId = expanded.line_items?.data?.[0]?.price?.id || "";
+            } catch (e) {
+              console.warn("[Stripe webhook] could not expand session line_items:", e?.message || e);
+            }
+          }
+          planKey =
+            inferSaasPlanFromStripePriceId(linePriceId) ||
+            saasPlans.normalizePlanKey("BASIC");
+        }
+        if (!subscriptionId) {
+          console.warn(
+            "[Stripe webhook] checkout.session.completed has no subscription id (non-subscription Checkout?)",
+            session.id,
+          );
+          return res.sendStatus(200);
+        }
+        await updateClinicPlanFromStripeWebhook(clinicId, {
+          plan: planKey,
+          stripeSubscriptionId: subscriptionId,
+        });
+        console.log("[Stripe webhook] clinic plan updated:", clinicId, planKey, subscriptionId);
+      }
+      return res.sendStatus(200);
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err);
+      if (/signature|stripe-signature|constructEvent/i.test(msg)) {
+        console.error("[Stripe webhook] signature verification failed:", msg);
+        return res.status(400).send(`Webhook Error: ${msg}`);
+      }
+      console.error("[Stripe webhook]", err);
+      return res.sendStatus(500);
+    }
+  },
+);
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// ── Sanity check: Stripe wiring (must return JSON; register after body parsers) ──
-app.get("/api/test-stripe", (req, res) => {
+// ── Stripe (must be first /api mount after body parsers — Router defers with next() when no match) ──
+const stripeEarlyApi = express.Router();
+stripeEarlyApi.get("/test-stripe", (req, res) => {
   res.json({ ok: true });
 });
-
-// ── Stripe PaymentIntent ───────────────────────────────────────────────────────
-app.post("/api/payments/create-intent", async (req, res) => {
+stripeEarlyApi.post("/payments/create-intent", async (req, res) => {
   try {
     const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
     const { amount, clinicId } = req.body || {};
@@ -3655,11 +3765,11 @@ app.post("/api/payments/create-intent", async (req, res) => {
     res.status(500).json({ error: "payment_failed" });
   }
 });
+app.use("/api", stripeEarlyApi);
 
-// ── Static files FIRST — must run before /api routes so GET requests for /onboarding.js, /i18n.js, etc. never hit JSON catch-alls ──
 const publicDir = path.join(__dirname, "public");
 console.log("STATIC DIR:", publicDir);
-app.use(express.static(publicDir));
+// Static files: registered after all routes (see "// ================== START ==================") so no middleware shadows API paths.
 
 /**
  * Canonical path without `.html`.
@@ -3908,7 +4018,7 @@ app.get("/admin-treatment.html", (req, res) => {
   return res.status(404).send("admin-treatment.html not found in cliniflow-admin/public");
 });
 
-// Static files: registered late (see end of file) so all /api/* routes match first.
+// Static files: middleware is registered at END of route stack (before 404) — see "// ================== START ==================".
 
 // ================== STORAGE ==================
 // DATA_DIR is defined at the top of the file (early init required).
@@ -10765,6 +10875,104 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
         return res.status(500).json({ ok: false, error: e?.message || "internal_error" });
       }
     }
+  }
+});
+
+app.post("/api/stripe/public-checkout", async (req, res) => {
+  try {
+    const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+    const { priceId } = req.body;
+
+    if (!priceId) {
+      return res.status(400).json({ ok: false, error: "price_required" });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      success_url: "https://clinifly.net/success",
+      cancel_url: "https://clinifly.net/cancel",
+    });
+
+    res.json({ ok: true, url: session.url });
+  } catch (err) {
+    console.error("PUBLIC CHECKOUT ERROR:", err);
+    res.status(500).json({ ok: false, error: "checkout_failed" });
+  }
+});
+
+/** Stripe Checkout (subscription) — clinic must be authenticated as ADMIN; clinicId taken from session, not spoofed via body alone. */
+app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
+  try {
+    const secret = String(process.env.STRIPE_SECRET_KEY || "").trim();
+    if (!secret) {
+      return res.status(503).json({ ok: false, error: "stripe_not_configured" });
+    }
+
+    const priceId = String(req.body?.priceId || "").trim();
+    console.log("Stripe key prefix:", process.env.STRIPE_SECRET_KEY?.slice(0, 7));
+    console.log("priceId:", priceId);
+    const bodyClinicId = String(req.body?.clinicId || "").trim();
+
+    const sessionClinicId =
+      req.clinicId != null && String(req.clinicId).trim() !== ""
+        ? String(req.clinicId).trim()
+        : req.user && req.user.clinicId != null
+          ? String(req.user.clinicId).trim()
+          : "";
+
+    if (!/^price_[a-zA-Z0-9]+$/.test(priceId)) {
+      return res.status(400).json({ ok: false, error: "invalid_price_id" });
+    }
+
+    const allowed = String(process.env.STRIPE_CHECKOUT_ALLOWED_PRICE_IDS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes(priceId)) {
+      return res.status(400).json({ ok: false, error: "price_not_allowed" });
+    }
+
+    if (!sessionClinicId) {
+      return res.status(401).json({ ok: false, error: "clinic_required" });
+    }
+    if (bodyClinicId && bodyClinicId !== sessionClinicId) {
+      return res.status(403).json({ ok: false, error: "clinic_mismatch" });
+    }
+
+    const stripe = require("stripe")(secret);
+    const successUrl =
+      String(process.env.STRIPE_CHECKOUT_SUCCESS_URL || "").trim() || "https://clinifly.net/success";
+    const cancelUrl =
+      String(process.env.STRIPE_CHECKOUT_CANCEL_URL || "").trim() || "https://clinifly.net/cancel";
+
+    const saasPlanHint =
+      inferSaasPlanFromStripePriceId(priceId) ||
+      String(saasPlans.normalizePlanKey("BASIC"));
+
+    const checkoutSession = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        clinicId: String(sessionClinicId),
+        saasPlan: String(saasPlans.normalizePlanKey(saasPlanHint)),
+      },
+    });
+
+    return res.json({ ok: true, url: checkoutSession.url });
+  } catch (e) {
+    console.error("STRIPE CHECKOUT ERROR:", e);
+    return res.status(500).json({ ok: false, error: "checkout_failed" });
   }
 });
 
@@ -50518,7 +50726,10 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-// ── Unmatched routes (LAST). Static middleware is registered earlier. ─────────────────
+// ── Static assets: after every app.get/app.post route; optional files never steal POST /api/* ──
+app.use(express.static(publicDir));
+
+// ── Unmatched routes (LAST; must stay after static) ─────────────────
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.path });
 });
