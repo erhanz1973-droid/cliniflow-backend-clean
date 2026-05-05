@@ -3836,57 +3836,87 @@ app.post(
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
-      const email = session.customer_details?.email;
-      const plan = session.metadata?.plan;
-      const customerId = session.customer;
-      const subscriptionId = session.subscription;
+      let sessionWithItems = session;
+      try {
+        sessionWithItems = await stripe.checkout.sessions.retrieve(String(session.id), {
+          expand: ["line_items"],
+        });
+      } catch (retrieveErr) {
+        console.warn(
+          "[checkout.session.completed] stripe.checkout.sessions.retrieve:",
+          retrieveErr?.message || retrieveErr,
+        );
+      }
 
-      if (!email) {
-        console.log("No email in session");
-      } else if (!plan || !PLAN_CONFIG[plan]) {
-        console.log("Invalid plan:", plan);
-      } else if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
-        /* no-op */
+      const priceId = sessionWithItems.line_items?.data?.[0]?.price?.id;
+
+      const PLAN_BY_PRICE = {
+        price_1TTnpFD5VNkZC9K8Sz10fLV7: "pro",
+        price_1TTnqjD5VNkZC9K8Z7LrpZyV: "premium",
+      };
+
+      const plan =
+        session.metadata?.plan ||
+        session.metadata?.saasPlan ||
+        PLAN_BY_PRICE[priceId];
+
+      if (!plan) {
+        console.log("Plan not resolved", {
+          metadata: session.metadata,
+          priceId,
+        });
       } else {
-        try {
-          const emailNorm = String(email).trim().toLowerCase();
-          const { data: clinic } = await supabase
-            .from("clinics")
-            .select("id")
-            .eq("email", emailNorm)
-            .maybeSingle();
+        const email = session.customer_details?.email;
+        const customerId = session.customer;
+        const subscriptionId = session.subscription;
 
-          if (!clinic) {
-            console.log("Clinic not found for email:", email);
-          } else {
-            const stripeCust =
-              typeof customerId === "string" ? customerId : customerId?.id ?? customerId ?? null;
-            const stripeSub =
-              typeof subscriptionId === "string"
-                ? subscriptionId
-                : subscriptionId?.id ?? subscriptionId ?? null;
-
-            const cfg = PLAN_CONFIG[plan];
-
-            const { error: upErr } = await supabase
+        if (!email) {
+          console.log("No email in session");
+        } else if (!PLAN_CONFIG[plan]) {
+          console.log("Invalid plan:", plan);
+        } else if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+          /* no-op */
+        } else {
+          try {
+            const emailNorm = String(email).trim().toLowerCase();
+            const { data: clinic } = await supabase
               .from("clinics")
-              .update({
-                plan: plan,
-                stripe_customer_id: stripeCust,
-                stripe_subscription_id: stripeSub,
-                patient_limit: cfg.patient_limit,
-                features: cfg.features,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", clinic.id);
-            if (upErr) {
-              console.error("[checkout.session.completed] update:", upErr.message);
+              .select("id")
+              .eq("email", emailNorm)
+              .maybeSingle();
+
+            if (!clinic) {
+              console.log("Clinic not found for email:", email);
             } else {
-              console.log("Clinic upgraded:", clinic.id, "Plan:", plan);
+              const stripeCust =
+                typeof customerId === "string" ? customerId : customerId?.id ?? customerId ?? null;
+              const stripeSub =
+                typeof subscriptionId === "string"
+                  ? subscriptionId
+                  : subscriptionId?.id ?? subscriptionId ?? null;
+
+              const cfg = PLAN_CONFIG[plan];
+
+              const { error: upErr } = await supabase
+                .from("clinics")
+                .update({
+                  plan: plan,
+                  stripe_customer_id: stripeCust,
+                  stripe_subscription_id: stripeSub,
+                  patient_limit: cfg.patient_limit,
+                  features: cfg.features,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", clinic.id);
+              if (upErr) {
+                console.error("[checkout.session.completed] update:", upErr.message);
+              } else {
+                console.log("Clinic upgraded:", clinic.id, "Plan:", plan);
+              }
             }
+          } catch (e) {
+            console.error("[checkout.session.completed]", e);
           }
-        } catch (e) {
-          console.error("[checkout.session.completed]", e);
         }
       }
     }
