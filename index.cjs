@@ -867,17 +867,17 @@ async function resolveMessagesPatientDbId(patientId) {
       if (!errPidIn && Array.isArray(pidRows) && pidRows[0]?.id) return String(pidRows[0].id);
 
       const { data: byPidBare, error: errPidBare } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("patient_id", raw)
-        .maybeSingle();
+      .from("patients")
+      .select("id")
+      .eq("patient_id", raw)
+      .maybeSingle();
       if (!errPidBare && byPidBare?.id) return String(byPidBare.id);
     } else {
       const { data: byPid, error: errPid } = await supabase
-        .from("patients")
-        .select("id")
+          .from("patients")
+          .select("id")
         .eq("patient_id", raw)
-        .maybeSingle();
+          .maybeSingle();
       if (!errPid && byPid?.id) return String(byPid.id);
     }
 
@@ -1034,9 +1034,9 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
       .select("clinic_id, primary_doctor_id")
       .eq("id", patientResolvedId)
       .maybeSingle();
-    if (!UUID_RE.test(clinicId)) {
-      clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
-    }
+  if (!UUID_RE.test(clinicId)) {
+    clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
+  }
     primaryDoctorUuid =
       prow?.primary_doctor_id != null ? String(prow.primary_doctor_id).trim() : "";
   } catch (_) {
@@ -1096,8 +1096,8 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
 
   const threadId = thr?.id && UUID_RE.test(String(thr.id).trim()) ? String(thr.id).trim() : null;
 
-  return {
-    clinicId,
+    return {
+      clinicId,
     ...(threadId ? { threadId } : {}),
     assignedDoctorId: effectiveDoctorId || threadDoctorId || null,
     doctorName: display?.doctorName ?? null,
@@ -1122,7 +1122,7 @@ async function syncPatientLeadThreadAssignedDoctor(resolvedPatientId, clinicUuid
     try {
       const { data: prow } = await supabase.from("patients").select("clinic_id").eq("id", pid).maybeSingle();
       clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
-    } catch (e) {
+  } catch (e) {
       return { ok: false, skipped: true, reason: "clinic_resolve_failed" };
     }
   }
@@ -1568,22 +1568,22 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     const rowIns = Object.fromEntries(
       Object.entries({ ...payload }).filter(([, v]) => v !== undefined)
     );
-    for (const from_role of fromRoles) {
-      const { data, error } = await supabase
-        .from("patient_messages")
+  for (const from_role of fromRoles) {
+    const { data, error } = await supabase
+      .from("patient_messages")
         .insert({ ...rowIns, from_role })
-        .select("*")
-        .single();
-      if (!error) return { data, error: null };
-      lastError = error;
-      const msg = String(error?.message || "").toLowerCase();
-      const code = String(error?.code || "");
-      const enumOrCheck =
-        code === "23514" ||
-        code === "22P02" ||
-        msg.includes("enum") ||
-        msg.includes("check constraint") ||
-        msg.includes("invalid input");
+      .select("*")
+      .single();
+    if (!error) return { data, error: null };
+    lastError = error;
+    const msg = String(error?.message || "").toLowerCase();
+    const code = String(error?.code || "");
+    const enumOrCheck =
+      code === "23514" ||
+      code === "22P02" ||
+      msg.includes("enum") ||
+      msg.includes("check constraint") ||
+      msg.includes("invalid input");
       if (enumOrCheck) continue;
       continue outerPayload;
     }
@@ -3629,6 +3629,30 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ── Sanity check: Stripe wiring (must return JSON; register after body parsers) ──
+app.get("/api/test-stripe", (req, res) => {
+  res.json({ ok: true });
+});
+
+// ── Stripe PaymentIntent ───────────────────────────────────────────────────────
+app.post("/api/payments/create-intent", async (req, res) => {
+  try {
+    const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+    const { amount, clinicId } = req.body || {};
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency: "usd",
+      metadata: {
+        clinicId: String(clinicId || "test"),
+      },
+    });
+    res.json({ clientSecret: paymentIntent.client_secret });
+  } catch (e) {
+    console.error("STRIPE ERROR:", e);
+    res.status(500).json({ error: "payment_failed" });
+  }
+});
 
 // ── Static files FIRST — must run before /api routes so GET requests for /onboarding.js, /i18n.js, etc. never hit JSON catch-alls ──
 const publicDir = path.join(__dirname, "public");
@@ -9307,6 +9331,22 @@ app.post("/api/patient/login", async (req, res) => {
   }
 });
 
+/** Single chain for patient /me: column + JSON branding + legacy settings.logoUrl */
+function resolveClinicLogoForPatientMe(clinicRow) {
+  if (!clinicRow || typeof clinicRow !== "object") return null;
+  const st =
+    clinicRow.settings && typeof clinicRow.settings === "object" ? clinicRow.settings : {};
+  const br = st.branding && typeof st.branding === "object" ? st.branding : {};
+  const rowBr =
+    clinicRow.branding && typeof clinicRow.branding === "object" ? clinicRow.branding : {};
+  const fromCol = clinicRow.logo_url != null ? String(clinicRow.logo_url).trim() : "";
+  const fromBrand = String(br.clinicLogoUrl || "").trim();
+  const fromLegacy = String(st.logoUrl || "").trim();
+  const fromRowBrand = String(rowBr.clinicLogoUrl || "").trim();
+  const resolved = fromCol || fromBrand || fromLegacy || fromRowBrand;
+  return resolved ? String(resolved) : null;
+}
+
 // ================== PATIENT ME (alias) ==================
 app.get("/api/patient/me", requireToken, async (req, res) => {
   try {
@@ -9316,17 +9356,42 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
       const UUID_RE_ME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const isUuidMe = UUID_RE_ME.test(mePatientId);
       const ME_SELECT = "id,patient_id,name,phone,email,status,clinic_id,created_at,updated_at";
+      const ME_JOIN_CLINIC_ALIAS =
+        ME_SELECT +
+        ",clinic:clinics(id,clinic_code,plan,name,phone,address,settings,logo_url)";
+      const ME_JOIN_CLINIC_ALIAS_NO_LOGO =
+        ME_SELECT + ",clinic:clinics(id,clinic_code,plan,name,phone,address,settings)";
+      const ME_JOIN_FULL =
+        ME_SELECT +
+        ",clinics(id,clinic_code,plan,name,phone,address,settings,logo_url)";
+      const ME_JOIN_NO_LOGO =
+        ME_SELECT + ",clinics(id,clinic_code,plan,name,phone,address,settings)";
+      const selectAttempts = [
+        ME_JOIN_CLINIC_ALIAS,
+        ME_JOIN_CLINIC_ALIAS_NO_LOGO,
+        ME_JOIN_FULL,
+        ME_JOIN_NO_LOGO,
+        ME_SELECT,
+      ];
 
       let p = null;
-      // Try UUID lookup first if token holds a UUID
+      selLoop: for (const sel of selectAttempts) {
       if (isUuidMe) {
-        const r1 = await supabase.from("patients").select(ME_SELECT).eq("id", mePatientId).maybeSingle();
-        if (!r1.error && r1.data) p = r1.data;
-      }
-      // Fallback: TEXT patient_id lookup
-      if (!p) {
-        const r2 = await supabase.from("patients").select(ME_SELECT).eq("patient_id", mePatientId).maybeSingle();
-        if (!r2.error && r2.data) p = r2.data;
+          const r1 = await supabase.from("patients").select(sel).eq("id", mePatientId).maybeSingle();
+          if (!r1.error && r1.data) {
+            p = r1.data;
+            break selLoop;
+          }
+        }
+        const r2 = await supabase
+          .from("patients")
+          .select(sel)
+          .eq("patient_id", mePatientId)
+          .maybeSingle();
+        if (!r2.error && r2.data) {
+          p = r2.data;
+          break selLoop;
+        }
       }
 
       if (!p) {
@@ -9334,28 +9399,46 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
         return res.status(404).json({ ok: false, error: "patient_not_found" });
       }
 
-      const pErr = null;
+      let clinicData = null;
+      {
+        const emb = p.clinic ?? p.clinics;
+        if (emb != null) {
+          clinicData = Array.isArray(emb) ? emb[0] : emb;
+        }
+      }
+      delete p.clinic;
+      delete p.clinics;
+
+      if (!clinicData && p.clinic_id) {
+        let cTry = await supabase
+          .from("clinics")
+          .select("id,clinic_code,plan,name,phone,address,settings,logo_url")
+          .eq("id", p.clinic_id)
+          .maybeSingle();
+        if (cTry.error) {
+          const code = String(cTry.error?.code || "");
+          if (["42703", "PGRST204", "PGRST205"].includes(code)) {
+            cTry = await supabase
+          .from("clinics")
+          .select("id,clinic_code,plan,name,phone,address,settings")
+          .eq("id", p.clinic_id)
+              .maybeSingle();
+          }
+        }
+        if (!cTry.error && cTry.data) clinicData = cTry.data;
+        else if (cTry?.error)
+          console.error("[ME] Supabase clinic fetch failed", {
+            message: cTry.error.message,
+            code: cTry.error.code,
+          });
+      }
 
       let clinicCode = "";
       let clinicPlan = "FREE";
       let branding = null;
-      let clinicData = null;
+      let resolvedClinicLogoForPayload = null;
 
-      if (p?.clinic_id) {
-        const { data: c, error: cErr } = await supabase
-          .from("clinics")
-          .select("id,clinic_code,plan,name,phone,address,settings")
-          .eq("id", p.clinic_id)
-          .single();
-
-        if (cErr) {
-          console.error("[ME] Supabase clinic fetch failed", {
-            message: cErr.message,
-            code: cErr.code,
-            details: cErr.details,
-          });
-        } else if (c) {
-          clinicData = c;
+      if (clinicData) {
           if (typeof clinicData.settings === "string") {
             try {
               clinicData.settings = JSON.parse(clinicData.settings);
@@ -9363,11 +9446,14 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
               clinicData.settings = {};
             }
           }
+        if (!clinicData.settings || typeof clinicData.settings !== "object") {
+          clinicData.settings = {};
+        }
           clinicCode = clinicData.clinic_code || "";
           clinicPlan = clinicData.plan || "FREE";
           const b = clinicData.settings?.branding || null;
           branding = b
-            ? b
+          ? { ...b }
             : {
                 clinicName: clinicData.name || "",
                 clinicLogoUrl: "",
@@ -9379,11 +9465,19 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
                 showPoweredBy: true,
                 phone: clinicData.phone || "",
               };
+        resolvedClinicLogoForPayload = resolveClinicLogoForPatientMe(clinicData);
+        if (resolvedClinicLogoForPayload) {
+          branding.clinicLogoUrl =
+            String(branding.clinicLogoUrl || "").trim() || resolvedClinicLogoForPayload;
         }
       }
 
       const finalStatus = p?.status || "PENDING";
-      const meName = p?.name || '';
+      const meName = p?.name || "";
+      const clinicNameResolved =
+        (clinicData && clinicData.name && String(clinicData.name).trim()) ||
+        (branding && branding.clinicName && String(branding.clinicName).trim()) ||
+        "";
       const referralLevels =
         clinicData?.settings?.referralLevels ||
         {
@@ -9391,10 +9485,15 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
           level2: null,
           level3: null,
         };
-      const clinicNameResolved =
-        (clinicData && clinicData.name && String(clinicData.name).trim()) ||
-        (branding && branding.clinicName && String(branding.clinicName).trim()) ||
-        "";
+      let clinicPayload = null;
+      if (p?.clinic_id && clinicData?.id) {
+        clinicPayload = {
+          id: String(clinicData.id),
+          name:
+            (clinicNameResolved || String(clinicData.name || "").trim() || "").trim() || "",
+          logo: resolvedClinicLogoForPayload,
+        };
+      }
       return res.json({
         ok: true,
         patientId: req.patientId,
@@ -9405,6 +9504,7 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
         email: p?.email || "",
         clinic_id: p?.clinic_id ? String(p.clinic_id) : null,
         clinic_name: clinicNameResolved || null,
+        clinic: clinicPayload,
         clinicCode,
         clinicPlan,
         branding,
@@ -9433,6 +9533,7 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
       clinic_name: p?.clinic_name || p?.clinicName || null,
       clinicCode: p?.clinicCode || p?.clinic_code || "",
       clinicPlan: p?.clinicPlan || "FREE",
+      clinic: null,
       branding: null,
       financialSnapshot: p?.financialSnapshot || {
         totalEstimatedCost: 0,
@@ -12663,11 +12764,11 @@ function scheduledIsoFromProcedureLikeProc(proc, ianaTzHint = "UTC") {
   for (const c of candidates) {
     if (c == null || c === "") continue;
     try {
-      if (typeof c === "number" && Number.isFinite(c)) {
+    if (typeof c === "number" && Number.isFinite(c)) {
         return assertUtcIsoScheduledAt(new Date(c).toISOString(), "scheduled_at");
-      }
-      const s = String(c).trim();
-      if (!s) continue;
+    }
+    const s = String(c).trim();
+    if (!s) continue;
       return coerceScheduledAtInputToUtcIso(s, ianaTzHint, "scheduled_at");
     } catch (_) {
       /* try next candidate */
@@ -18355,15 +18456,15 @@ function encounterTreatmentRowIdFromPatientProcedureId(procedureIdRaw) {
 function patientTreatmentsDateToScheduledIso(dateFinal, ianaTzHint = "UTC") {
   if (dateFinal == null || dateFinal === "") return null;
   try {
-    if (typeof dateFinal === "number" && Number.isFinite(dateFinal)) {
+  if (typeof dateFinal === "number" && Number.isFinite(dateFinal)) {
       return assertUtcIsoScheduledAt(new Date(dateFinal).toISOString(), "patient_treatments.scheduled_at");
-    }
-    const str = String(dateFinal).trim();
+  }
+  const str = String(dateFinal).trim();
     if (!str) return null;
     return coerceScheduledAtInputToUtcIso(str, ianaTzHint, "patient_treatments.scheduled_at");
   } catch (e) {
     console.warn("[patientTreatmentsDateToScheduledIso]", e?.message || e);
-    return null;
+  return null;
   }
 }
 
@@ -20275,17 +20376,19 @@ async function collectPatientFiles(patientId) {
     // ── Source 2: patient_files table ─────────────────────────────────────────
     try {
       const { data: pfRows, error: pfErr } = await supabase.from('patient_files')
-        .select('id, file_url, file_name, file_type, file_subtype, mime_type, file_size, from_role, source, created_at')
+        .select('id, file_url, image_url, file_name, file_type, file_subtype, mime_type, file_size, from_role, source, created_at')
         .eq('patient_id', patientUUID)
         .order('created_at', { ascending: false })
         .limit(200);
       if (pfErr) console.error('[FILES] patient_files query error:', pfErr.message);
       for (const row of (pfRows || [])) {
-        if (!row.file_url) continue;
+        if (!row.file_url && !row.image_url) continue;
+        const urlForUi = String(row.file_url || row.image_url || "").trim();
+        if (!urlForUi) continue;
         addFile({
           id: String(row.id),
           name: row.file_name || 'file',
-          url: row.file_url,
+          url: urlForUi,
           mimeType: row.mime_type || '',
           fileType: row.file_type || 'image',
           subtype: row.file_subtype || null,
@@ -20643,25 +20746,46 @@ async function handlePatientChatUpload(req, res) {
             console.warn('[SAAS] upload gate:', e?.message || e);
           }
         }
-        const { data: pfRow } = await supabase.from('patient_files').insert({
+      }
+
+      const rowInsert = {
+        patient_id: patientUUID,
+        clinic_id: clinicIdForFile,
+        file_url: fileUrl,
+        file_name: file.originalname || safeName,
+        file_type: fileType,
+        file_subtype: subtype,
+        mime_type: mime,
+        file_size: file.size,
+        from_role: 'patient',
+        source,
+        angle_type: detectedAngle,
+        validation_status: validationResult ? validationResult.status : null,
+        validation_score: validationResult ? validationResult.score : null,
+        validation_issues: validationResult ? validationResult.issues : null,
+      };
+      if (isImg) rowInsert.image_url = fileUrl;
+
+      let pfTry = await supabase.from('patient_files').insert(rowInsert).select('id').maybeSingle();
+      if (pfTry.error && isMissingColumnError(pfTry.error, 'image_url')) {
+        const rowNoImg = { ...rowInsert };
+        delete rowNoImg.image_url;
+        pfTry = await supabase.from('patient_files').insert(rowNoImg).select('id').maybeSingle();
+      }
+      if (pfTry.error) {
+        console.error('[PATIENT UPLOAD] patient_files insert failed:', {
+          code: pfTry.error.code,
+          message: pfTry.error.message,
           patient_id: patientUUID,
           clinic_id: clinicIdForFile,
           file_url: fileUrl,
-          file_name: file.originalname || safeName,
-          file_type: fileType,
-          file_subtype: subtype,
-          mime_type: mime,
-          file_size: file.size,
-          from_role: 'patient',
-          source,
-          angle_type: detectedAngle,
-          validation_status: validationResult ? validationResult.status : null,
-          validation_score: validationResult ? validationResult.score : null,
-          validation_issues: validationResult ? validationResult.issues : null,
-        }).select('id').maybeSingle();
-        if (pfRow && pfRow.id) {
-          savedId = String(pfRow.id);
-          saasEnforcement.invalidateBillingUsageCache(clinicIdForFile);
+        });
+      } else if (pfTry.data && pfTry.data.id) {
+        savedId = String(pfTry.data.id);
+        if (clinicIdForFile) {
+          try {
+            saasEnforcement.invalidateBillingUsageCache(clinicIdForFile);
+          } catch (_) {}
         }
       }
     }
@@ -27262,6 +27386,59 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       return res.status(500).json({ ok: false, error: 'sign_failed', message: signErr?.message });
     }
 
+    const { data: pubData } = supabase.storage.from("patient-files").getPublicUrl(storagePath);
+    const publicUrl = String(pubData?.publicUrl || "").trim();
+    const dbImageUrl = publicUrl || signed.signedUrl;
+
+    let clinicIdForFile = null;
+    try {
+      const { data: prow } = await supabase
+        .from("patients")
+        .select("clinic_id")
+        .eq("id", patientId)
+        .maybeSingle();
+      if (prow && prow.clinic_id != null) clinicIdForFile = prow.clinic_id;
+    } catch (clErr) {
+      console.warn("[AI UPLOAD] clinic_id lookup:", clErr?.message || clErr);
+    }
+
+    const pfInsert = {
+      patient_id: patientId,
+      clinic_id: clinicIdForFile,
+      file_url: dbImageUrl,
+      image_url: dbImageUrl,
+      file_name: fileName,
+      file_type: "image",
+      mime_type: "image/jpeg",
+      file_size: size,
+      from_role: "patient",
+      source: "ai_upload",
+    };
+    let pfIns = await supabase.from("patient_files").insert(pfInsert).select("id").maybeSingle();
+    if (pfIns.error && isMissingColumnError(pfIns.error, "image_url")) {
+      const noImg = { ...pfInsert };
+      delete noImg.image_url;
+      pfIns = await supabase.from("patient_files").insert(noImg).select("id").maybeSingle();
+    }
+    if (pfIns.error) {
+      console.error("[AI UPLOAD] patient_files insert failed:", {
+        code: pfIns.error.code,
+        message: pfIns.error.message,
+        details: pfIns.error.details,
+        hint: pfIns.error.hint,
+        patient_id: patientId,
+        clinic_id: clinicIdForFile,
+        has_public_url: Boolean(publicUrl),
+      });
+    } else {
+      if (clinicIdForFile) {
+        try {
+          saasEnforcement.invalidateBillingUsageCache(clinicIdForFile);
+        } catch (_) {}
+      }
+      console.log("[AI UPLOAD] patient_files saved:", pfIns.data?.id);
+    }
+
     const l2req = String(req.body?.language || req.body?.lang || req.headers["x-lang"] || "")
       .toLowerCase()
       .trim()
@@ -27281,8 +27458,11 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       ok: true,
       imageUrl: signed.signedUrl,
       url: signed.signedUrl,
+      publicUrl: publicUrl || null,
       path: storagePath,
       language: languageOut,
+      patientFileId: pfIns.data?.id ?? null,
+      dbRecordOk: !pfIns.error,
     });
 
   } catch (err) {
@@ -29502,11 +29682,40 @@ app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
     safe.max_patients = computedMax;
     safe.maxPatients = computedMax;
 
+    const logoColBc = safe.logo_url != null ? String(safe.logo_url).trim() : "";
+    const prevBrandBc =
+      safe.settings?.branding && typeof safe.settings.branding === "object" ? safe.settings.branding : {};
+    safe.settings = {
+      ...safe.settings,
+      branding: {
+        ...prevBrandBc,
+        clinicLogoUrl: String(
+          prevBrandBc.clinicLogoUrl || safe.settings?.logoUrl || logoColBc || ""
+        ).trim(),
+      },
+    };
+
     const mapsUrlNorm = pickGoogleMapsUrlFromClinicRow(safe);
     safe.googleMapsUrl = mapsUrlNorm;
+    const resolvedLogoBc = String(
+      logoColBc ||
+        safe.settings.branding.clinicLogoUrl ||
+        (safe.settings.logoUrl != null ? String(safe.settings.logoUrl).trim() : "") ||
+        ""
+    ).trim();
+    if (resolvedLogoBc) {
+      safe.logo_url = resolvedLogoBc;
+      safe.logo = resolvedLogoBc;
+    } else {
+      safe.logo = safe.logo_url != null ? String(safe.logo_url).trim() || null : null;
+    }
     if (!safe.branding || typeof safe.branding !== "object") {
       safe.branding = { ...(safe.settings?.branding && typeof safe.settings.branding === "object" ? safe.settings.branding : {}) };
     }
+    safe.branding = {
+      ...safe.branding,
+      ...safe.settings.branding,
+    };
     if (mapsUrlNorm && !String(safe.branding.googleMapLink || "").trim()) {
       safe.branding = { ...safe.branding, googleMapLink: mapsUrlNorm };
     }
@@ -29620,24 +29829,53 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       passwordHash = await bcrypt.hash(String(body.password).trim(), 10);
     }
     
-    // Handle branding object (Supabase often stores branding under settings.branding only)
-    const existingBranding =
-      (existing.branding && typeof existing.branding === "object" ? existing.branding : null) ||
-      (existing.settings?.branding && typeof existing.settings.branding === "object" ? existing.settings.branding : {}) ||
-      {};
+    // Handle branding — merge existing settings.branding + body (do not drop keys)
+    const existingSettings =
+      existing.settings && typeof existing.settings === "object" ? existing.settings : {};
+    const existingBranding = {
+      ...(existingSettings.branding || {}),
+      ...((existing.branding && typeof existing.branding === "object" ? existing.branding : {}) || {}),
+    };
     const bodyBranding = body.branding || {};
+    const incomingLogo = String(
+      body.logoUrl ||
+        body.branding?.clinicLogoUrl ||
+        body.settings?.branding?.clinicLogoUrl ||
+        ""
+    ).trim();
+    const fallbackLogo = String(
+      existingBranding.clinicLogoUrl ||
+        existing.logo_url ||
+        existingSettings.logoUrl ||
+        existing.logoUrl ||
+        ""
+    ).trim();
     const existingMapsFallback = pickGoogleMapsUrlFromClinicRow(existing);
     let updatedBranding = {
+      ...existingBranding,
+      ...bodyBranding,
       clinicName: bodyBranding.clinicName || existingBranding.clinicName || existing.name || "",
-      clinicLogoUrl: bodyBranding.clinicLogoUrl || existingBranding.clinicLogoUrl || existing.logoUrl || "",
       address: bodyBranding.address || existingBranding.address || existing.address || "",
       googleMapLink: bodyBranding.googleMapLink || existingBranding.googleMapLink || existingMapsFallback || "",
       primaryColor: bodyBranding.primaryColor || existingBranding.primaryColor || "#2563EB",
       secondaryColor: bodyBranding.secondaryColor || existingBranding.secondaryColor || "#10B981",
       welcomeMessage: bodyBranding.welcomeMessage || existingBranding.welcomeMessage || "",
-      showPoweredBy: bodyBranding.showPoweredBy !== undefined ? bodyBranding.showPoweredBy : (existingBranding.showPoweredBy !== undefined ? existingBranding.showPoweredBy : true),
+      showPoweredBy:
+        bodyBranding.showPoweredBy !== undefined
+          ? bodyBranding.showPoweredBy
+          : existingBranding.showPoweredBy !== undefined
+            ? existingBranding.showPoweredBy
+            : true,
+      clinicLogoUrl: incomingLogo || existingBranding.clinicLogoUrl || fallbackLogo || "",
     };
     updatedBranding = saasEnforcement.clampBrandingForPlan(rawPlan, updatedBranding);
+    const persistedLogo = String(
+      incomingLogo || updatedBranding.clinicLogoUrl || fallbackLogo || ""
+    ).trim();
+    updatedBranding = {
+      ...updatedBranding,
+      clinicLogoUrl: persistedLogo || updatedBranding.clinicLogoUrl || "",
+    };
     
     const updated = {
       ...existing,
@@ -29652,7 +29890,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       phone: String(body.phone || existing.phone || ""),
       email: String(existing.email || ""),
       website: String(body.website || existing.website || ""),
-      logoUrl: String(body.logoUrl || bodyBranding.clinicLogoUrl || existing.logoUrl || existingBranding.clinicLogoUrl || ""),
+      logoUrl: String(persistedLogo || ""),
       googleMapsUrl: String(
         body.googleMapsUrl || bodyBranding.googleMapLink || existingMapsFallback || existing.googleMapsUrl || existingBranding.googleMapLink || ""
       ),
@@ -29667,7 +29905,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         defaultInviterDiscountPercent: inviterPercent,
         defaultInvitedDiscountPercent: invitedPercent,
         referralLevels,
-        logoUrl: String(body.logoUrl || bodyBranding.clinicLogoUrl || existing.logoUrl || existingBranding.clinicLogoUrl || ""),
+        logoUrl: String(persistedLogo || ""),
         googleMapsUrl: String(
           body.googleMapsUrl || bodyBranding.googleMapLink || existingMapsFallback || existing.googleMapsUrl || existingBranding.googleMapLink || ""
         ),
@@ -29723,25 +29961,8 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
           phone: updated.phone,
           website: updated.website,
           google_maps_url: updated.googleMapsUrl ? String(updated.googleMapsUrl).trim() : null,
-          settings: {
-            branding: updatedBranding,
-            chairCount: normalizedChairCount,
-            chair_count: normalizedChairCount,
-            defaultInviterDiscountPercent: inviterPercent,
-            defaultInvitedDiscountPercent: invitedPercent,
-            referralLevels,
-            referralLevel1Percent: referralLevels.level1, // Add this for compatibility
-            googleReviews: updated.googleReviews,
-            trustpilotReviews: updated.trustpilotReviews,
-            logoUrl: updated.logoUrl,
-            googleMapsUrl: updated.googleMapsUrl,
-            showTreatmentPrices,
-            auto_assign_enabled: inboundAutoAssignCfg.auto_assign_enabled,
-            default_doctor_id: inboundAutoAssignCfg.default_doctor_id,
-            sticky_assignment_enabled: inboundAutoAssignCfg.sticky_assignment_enabled,
-            auto_assign_fallback_to_first_doctor: inboundAutoAssignCfg.auto_assign_fallback_to_first_doctor,
-            auto_assign_fallback_mode: inboundAutoAssignCfg.auto_assign_fallback_mode,
-          }
+          logo_url: persistedLogo || null,
+          settings: updated.settings,
         };
         
         // Update password separately if changed
@@ -32712,7 +32933,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       }
     };
     const upcomingInstantLimit = now + 180 * 24 * 60 * 60 * 1000;
-
+    
     const allEvents = [];
     let currentPatientMembershipStartMs = 0;
 
@@ -32864,8 +33085,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               !isMissingColumnError(r1.error, "treatment_events") &&
               !["42703", "PGRST204"].includes(String(r1.error.code || ""))) {
             console.error("[ADMIN EVENTS] patients query failed", r1.error);
-            break;
-          }
+          break;
+        }
           continue;
         }
         ingestPatients(r1.data);
@@ -33798,7 +34019,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     const todayKey = calendarDayKeyInTz(now) || new Date(now).toISOString().slice(0, 10);
 
     const treatmentEventTypes = ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB"];
-
+    
     allEvents.forEach((evt) => {
       let eventTs = Number(evt.timestamp);
       if (!Number.isFinite(eventTs) || eventTs <= 0) {
@@ -33811,7 +34032,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const isCancelled = status === "CANCELLED" || status === "CANCELED";
       const eventType = String(evt.type || "").toUpperCase();
       const isTreatmentEvent = treatmentEventTypes.includes(eventType);
-
+      
       if (isCancelled || isCompleted) return;
 
       const eventKey = calendarDayKeyInTz(eventTs) || String(evt.date || "").trim().slice(0, 10);
@@ -33839,7 +34060,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
     overdue.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     todayEvents.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
+    
     upcoming.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     
     res.json({
@@ -39618,12 +39839,12 @@ async function getDoctorVisiblePatientIdSet(req) {
   ];
   const [teamPatientIds, fromPatientTableAssign, fromLeadThreads, fromProcessAssign, fromCalendar] =
     await Promise.all([
-      collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
-      collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
+    collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
+    collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
       collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw),
-      collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-      collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
-    ]);
+    collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
+    collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
+  ]);
   const visiblePatientIds = new Set(teamPatientIds);
   for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
   for (const pid of fromLeadThreads) visiblePatientIds.add(pid);
@@ -40586,8 +40807,8 @@ async function handleDoctorInboxSummary(req, res) {
       const clientToday = String(req.query?.localToday || "").trim();
       const clientTomorrow = String(req.query?.localTomorrow || "").trim();
       todayStr = ymdRe.test(clientToday) ? clientToday : localYmd(new Date());
-      const tomorrowD = new Date();
-      tomorrowD.setDate(tomorrowD.getDate() + 1);
+    const tomorrowD = new Date();
+    tomorrowD.setDate(tomorrowD.getDate() + 1);
       tomorrowStr = ymdRe.test(clientTomorrow) ? clientTomorrow : localYmd(tomorrowD);
     }
     console.log("[DASHBOARD] todayStr:", todayStr, "tomorrowStr:", tomorrowStr);
@@ -42578,8 +42799,8 @@ app.post('/api/doctor/encounters', requireDoctorAuth, async (req, res) => {
     const clinicIdDoc = String(req?.doctor?.clinic_id || '').trim();
     const patientRow = await resolvePatientRowWithAdminFallback(patient_id, clinicIdDoc, "[ENCOUNTER]");
     if (!patientRow?.id) {
-      return res.status(404).json({ ok: false, error: 'patient_not_found' });
-    }
+        return res.status(404).json({ ok: false, error: 'patient_not_found' });
+      }
     const resolvedPatientId = String(patientRow.id);
 
     const safeSelect = 'id, patient_id, created_by_doctor_id, status, created_at';
@@ -43887,8 +44108,8 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
     if (docCid && patRow.clinic_id != null && String(patRow.clinic_id).trim() !== docCid) {
       const allowCross = await doctorCanReadPatientAcrossClinicMismatch(patRow, patientId, req);
       if (!allowCross) {
-        return res.status(404).json({ ok: false, error: "patient_not_found" });
-      }
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
     }
 
     const treatmentsAccessKey = String(patRow?.id || patRow?.patient_id || patientId).trim();
@@ -44135,8 +44356,8 @@ app.get('/api/doctor/patients/:patientId/diagnoses', requireDoctorAuth, async (r
     if (docCid && patient.clinic_id != null && String(patient.clinic_id).trim() !== docCid) {
       const allowCross = await doctorCanReadPatientAcrossClinicMismatch(patient, patientId, req);
       if (!allowCross) {
-        return res.status(404).json({ ok: false, error: "patient_not_found" });
-      }
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
     }
     if (isPatientStatusBlockedForDoctorRead(patient?.status)) {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
@@ -46739,10 +46960,10 @@ async function loadOfferMessagingContext(offerId) {
   // Only id + patient_id are needed for access checks and mirror inserts.
   // Avoid column-probing loops that add ~7s per failed attempt.
   const { data: tr, error: tErr } = await supabase
-    .from("treatment_requests")
+      .from("treatment_requests")
     .select("id, patient_id")
-    .eq("id", offer.request_id)
-    .maybeSingle();
+      .eq("id", offer.request_id)
+      .maybeSingle();
 
   if (tErr || !tr?.patient_id) return null;
 
@@ -46969,12 +47190,12 @@ app.post("/api/offer-messages", async (req, res) => {
       if (actorName) {
         sender_name = actorName;
       } else {
-        const { data: prow } = await supabase
-          .from("patients")
-          .select("name, full_name")
-          .eq("id", tr.patient_id)
-          .maybeSingle();
-        sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
+      const { data: prow } = await supabase
+        .from("patients")
+        .select("name, full_name")
+        .eq("id", tr.patient_id)
+        .maybeSingle();
+      sender_name = String(prow?.full_name || prow?.name || "").trim() || "Patient";
         // Cache name back on actor to avoid repeat lookups in same session
         actor.name = sender_name;
       }

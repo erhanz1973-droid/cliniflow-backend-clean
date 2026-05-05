@@ -452,6 +452,27 @@
     }
   }
 
+  /** Top-level branding + settings.branding (admin API may return either) */
+  function mergeClinicBranding(clinic) {
+    const settings = clinic.settings && typeof clinic.settings === "object" ? clinic.settings : {};
+    const fromSettings =
+      settings.branding && typeof settings.branding === "object" ? settings.branding : {};
+    const fromTop = clinic.branding && typeof clinic.branding === "object" ? clinic.branding : {};
+    return { ...fromSettings, ...fromTop };
+  }
+
+  function resolveClinicLogoUrlForSettingsInput(clinic, branding) {
+    const settings = clinic.settings && typeof clinic.settings === "object" ? clinic.settings : {};
+    return String(
+      clinic.logo ||
+        clinic.logo_url ||
+        branding.clinicLogoUrl ||
+        settings.logoUrl ||
+        clinic.logoUrl ||
+        ""
+    ).trim();
+  }
+
   async function loadClinicSettings() {
     try {
       // Get admin token from localStorage
@@ -506,7 +527,7 @@
       });
       
       // Backend returns clinic object directly, not wrapped in { ok: true, clinic: {...} }
-      const branding = clinic.branding || clinic.settings?.branding || {};
+      const branding = mergeClinicBranding(clinic);
       // IMPORTANT:
       // - subscriptionStatus is NOT a plan (can be TRIAL/ACTIVE) and would break the dropdown.
       // - Only use plan fields for plan UI.
@@ -540,7 +561,9 @@
 
       // Populate form
       if ($("clinicName")) $("clinicName").value = branding.clinicName || clinic.name || "";
-      if ($("clinicLogoUrl")) $("clinicLogoUrl").value = branding.clinicLogoUrl || clinic.logoUrl || "";
+      if ($("clinicLogoUrl")) {
+        $("clinicLogoUrl").value = resolveClinicLogoUrlForSettingsInput(clinic, branding);
+      }
       if ($("clinicAddress")) $("clinicAddress").value = branding.address || clinic.address || "";
       if ($("clinicCity")) $("clinicCity").value = clinic.city || "";
       if ($("chairCount")) {
@@ -727,6 +750,8 @@
         successStatusEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
       
+      await loadClinicSettings();
+
       // Update the local clinicPlan variable to reflect the saved plan
       clinicPlan = payload.plan;
       console.log("Updated local clinicPlan to:", clinicPlan);
@@ -744,6 +769,12 @@
 
   // Load settings on page load
   loadClinicSettings();
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") {
+      loadClinicSettings();
+    }
+  });
 
   // ================== TREATMENT PRICE LIST ==================
 
