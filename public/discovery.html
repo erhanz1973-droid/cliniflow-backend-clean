@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Clinic discovery — Cliniflow</title>
+  <title>Klinik Bul — Cliniflow</title>
   <script src="/api-base.js?v=202605071"></script>
   <style>
     body {
@@ -62,91 +62,84 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Find a clinic</h1>
-    <p class="muted">Choose a country; optionally narrow by city. Leave city empty to see all listed clinics in that country.</p>
+    <h1>Klinik Bul</h1>
+    <p class="muted">Ülke seçin; isterseniz şehir ile daraltın. Şehir boş bırakılırsa seçilen ülkedeki tüm kayıtlı klinikler listelenir.</p>
 
-    <label for="countrySelect">Country</label>
-    <select id="countrySelect" aria-label="Country"></select>
+    <label for="countrySelect">Ülke</label>
+    <select id="countrySelect" aria-label="Ülke"></select>
+    <div id="countryWarn" class="err" style="margin-top:6px;font-size:0.9rem;">Lütfen ülke seçin</div>
 
-    <label for="cityInput">City <span class="muted" style="font-weight:400;">(optional)</span></label>
-    <input type="text" id="cityInput" placeholder="e.g. Antalya" autocomplete="address-level2" />
+    <label for="cityInput">Şehir <span class="muted" style="font-weight:400;">(isteğe bağlı)</span></label>
+    <input type="text" id="cityInput" placeholder="Örn. Antalya" autocomplete="address-level2" />
 
-    <button type="button" id="searchBtn">Search</button>
+    <button type="button" id="searchBtn" disabled>Ara</button>
     <div id="status"></div>
     <div id="results"></div>
   </div>
 
   <script>
     (function () {
-      var COUNTRIES = [
-        ["", "— Select country —"],
-        ["AE", "United Arab Emirates"],
-        ["AM", "Armenia"],
-        ["AT", "Austria"],
-        ["AZ", "Azerbaijan"],
-        ["BY", "Belarus"],
-        ["BE", "Belgium"],
-        ["BG", "Bulgaria"],
-        ["CA", "Canada"],
-        ["CH", "Switzerland"],
-        ["CY", "Cyprus"],
-        ["CZ", "Czechia"],
-        ["DE", "Germany"],
-        ["DK", "Denmark"],
-        ["EE", "Estonia"],
-        ["ES", "Spain"],
-        ["FI", "Finland"],
-        ["FR", "France"],
-        ["GB", "United Kingdom"],
-        ["GE", "Georgia"],
-        ["GR", "Greece"],
-        ["HR", "Croatia"],
-        ["HU", "Hungary"],
-        ["IE", "Ireland"],
-        ["IL", "Israel"],
-        ["IT", "Italy"],
-        ["JO", "Jordan"],
-        ["KZ", "Kazakhstan"],
-        ["LB", "Lebanon"],
-        ["LV", "Latvia"],
-        ["LT", "Lithuania"],
-        ["MD", "Moldova"],
-        ["MT", "Malta"],
-        ["NL", "Netherlands"],
-        ["NO", "Norway"],
-        ["PL", "Poland"],
-        ["PT", "Portugal"],
-        ["RO", "Romania"],
-        ["RU", "Russia"],
-        ["SA", "Saudi Arabia"],
-        ["RS", "Serbia"],
-        ["SK", "Slovakia"],
-        ["SI", "Slovenia"],
-        ["SE", "Sweden"],
-        ["SY", "Syria"],
-        ["TR", "Turkey"],
-        ["UA", "Ukraine"],
-        ["US", "United States"],
-        ["UZ", "Uzbekistan"],
-      ];
-
       var sel = document.getElementById("countrySelect");
-      COUNTRIES.forEach(function (row) {
-        var o = document.createElement("option");
-        o.value = row[0];
-        o.textContent = row[1];
-        sel.appendChild(o);
-      });
+      var btn = document.getElementById("searchBtn");
+      var countryWarn = document.getElementById("countryWarn");
 
       function apiOrigin() {
         return typeof cliniflowApiBase === "function" ? cliniflowApiBase() : "";
       }
 
+      function rebuildCountrySelect(codes) {
+        sel.innerHTML = "";
+        var ph = document.createElement("option");
+        ph.value = "";
+        ph.textContent = "Ülke seçin";
+        sel.appendChild(ph);
+        (codes || []).forEach(function (code) {
+          var c = String(code || "").trim().toUpperCase();
+          if (!/^[A-Z]{2}$/.test(c)) return;
+          var o = document.createElement("option");
+          o.value = c;
+          o.textContent = c;
+          sel.appendChild(o);
+        });
+        updateCountryRequirementUi();
+      }
+
+      async function loadCountries() {
+        rebuildCountrySelect([]);
+        try {
+          var base = apiOrigin().replace(/\/+$/, "");
+          var res = await fetch((base ? base : "") + "/api/discovery/countries", {
+            headers: { Accept: "application/json" },
+          });
+          var data = await res.json().catch(function () {
+            return {};
+          });
+          if (!res.ok || data.ok === false) {
+            console.warn("[discovery/countries]", data.error || res.status);
+            return;
+          }
+          rebuildCountrySelect(Array.isArray(data.countries) ? data.countries : []);
+        } catch (e) {
+          console.warn("[discovery/countries]", e);
+        }
+      }
+
+      function updateCountryRequirementUi() {
+        var country = String(sel.value || "").trim().toUpperCase();
+        var ok = country.length === 2;
+        btn.disabled = !ok;
+        if (countryWarn) countryWarn.style.display = ok ? "none" : "block";
+      }
+
+      sel.addEventListener("change", updateCountryRequirementUi);
+
+      loadCountries();
+
       function renderCards(list) {
         var root = document.getElementById("results");
         root.innerHTML = "";
         if (!list || !list.length) {
-          root.innerHTML = '<p class="muted">No clinics found.</p>';
+          root.innerHTML = '<p class="muted">Klinik bulunamadı.</p>';
           return;
         }
         list.forEach(function (c) {
@@ -156,9 +149,9 @@
           var ratingLine =
             c.rating != null && c.rating !== ""
               ? "★ " + escapeHtml(String(c.rating))
-              : "No ratings yet";
+              : "Henüz puan yok";
           el.innerHTML =
-            "<h2>" + escapeHtml(c.name || "Clinic") + "</h2>" +
+            "<h2>" + escapeHtml(c.name || "Klinik") + "</h2>" +
             '<div class="meta">' + cityLine + "</div>" +
             '<div class="rating">' + ratingLine + "</div>";
           root.appendChild(el);
@@ -173,21 +166,23 @@
 
       async function runSearch() {
         var status = document.getElementById("status");
-        var btn = document.getElementById("searchBtn");
         var country = String(sel.value || "").trim().toUpperCase();
         var city = document.getElementById("cityInput").value.trim();
 
         status.innerHTML = "";
         if (!country || country.length !== 2) {
-          status.innerHTML = '<span class="err">Please select a country.</span>';
+          status.innerHTML = '<span class="err">Lütfen ülke seçin</span>';
+          updateCountryRequirementUi();
           return;
         }
 
-        var params = new URLSearchParams({ country: country });
-        if (city.length >= 2) params.set("city", city);
-
-        var base = apiOrigin();
-        var url = (base ? base.replace(/\/+$/, "") : "") + "/api/discovery/clinics?" + params.toString();
+        var base = apiOrigin().replace(/\/+$/, "");
+        var url =
+          (base ? base : "") +
+          "/api/discovery/clinics?country=" +
+          encodeURIComponent(country) +
+          "&city=" +
+          encodeURIComponent(city);
 
         btn.disabled = true;
         try {
@@ -198,7 +193,7 @@
           if (!res.ok) {
             status.innerHTML =
               '<span class="err">' +
-              escapeHtml(data.message || data.error || "Request failed") +
+              escapeHtml(data.message || data.error || "İstek başarısız") +
               "</span>";
             renderCards([]);
             return;
@@ -207,12 +202,12 @@
           status.innerHTML =
             '<span class="muted">' +
             (data.clinics ? data.clinics.length : 0) +
-            " clinic(s)</span>";
+            " klinik</span>";
         } catch (e) {
-          status.innerHTML = '<span class="err">Network error.</span>';
+          status.innerHTML = '<span class="err">Bağlantı hatası.</span>';
           renderCards([]);
         } finally {
-          btn.disabled = false;
+          updateCountryRequirementUi();
         }
       }
 
