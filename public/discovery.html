@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinic discovery — Cliniflow</title>
+  <script src="/api-base.js?v=202605071"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #e6eaf2;
+      margin: 0;
+      padding: 24px 16px 48px;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 8px; }
+    .muted { color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
+    label { display: block; margin-top: 12px; margin-bottom: 6px; font-weight: 600; }
+    select, input[type="text"] {
+      width: 100%;
+      max-width: 420px;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e6eaf2;
+      font-size: 1rem;
+    }
+    button {
+      margin-top: 16px;
+      padding: 12px 20px;
+      font-weight: 700;
+      border: none;
+      border-radius: 8px;
+      background: #2563eb;
+      color: #fff;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status { margin-top: 16px; min-height: 1.25rem; }
+    .err { color: #fca5a5; }
+    #results {
+      margin-top: 28px;
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card h2 { margin: 0 0 8px; font-size: 1.1rem; color: #f8fafc; }
+    .card .meta { color: #94a3b8; font-size: 0.9rem; }
+    .card .rating { margin-top: 8px; color: #fbbf24; font-weight: 600; }
+    .wrap { max-width: 960px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Find a clinic</h1>
+    <p class="muted">Choose a country; optionally narrow by city. Leave city empty to see all listed clinics in that country.</p>
+
+    <label for="countrySelect">Country</label>
+    <select id="countrySelect" aria-label="Country"></select>
+
+    <label for="cityInput">City <span class="muted" style="font-weight:400;">(optional)</span></label>
+    <input type="text" id="cityInput" placeholder="e.g. Antalya" autocomplete="address-level2" />
+
+    <button type="button" id="searchBtn">Search</button>
+    <div id="status"></div>
+    <div id="results"></div>
+  </div>
+
+  <script>
+    (function () {
+      var COUNTRIES = [
+        ["", "— Select country —"],
+        ["AE", "United Arab Emirates"],
+        ["AM", "Armenia"],
+        ["AT", "Austria"],
+        ["AZ", "Azerbaijan"],
+        ["BY", "Belarus"],
+        ["BE", "Belgium"],
+        ["BG", "Bulgaria"],
+        ["CA", "Canada"],
+        ["CH", "Switzerland"],
+        ["CY", "Cyprus"],
+        ["CZ", "Czechia"],
+        ["DE", "Germany"],
+        ["DK", "Denmark"],
+        ["EE", "Estonia"],
+        ["ES", "Spain"],
+        ["FI", "Finland"],
+        ["FR", "France"],
+        ["GB", "United Kingdom"],
+        ["GE", "Georgia"],
+        ["GR", "Greece"],
+        ["HR", "Croatia"],
+        ["HU", "Hungary"],
+        ["IE", "Ireland"],
+        ["IL", "Israel"],
+        ["IT", "Italy"],
+        ["JO", "Jordan"],
+        ["KZ", "Kazakhstan"],
+        ["LB", "Lebanon"],
+        ["LV", "Latvia"],
+        ["LT", "Lithuania"],
+        ["MD", "Moldova"],
+        ["MT", "Malta"],
+        ["NL", "Netherlands"],
+        ["NO", "Norway"],
+        ["PL", "Poland"],
+        ["PT", "Portugal"],
+        ["RO", "Romania"],
+        ["RU", "Russia"],
+        ["SA", "Saudi Arabia"],
+        ["RS", "Serbia"],
+        ["SK", "Slovakia"],
+        ["SI", "Slovenia"],
+        ["SE", "Sweden"],
+        ["SY", "Syria"],
+        ["TR", "Turkey"],
+        ["UA", "Ukraine"],
+        ["US", "United States"],
+        ["UZ", "Uzbekistan"],
+      ];
+
+      var sel = document.getElementById("countrySelect");
+      COUNTRIES.forEach(function (row) {
+        var o = document.createElement("option");
+        o.value = row[0];
+        o.textContent = row[1];
+        sel.appendChild(o);
+      });
+
+      function apiOrigin() {
+        return typeof cliniflowApiBase === "function" ? cliniflowApiBase() : "";
+      }
+
+      function renderCards(list) {
+        var root = document.getElementById("results");
+        root.innerHTML = "";
+        if (!list || !list.length) {
+          root.innerHTML = '<p class="muted">No clinics found.</p>';
+          return;
+        }
+        list.forEach(function (c) {
+          var el = document.createElement("article");
+          el.className = "card";
+          var cityLine = c.city ? escapeHtml(c.city) : "—";
+          var ratingLine =
+            c.rating != null && c.rating !== ""
+              ? "★ " + escapeHtml(String(c.rating))
+              : "No ratings yet";
+          el.innerHTML =
+            "<h2>" + escapeHtml(c.name || "Clinic") + "</h2>" +
+            '<div class="meta">' + cityLine + "</div>" +
+            '<div class="rating">' + ratingLine + "</div>";
+          root.appendChild(el);
+        });
+      }
+
+      function escapeHtml(s) {
+        var d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      async function runSearch() {
+        var status = document.getElementById("status");
+        var btn = document.getElementById("searchBtn");
+        var country = String(sel.value || "").trim().toUpperCase();
+        var city = document.getElementById("cityInput").value.trim();
+
+        status.innerHTML = "";
+        if (!country || country.length !== 2) {
+          status.innerHTML = '<span class="err">Please select a country.</span>';
+          return;
+        }
+
+        var params = new URLSearchParams({ country: country });
+        if (city.length >= 2) params.set("city", city);
+
+        var base = apiOrigin();
+        var url = (base ? base.replace(/\/+$/, "") : "") + "/api/discovery/clinics?" + params.toString();
+
+        btn.disabled = true;
+        try {
+          var res = await fetch(url, { headers: { Accept: "application/json" } });
+          var data = await res.json().catch(function () {
+            return {};
+          });
+          if (!res.ok) {
+            status.innerHTML =
+              '<span class="err">' +
+              escapeHtml(data.message || data.error || "Request failed") +
+              "</span>";
+            renderCards([]);
+            return;
+          }
+          renderCards(data.clinics || []);
+          status.innerHTML =
+            '<span class="muted">' +
+            (data.clinics ? data.clinics.length : 0) +
+            " clinic(s)</span>";
+        } catch (e) {
+          status.innerHTML = '<span class="err">Network error.</span>';
+          renderCards([]);
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      document.getElementById("searchBtn").addEventListener("click", runSearch);
+    })();
+  </script>
+</body>
+</html>

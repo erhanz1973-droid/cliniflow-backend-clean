@@ -769,19 +769,29 @@
     root.innerHTML =
       '<section class="plan-usage-widget">' +
       "<h2>" + t("dashboard.planUsage") + "</h2>" +
-      '<div class="plan-pill" title="' + t("dashboard.planTierTitle") + '">' +
+      '<div class="plan-pill" title="' + t("dashboard.planTierTitle") + '" id="planName">' +
       planTitle +
       "</div>" +
       alertHtml +
       '<div class="plan-rows">' +
       rows
         .map(function (r) {
+          var vid =
+            r.key === "activeTreatments"
+              ? "activeTreatments"
+              : r.key === "uploads"
+                ? "uploads"
+                : r.key === "referrals"
+                  ? "referrals"
+                  : "";
           return (
             '<div class="plan-row">' +
             '<span class="plan-row-label">' +
             r.label +
             "</span>" +
-            '<span class="plan-row-value">' +
+            '<span class="plan-row-value"' +
+            (vid ? ' id="' + vid + '"' : "") +
+            ">" +
             planUsageFormatPair(r.used, r.limit, unlimitedLabel) +
             "</span>" +
             "</div>"
@@ -789,21 +799,63 @@
         })
         .join("") +
       "</div>" +
-      '<button type="button" class="plan-upgrade" id="planUsageUpgradeBtn">' + t("dashboard.upgrade") + "</button>" +
+      '<button type="button" class="plan-upgrade" id="upgradeButton">' +
+      t("dashboard.upgrade") +
+      "</button>" +
       "</section>";
 
-    const btn = document.getElementById("planUsageUpgradeBtn");
+    const btn = document.getElementById("upgradeButton");
     if (btn) {
-      if (btn.textContent === "Upgrade") {
-        console.warn("Hardcoded English detected");
-      }
       btn.onclick = function () {
-        const pricingUrl = "https://clinifly.net/pricing";
-        const msg = t("dashboard.confirmOpenPricing").replace(/\{url\}/g, pricingUrl);
-        if (window.confirm(msg)) {
-          window.location.href = pricingUrl;
-        }
+        window.location.href = "https://cliniflow-backend-clean-production.up.railway.app/pricing.html";
       };
+    }
+  }
+
+  function formatLimit(value) {
+    if (!value || value >= 999999) return "Sınırsız";
+    return value;
+  }
+
+  function formatUsage(u, l) {
+    var nu = Number(u);
+    var n = Number.isFinite(nu) ? nu : 0;
+    return `${n} / ${formatLimit(l)}`;
+  }
+
+  function showUpgradeBanner() {
+    var btn = document.getElementById("upgradeButton");
+    if (!btn) return;
+    try {
+      btn.focus();
+      btn.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    } catch (e) {}
+  }
+
+  function updateDashboardUI(data) {
+    if (!data) return;
+    var planEl = document.getElementById("planName");
+    if (planEl && data.plan != null) {
+      planEl.textContent = String(data.plan).toUpperCase();
+    }
+    var elAT = document.getElementById("activeTreatments");
+    if (elAT)
+      elAT.textContent = formatUsage(data.usage && data.usage.active_treatments, data.limits && data.limits.active_treatments);
+    var elU = document.getElementById("uploads");
+    if (elU)
+      elU.textContent = formatUsage(data.usage && data.usage.monthly_uploads, data.limits && data.limits.monthly_uploads);
+    var elR = document.getElementById("referrals");
+    if (elR)
+      elR.textContent = formatUsage(data.usage && data.usage.referrals, data.limits && data.limits.referrals);
+
+    var limAt = data.limits && data.limits.active_treatments;
+    var useAt = data.usage && data.usage.active_treatments;
+    if (
+      limAt > 0 &&
+      limAt < 999999 &&
+      useAt >= limAt * 0.8
+    ) {
+      showUpgradeBanner();
     }
   }
 
@@ -835,48 +887,20 @@
 
   async function loadPlanUsageWidget() {
     const token = getAdminToken();
-    if (!token) {
-      renderPlanWidget("planUsageWidgetMount");
-      return;
-    }
+    renderPlanWidget("planUsageWidgetMount");
+    if (!token) return;
     try {
-      const res = await safariFetch(`${API}/api/admin/billing/usage`, {
+      const res = await safariFetch(`${API}/api/clinic/usage`, {
         headers: { Accept: "application/json" },
       });
       if (!res.ok) {
         if (window.handle401 && window.handle401(res.status)) return;
-        renderPlanWidget("planUsageWidgetMount");
         return;
       }
       const data = await res.json();
-      if (!data.ok) {
-        renderPlanWidget("planUsageWidgetMount");
-        return;
-      }
-      const lim = limitsFromBillingCatalog(data.catalog);
-      if (!data.snapshot) {
-        renderPlanWidget("planUsageWidgetMount", {
-          plan: "free",
-          usage: { activeTreatments: 0, uploads: 0, referrals: 0 },
-          limits: lim,
-        });
-        return;
-      }
-      const s = data.snapshot;
-      const u = s.usage || {};
-      const plan = String(s.plan || "free").toLowerCase();
-      renderPlanWidget("planUsageWidgetMount", {
-        plan,
-        usage: {
-          activeTreatments: Number(u.activeTreatments) || 0,
-          uploads: Number(u.monthlyUploads) || 0,
-          referrals: Number(u.referralInvites) || 0,
-        },
-        limits: lim,
-      });
+      updateDashboardUI(data);
     } catch (e) {
       console.warn("[PLAN USAGE]", e);
-      renderPlanWidget("planUsageWidgetMount");
     }
   }
 

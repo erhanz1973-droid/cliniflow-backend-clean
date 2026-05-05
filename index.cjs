@@ -11035,6 +11035,70 @@ app.get("/api/admin/billing/plans", requireAdminAuth, (req, res) => {
   }
 });
 
+// GET /api/clinic/usage — dashboard plan row (clinic-column limits + live counts)
+app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
+  try {
+    const clinicId = req.clinicId || req.clinic?.id;
+    if (!clinicId || String(clinicId).trim() === "") {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const cid = String(clinicId).trim();
+    if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+      return res.status(503).json({ error: "database_unavailable" });
+    }
+
+    let { data: clinic, error: cErr } = await supabase
+      .from("clinics")
+      .select("id, plan, patient_limit, max_patients, upload_limit, referral_limit")
+      .eq("id", cid)
+      .maybeSingle();
+    if (cErr && /column|schema/i.test(String(cErr.message || ""))) {
+      const r2 = await supabase
+        .from("clinics")
+        .select("id, plan, max_patients")
+        .eq("id", cid)
+        .maybeSingle();
+      clinic = r2.data;
+      cErr = r2.error;
+    }
+    if (!clinic) {
+      return res.status(404).json({ error: "clinic_not_found" });
+    }
+
+    const { getActiveTreatmentsCount, countMonthlyUploadsForClinic } = require("./lib/saasUsage.cjs");
+    const activeCount = await getActiveTreatmentsCount(cid);
+    const uploadsR = await countMonthlyUploadsForClinic(supabase, cid);
+
+    let referralCount = 0;
+    const { count: refCount, error: refErr } = await supabase
+      .from("referrals")
+      .select("*", { count: "exact", head: true })
+      .eq("clinic_id", cid);
+    if (!refErr && refCount != null) {
+      referralCount = refCount;
+    }
+
+    const limits = {
+      active_treatments: clinic.patient_limit ?? clinic.max_patients ?? 999999,
+      monthly_uploads: clinic.upload_limit ?? 999999,
+      referrals: clinic.referral_limit ?? 999999,
+    };
+
+    return res.json({
+      plan: clinic.plan,
+      limits,
+      usage: {
+        active_treatments: activeCount,
+        monthly_uploads: uploadsR.value,
+        referrals: referralCount,
+      },
+    });
+  } catch (e) {
+    console.error("[GET /api/clinic/usage]", e);
+    return res.status(500).json({ error: e?.message || "internal_error" });
+  }
+});
+
 app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
   try {
     if (!req.clinic) {
