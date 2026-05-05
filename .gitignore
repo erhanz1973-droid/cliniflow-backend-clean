@@ -3,3 +3,6 @@ public/uploads/
 .DS_Store
 *.jks
 *.pem
+.env
+.env.*
+upload_certificate.crt

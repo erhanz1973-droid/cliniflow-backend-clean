@@ -1,3 +1,5 @@
+console.log("🚀 STRIPE VERSION DEPLOYED");
+
 process.on("uncaughtException", (err) => {
   console.error("🔥 UNCAUGHT EXCEPTION:", err);
   if (err && err.stack) console.error(err.stack);
