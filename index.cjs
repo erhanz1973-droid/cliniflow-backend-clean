@@ -243,6 +243,23 @@ const { randomUUID } = require("crypto");
 const procedures = require("./shared/procedures");
 console.log("🌍 I18N PROCEDURES ACTIVE");
 const saasPlans = require("./shared/saasPlans");
+
+const PLAN_CONFIG = {
+  pro: {
+    patient_limit: 15,
+    features: {
+      analytics: true,
+      referral_advanced: false,
+    },
+  },
+  premium: {
+    patient_limit: 999999,
+    features: {
+      analytics: true,
+      referral_advanced: true,
+    },
+  },
+};
 const saasEnforcement = require("./lib/saasEnforcement.cjs");
 const { procedureIdForEncounterTreatmentColumn } = require("./lib/procedureIdForEncounterTreatment");
 const { fillIcdRowFromStatic, searchStaticDentalIcd } = require("./lib/icd10StaticLabels.cjs");
@@ -3640,24 +3657,156 @@ function inferSaasPlanFromStripePriceId(priceId) {
   return "";
 }
 
-async function updateClinicPlanFromStripeWebhook(clinicId, { plan, stripeSubscriptionId }) {
-  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
-    console.error("[Stripe webhook] Supabase unavailable; skipping plan update");
+/** Wix / public Checkout plan snapshot (merged into clinics.settings.stripeCheckoutPlan). SaaS `plan` column still uses normalizePlanKey. */
+const STRIPE_CHECKOUT_PLAN_CONFIG = Object.freeze({
+  free: {
+    patient_limit: 5,
+    features: { analytics: false, referral_advanced: false },
+  },
+  basic: {
+    patient_limit: 15,
+    features: { analytics: true, referral_advanced: false },
+  },
+  pro: {
+    patient_limit: 15,
+    features: { analytics: true, referral_advanced: false },
+  },
+  premium: {
+    patient_limit: 999999,
+    features: { analytics: true, referral_advanced: true },
+  },
+});
+
+async function resolveClinicIdForStripeWebhook(session, customerIdStr) {
+  const meta = session && session.metadata;
+  if (meta && meta.clinicId) {
+    const id = String(meta.clinicId).trim();
+    if (id) return id;
+  }
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return "";
+
+  const cus = String(customerIdStr || "").trim();
+  if (cus) {
+    const { data, error } = await supabase
+      .from("clinics")
+      .select("id")
+      .eq("stripe_customer_id", cus)
+      .maybeSingle();
+    if (error && !/column|schema|does not exist/i.test(String(error.message || ""))) {
+      console.warn("[resolveClinicIdForStripeWebhook] stripe_customer_id lookup:", error.message);
+    } else if (data && data.id) {
+      return String(data.id);
+    }
+  }
+
+  const emailRaw =
+    (session && session.customer_details && session.customer_details.email) ||
+    (session && session.customer_details && session.customer_details.email_address) ||
+    (session && session.customer_email) ||
+    "";
+  const candidates = [
+    String(emailRaw || "").trim().toLowerCase(),
+    String(emailRaw || "").trim(),
+  ].filter((x, i, a) => x && a.indexOf(x) === i);
+
+  for (const em of candidates) {
+    const { data: row } = await supabase.from("clinics").select("id").eq("email", em).maybeSingle();
+    if (row && row.id) return String(row.id);
+  }
+  return "";
+}
+
+async function upgradeClinicPlan({ plan, subscriptionId, customerId, session }) {
+  const subId =
+    subscriptionId == null
+      ? ""
+      : typeof subscriptionId === "string"
+        ? subscriptionId
+        : String(subscriptionId.id || "").trim();
+  const custId =
+    customerId == null
+      ? ""
+      : typeof customerId === "string"
+        ? customerId
+        : String(customerId.id || "").trim();
+
+  if (!subId) {
+    console.warn("[upgradeClinicPlan] missing subscription id; skip clinic update");
     return;
   }
-  const id = String(clinicId || "").trim();
-  if (!id) return;
-  const norm = saasPlans.normalizePlanKey(plan);
-  const patch = {
-    plan: norm,
-    ...(stripeSubscriptionId
-      ? { stripe_subscription_id: String(stripeSubscriptionId).trim() }
-      : {}),
-  };
-  const { error } = await supabase.from("clinics").update(patch).eq("id", id);
-  if (error) {
-    console.error("[Stripe webhook] clinics update failed:", error.message || error);
+
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+    console.error("[upgradeClinicPlan] Supabase unavailable; skipping");
+    return;
   }
+
+  const clinicId = await resolveClinicIdForStripeWebhook(session, custId);
+  if (!clinicId) {
+    console.warn(
+      "[upgradeClinicPlan] could not resolve clinic (metadata.clinicId, stripe_customer_id, or clinics.email).",
+      { custId: custId || null, subId, source: session?.metadata?.source },
+    );
+    return;
+  }
+
+  const rawKey = String(plan || "pro").toLowerCase();
+  const cfg = STRIPE_CHECKOUT_PLAN_CONFIG[rawKey] || STRIPE_CHECKOUT_PLAN_CONFIG.pro;
+  const normPlan = saasPlans.normalizePlanKey(plan || "pro");
+
+  const { data: crow, error: selErr } = await supabase
+    .from("clinics")
+    .select("settings")
+    .eq("id", clinicId)
+    .maybeSingle();
+  if (selErr) {
+    console.error("[upgradeClinicPlan] settings read:", selErr.message);
+  }
+  let settings = crow?.settings || {};
+  if (typeof settings === "string") {
+    try {
+      settings = JSON.parse(settings);
+    } catch {
+      settings = {};
+    }
+  }
+  const base = settings && typeof settings === "object" ? settings : {};
+  const prevSnap =
+    base.stripeCheckoutPlan && typeof base.stripeCheckoutPlan === "object"
+      ? base.stripeCheckoutPlan
+      : {};
+
+  const stripeSnapshot = {
+    ...prevSnap,
+    rawPlan: rawKey,
+    patient_limit: cfg.patient_limit,
+    features: cfg.features,
+    stripe_subscription_id: subId,
+    stripe_customer_id: custId || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const patch = {
+    plan: normPlan,
+    stripe_subscription_id: String(subId).trim(),
+    settings: {
+      ...base,
+      stripeCheckoutPlan: stripeSnapshot,
+    },
+  };
+  if (custId) {
+    patch.stripe_customer_id = String(custId).trim();
+  }
+
+  let { error } = await supabase.from("clinics").update(patch).eq("id", clinicId);
+  if (error && /stripe_customer_id|column|schema|does not exist/i.test(String(error.message || ""))) {
+    delete patch.stripe_customer_id;
+    ({ error } = await supabase.from("clinics").update(patch).eq("id", clinicId));
+  }
+  if (error) {
+    console.error("[upgradeClinicPlan] clinics update failed:", error.message || error);
+    return;
+  }
+  console.log("CLINIC UPGRADED:", clinicId, rawKey, "→ SaaS:", normPlan);
 }
 
 // Stripe webhook must use raw body (before express.json)
@@ -3665,78 +3814,119 @@ app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    const secret =
-      String(process.env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEB_HOOK_SECRET || "").trim();
-    if (!secret) {
+    const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+    const sig = req.headers["stripe-signature"];
+    const endpointSecret = String(
+      process.env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEB_HOOK_SECRET || "",
+    ).trim();
+
+    if (!endpointSecret) {
       console.error("[Stripe webhook] STRIPE_WEBHOOK_SECRET not configured");
       return res.status(503).send("stripe_webhook_not_configured");
     }
-    const apiKey = String(process.env.STRIPE_SECRET_KEY || "").trim();
-    if (!apiKey) {
-      console.error("[Stripe webhook] STRIPE_SECRET_KEY missing");
-      return res.status(503).send("stripe_not_configured");
-    }
+
     let event;
     try {
-      const stripe = require("stripe")(apiKey);
-      const sig = req.headers["stripe-signature"];
-      event = stripe.webhooks.constructEvent(req.body, sig, secret);
-      if (event.type === "checkout.session.completed") {
-        const session = event.data.object;
-        const clinicId = session.metadata && session.metadata.clinicId;
-        if (!clinicId) {
-          console.error("[Stripe webhook] checkout.session.completed missing metadata.clinicId");
-          return res.sendStatus(200);
-        }
-        const subscriptionId =
-          typeof session.subscription === "string"
-            ? session.subscription
-            : session.subscription?.id || null;
-        let planKey =
-          (session.metadata &&
-            String(session.metadata.saasPlan || session.metadata.plan || "").trim()) ||
-          "";
-        if (planKey) {
-          planKey = saasPlans.normalizePlanKey(planKey);
-        } else {
-          let linePriceId = session.line_items?.data?.[0]?.price?.id || "";
-          if (!linePriceId) {
-            try {
-              const expanded = await stripe.checkout.sessions.retrieve(String(session.id), {
-                expand: ["line_items.data.price"],
-              });
-              linePriceId = expanded.line_items?.data?.[0]?.price?.id || "";
-            } catch (e) {
-              console.warn("[Stripe webhook] could not expand session line_items:", e?.message || e);
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err) {
+      console.error("Webhook signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+
+      const email = session.customer_details?.email;
+      const plan = session.metadata?.plan;
+      const customerId = session.customer;
+      const subscriptionId = session.subscription;
+
+      if (!email) {
+        console.log("No email in session");
+      } else if (!plan || !PLAN_CONFIG[plan]) {
+        console.log("Invalid plan:", plan);
+      } else if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+        /* no-op */
+      } else {
+        try {
+          const emailNorm = String(email).trim().toLowerCase();
+          const { data: clinic } = await supabase
+            .from("clinics")
+            .select("id")
+            .eq("email", emailNorm)
+            .maybeSingle();
+
+          if (!clinic) {
+            console.log("Clinic not found for email:", email);
+          } else {
+            const stripeCust =
+              typeof customerId === "string" ? customerId : customerId?.id ?? customerId ?? null;
+            const stripeSub =
+              typeof subscriptionId === "string"
+                ? subscriptionId
+                : subscriptionId?.id ?? subscriptionId ?? null;
+
+            const cfg = PLAN_CONFIG[plan];
+
+            const { error: upErr } = await supabase
+              .from("clinics")
+              .update({
+                plan: plan,
+                stripe_customer_id: stripeCust,
+                stripe_subscription_id: stripeSub,
+                patient_limit: cfg.patient_limit,
+                features: cfg.features,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", clinic.id);
+            if (upErr) {
+              console.error("[checkout.session.completed] update:", upErr.message);
+            } else {
+              console.log("Clinic upgraded:", clinic.id, "Plan:", plan);
             }
           }
-          planKey =
-            inferSaasPlanFromStripePriceId(linePriceId) ||
-            saasPlans.normalizePlanKey("BASIC");
+        } catch (e) {
+          console.error("[checkout.session.completed]", e);
         }
-        if (!subscriptionId) {
-          console.warn(
-            "[Stripe webhook] checkout.session.completed has no subscription id (non-subscription Checkout?)",
-            session.id,
-          );
-          return res.sendStatus(200);
-        }
-        await updateClinicPlanFromStripeWebhook(clinicId, {
-          plan: planKey,
-          stripeSubscriptionId: subscriptionId,
-        });
-        console.log("[Stripe webhook] clinic plan updated:", clinicId, planKey, subscriptionId);
       }
-      return res.sendStatus(200);
-    } catch (err) {
-      const msg = err && err.message ? String(err.message) : String(err);
-      if (/signature|stripe-signature|constructEvent/i.test(msg)) {
-        console.error("[Stripe webhook] signature verification failed:", msg);
-        return res.status(400).send(`Webhook Error: ${msg}`);
-      }
-      console.error("[Stripe webhook]", err);
-      return res.sendStatus(500);
     }
+
+    if (event.type === "customer.subscription.deleted") {
+      const sub = event.data.object;
+
+      if (isSupabaseEnabled() && typeof supabase?.from === "function") {
+        try {
+          const { data: clinic } = await supabase
+            .from("clinics")
+            .select("id")
+            .eq("stripe_subscription_id", sub.id)
+            .maybeSingle();
+
+          if (clinic) {
+            const cfg = PLAN_CONFIG.pro;
+
+            const { error: downErr } = await supabase
+              .from("clinics")
+              .update({
+                plan: "pro",
+                patient_limit: cfg.patient_limit,
+                features: cfg.features,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", clinic.id);
+            if (downErr) {
+              console.error("[customer.subscription.deleted] update:", downErr.message);
+            } else {
+              console.log("Clinic downgraded:", clinic.id);
+            }
+          }
+        } catch (e) {
+          console.error("[customer.subscription.deleted]", e);
+        }
+      }
+    }
+
+    res.json({ received: true });
   },
 );
 
@@ -10891,14 +11081,13 @@ app.post("/api/stripe/public-checkout", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      success_url: "https://clinifly.net/success",
-      cancel_url: "https://clinifly.net/cancel",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: "https://www.clinifly.net/success",
+      cancel_url: "https://www.clinifly.net/cancel",
+      metadata: {
+        plan: priceId === "price_1TTnqjD5VNkZC9K8Z7LrpZyV" ? "premium" : "pro",
+        source: "wix",
+      },
     });
 
     res.json({ ok: true, url: session.url });

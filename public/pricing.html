@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title id="pageTitle">Clinifly - Fiyatlandırma</title>
+  <!-- Stripe Price IDs: set content to price_… from Stripe Dashboard (Products) -->
+  <meta name="cliniflow-stripe-price-basic" content="" />
+  <meta name="cliniflow-stripe-price-pro" content="price_1TTp0YD5VNkZC9K8jvadXaE9" />
+  <meta name="DEBUG" content="WORKING" />
   <script src="/admin-i18n.js?v=21"></script>
+  <script src="/api-base.js?v=1"></script>
   <style>
     :root {
       --bg: #111827;
@@ -182,6 +187,12 @@
       color: var(--primary);
     }
 
+    .plan-cta:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .comparison-table {
       background: var(--card);
       border: 1px solid var(--border);
@@ -340,7 +351,7 @@
           <li><span class="check">✓</span> <span data-i18n="pricing.features.referral">Referral sistemi</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.branding">Clinifly branding</span></li>
         </ul>
-        <button class="plan-cta secondary" data-i18n="pricing.free.cta">Başla</button>
+        <button type="button" class="plan-cta secondary" data-i18n="pricing.free.cta" onclick="window.location.href='/admin-login.html'">Başla</button>
       </div>
 
       <div class="plan featured">
@@ -358,7 +369,7 @@
           <li><span class="check">✓</span> <span data-i18n="pricing.features.analytics">Temel analizler</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.support">E-posta desteği</span></li>
         </ul>
-        <button class="plan-cta primary" data-i18n="pricing.basic.cta">Upgrade Et</button>
+        <button type="button" class="plan-cta primary" data-i18n="pricing.basic.cta" id="btn-upgrade-basic" onclick="upgradePlan(getStripePrice('basic'))">Upgrade Et</button>
       </div>
 
       <div class="plan">
@@ -376,7 +387,7 @@
           <li><span class="check">✓</span> <span data-i18n="pricing.features.prioritySupport">Öncelikli destek</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.onboarding">Özel onboarding</span></li>
         </ul>
-        <button class="plan-cta primary" data-i18n="pricing.pro.cta">İletişime Geç</button>
+        <button type="button" class="plan-cta primary" data-i18n="pricing.pro.cta" id="btn-upgrade-pro" onclick="upgradePlan(getStripePrice('pro'))">Upgrade Et</button>
       </div>
     </div>
 
@@ -527,6 +538,98 @@
         answer.classList.contains('active') ? '▲' : '▼';
     }
 
+    function getStripePrice(tier) {
+      const name = tier === "pro" ? "cliniflow-stripe-price-pro" : "cliniflow-stripe-price-basic";
+      const el = document.querySelector('meta[name="' + name + '"]');
+      return (el && el.getAttribute("content") || "").trim();
+    }
+
+    function checkoutApiOrigin() {
+      if (typeof cliniflowApiBase === "function") {
+        var b = cliniflowApiBase();
+        if (b) return b.replace(/\/+$/, "");
+      }
+      return "";
+    }
+
+    async function upgradePlan(priceId) {
+      var pid = String(priceId || "").trim();
+      if (!pid) {
+        alert("Subscription price is not configured. Set <meta name=\"cliniflow-stripe-price-basic\"> and cliniflow-stripe-price-pro content to your Stripe Price IDs (price_…).");
+        return;
+      }
+      try {
+        var token = "";
+        try {
+          token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+        } catch (e) { token = ""; }
+        if (!token) {
+          if (confirm("Clinic admin login is required to subscribe. Open login?")) {
+            window.location.href = "/admin-login.html?next=" + encodeURIComponent("/pricing.html");
+          }
+          return;
+        }
+
+        var clinicId = "";
+        try {
+          var u = JSON.parse(localStorage.getItem("user") || "{}");
+          clinicId = String(u.clinicId || u.clinic_id || "").trim();
+        } catch (e2) { clinicId = ""; }
+
+        var origin = checkoutApiOrigin();
+        var path = "/api/stripe/create-checkout";
+        var url = origin ? origin + path : path;
+
+        var res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+          },
+          body: JSON.stringify({
+            priceId: pid,
+            ...(clinicId ? { clinicId: clinicId } : {}),
+          }),
+        });
+
+        var data = {};
+        try {
+          data = await res.json();
+        } catch (e3) {}
+
+        if (data.url) {
+          window.location.href = data.url;
+          return;
+        }
+
+        alert(data.error || data.message || ("Failed to start checkout (HTTP " + res.status + ")"));
+      } catch (e) {
+        console.error(e);
+        alert("Error starting payment");
+      }
+    }
+
+    (function configureUpgradeButtons() {
+      function refresh() {
+        var b = getStripePrice("basic");
+        var p = getStripePrice("pro");
+        var bb = document.getElementById("btn-upgrade-basic");
+        var pb = document.getElementById("btn-upgrade-pro");
+        if (bb) {
+          bb.disabled = !b;
+          bb.title = b ? "" : "Set meta cliniflow-stripe-price-basic with your Stripe price_… id";
+        }
+        if (pb) {
+          pb.disabled = !p;
+          pb.title = p ? "" : "Set meta cliniflow-stripe-price-pro with your Stripe price_… id";
+        }
+      }
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", refresh);
+      } else {
+        refresh();
+      }
+    })();
   </script>
 </body>
 </html>
