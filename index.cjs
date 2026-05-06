@@ -51057,7 +51057,7 @@ app.get("/api/discovery/clinics", async (req, res) => {
 
     const { data, error } = await supabase
       .from("clinics")
-      .select("id, name, city, country, clinic_code, status, latitude, longitude")
+      .select("id, name, city, country, clinic_code, status")
       .eq("is_listed", true)
       .eq("country", country)
       .order("name", { ascending: true })
@@ -51071,10 +51071,16 @@ app.get("/api/discovery/clinics", async (req, res) => {
     });
 
     const cityQuery = city.toLowerCase();
-    const clinics =
+    const clinicsRaw =
       cityQuery.length >= 2
         ? rows.filter((c) => String(c?.city || "").toLowerCase().includes(cityQuery))
         : rows;
+
+    const clinics = clinicsRaw.map((c) => ({
+      ...c,
+      latitude: c?.latitude ?? c?.lat ?? null,
+      longitude: c?.longitude ?? c?.lng ?? null,
+    }));
 
     console.log("[discovery/clinics] result", {
       count: clinics?.length,
