@@ -265,15 +265,15 @@
           cta: "Başla"
         },
         basic: {
-          name: "Basic",
+          name: "Pro",
           badge: "Popüler",
-          description: "Günlük hasta iletişimi olan klinikler için ideal.",
+          description: "Büyüyen klinikler için güçlü paket.",
           cta: "Upgrade Et"
         },
         pro: {
-          name: "Pro",
-          description: "Büyüyen klinikler için limitsiz kullanım.",
-          cta: "İletişime Geç"
+          name: "Premium",
+          description: "Kurumsal klinikler için premium destek.",
+          cta: "Upgrade Et"
         },
         features: {
           allCore: "Tüm core özellikler",
@@ -292,8 +292,8 @@
         comparison: {
           feature: "Özellik",
           free: "Free",
-          basic: "Basic",
-          pro: "Pro",
+          basic: "Pro",
+          pro: "Premium",
           patients: "Aktif Hasta Sayısı",
           unlimited: "Sınırsız",
           coreFeatures: "Core Özellikler",
@@ -1070,15 +1070,15 @@
           cta: "Get Started"
         },
         basic: {
-          name: "Basic",
+          name: "Pro",
           badge: "Popular",
-          description: "Ideal for clinics with daily patient communication.",
+          description: "Powerful package for growing clinics.",
           cta: "Upgrade"
         },
         pro: {
-          name: "Pro",
-          description: "Unlimited usage for growing clinics.",
-          cta: "Contact Us"
+          name: "Premium",
+          description: "Premium support for enterprise clinics.",
+          cta: "Upgrade"
         },
         features: {
           allCore: "All core features",
@@ -1097,8 +1097,8 @@
         comparison: {
           feature: "Feature",
           free: "Free",
-          basic: "Basic",
-          pro: "Pro",
+          basic: "Pro",
+          pro: "Premium",
           patients: "Active Patients",
           unlimited: "Unlimited",
           coreFeatures: "Core Features",

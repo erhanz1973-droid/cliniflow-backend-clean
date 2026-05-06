@@ -125,10 +125,30 @@
     }
 
     .plan-patients {
-      font-size: 32px;
-      font-weight: 800;
+      font-size: 22px;
+      font-weight: 700;
       color: var(--primary);
+      margin-bottom: 10px;
+    }
+
+    .plan-price {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
       margin-bottom: 16px;
+    }
+
+    .plan-price .amount {
+      font-size: 44px;
+      line-height: 1;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .plan-price .period {
+      font-size: 14px;
+      color: var(--muted);
+      padding-bottom: 6px;
     }
 
     .plan-description {
@@ -191,6 +211,11 @@
       opacity: 0.45;
       cursor: not-allowed;
       transform: none;
+    }
+
+    .plan-cta-row {
+      display: grid;
+      gap: 10px;
     }
 
     .comparison-table {
@@ -332,7 +357,7 @@
     <div class="pricing-info">
       <p data-i18n="pricing.info">
         Planlar <span class="highlight">aktif hasta sayısına</span> göre belirlenir. 
-        Mevccut hastalarınızla çalışmaya devam edebilirsiniz.
+        Mevcut hastalarınızla çalışmaya devam edebilirsiniz.
       </p>
     </div>
 
@@ -341,6 +366,10 @@
         <div class="plan-icon">🆓</div>
         <div class="plan-name" data-i18n="pricing.free.name">Free</div>
         <div class="plan-patients">5 Hasta</div>
+        <div class="plan-price">
+          <span class="amount">$0</span>
+          <span class="period">/month</span>
+        </div>
         <div class="plan-description" data-i18n="pricing.free.description">
           "Clinifly'i gerçek hastalarla denemeniz için."
         </div>
@@ -351,43 +380,51 @@
           <li><span class="check">✓</span> <span data-i18n="pricing.features.referral">Referral sistemi</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.branding">Clinifly branding</span></li>
         </ul>
-        <button type="button" class="plan-cta secondary" data-i18n="pricing.free.cta" onclick="window.location.href='/admin-login.html'">Başla</button>
+        <button type="button" class="plan-cta secondary" data-i18n="pricing.free.cta" onclick="window.location.href='/admin-register.html'">Başla</button>
       </div>
 
       <div class="plan featured">
         <div class="plan-badge" data-i18n="pricing.basic.badge">Popüler</div>
-        <div class="plan-icon">💼</div>
-        <div class="plan-name" data-i18n="pricing.basic.name">Basic</div>
+        <div class="plan-icon">🚀</div>
+        <div class="plan-name" data-i18n="pricing.basic.name">Pro</div>
         <div class="plan-patients">15 Hasta</div>
+        <div class="plan-price">
+          <span class="amount">$29</span>
+          <span class="period">/month</span>
+        </div>
         <div class="plan-description" data-i18n="pricing.basic.description">
-          "Günlük hasta iletişimi olan klinikler için ideal."
+          "Büyüyen klinikler için güçlü paket."
         </div>
         <ul class="plan-features">
-          <li><span class="check">✓</span> <span data-i18n="pricing.features.allCore">Tüm core özellikler</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.customBranding">Özel branding</span></li>
-          <li><span class="check">✓</span> <span data-i18n="pricing.features.referral">Gelişmiş referral</span></li>
-          <li><span class="check">✓</span> <span data-i18n="pricing.features.analytics">Temel analizler</span></li>
+          <li><span class="check">✓</span> <span data-i18n="pricing.features.referral">Referral sistemi</span></li>
+          <li><span class="check">✓</span> <span data-i18n="pricing.features.analytics">Analizler</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.support">E-posta desteği</span></li>
         </ul>
         <button type="button" class="plan-cta primary" data-i18n="pricing.basic.cta" id="btn-upgrade-basic" onclick="upgradePlan(getStripePrice('basic'))">Upgrade Et</button>
       </div>
 
       <div class="plan">
-        <div class="plan-icon">🚀</div>
-        <div class="plan-name" data-i18n="pricing.pro.name">Pro</div>
+        <div class="plan-icon">👑</div>
+        <div class="plan-name" data-i18n="pricing.pro.name">Premium</div>
         <div class="plan-patients">Sınırsız</div>
+        <div class="plan-price">
+          <span class="amount">$89</span>
+          <span class="period">/month</span>
+        </div>
         <div class="plan-description" data-i18n="pricing.pro.description">
-          "Büyüyen klinikler için limitsiz kullanım."
+          "Kurumsal klinikler için premium destek."
         </div>
         <ul class="plan-features">
-          <li><span class="check">✓</span> <span data-i18n="pricing.features.allCore">Tüm core özellikler</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.unlimitedPatients">Sınırsız hasta</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.advancedReferral">Gelişmiş referral (level, kampanya)</span></li>
-          <li><span class="check">✓</span> <span data-i18n="pricing.features.analytics">Detaylı raporlama</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.prioritySupport">Öncelikli destek</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.onboarding">Özel onboarding</span></li>
         </ul>
-        <button type="button" class="plan-cta primary" data-i18n="pricing.pro.cta" id="btn-upgrade-pro" onclick="upgradePlan(getStripePrice('pro'))">Upgrade Et</button>
+        <div class="plan-cta-row">
+          <button type="button" class="plan-cta primary" data-i18n="pricing.pro.cta" id="btn-upgrade-pro" onclick="upgradePlan(getStripePrice('pro'))">Upgrade Et</button>
+          <button type="button" class="plan-cta secondary" onclick="window.location.href='mailto:hello@clinifly.com?subject=Clinifly%20Premium%20Plan'">İletişime Geç</button>
+        </div>
       </div>
     </div>
 
@@ -397,8 +434,8 @@
           <tr>
             <th data-i18n="pricing.comparison.feature">Özellik</th>
             <th data-i18n="pricing.comparison.free">Free</th>
-            <th data-i18n="pricing.comparison.basic">Basic</th>
-            <th data-i18n="pricing.comparison.pro">Pro</th>
+            <th data-i18n="pricing.comparison.basic">Pro</th>
+            <th data-i18n="pricing.comparison.pro">Premium</th>
           </tr>
         </thead>
         <tbody>
