@@ -4068,6 +4068,7 @@ app.post(
 
       try {
         const clinicId = await resolveClinicIdForStripeWebhook(sessionWithItems, customerId);
+        console.log("[stripe webhook] resolved clinic id", clinicId || null);
         if (!clinicId) {
           console.warn("[checkout.session.completed] clinic unresolved", {
             customerId: customerId || null,
@@ -4094,6 +4095,7 @@ app.post(
       const sub = event.data.object;
       try {
         const clinicId = await resolveClinicIdForStripeSubscription(sub);
+        console.log(`[${event.type}] resolved clinic id`, clinicId || null);
         if (!clinicId) {
           console.warn(`[${event.type}] clinic unresolved`, {
             subscriptionId: sub?.id || null,
@@ -11445,6 +11447,10 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
     const saasPlanHint =
       inferSaasPlanFromStripePriceId(priceId) ||
       String(saasPlans.normalizePlanKey("BASIC"));
+    const planKeyForMetadata = inferPlanKeyFromPriceId(priceId) || "pro";
+    const clinicNameForMetadata = String(
+      req.clinic?.name || req.clinic?.clinic_name || req.clinic?.clinicName || ""
+    ).trim();
 
     const mode = "subscription";
     console.log("[stripe checkout] mode", mode);
@@ -11456,9 +11462,12 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
       cancel_url: cancelUrl,
       metadata: {
         clinicId: String(sessionClinicId),
+        clinicName: clinicNameForMetadata || "",
+        plan: String(planKeyForMetadata),
         saasPlan: String(saasPlans.normalizePlanKey(saasPlanHint)),
       },
     });
+    console.log("[stripe checkout] metadata", checkoutSession?.metadata || null);
 
     return res.json({ ok: true, url: checkoutSession.url });
   } catch (e) {
