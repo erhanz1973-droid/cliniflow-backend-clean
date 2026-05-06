@@ -22202,6 +22202,15 @@ function rowBelongsToClinic(row, expectedClinicId) {
   if (!got) return false;
   return got === exp;
 }
+
+/** Timeline satellite rows (patient_treatments, treatment_plans): null clinic_id OK if scoped by patient list; wrong clinic rejects. */
+function eventsSatelliteRowClinicOk(row, expectedClinicId) {
+  const exp = expectedClinicId != null ? String(expectedClinicId).trim() : "";
+  if (!exp) return false;
+  const got = row && row.clinic_id != null ? String(row.clinic_id).trim() : "";
+  if (!got) return true;
+  return got === exp;
+}
 // POST /api/chat/upload (patient uploads files/images to chat)
 app.post("/api/chat/upload", requireToken, chatUpload.array("files", 5), async (req, res) => {
   try {
@@ -33943,7 +33952,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const patientClausesToTry = _eventsPatientSelectClause
         ? [_eventsPatientSelectClause, ...patientSelectCandidates.filter(c => c !== _eventsPatientSelectClause)]
         : patientSelectCandidates;
-      for (const selectClause of patientClausesToTry) {
+      patientSelectScan: for (const selectClause of patientClausesToTry) {
         /** @type {Map<string, any>} */
         const accById = new Map();
         const ingestPatients = (rows) => {
@@ -33953,31 +33962,44 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             if (!accById.has(id)) accById.set(id, r);
           }
         };
-        const r1 = await supabase
-          .from("patients")
-          .select(selectClause)
-          .eq("clinic_id", req.clinicId)
-          .order("created_at", { ascending: false });
-
-        if (r1.error) {
-          if (!isMissingColumnError(r1.error, "travel") &&
-              !isMissingColumnError(r1.error, "treatments") &&
-              !isMissingColumnError(r1.error, "treatment_events") &&
-              !["42703", "PGRST204"].includes(String(r1.error.code || ""))) {
-            console.error("[ADMIN EVENTS] patients query failed", r1.error);
-          break;
-        }
-          continue;
-        }
-        ingestPatients(r1.data);
-        const codeUpper = String(req.clinicCode || "").trim();
-        if (codeUpper) {
-          const r2 = await supabase
+        const EVENTS_PATIENT_PAGE = 800;
+        for (let off = 0; ; off += EVENTS_PATIENT_PAGE) {
+          const r1 = await supabase
             .from("patients")
             .select(selectClause)
-            .eq("clinic_code", codeUpper)
-            .order("created_at", { ascending: false });
-          if (!r2.error) ingestPatients(r2.data);
+            .eq("clinic_id", req.clinicId)
+            .order("created_at", { ascending: false })
+            .range(off, off + EVENTS_PATIENT_PAGE - 1);
+
+          if (r1.error) {
+            if (!isMissingColumnError(r1.error, "travel") &&
+                !isMissingColumnError(r1.error, "treatments") &&
+                !isMissingColumnError(r1.error, "treatment_events") &&
+                !["42703", "PGRST204"].includes(String(r1.error.code || ""))) {
+              console.error("[ADMIN EVENTS] patients query failed", r1.error);
+              break patientSelectScan;
+            }
+            continue patientSelectScan;
+          }
+          const chunk = r1.data || [];
+          ingestPatients(chunk);
+          if (chunk.length < EVENTS_PATIENT_PAGE) break;
+        }
+
+        const codeUpper = String(req.clinicCode || "").trim().toUpperCase();
+        if (codeUpper) {
+          for (let off2 = 0; ; off2 += EVENTS_PATIENT_PAGE) {
+            const r2 = await supabase
+              .from("patients")
+              .select(selectClause)
+              .eq("clinic_code", codeUpper)
+              .order("created_at", { ascending: false })
+              .range(off2, off2 + EVENTS_PATIENT_PAGE - 1);
+            if (r2.error) break;
+            const chunk2 = r2.data || [];
+            ingestPatients(chunk2);
+            if (chunk2.length < EVENTS_PATIENT_PAGE) break;
+          }
         }
         if (accById.size > 0) {
           _eventsPatientSelectClause = selectClause; // cache the working clause
@@ -34041,8 +34063,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const { data: ptRows, error: ptErr } = await supabase
             .from("patient_treatments")
             .select("patient_id, treatments_data, clinic_id")
-            .in("patient_id", chunk)
-            .eq("clinic_id", req.clinicId);
+            .in("patient_id", chunk);
           if (ptErr) {
             if (!["42P01", "PGRST205", "PGRST204"].includes(String(ptErr.code || ""))) {
               console.error("[EVENTS] patient_treatments query failed:", ptErr.message);
@@ -34050,7 +34071,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             break;
           }
           (ptRows || []).forEach((row) => {
-            if (!rowBelongsToClinic(row, req.clinicId)) return;
+            if (!eventsSatelliteRowClinicOk(row, req.clinicId)) return;
             if (!row?.treatments_data) return;
             const rowPid = String(row.patient_id || "").trim();
             const aliasKeys = expandPatientIdLookupKeys(rowPid);
@@ -34121,11 +34142,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const { data, error } = await supabase
             .from("treatment_plans")
             .select(selTp)
-            .in(col, chunk)
-            .eq("clinic_id", req.clinicId);
+            .in(col, chunk);
           if (error) return;
           (data || []).forEach((row) => {
-            if (rowBelongsToClinic(row, req.clinicId)) planRowsMerged.push(row);
+            if (eventsSatelliteRowClinicOk(row, req.clinicId)) planRowsMerged.push(row);
           });
         };
         for (let i = 0; i < allEncounterIds.length; i += 100) {
@@ -34319,11 +34339,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       }
 
       for (const p of list) {
-        const rowCid = String(p?.clinic_id ?? "").trim();
-        const rowCode = String(p?.clinic_code ?? "").trim().toUpperCase();
-        const idMatch = req.clinicId && rowCid && rowCid === String(req.clinicId).trim();
-        const codeMatch = clinicCode && rowCode && rowCode === clinicCode;
-        if (!p || (!idMatch && !codeMatch)) continue;
+        // Liste zaten clinic_id / clinic_code sorgularıyla kuruldu; clinic_code SELECT'ta olmayabilir — satırı atlama.
+        if (!p) continue;
         currentPatientMembershipStartMs = p?.created_at ? Date.parse(String(p.created_at)) : 0;
         const patientId = String(p?.patient_id || p?.id || "").trim();
         if (!patientId) continue;
