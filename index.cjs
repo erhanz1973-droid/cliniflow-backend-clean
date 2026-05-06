@@ -51239,6 +51239,32 @@ try {
   console.warn("[chat-socket] init failed — HTTP polling only:", e?.message || e);
 }
 
+// Public discovery: list available country codes for dropdowns.
+app.get("/api/discovery/countries", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("clinics")
+      .select("country")
+      .eq("is_listed", true);
+
+    if (error) throw error;
+
+    const countries = [...new Set(
+      (data || [])
+        .map((row) => String(row?.country || "").trim().toUpperCase())
+        .filter((code) => /^[A-Z]{2}$/.test(code))
+    )].sort();
+
+    return res.json({ ok: true, countries });
+  } catch (e) {
+    console.error("[GET /api/discovery/countries]", e?.message || e);
+    return res.status(500).json({
+      ok: false,
+      error: e?.message || "internal_error",
+    });
+  }
+});
+
 console.log("[STARTUP] http.Server.listen", {
   port: PORT,
   host: "0.0.0.0",
