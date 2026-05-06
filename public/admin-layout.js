@@ -4,13 +4,6 @@
  * All labels are i18n-aware and update on language change.
  */
 (function () {
-  if (typeof window !== 'undefined' && !window.i18n) {
-    console.error('❌ i18n not loaded — check script order');
-  }
-
-  console.log('I18N FILE VERSION (layout):', 'v18');
-
-  const t = (key) => (window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key) : key);
 
   /** When admin HTML is on backend static but API lives on cliniflow-admin service (must match login + JWT_SECRET there). */
   var RENDER_ADMIN_API_FALLBACK =
@@ -55,33 +48,31 @@
     { href: '/admin-patients.html',  icon: iconUsers(),    key: 'patients',  badge: 'sbPatients' },
     { href: '/admin-treatment.html', icon: iconTooth(),    key: 'treatment' },
     { href: '/admin-schedule.html',  icon: iconCal(),      key: 'schedule' },
+    { href: '/admin-travel.html',    icon: iconPlane(),    key: 'travel' },
   ];
   const NAV2 = [
     { href: '/admin-doctor-applications-v2.html', icon: iconDoctor(), key: 'doctors', badge: 'sbDoctors' },
     { href: '/admin-chat.html',     icon: iconChat(),     key: 'chat',    badge: 'sbChat' },
-    { href: '/admin-leads.html',     icon: iconInbox(),    key: 'leads' },
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
     { href: '/admin-referrals.html', icon: iconReferrals(), key: 'referrals', badge: 'sbReferrals' },
     { href: '/admin-settings.html', icon: iconSettings(), key: 'settings' },
   ];
 
-  var i18nReadyApplyCount = 0;
-  document.addEventListener('i18n:ready', function () {
-    if (window.i18n && typeof window.i18n.getLang === 'function') {
-      console.log('NAV LANG:', window.i18n.getLang());
-    }
-    const path = window.location.pathname || '';
-    i18nReadyApplyCount++;
-    const nav = document.querySelector('.al-nav');
-    if (nav) {
-      nav.replaceChildren();
-      nav.innerHTML = buildNavHTML(path);
-      nav.dataset.path = path;
-      try {
-        console.log('NAV HTML AFTER:', document.querySelector('.al-nav') && document.querySelector('.al-nav').innerHTML);
-      } catch (e) { /* no-op */ }
-    }
-  });
+  /* ── i18n helper ─────────────────────────────────────────────── */
+  function tn(key) {
+    if (window.i18n && typeof window.i18n.t === 'function') return window.i18n.t(key);
+    // Fallbacks
+    const fallbacks = {
+      'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
+      'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
+      'dashboard.nav.travel': 'Travel',
+      'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.chat': 'Messages',
+      'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.settings': 'Settings',
+      'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
+      'dashboard.sidebar.logout': 'Logout', 'dashboard.sidebar.clinic': 'Clinic',
+    };
+    return fallbacks[key] || key.split('.').pop();
+  }
 
   /* ── SVG Icons ─────────────────────────────────────────────── */
   function svg(d, extra) {
@@ -91,9 +82,11 @@
   function iconUsers()    { return svg('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'); }
   function iconTooth()    { return svg('<path d="M12 2C9.2 2 7 4.2 7 7c0 1.5.6 2.8 1.4 3.8-.2 1.2-.4 2.5-.4 3.2 0 3.3 1.3 5 2.5 5s2-1.2 2-2.4c0-.8-.5-1.8-.5-1.8s-.5 1-.5 1.8c0 .9-.4 1.4-1 1.4S9 16.8 9 14c0-.8.2-2 .4-3.2C10 11.7 10.7 13 12 13s2.1-.3 2.6-2.2c.2 1.1.4 2.2.4 3.2 0 2.8-.8 5-2 5s-1-.5-1-1.4c0-.8-.5-1.8-.5-1.8s-.5 1-.5 1.8c0 1.2 1 2.4 2 2.4s2.5-1.7 2.5-5c0-.8-.2-2-.4-3.2C15.4 9.8 16 8.5 16 7c0-2.8-1.8-5-4-5z"/>'); }
   function iconCal()      { return svg('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'); }
+  function iconPlane() {
+    return svg('<path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>');
+  }
   function iconDoctor()   { return svg('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'); }
   function iconChat()     { return svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'); }
-  function iconInbox()    { return svg('<polyline points="22 12 18 12 15 21 9 21 6 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'); }
   function iconSettings() { return svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'); }
   function iconFiles()    { return svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'); }
   /** Referrals / invite network */
@@ -108,49 +101,54 @@
     const badge = item.badge ? `<span class="al-nav-badge" id="${item.badge}"></span>` : '';
     return `<a href="${item.href}" class="${cls}" data-nav-key="${item.key}">
       <span class="al-nav-icon">${item.icon}</span>
-      <span class="al-nav-label">${t('dashboard.nav.' + item.key)}</span>
+      <span class="al-nav-label">${tn('dashboard.nav.' + item.key)}</span>
       ${badge}
     </a>`;
   }
 
-  function navItemActive(item, currentHref) {
-    const ch = String(currentHref || '');
-    return ch.endsWith(item.key) || ch.includes(item.href.replace('/', ''));
-  }
-
-  function buildNavHTML(currentHref) {
-    const ch = String(currentHref || (typeof location !== 'undefined' ? (location.pathname || '') : ''));
-    const nav1 = NAV.map((i) => navItem(i, navItemActive(i, ch))).join('');
-    const nav2 = NAV2.map((i) => navItem(i, navItemActive(i, ch))).join('');
-    return (
-      '<div class="al-nav-section" id="alNavSection1">' + t('dashboard.sidebar.mainMenu') + '</div>' +
-      nav1 +
-      '<div class="al-nav-section" id="alNavSection2" style="margin-top:14px;">' + t('dashboard.sidebar.management') + '</div>' +
-      nav2
-    );
-  }
-
   /* ── Build full sidebar HTML ─────────────────────────────── */
   function buildSidebar(currentHref) {
-    const ch = String(currentHref || '');
+    const nav1 = NAV.map(i => navItem(i, currentHref.endsWith(i.key) || currentHref.includes(i.href.replace('/', '')))).join('');
+    const nav2 = NAV2.map(i => navItem(i, currentHref.endsWith(i.key) || currentHref.includes(i.href.replace('/', '')))).join('');
     return `
       <a href="/admin.html" class="al-logo" style="text-decoration:none;">
         <div class="al-logo-icon">🦷</div>
         <div>
           <div class="al-logo-brand">Clinifly</div>
-          <div class="al-logo-clinic" id="alClinicName">${t('dashboard.sidebar.clinic')}</div>
+          <div class="al-logo-clinic" id="alClinicName">${tn('dashboard.sidebar.clinic')}</div>
         </div>
       </a>
       <nav class="al-nav">
-        ${buildNavHTML(ch)}
+        <div class="al-nav-section" id="alNavSection1">${tn('dashboard.sidebar.mainMenu')}</div>
+        ${nav1}
+        <div class="al-nav-section" id="alNavSection2" style="margin-top:14px;">${tn('dashboard.sidebar.management')}</div>
+        ${nav2}
       </nav>
       <div class="al-sidebar-footer">
         <button class="al-logout-btn" id="alLogoutBtn" onclick="window.__alLogout()">
           <span class="al-nav-icon">${iconLogout()}</span>
-          <span id="alLogoutLabel">${t('dashboard.sidebar.logout')}</span>
+          <span id="alLogoutLabel">${tn('dashboard.sidebar.logout')}</span>
         </button>
       </div>
     `;
+  }
+
+  /* ── Update sidebar labels (called on language change) ───── */
+  function updateSidebarLabels() {
+    // Nav item labels
+    document.querySelectorAll('.al-nav-item[data-nav-key]').forEach(el => {
+      const key = el.getAttribute('data-nav-key');
+      const labelEl = el.querySelector('.al-nav-label');
+      if (labelEl) labelEl.textContent = tn('dashboard.nav.' + key);
+    });
+    // Section headers
+    const s1 = document.getElementById('alNavSection1');
+    if (s1) s1.textContent = tn('dashboard.sidebar.mainMenu');
+    const s2 = document.getElementById('alNavSection2');
+    if (s2) s2.textContent = tn('dashboard.sidebar.management');
+    // Logout
+    const logoutLabel = document.getElementById('alLogoutLabel');
+    if (logoutLabel) logoutLabel.textContent = tn('dashboard.sidebar.logout');
   }
 
   /* ── Build topbar HTML ───────────────────────────────────── */
@@ -160,11 +158,11 @@
         <span class="al-page-title" id="alPageTitle">${pageTitle}</span>
       </div>
       <div class="al-topbar-right">
-        <div class="al-lang lang-switcher" id="alLang" role="group" aria-label="Language">
-          <span class="lang-btn" id="lang-tr" data-lang="tr" role="button" tabindex="0">TR</span>
-          <span class="lang-btn" id="lang-en" data-lang="en" role="button" tabindex="0">EN</span>
-          <span class="lang-btn" id="lang-ru" data-lang="ru" role="button" tabindex="0">RU</span>
-          <span class="lang-btn" id="lang-ka" data-lang="ka" role="button" tabindex="0">KA</span>
+        <div class="al-lang" id="alLang">
+          <span id="lang-tr" onclick="if(window.onLanguageChange)window.onLanguageChange('tr')">TR</span>
+          <span id="lang-en" onclick="if(window.onLanguageChange)window.onLanguageChange('en')">EN</span>
+          <span id="lang-ru" onclick="if(window.onLanguageChange)window.onLanguageChange('ru')">RU</span>
+          <span id="lang-ka" onclick="if(window.onLanguageChange)window.onLanguageChange('ka')">KA</span>
         </div>
       </div>
     `;
@@ -222,13 +220,12 @@
     // Start unread badge polling
     startBadgePolling();
 
-    if (typeof window.rebindAdminLangButtons === 'function') {
-      window.rebindAdminLangButtons();
-    }
-    // Ensure any data-i18n elements in page content get translated
-    setTimeout(function () {
-      if (typeof window.applyI18n === 'function') window.applyI18n();
-    }, 0);
+    // Hook into i18n updates to refresh sidebar labels
+    const prevOnI18nUpdated = window.onI18nUpdated;
+    window.onI18nUpdated = function () {
+      updateSidebarLabels();
+      if (typeof prevOnI18nUpdated === 'function') prevOnI18nUpdated();
+    };
   }
 
   /* ── Load clinic name ────────────────────────────────────── */
@@ -241,7 +238,7 @@
       });
       if (res.ok) {
         const d = await res.json();
-        const name = d.branding?.clinicName || d.name || t('dashboard.sidebar.clinic');
+        const name = d.branding?.clinicName || d.name || tn('dashboard.sidebar.clinic');
         const el = document.getElementById('alClinicName');
         if (el) el.textContent = name;
       } else if (res.status === 401 && typeof window.handle401 === 'function') {
