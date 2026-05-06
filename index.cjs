@@ -3647,14 +3647,47 @@ app.use((req, res, next) => {
   next();
 });
 
-/** Map Stripe Price id → Saas plan (BASIC | PRO). Set STRIPE_PRICE_BASIC / STRIPE_PRICE_PRO on Railway to match Checkout prices. */
+/** Map Stripe Price id → Saas plan (BASIC | PRO). Supports premium alias vars too. */
 function inferSaasPlanFromStripePriceId(priceId) {
   const p = String(priceId || "").trim();
   const basic = String(process.env.STRIPE_PRICE_BASIC || "").trim();
-  const pro = String(process.env.STRIPE_PRICE_PRO || "").trim();
+  const pro =
+    String(process.env.STRIPE_PRICE_PRO || "").trim() ||
+    String(process.env.STRIPE_PRICE_PREMIUM || "").trim();
   if (pro && p === pro) return "PRO";
   if (basic && p === basic) return "BASIC";
   return "";
+}
+
+function normalizeCheckoutTier(rawTier) {
+  const t = String(rawTier || "").trim().toLowerCase();
+  if (!t) return "";
+  if (["basic", "pro", "starter"].includes(t)) return "basic";
+  if (["premium", "enterprise"].includes(t)) return "premium";
+  return "";
+}
+
+function resolveCheckoutPriceIdFromRequest(body) {
+  const direct = String(body?.priceId || "").trim();
+  if (direct) return direct;
+  const tier = normalizeCheckoutTier(body?.tier || body?.plan || body?.product);
+  if (tier === "basic") return String(process.env.STRIPE_PRICE_BASIC || "").trim();
+  if (tier === "premium")
+    return (
+      String(process.env.STRIPE_PRICE_PREMIUM || "").trim() ||
+      String(process.env.STRIPE_PRICE_PRO || "").trim()
+    );
+  return "";
+}
+
+function isStripeModeCompatible(secretKey, priceId) {
+  const liveSecret = String(secretKey || "").startsWith("sk_live_");
+  const testSecret = String(secretKey || "").startsWith("sk_test_");
+  const livePrice = String(priceId || "").startsWith("price_live_");
+  const testPrice = String(priceId || "").startsWith("price_test_");
+  if (liveSecret && testPrice) return false;
+  if (testSecret && livePrice) return false;
+  return true;
 }
 
 /** Wix / public Checkout plan snapshot (merged into clinics.settings.stripeCheckoutPlan). SaaS `plan` column still uses normalizePlanKey. */
@@ -11179,7 +11212,7 @@ app.post("/api/stripe/public-checkout", async (req, res) => {
       success_url: "https://www.clinifly.net/success",
       cancel_url: "https://www.clinifly.net/cancel",
       metadata: {
-        plan: priceId === "price_1TTnqjD5VNkZC9K8Z7LrpZyV" ? "premium" : "pro",
+        plan: inferSaasPlanFromStripePriceId(priceId) === "PRO" ? "premium" : "pro",
         source: "wix",
       },
     });
@@ -11199,7 +11232,7 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
       return res.status(503).json({ ok: false, error: "stripe_not_configured" });
     }
 
-    const priceId = String(req.body?.priceId || "").trim();
+    const priceId = resolveCheckoutPriceIdFromRequest(req.body || {});
     console.log("Stripe key prefix:", process.env.STRIPE_SECRET_KEY?.slice(0, 7));
     console.log("priceId:", priceId);
     const bodyClinicId = String(req.body?.clinicId || "").trim();
@@ -11213,6 +11246,13 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
 
     if (!/^price_[a-zA-Z0-9]+$/.test(priceId)) {
       return res.status(400).json({ ok: false, error: "invalid_price_id" });
+    }
+    if (!isStripeModeCompatible(secret, priceId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "price_mode_mismatch",
+        message: "Stripe key mode and price mode do not match (live/test).",
+      });
     }
 
     const allowed = String(process.env.STRIPE_CHECKOUT_ALLOWED_PRICE_IDS || "")

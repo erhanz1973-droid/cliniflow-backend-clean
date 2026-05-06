@@ -6,7 +6,7 @@
   <title id="pageTitle">Clinifly - Fiyatlandırma</title>
   <!-- Stripe Price IDs: set content to price_… from Stripe Dashboard (Products) -->
   <meta name="cliniflow-stripe-price-basic" content="" />
-  <meta name="cliniflow-stripe-price-pro" content="price_1TTp0YD5VNkZC9K8jvadXaE9" />
+  <meta name="cliniflow-stripe-price-pro" content="" />
   <meta name="DEBUG" content="WORKING" />
   <script src="/admin-i18n.js?v=21"></script>
   <script src="/api-base.js?v=1"></script>
@@ -398,7 +398,7 @@
           <li><span class="check">✓</span> <span data-i18n="pricing.features.analytics">Analizler</span></li>
           <li><span class="check">✓</span> <span data-i18n="pricing.features.support">E-posta desteği</span></li>
         </ul>
-        <button type="button" class="plan-cta primary" data-i18n="pricing.basic.cta" id="btn-upgrade-basic" onclick="upgradePlan(getStripePrice('basic'))">Upgrade Et</button>
+        <button type="button" class="plan-cta primary" data-i18n="pricing.basic.cta" id="btn-upgrade-basic" onclick="upgradePlan('', 'basic')">Upgrade Et</button>
       </div>
 
       <div class="plan">
@@ -419,7 +419,7 @@
           <li><span class="check">✓</span> <span data-i18n="pricing.features.onboarding">Özel onboarding</span></li>
         </ul>
         <div class="plan-cta-row">
-          <button type="button" class="plan-cta primary" data-i18n="pricing.pro.cta" id="btn-upgrade-pro" onclick="upgradePlan(getStripePrice('pro'))">Upgrade Et</button>
+          <button type="button" class="plan-cta primary" data-i18n="pricing.pro.cta" id="btn-upgrade-pro" onclick="upgradePlan('', 'premium')">Upgrade Et</button>
           <button type="button" class="plan-cta secondary" data-i18n="pricing.pro.contactCta" onclick="window.location.href='mailto:hello@clinifly.com?subject=Clinifly%20Premium%20Plan'">Contact</button>
         </div>
       </div>
@@ -586,12 +586,9 @@
       return "";
     }
 
-    async function upgradePlan(priceId) {
+    async function upgradePlan(priceId, tier) {
       var pid = String(priceId || "").trim();
-      if (!pid) {
-        alert("Subscription price is not configured. Set <meta name=\"cliniflow-stripe-price-basic\"> and cliniflow-stripe-price-pro content to your Stripe Price IDs (price_…).");
-        return;
-      }
+      var planTier = String(tier || "").trim().toLowerCase();
       try {
         var token = "";
         try {
@@ -621,7 +618,8 @@
             Authorization: "Bearer " + token,
           },
           body: JSON.stringify({
-            priceId: pid,
+            ...(pid ? { priceId: pid } : {}),
+            ...(planTier ? { tier: planTier } : {}),
             ...(clinicId ? { clinicId: clinicId } : {}),
           }),
         });
@@ -643,27 +641,7 @@
       }
     }
 
-    (function configureUpgradeButtons() {
-      function refresh() {
-        var b = getStripePrice("basic");
-        var p = getStripePrice("pro");
-        var bb = document.getElementById("btn-upgrade-basic");
-        var pb = document.getElementById("btn-upgrade-pro");
-        if (bb) {
-          bb.disabled = !b;
-          bb.title = b ? "" : "Set meta cliniflow-stripe-price-basic with your Stripe price_… id";
-        }
-        if (pb) {
-          pb.disabled = !p;
-          pb.title = p ? "" : "Set meta cliniflow-stripe-price-pro with your Stripe price_… id";
-        }
-      }
-      if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", refresh);
-      } else {
-        refresh();
-      }
-    })();
+    // Buttons stay enabled; backend resolves correct live price IDs by tier.
   </script>
 </body>
 </html>
