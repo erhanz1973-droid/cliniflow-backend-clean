@@ -258,23 +258,28 @@
       pricing: {
         title: "Clinifly Fiyatlandırma",
         subtitle: "Aktif hasta sayınıza göre esnek planlar",
-        info: "Planlar <span class=\"highlight\">aktif hasta sayısına</span> göre belirlenir. Mevcut hastalarınızla çalışmaya devam edebilirsiniz.",
+        info: "Sadece aktif hasta sayınıza göre ödeme yapın.",
         free: {
           name: "Free",
+          patients: "5 Hasta",
           description: "Clinifly'i gerçek hastalarla denemeniz için.",
           cta: "Başla"
         },
         basic: {
           name: "Pro",
           badge: "Popüler",
+          patients: "15 Hasta",
           description: "Büyüyen klinikler için güçlü paket.",
           cta: "Upgrade Et"
         },
         pro: {
           name: "Premium",
+          patients: "Sınırsız hasta",
           description: "Kurumsal klinikler için premium destek.",
-          cta: "Upgrade Et"
+          cta: "Upgrade Et",
+          contactCta: "İletişime Geç"
         },
+        periodMonthly: "/ay",
         features: {
           allCore: "Tüm core özellikler",
           patientCommunication: "Hasta iletişimi",
@@ -1063,23 +1068,28 @@
       pricing: {
         title: "Clinifly Pricing",
         subtitle: "Flexible plans based on your active patient count",
-        info: "Plans are based on <span class=\"highlight\">active patient count</span>. You can continue working with your existing patients.",
+        info: "Pay only based on your active patient count.",
         free: {
           name: "Free",
+          patients: "5 patients",
           description: "Try Clinifly with real patients.",
           cta: "Get Started"
         },
         basic: {
           name: "Pro",
           badge: "Popular",
+          patients: "15 patients",
           description: "Powerful package for growing clinics.",
           cta: "Upgrade"
         },
         pro: {
           name: "Premium",
+          patients: "Unlimited patients",
           description: "Premium support for enterprise clinics.",
-          cta: "Upgrade"
+          cta: "Upgrade",
+          contactCta: "Contact Us"
         },
+        periodMonthly: "/month",
         features: {
           allCore: "All core features",
           patientCommunication: "Patient communication",
@@ -1797,6 +1807,88 @@
         doctorNotFound: "Врач не найден",
         chairWithNumber: "Кресло {n}"
       },
+      pricing: {
+        title: "Тарифы Clinifly",
+        subtitle: "Гибкие планы по числу активных пациентов",
+        info: "Платите только за количество активных пациентов.",
+        periodMonthly: "/месяц",
+        free: {
+          name: "Free",
+          patients: "5 пациентов",
+          description: "Попробуйте Clinifly с реальными пациентами.",
+          cta: "Начать"
+        },
+        basic: {
+          name: "Pro",
+          badge: "Популярно",
+          patients: "15 пациентов",
+          description: "Сильный пакет для растущих клиник.",
+          cta: "Обновить"
+        },
+        pro: {
+          name: "Premium",
+          patients: "Безлимит пациентов",
+          description: "Премиум-поддержка для крупных клиник.",
+          cta: "Обновить",
+          contactCta: "Связаться"
+        },
+        features: {
+          allCore: "Все базовые функции",
+          patientCommunication: "Коммуникация с пациентами",
+          fileSharing: "Обмен файлами",
+          referral: "Реферальная система",
+          branding: "Брендинг Clinifly",
+          customBranding: "Кастомный брендинг",
+          analytics: "Аналитика",
+          support: "Поддержка по email",
+          unlimitedPatients: "Безлимит пациентов",
+          advancedReferral: "Расширенные рефералы (уровни, кампании)",
+          prioritySupport: "Приоритетная поддержка",
+          onboarding: "Онбординг-поддержка"
+        },
+        comparison: {
+          feature: "Функция",
+          free: "Free",
+          basic: "Pro",
+          pro: "Premium",
+          patients: "Активные пациенты",
+          unlimited: "Безлимит",
+          coreFeatures: "Базовые функции",
+          branding: "Брендинг Clinifly",
+          customBranding: "Кастомный брендинг",
+          referral: "Реферальная система",
+          advancedReferral: "Расширенные рефералы",
+          analytics: "Аналитика",
+          support: "Поддержка",
+          community: "Сообщество",
+          email: "Email",
+          priority: "Приоритетная"
+        },
+        faq: {
+          title: "Частые вопросы",
+          q1: {
+            question: "Как считается число активных пациентов?",
+            answer: "Учитываются только APPROVED (активные) пациенты. Pending, rejected и cancelled не входят в лимит."
+          },
+          q2: {
+            question: "Что будет при достижении лимита?",
+            answer: "С текущими пациентами можно продолжать работу. Ограничивается только одобрение новых пациентов."
+          },
+          q3: {
+            question: "Можно ли сменить план?",
+            answer: "Да, вы можете повысить или понизить план в любое время."
+          },
+          q4: {
+            question: "Какие способы оплаты принимаются?",
+            answer: "Мы принимаем банковские карты, банковские переводы и локальные способы оплаты."
+          }
+        },
+        contact: {
+          title: "Нужны особые условия?",
+          description: "Для крупных клиник доступны индивидуальные планы.",
+          button: "Связаться"
+        }
+      },
       login: { title: "Вход в Clinifly Admin", clinicCode: "Код клиники", password: "Пароль", login: "Войти", loading: "Загрузка...", error: "Ошибка входа", invalidCredentials: "Неверный код клиники или пароль.", sessionExpired: "⏰ Срок сессии истёк или токен недействителен. Пожалуйста, войдите снова." },
       auth: { email: "Эл. почта", password: "Пароль", confirm_password: "Подтвердите пароль", name: "Имя и фамилия" },
       patients: {
@@ -2284,6 +2376,88 @@
         fetchFailed: "ჩაწერის ჩატვირთვა ვერ მოხერხდა: {message}",
         doctorNotFound: "ექიმი ვერ მოიძებნა",
         chairWithNumber: "სკამი {n}"
+      },
+      pricing: {
+        title: "Clinifly ტარიფები",
+        subtitle: "მოქნილი გეგმები აქტიური პაციენტების რაოდენობაზე",
+        info: "გადაიხადეთ მხოლოდ აქტიური პაციენტების რაოდენობის მიხედვით.",
+        periodMonthly: "/თვე",
+        free: {
+          name: "Free",
+          patients: "5 პაციენტი",
+          description: "სცადეთ Clinifly რეალურ პაციენტებთან.",
+          cta: "დაწყება"
+        },
+        basic: {
+          name: "Pro",
+          badge: "პოპულარული",
+          patients: "15 პაციენტი",
+          description: "ძლიერი პაკეტი მზარდი კლინიკებისთვის.",
+          cta: "გეგმის გაუმჯობესება"
+        },
+        pro: {
+          name: "Premium",
+          patients: "ულიმიტო პაციენტი",
+          description: "პრემიუმ მხარდაჭერა მსხვილი კლინიკებისთვის.",
+          cta: "გეგმის გაუმჯობესება",
+          contactCta: "დაგვიკავშირდით"
+        },
+        features: {
+          allCore: "ყველა ძირითადი ფუნქცია",
+          patientCommunication: "პაციენტთან კომუნიკაცია",
+          fileSharing: "ფაილების გაზიარება",
+          referral: "რეფერალის სისტემა",
+          branding: "Clinifly ბრენდინგი",
+          customBranding: "მორგებული ბრენდინგი",
+          analytics: "ანალიტიკა",
+          support: "ელფოსტის მხარდაჭერა",
+          unlimitedPatients: "ულიმიტო პაციენტები",
+          advancedReferral: "გაფართოებული რეფერალი (დონეები, კამპანიები)",
+          prioritySupport: "პრიორიტეტული მხარდაჭერა",
+          onboarding: "ონბორდინგ მხარდაჭერა"
+        },
+        comparison: {
+          feature: "ფუნქცია",
+          free: "Free",
+          basic: "Pro",
+          pro: "Premium",
+          patients: "აქტიური პაციენტები",
+          unlimited: "ულიმიტო",
+          coreFeatures: "ძირითადი ფუნქციები",
+          branding: "Clinifly ბრენდინგი",
+          customBranding: "მორგებული ბრენდინგი",
+          referral: "რეფერალის სისტემა",
+          advancedReferral: "გაფართოებული რეფერალი",
+          analytics: "ანალიტიკა",
+          support: "მხარდაჭერა",
+          community: "საზოგადოება",
+          email: "ელფოსტა",
+          priority: "პრიორიტეტული"
+        },
+        faq: {
+          title: "ხშირად დასმული კითხვები",
+          q1: {
+            question: "როგორ ითვლება აქტიური პაციენტების რაოდენობა?",
+            answer: "ითვლება მხოლოდ APPROVED (აქტიური) პაციენტები. Pending, rejected ან cancelled არ შედის ლიმიტში."
+          },
+          q2: {
+            question: "რა ხდება ლიმიტის ამოწურვისას?",
+            answer: "არსებულ პაციენტებთან მუშაობას გააგრძელებთ. იზღუდება მხოლოდ ახალი პაციენტების დამტკიცება."
+          },
+          q3: {
+            question: "შემიძლია გეგმის შეცვლა?",
+            answer: "დიახ, შეგიძლიათ ნებისმიერ დროს განაახლოთ ან შეცვალოთ გეგმა."
+          },
+          q4: {
+            question: "გადახდის რა მეთოდებია ხელმისაწვდომი?",
+            answer: "ვიღებთ საბანკო ბარათებს, საბანკო გადარიცხვებს და ლოკალურ გადახდის მეთოდებს."
+          }
+        },
+        contact: {
+          title: "გაქვთ განსაკუთრებული საჭიროებები?",
+          description: "მსხვილი კლინიკებისთვის ხელმისაწვდომია ინდივიდუალური გეგმები.",
+          button: "დაგვიკავშირდით"
+        }
       },
       login: { title: "Clinifly Admin-ში შესვლა", clinicCode: "კლინიკის კოდი", password: "პაროლი", login: "შესვლა", loading: "იტვირთება...", error: "შესვლის შეცდომა", invalidCredentials: "კლინიკის კოდი ან პაროლი არასწორია.", sessionExpired: "⏰ სეანსი ამოიწურა ან ტოკენი არასწორია. გთხოვთ, ხელახლა შეხვიდეთ." },
       auth: { email: "ელ-ფოსტა", password: "პაროლი", confirm_password: "დაადასტურეთ პაროლი", name: "სახელი და გვარი" },

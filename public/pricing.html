@@ -355,20 +355,17 @@
     </div>
 
     <div class="pricing-info">
-      <p data-i18n="pricing.info">
-        Planlar <span class="highlight">aktif hasta sayısına</span> göre belirlenir. 
-        Mevcut hastalarınızla çalışmaya devam edebilirsiniz.
-      </p>
+      <p data-i18n="pricing.info">Sadece aktif hasta sayınıza göre ödeme yapın.</p>
     </div>
 
     <div class="plans">
       <div class="plan">
         <div class="plan-icon">🆓</div>
         <div class="plan-name" data-i18n="pricing.free.name">Free</div>
-        <div class="plan-patients">5 Hasta</div>
+        <div class="plan-patients" data-i18n="pricing.free.patients">5 patients</div>
         <div class="plan-price">
           <span class="amount">$0</span>
-          <span class="period">/month</span>
+          <span class="period" data-i18n="pricing.periodMonthly">/month</span>
         </div>
         <div class="plan-description" data-i18n="pricing.free.description">
           "Clinifly'i gerçek hastalarla denemeniz için."
@@ -387,10 +384,10 @@
         <div class="plan-badge" data-i18n="pricing.basic.badge">Popüler</div>
         <div class="plan-icon">🚀</div>
         <div class="plan-name" data-i18n="pricing.basic.name">Pro</div>
-        <div class="plan-patients">15 Hasta</div>
+        <div class="plan-patients" data-i18n="pricing.basic.patients">15 patients</div>
         <div class="plan-price">
           <span class="amount">$29</span>
-          <span class="period">/month</span>
+          <span class="period" data-i18n="pricing.periodMonthly">/month</span>
         </div>
         <div class="plan-description" data-i18n="pricing.basic.description">
           "Büyüyen klinikler için güçlü paket."
@@ -407,10 +404,10 @@
       <div class="plan">
         <div class="plan-icon">👑</div>
         <div class="plan-name" data-i18n="pricing.pro.name">Premium</div>
-        <div class="plan-patients">Sınırsız</div>
+        <div class="plan-patients" data-i18n="pricing.pro.patients">Unlimited patients</div>
         <div class="plan-price">
           <span class="amount">$89</span>
-          <span class="period">/month</span>
+          <span class="period" data-i18n="pricing.periodMonthly">/month</span>
         </div>
         <div class="plan-description" data-i18n="pricing.pro.description">
           "Kurumsal klinikler için premium destek."
@@ -423,7 +420,7 @@
         </ul>
         <div class="plan-cta-row">
           <button type="button" class="plan-cta primary" data-i18n="pricing.pro.cta" id="btn-upgrade-pro" onclick="upgradePlan(getStripePrice('pro'))">Upgrade Et</button>
-          <button type="button" class="plan-cta secondary" onclick="window.location.href='mailto:hello@clinifly.com?subject=Clinifly%20Premium%20Plan'">İletişime Geç</button>
+          <button type="button" class="plan-cta secondary" data-i18n="pricing.pro.contactCta" onclick="window.location.href='mailto:hello@clinifly.com?subject=Clinifly%20Premium%20Plan'">Contact</button>
         </div>
       </div>
     </div>
