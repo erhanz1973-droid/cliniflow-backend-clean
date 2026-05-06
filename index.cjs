@@ -3848,6 +3848,119 @@ async function upgradeClinicPlan({ plan, subscriptionId, customerId, session }) 
   console.log("CLINIC UPGRADED:", clinicId, rawKey, "→ SaaS:", normPlan);
 }
 
+function inferPlanKeyFromPriceId(priceId) {
+  const p = String(priceId || "").trim();
+  if (!p) return "";
+  const basic = String(process.env.STRIPE_PRICE_BASIC || "").trim();
+  const pro = String(process.env.STRIPE_PRICE_PRO || "").trim();
+  const premium = String(process.env.STRIPE_PRICE_PREMIUM || "").trim();
+  if (premium && p === premium) return "premium";
+  if (pro && p === pro) return "pro";
+  if (basic && p === basic) return "pro";
+  // Legacy ids kept for backward compatibility
+  if (p === "price_1TTnpFD5VNkZC9K8Sz10fLV7") return "pro";
+  if (p === "price_1TTnqjD5VNkZC9K8Z7LrpZyV") return "premium";
+  return "";
+}
+
+async function resolveClinicIdForStripeSubscription(sub) {
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return "";
+  const subId = String(sub?.id || "").trim();
+  if (subId) {
+    const { data } = await supabase
+      .from("clinics")
+      .select("id")
+      .eq("stripe_subscription_id", subId)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+  const custId =
+    typeof sub?.customer === "string" ? String(sub.customer).trim() : String(sub?.customer?.id || "").trim();
+  if (custId) {
+    const { data } = await supabase
+      .from("clinics")
+      .select("id")
+      .eq("stripe_customer_id", custId)
+      .maybeSingle();
+    if (data?.id) return String(data.id);
+  }
+  return "";
+}
+
+async function upsertClinicStripeStateById({
+  clinicId,
+  plan,
+  customerId,
+  subscriptionId,
+  priceId,
+  status,
+  currentPeriodEnd,
+}) {
+  if (!clinicId || !isSupabaseEnabled() || typeof supabase?.from !== "function") return;
+
+  const { data: crow } = await supabase.from("clinics").select("settings").eq("id", clinicId).maybeSingle();
+  let settings = crow?.settings || {};
+  if (typeof settings === "string") {
+    try {
+      settings = JSON.parse(settings);
+    } catch {
+      settings = {};
+    }
+  }
+  const base = settings && typeof settings === "object" ? settings : {};
+  const prev = base.stripeCheckoutPlan && typeof base.stripeCheckoutPlan === "object" ? base.stripeCheckoutPlan : {};
+
+  const rawPlan = String(plan || "pro").toLowerCase();
+  const cfg = STRIPE_CHECKOUT_PLAN_CONFIG[rawPlan] || STRIPE_CHECKOUT_PLAN_CONFIG.pro;
+  const normPlan = saasPlans.normalizePlanKey(rawPlan);
+
+  const patch = {
+    plan: normPlan,
+    settings: {
+      ...base,
+      stripeCheckoutPlan: {
+        ...prev,
+        rawPlan,
+        patient_limit: cfg.patient_limit,
+        features: cfg.features,
+        stripe_customer_id: customerId || null,
+        stripe_subscription_id: subscriptionId || null,
+        stripe_price_id: priceId || null,
+        stripe_status: status || null,
+        stripe_current_period_end: currentPeriodEnd || null,
+        updated_at: new Date().toISOString(),
+      },
+    },
+    updated_at: new Date().toISOString(),
+    ...(customerId ? { stripe_customer_id: customerId } : {}),
+    ...(subscriptionId ? { stripe_subscription_id: subscriptionId } : {}),
+    ...(priceId ? { stripe_price_id: priceId } : {}),
+    ...(status ? { stripe_status: status } : {}),
+    ...(currentPeriodEnd ? { stripe_current_period_end: currentPeriodEnd } : {}),
+  };
+
+  const optionalCols = [
+    "stripe_price_id",
+    "stripe_status",
+    "stripe_current_period_end",
+    "stripe_customer_id",
+    "stripe_subscription_id",
+  ];
+  let writePatch = { ...patch };
+  // Gracefully handle schemas where some stripe columns are not present yet.
+  for (let i = 0; i < optionalCols.length; i += 1) {
+    const { error } = await supabase.from("clinics").update(writePatch).eq("id", clinicId);
+    if (!error) return;
+    const msg = String(error.message || "");
+    const miss = optionalCols.find((c) => Object.prototype.hasOwnProperty.call(writePatch, c) && msg.includes(c));
+    if (!miss) {
+      console.error("[upsertClinicStripeStateById] update failed:", msg);
+      return;
+    }
+    delete writePatch[miss];
+  }
+}
+
 // Stripe webhook must use raw body (before express.json)
 app.post(
   "/api/stripe/webhook",
@@ -3888,110 +4001,95 @@ app.post(
       }
 
       const priceId = sessionWithItems.line_items?.data?.[0]?.price?.id;
-
-      const PLAN_BY_PRICE = {
-        price_1TTnpFD5VNkZC9K8Sz10fLV7: "pro",
-        price_1TTnqjD5VNkZC9K8Z7LrpZyV: "premium",
-      };
-
+      const customerId =
+        typeof session.customer === "string"
+          ? session.customer
+          : session.customer?.id || null;
+      const subscriptionId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription?.id || null;
       const plan =
-        session.metadata?.plan ||
-        session.metadata?.saasPlan ||
-        PLAN_BY_PRICE[priceId];
+        String(session.metadata?.plan || session.metadata?.saasPlan || "").toLowerCase() ||
+        inferPlanKeyFromPriceId(priceId) ||
+        "pro";
 
-      if (!plan) {
-        console.log("Plan not resolved", {
-          metadata: session.metadata,
-          priceId,
-        });
-      } else {
-        const email = session.customer_details?.email;
-        const customerId = session.customer;
-        const subscriptionId = session.subscription;
-
-        if (!email) {
-          console.log("No email in session");
-        } else if (!PLAN_CONFIG[plan]) {
-          console.log("Invalid plan:", plan);
-        } else if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
-          /* no-op */
+      try {
+        const clinicId = await resolveClinicIdForStripeWebhook(sessionWithItems, customerId);
+        if (!clinicId) {
+          console.warn("[checkout.session.completed] clinic unresolved", {
+            customerId: customerId || null,
+            subscriptionId: subscriptionId || null,
+          });
         } else {
-          try {
-            const emailNorm = String(email).trim().toLowerCase();
-            const { data: clinic } = await supabase
-              .from("clinics")
-              .select("id")
-              .eq("email", emailNorm)
-              .maybeSingle();
-
-            if (!clinic) {
-              console.log("Clinic not found for email:", email);
-            } else {
-              const stripeCust =
-                typeof customerId === "string" ? customerId : customerId?.id ?? customerId ?? null;
-              const stripeSub =
-                typeof subscriptionId === "string"
-                  ? subscriptionId
-                  : subscriptionId?.id ?? subscriptionId ?? null;
-
-              const cfg = PLAN_CONFIG[plan];
-
-              const { error: upErr } = await supabase
-                .from("clinics")
-                .update({
-                  plan: plan,
-                  stripe_customer_id: stripeCust,
-                  stripe_subscription_id: stripeSub,
-                  patient_limit: cfg.patient_limit,
-                  features: cfg.features,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", clinic.id);
-              if (upErr) {
-                console.error("[checkout.session.completed] update:", upErr.message);
-              } else {
-                console.log("Clinic upgraded:", clinic.id, "Plan:", plan);
-              }
-            }
-          } catch (e) {
-            console.error("[checkout.session.completed]", e);
-          }
+          await upsertClinicStripeStateById({
+            clinicId,
+            plan,
+            customerId: customerId || null,
+            subscriptionId: subscriptionId || null,
+            priceId: priceId || null,
+            status: "active",
+            currentPeriodEnd: null,
+          });
+          console.log("[checkout.session.completed] clinic updated:", clinicId, plan);
         }
+      } catch (e) {
+        console.error("[checkout.session.completed]", e);
+      }
+    }
+
+    if (event.type === "customer.subscription.created" || event.type === "customer.subscription.updated") {
+      const sub = event.data.object;
+      try {
+        const clinicId = await resolveClinicIdForStripeSubscription(sub);
+        if (!clinicId) {
+          console.warn(`[${event.type}] clinic unresolved`, {
+            subscriptionId: sub?.id || null,
+            customerId: sub?.customer || null,
+          });
+        } else {
+          const priceId = sub?.items?.data?.[0]?.price?.id || null;
+          const plan = inferPlanKeyFromPriceId(priceId) || "pro";
+          const periodEndUnix = Number(sub?.current_period_end || 0);
+          const currentPeriodEnd = periodEndUnix > 0 ? new Date(periodEndUnix * 1000).toISOString() : null;
+          const customerId =
+            typeof sub?.customer === "string" ? String(sub.customer) : String(sub?.customer?.id || "");
+          await upsertClinicStripeStateById({
+            clinicId,
+            plan,
+            customerId: customerId || null,
+            subscriptionId: sub?.id || null,
+            priceId,
+            status: sub?.status || "active",
+            currentPeriodEnd,
+          });
+        }
+      } catch (e) {
+        console.error(`[${event.type}]`, e);
       }
     }
 
     if (event.type === "customer.subscription.deleted") {
       const sub = event.data.object;
 
-      if (isSupabaseEnabled() && typeof supabase?.from === "function") {
-        try {
-          const { data: clinic } = await supabase
-            .from("clinics")
-            .select("id")
-            .eq("stripe_subscription_id", sub.id)
-            .maybeSingle();
-
-          if (clinic) {
-            const cfg = PLAN_CONFIG.pro;
-
-            const { error: downErr } = await supabase
-              .from("clinics")
-              .update({
-                plan: "pro",
-                patient_limit: cfg.patient_limit,
-                features: cfg.features,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", clinic.id);
-            if (downErr) {
-              console.error("[customer.subscription.deleted] update:", downErr.message);
-            } else {
-              console.log("Clinic downgraded:", clinic.id);
-            }
-          }
-        } catch (e) {
-          console.error("[customer.subscription.deleted]", e);
+      try {
+        const clinicId = await resolveClinicIdForStripeSubscription(sub);
+        if (clinicId) {
+          const customerId =
+            typeof sub?.customer === "string" ? String(sub.customer) : String(sub?.customer?.id || "");
+          await upsertClinicStripeStateById({
+            clinicId,
+            plan: "pro",
+            customerId: customerId || null,
+            subscriptionId: sub?.id || null,
+            priceId: null,
+            status: sub?.status || "canceled",
+            currentPeriodEnd: null,
+          });
+          console.log("[customer.subscription.deleted] clinic downgraded:", clinicId);
         }
+      } catch (e) {
+        console.error("[customer.subscription.deleted]", e);
       }
     }
 
