@@ -34029,7 +34029,13 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       // We build a UUID→data map so the per-patient loop can access it cheaply.
       const patientTreatmentsMap = new Map(); // patientUUID → treatments_data
       try {
-        const allUuids = [...new Set(list.map((p) => String(p?.id || "").trim()).filter(Boolean))];
+        const allUuids = [...new Set(
+          list.flatMap((p) =>
+            [...expandPatientIdLookupKeys(String(p?.id || "")), ...expandPatientIdLookupKeys(String(p?.patient_id || ""))].filter(
+              (x) => x && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x)
+            )
+          )
+        )];
         for (let i = 0; i < allUuids.length; i += 50) {
           const chunk = allUuids.slice(i, i + 50);
           const { data: ptRows, error: ptErr } = await supabase
@@ -34045,7 +34051,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           }
           (ptRows || []).forEach((row) => {
             if (!rowBelongsToClinic(row, req.clinicId)) return;
-            if (row?.treatments_data) patientTreatmentsMap.set(String(row.patient_id), row.treatments_data);
+            if (!row?.treatments_data) return;
+            const rowPid = String(row.patient_id || "").trim();
+            const aliasKeys = expandPatientIdLookupKeys(rowPid);
+            for (const k of aliasKeys.length ? aliasKeys : [rowPid]) {
+              if (k) patientTreatmentsMap.set(k, row.treatments_data);
+            }
           });
         }
         console.log("[EVENTS] patient_treatments loaded for", patientTreatmentsMap.size, "patients");
@@ -34058,8 +34069,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
       // Pre-fetch all patient encounters in ONE parallel batch (avoids sequential N queries)
       const allPatientUuids = [...new Set(
-        list.flatMap(p => [String(p?.id || ''), String(p?.patient_id || '')])
-          .filter(id => id && UUID_RE_EVENTS.test(id))
+        list.flatMap((p) =>
+          [...expandPatientIdLookupKeys(String(p?.id || "")), ...expandPatientIdLookupKeys(String(p?.patient_id || ""))].filter(
+            (id) => id && UUID_RE_EVENTS.test(id)
+          )
+        )
       )];
       const encountersByPatientId = new Map(); // patientUUID → encounter[]
       if (allPatientUuids.length > 0) {
@@ -34219,8 +34233,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       for (const prow of list) {
         const id = String(prow?.id || "").trim();
         const pLegacy = String(prow?.patient_id || "").trim();
-        if (id) patientRowByLookupId.set(id, prow);
-        if (pLegacy) patientRowByLookupId.set(pLegacy, prow);
+        const keys = [...new Set([...expandPatientIdLookupKeys(id), ...expandPatientIdLookupKeys(pLegacy)].filter(Boolean))];
+        for (const k of keys.length ? keys : [id, pLegacy].filter(Boolean)) {
+          patientRowByLookupId.set(k, prow);
+        }
       }
 
       const isMirroredEncounterTreatmentProcedure = (proc) => {
@@ -34314,11 +34330,14 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         const patientName = String(p?.name || p?.full_name || patientId).trim();
         const patientDoctorId = String(p?.primary_doctor_id || p?.doctor_id || "").trim();
         const patientDoctorName = String(doctorNameById.get(patientDoctorId) || "").trim();
-        // Only include UUID-format IDs for queries that expect UUID columns (e.g. patient_encounters)
+        // UUIDs for FK columns (patient_encounters, treatment_plans, …); expand p_<uuid> slugs.
         const patientLookupIds = [
-          String(p?.id || "").trim(),
-          String(p?.patient_id || "").trim(),
-        ].filter(id => id && UUID_RE_EVENTS.test(id));
+          ...new Set(
+            [...expandPatientIdLookupKeys(String(p?.id || "")), ...expandPatientIdLookupKeys(String(p?.patient_id || ""))].filter(
+              (id) => id && UUID_RE_EVENTS.test(id)
+            )
+          ),
+        ];
 
         // TRAVEL (null-safe)
         const travel = p?.travel || {};
@@ -34469,7 +34488,17 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         });
 
         // PATIENT_TREATMENTS TABLE (doctor app saves treatments_data.teeth[].procedures[])
-        const ptData = patientTreatmentsMap.get(String(p?.id || "").trim());
+        let ptData = null;
+        for (const pk of [
+          ...expandPatientIdLookupKeys(String(p?.id || "")),
+          ...expandPatientIdLookupKeys(String(p?.patient_id || "")),
+        ]) {
+          const v = patientTreatmentsMap.get(pk);
+          if (v) {
+            ptData = v;
+            break;
+          }
+        }
         const ptTeeth = Array.isArray(ptData?.teeth) ? ptData.teeth : [];
         ptTeeth.forEach((tooth) => {
           const toothId = tooth?.id ?? tooth?.toothId;
@@ -34593,7 +34622,13 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         try {
           // Collect plan IDs for this patient from the pre-built map
           const planIdsForPatient = new Set();
-          for (const uid of [...patientLookupIds, String(p?.id || '').trim()]) {
+          for (const uid of [
+            ...new Set([
+              ...patientLookupIds,
+              ...expandPatientIdLookupKeys(String(p?.id || "")),
+              ...expandPatientIdLookupKeys(String(p?.patient_id || "")),
+            ]),
+          ]) {
             if (!uid) continue;
             const set = planIdsByPatientId.get(uid);
             if (set) set.forEach(id => planIdsForPatient.add(id));
