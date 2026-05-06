@@ -51036,6 +51036,62 @@ app.get("/api/discovery/countries", async (_req, res) => {
   }
 });
 
+// Public discovery: clinic listing by country (+ optional city text filter).
+app.get("/api/discovery/clinics", async (req, res) => {
+  try {
+    const country = String(req.query?.country || "").trim().toUpperCase();
+    const city = String(req.query?.city || "").trim();
+
+    console.log("[discovery/clinics] query", {
+      country,
+      city,
+    });
+
+    if (!/^[A-Z]{2}$/.test(country)) {
+      return res.status(400).json({
+        ok: false,
+        error: "country_required",
+        message: "country must be ISO-2 code (e.g. TR)",
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("clinics")
+      .select("id, name, city, country, clinic_code, status, latitude, longitude")
+      .eq("is_listed", true)
+      .eq("country", country)
+      .order("name", { ascending: true })
+      .limit(200);
+
+    if (error) throw error;
+
+    const rows = (data || []).filter((c) => {
+      const s = String(c?.status ?? "active").toLowerCase();
+      return !["suspended", "reject", "rejected", "inactive", "closed"].includes(s);
+    });
+
+    const cityQuery = city.toLowerCase();
+    const clinics =
+      cityQuery.length >= 2
+        ? rows.filter((c) => String(c?.city || "").toLowerCase().includes(cityQuery))
+        : rows;
+
+    console.log("[discovery/clinics] result", {
+      count: clinics?.length,
+      first: clinics?.[0],
+    });
+
+    return res.json({ ok: true, clinics });
+  } catch (e) {
+    console.error("[GET /api/discovery/clinics]", e?.message || e);
+    return res.status(500).json({
+      ok: false,
+      error: "discovery_clinics_failed",
+      message: e?.message || "internal_error",
+    });
+  }
+});
+
 app.use(express.static(publicDir));
 
 // ── Unmatched routes (LAST; must stay after static) ─────────────────
