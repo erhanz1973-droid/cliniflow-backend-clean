@@ -3964,7 +3964,12 @@ async function upsertClinicStripeStateById({
 // Stripe webhook must use raw body (before express.json)
 app.post(
   "/api/stripe/webhook",
-  express.raw({ type: "application/json" }),
+  express.raw({
+    type: (req) => {
+      const ct = String(req.headers["content-type"] || "").toLowerCase();
+      return ct.includes("application/json") || Boolean(req.headers["stripe-signature"]);
+    },
+  }),
   async (req, res) => {
     const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
     const sig = req.headers["stripe-signature"];
@@ -3978,6 +3983,12 @@ app.post(
     }
 
     let event;
+    console.log("[stripe webhook] constructEvent input", {
+      bodyIsBuffer: Buffer.isBuffer(req.body),
+      bodyType: typeof req.body,
+      contentType: req.headers["content-type"] || null,
+      hasSignature: Boolean(req.headers["stripe-signature"]),
+    });
     try {
       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     } catch (err) {
