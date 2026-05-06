@@ -34435,8 +34435,20 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const procs = Array.isArray(tooth?.procedures) ? tooth.procedures : [];
           procs.forEach((proc) => {
             if (isMirroredEncounterTreatmentProcedure(proc)) return;
-            // scheduledAt preferred, else createdAt (both are ms)
-            const timelineAt = toIso(proc?.scheduledAt) || toIso(proc?.createdAt);
+            // scheduledAt / createdAt (ms or ISO), else wall date+time (admin often stores DD.MM.YYYY)
+            const procTimeRaw =
+              proc?.time ??
+              proc?.scheduledTime ??
+              proc?.appointmentTime ??
+              proc?.appointment_time ??
+              "";
+            const procTime =
+              procTimeRaw === "" || procTimeRaw == null ? "" : String(procTimeRaw).trim();
+            const timelineAt =
+              toIso(proc?.scheduledAt) ||
+              toIso(proc?.createdAt) ||
+              parseTravelDate(proc?.date, procTime) ||
+              dateTimeToIso(proc?.date, procTime);
             if (!timelineAt) return;
             const dt = new Date(Date.parse(timelineAt));
             const procedureDoctorId = String(
@@ -34505,11 +34517,21 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const procs = Array.isArray(tooth?.procedures) ? tooth.procedures : [];
           procs.forEach((proc) => {
             if (isMirroredEncounterTreatmentProcedure(proc)) return;
+            const procTimeRaw =
+              proc?.time ??
+              proc?.scheduledTime ??
+              proc?.appointmentTime ??
+              proc?.appointment_time ??
+              "";
+            const procTime =
+              procTimeRaw === "" || procTimeRaw == null ? "" : String(procTimeRaw).trim();
             const timelineAt =
               toIso(proc?.scheduledAt) ||
               toIso(proc?.scheduled_at) ||
               toIso(proc?.createdAt) ||
-              toIso(proc?.created_at);
+              toIso(proc?.created_at) ||
+              parseTravelDate(proc?.date, procTime) ||
+              dateTimeToIso(proc?.date, procTime);
             if (!timelineAt) return;
             const dt = new Date(Date.parse(timelineAt));
             const procStatus = String(proc?.status || "PLANNED").toUpperCase();
@@ -34948,7 +34970,15 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const eventType = String(evt.type || "").toUpperCase();
       const isTreatmentEvent = treatmentEventTypes.includes(eventType);
       
-      if (isCancelled || isCompleted) return;
+      if (isCancelled) return;
+      // İptal değil; tamamlananları geçmiş günlerde listeleme (dashboard "yapılacaklar"). Bugün ve gelecek görünsün.
+      if (isCompleted) {
+        const doneDay =
+          calendarDayKeyInTz(eventTs) || String(evt.date || "").trim().slice(0, 10);
+        const dkOk = doneDay && /^\d{4}-\d{2}-\d{2}$/.test(doneDay);
+        const tkOk = todayKey && /^\d{4}-\d{2}-\d{2}$/.test(todayKey);
+        if (dkOk && tkOk && doneDay < todayKey) return;
+      }
 
       const eventKey = calendarDayKeyInTz(eventTs) || String(evt.date || "").trim().slice(0, 10);
       const keyUsable = eventKey && /^\d{4}-\d{2}-\d{2}$/.test(eventKey);
