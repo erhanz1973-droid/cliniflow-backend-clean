@@ -755,6 +755,32 @@
     return upperRaw;
   }
 
+  /** Tek prosedür kaydı: doktor/API bazen sadece procedureId doldurur; status güncellemesi için id eşlenmeli. */
+  function canonicalProcedureIdFromProc(proc) {
+    const a = String(proc?.id || "").trim();
+    const b = String(proc?.procedureId || "").trim();
+    const enc =
+      (a.includes("encounter-treatment") ? a : "") ||
+      (b.includes("encounter-treatment") ? b : "") ||
+      "";
+    const primary = enc || a || b;
+    return primary;
+  }
+
+  function procedureRecordMatchesId(proc, qRaw) {
+    const q = String(qRaw || "").trim();
+    if (!q) return false;
+    const c = canonicalProcedureIdFromProc(proc);
+    if (!c) return false;
+    if (c === q) return true;
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const m1 = /^encounter-treatment-([0-9a-f-]{36})$/i.exec(c);
+    const m2 = /^encounter-treatment-([0-9a-f-]{36})$/i.exec(q);
+    const u1 = m1 ? m1[1].toLowerCase() : uuidRe.test(c) ? c.toLowerCase() : "";
+    const u2 = m2 ? m2[1].toLowerCase() : uuidRe.test(q) ? q.toLowerCase() : "";
+    return u1 && u2 && u1 === u2;
+  }
+
   function normalizeLoadedProcedure(proc) {
     if (!proc || typeof proc !== "object") return proc;
     const next = proc;
@@ -766,6 +792,11 @@
       "";
     const normalizedType = normalizeProcedureTypeValue(candidate);
     if (normalizedType) next.type = normalizedType;
+    const cid = canonicalProcedureIdFromProc(next);
+    if (cid) {
+      next.id = cid;
+      next.procedureId = cid;
+    }
     return next;
   }
 
@@ -1008,6 +1039,35 @@
     selToothDiagnosisList: !!elSelToothDiagnosisList,
     procList: !!elProcList
   });
+
+  /** Normalizes `p_<uuid>` / unicode dashes → bare lowercase UUID for `/api/patient/:id/...`. */
+  function normalizePatientIdForApi(pid) {
+    const raw = String(pid || "").trim();
+    if (!raw) return "";
+    const s = raw.normalize("NFKC").replace(/[\u2010-\u2015\u2212]/g, "-");
+    const m = /^p_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(s);
+    if (m) return m[1].toLowerCase();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return s.toLowerCase();
+    return raw;
+  }
+
+  function idsMatchPatient(a, b) {
+    const na = normalizePatientIdForApi(a);
+    const nb = normalizePatientIdForApi(b);
+    if (na && nb && na === nb) return true;
+    return String(a || "").trim() === String(b || "").trim();
+  }
+
+  function syncPatientSelectToCanonical(canonical) {
+    const el = document.getElementById("patientSelect");
+    if (!el || !canonical) return;
+    const opt = Array.from(el.options).find((o) =>
+      idsMatchPatient(o.value, canonical) ||
+      (o.dataset.uuid && idsMatchPatient(o.dataset.uuid, canonical)) ||
+      (o.dataset.patientId && idsMatchPatient(o.dataset.patientId, canonical))
+    );
+    if (opt) el.value = opt.value;
+  }
 
   // Get patientId from URL
   function getPatientIdFromURL() {
@@ -1778,7 +1838,7 @@
         const row = document.createElement("div");
         row.className = "item";
         // Add procedure ID as data attribute for URL navigation
-        const procId = p.id || p.procedureId || '';
+        const procId = canonicalProcedureIdFromProc(p);
         if (procId) {
           row.setAttribute('data-procedure-id', procId);
         }
@@ -1786,7 +1846,7 @@
         const st = normalizeStatusUI(p.status||"PLANNED");
         const stClass = st === "COMPLETED" ? "status ok" : (st === "ACTIVE" ? "status planned" : "status planned");
         const toothDisplay = SELECTED_TOOTH ? t("treatment.procLineTooth", { tooth: SELECTED_TOOTH }) : "";
-        const isEditing = !!(EDITING_PROC && EDITING_PROC.toothId === SELECTED_TOOTH && EDITING_PROC.procedureId === p.id);
+        const isEditing = !!(EDITING_PROC && EDITING_PROC.toothId === SELECTED_TOOTH && procedureRecordMatchesId(p, EDITING_PROC.procedureId));
         
         // Format price if available
         let priceText = '';
@@ -1838,7 +1898,7 @@
         badge.title = t("treatment.statusCycleTitle");
         badge.onclick = (e) => {
           e.stopPropagation();
-          toggleProcedureStatus(p.id, SELECTED_TOOTH);
+          toggleProcedureStatus(procId, SELECTED_TOOTH);
         };
         right.appendChild(badge);
 
@@ -1868,7 +1928,7 @@
           e.stopPropagation();
           const newStatus = statusSelect.value;
           if (newStatus === st) return; // No change
-          await changeProcedureStatus(p.id, SELECTED_TOOTH, newStatus);
+          await changeProcedureStatus(procId, SELECTED_TOOTH, newStatus);
         };
         right.appendChild(statusSelect);
 
@@ -1979,7 +2039,7 @@
           saveBtn.onclick = async (e) => {
             e.stopPropagation();
             await saveProcedureInlineEdit(
-              p.id,
+              procId,
               SELECTED_TOOTH,
               typeInput.value,
               dateInput.value,
@@ -2031,7 +2091,7 @@
           editBtn.title = t("treatment.editInlineTitle");
           editBtn.onclick = (e) => {
             e.stopPropagation();
-            EDITING_PROC = { toothId: SELECTED_TOOTH, procedureId: p.id };
+            EDITING_PROC = { toothId: SELECTED_TOOTH, procedureId: procId };
             renderSelectedToothList();
           };
           right.appendChild(editBtn);
@@ -2049,8 +2109,10 @@
     if (!procedureId || !toothId) return setMsg("Procedure/Tooth ID bulunamadı.", "err");
 
     const tooth = findTooth(toothId);
-    const proc = tooth?.procedures?.find(p => p.id === procedureId);
+    const proc = tooth?.procedures?.find((p) => procedureRecordMatchesId(p, procedureId));
     if (!proc) return setMsg("Procedure bulunamadı.", "err");
+
+    const stableProcId = canonicalProcedureIdFromProc(proc) || String(procedureId).trim();
 
     const newType = String(newTypeRaw || "").trim().toUpperCase() || String(proc.type || "").toUpperCase() || "";
     const policyEl = document.getElementById("procDatePolicy");
@@ -2074,7 +2136,7 @@
     }
     const cat = TYPE_TO_CATEGORY[newType] || TYPE_TO_CATEGORY[String(proc.type||"").toUpperCase()];
     if (!cat) return setMsg("Geçersiz işlem türü.", "err");
-    if (normalizeStatusUI(proc.status) === "ACTIVE" && hasActiveConflictUI(tooth, cat, procedureId)) {
+    if (normalizeStatusUI(proc.status) === "ACTIVE" && hasActiveConflictUI(tooth, cat, stableProcId)) {
       return setMsg(`Bu dişte ${cat} kategorisinde zaten ACTIVE işlem var.`, "err");
     }
 
@@ -2100,8 +2162,8 @@
       const payload = {
         toothId: toothId,
         procedure: {
-          id: procedureId,
-          procedureId: procedureId,
+          id: stableProcId,
+          procedureId: stableProcId,
           type: proc.type,
           category: cat,
           status: normalizeStatusUI(proc.status || "PLANNED"),
@@ -2196,7 +2258,7 @@
       return;
     }
 
-    const proc = tooth.procedures.find(p => p.id === procedureId);
+    const proc = tooth.procedures.find((p) => procedureRecordMatchesId(p, procedureId));
     if (!proc) {
       setMsg("Procedure bulunamadı.", "err");
       return;
@@ -2209,9 +2271,11 @@
       return; // No change needed
     }
 
+    const stableProcId = canonicalProcedureIdFromProc(proc) || String(procedureId).trim();
+
     // Enforce: only one ACTIVE per category
     const cat = TYPE_TO_CATEGORY[String(proc.type||"").toUpperCase()];
-    if (normalizedNewStatus === "ACTIVE" && cat && hasActiveConflictUI(tooth, cat, procedureId)) {
+    if (normalizedNewStatus === "ACTIVE" && cat && hasActiveConflictUI(tooth, cat, stableProcId)) {
       setMsg(`Bu dişte ${cat} kategorisinde zaten ACTIVE işlem var.`, "err");
       return;
     }
@@ -2228,8 +2292,8 @@
       const payload = {
         toothId: toothId,
         procedure: {
-          procedureId: procedureId,
-          id: procedureId,
+          procedureId: stableProcId,
+          id: stableProcId,
           type: proc.type,
           category: TYPE_TO_CATEGORY[String(proc.type||"").toUpperCase()] || proc.category,
           status: normalizedNewStatus,
@@ -2292,11 +2356,13 @@
       return;
     }
 
-    const proc = tooth.procedures.find(p => p.id === procedureId);
+    const proc = tooth.procedures.find((p) => procedureRecordMatchesId(p, procedureId));
     if (!proc) {
       setMsg("Procedure bulunamadı.", "err");
       return;
     }
+
+    const stableProcId = canonicalProcedureIdFromProc(proc) || String(procedureId).trim();
 
     // Get current status and determine next status
     const currentStatus = normalizeStatusUI(proc.status || "PLANNED");
@@ -2305,7 +2371,7 @@
 
     // Enforce: only one ACTIVE per category
     const cat = TYPE_TO_CATEGORY[String(proc.type||"").toUpperCase()];
-    if (nextStatus === "ACTIVE" && cat && hasActiveConflictUI(tooth, cat, procedureId)) {
+    if (nextStatus === "ACTIVE" && cat && hasActiveConflictUI(tooth, cat, stableProcId)) {
       setMsg(`Bu dişte ${cat} kategorisinde zaten ACTIVE işlem var.`, "err");
       return;
     }
@@ -2322,8 +2388,8 @@
       const payload = {
         toothId: toothId,
         procedure: {
-          procedureId: procedureId,
-          id: procedureId,
+          procedureId: stableProcId,
+          id: stableProcId,
           type: proc.type,
           category: TYPE_TO_CATEGORY[String(proc.type||"").toUpperCase()] || proc.category,
           status: nextStatus,
@@ -2394,7 +2460,11 @@
       if (res.ok) {
         const json = await res.json();
         if (json.ok && Array.isArray(json.patients)) {
-          const patient = json.patients.find(p => p.id === patientId || p.patient_id === patientId || p.patientId === patientId);
+          const patient = json.patients.find(p =>
+            idsMatchPatient(p.id, patientId) ||
+            idsMatchPatient(p.patient_id, patientId) ||
+            idsMatchPatient(p.patientId, patientId)
+          );
           if (patient) {
             const rawName = String(patient.name || patient.full_name || "").trim();
             const badValues = ["unknown", "unknown patient", "null", "undefined", "n/a", "na", "-", "--", ""];
@@ -2414,7 +2484,8 @@
   }
 
   async function loadTreatments(patientId){
-    if (!patientId) {
+    const apiPid = normalizePatientIdForApi(patientId) || String(patientId || "").trim();
+    if (!apiPid) {
       setMsg(t("treatment.selectPatientAbove"), "muted");
       elLoading.style.display = 'none';
       elContent.style.display = 'none';
@@ -2422,7 +2493,7 @@
       return;
     }
 
-    CURRENT_PATIENT_ID = patientId;
+    CURRENT_PATIENT_ID = apiPid;
     ALL_DIAGNOSES = [];
     elLoading.style.display = 'block';
     elContent.style.display = 'none';
@@ -2430,7 +2501,7 @@
 
     try{
       setMsg(t("treatment.loadingTreatmentsMsg"));
-      const r = await fetch(`${API_BASE}/api/patient/${encodeURIComponent(patientId)}/treatments?nocache=1`, {
+      const r = await fetch(`${API_BASE}/api/patient/${encodeURIComponent(apiPid)}/treatments?nocache=1`, {
         headers: adminHeaders({ Accept: "application/json", "Cache-Control": "no-cache" }),
         cache: "no-store",
       });
