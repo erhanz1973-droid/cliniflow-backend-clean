@@ -3947,9 +3947,17 @@ async function upsertClinicStripeStateById({
     "stripe_subscription_id",
   ];
   let writePatch = { ...patch };
+  console.log("before clinic update");
+  console.log(writePatch);
   // Gracefully handle schemas where some stripe columns are not present yet.
   for (let i = 0; i < optionalCols.length; i += 1) {
-    const { error } = await supabase.from("clinics").update(writePatch).eq("id", clinicId);
+    const { data, error } = await supabase
+      .from("clinics")
+      .update(writePatch)
+      .eq("id", clinicId)
+      .select("id, plan, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_status, stripe_current_period_end")
+      .maybeSingle();
+    console.log("supabase update result", { data, error });
     if (!error) return;
     const msg = String(error.message || "");
     const miss = optionalCols.find((c) => Object.prototype.hasOwnProperty.call(writePatch, c) && msg.includes(c));
@@ -4033,6 +4041,8 @@ app.post(
 
       if (subscriptionId) {
         try {
+          console.log("before subscription retrieve");
+          console.log("subscriptionId", session?.subscription ?? null);
           const subObj = await stripe.subscriptions.retrieve(String(subscriptionId));
           console.log("[stripe webhook] subscription object", subObj || null);
           if (subObj) {
