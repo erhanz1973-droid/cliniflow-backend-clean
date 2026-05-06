@@ -4009,9 +4009,32 @@ app.post(
         typeof session.subscription === "string"
           ? session.subscription
           : session.subscription?.id || null;
+      let subscriptionStatus = "active";
+      let subscriptionPriceId = priceId || null;
+      let subscriptionPeriodEndIso = null;
+
+      if (subscriptionId) {
+        try {
+          const subObj = await stripe.subscriptions.retrieve(String(subscriptionId));
+          if (subObj) {
+            subscriptionStatus = String(subObj.status || subscriptionStatus);
+            subscriptionPriceId =
+              subObj?.items?.data?.[0]?.price?.id || subscriptionPriceId;
+            const periodEndUnix = Number(subObj?.current_period_end || 0);
+            if (periodEndUnix > 0) {
+              subscriptionPeriodEndIso = new Date(periodEndUnix * 1000).toISOString();
+            }
+          }
+        } catch (subErr) {
+          console.warn(
+            "[checkout.session.completed] stripe.subscriptions.retrieve:",
+            subErr?.message || subErr,
+          );
+        }
+      }
       const plan =
         String(session.metadata?.plan || session.metadata?.saasPlan || "").toLowerCase() ||
-        inferPlanKeyFromPriceId(priceId) ||
+        inferPlanKeyFromPriceId(subscriptionPriceId || priceId) ||
         "pro";
 
       try {
@@ -4027,9 +4050,9 @@ app.post(
             plan,
             customerId: customerId || null,
             subscriptionId: subscriptionId || null,
-            priceId: priceId || null,
-            status: "active",
-            currentPeriodEnd: null,
+            priceId: subscriptionPriceId || null,
+            status: subscriptionStatus || "active",
+            currentPeriodEnd: subscriptionPeriodEndIso,
           });
           console.log("[checkout.session.completed] clinic updated:", clinicId, plan);
         }
