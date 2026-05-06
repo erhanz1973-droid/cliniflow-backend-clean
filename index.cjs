@@ -3987,6 +3987,8 @@ app.post(
 
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
+      console.log("[stripe webhook] session.subscription", session?.subscription ?? null);
+      console.log("[stripe webhook] session.customer", session?.customer ?? null);
 
       let sessionWithItems = session;
       try {
@@ -4016,6 +4018,7 @@ app.post(
       if (subscriptionId) {
         try {
           const subObj = await stripe.subscriptions.retrieve(String(subscriptionId));
+          console.log("[stripe webhook] subscription object", subObj || null);
           if (subObj) {
             subscriptionStatus = String(subObj.status || subscriptionStatus);
             subscriptionPriceId =
@@ -11417,8 +11420,10 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
       inferSaasPlanFromStripePriceId(priceId) ||
       String(saasPlans.normalizePlanKey("BASIC"));
 
+    const mode = "subscription";
+    console.log("[stripe checkout] mode", mode);
     const checkoutSession = await stripe.checkout.sessions.create({
-      mode: "subscription",
+      mode,
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: successUrl,
