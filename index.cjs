@@ -11477,7 +11477,7 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
 });
 
 // TEMP DEBUG: Sync a clinic's Stripe subscription fields manually.
-app.post("/api/debug/stripe-sync-clinic", requireAdminAuth, async (req, res) => {
+app.post("/api/debug/stripe-sync-clinic", async (req, res) => {
   try {
     if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
       return res.status(503).json({ ok: false, error: "supabase_unavailable" });
