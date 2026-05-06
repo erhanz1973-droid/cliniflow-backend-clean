@@ -3981,7 +3981,12 @@ app.post(
     try {
       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     } catch (err) {
-      console.error("Webhook signature error:", err.message);
+      console.error("Webhook signature error:", err.message, {
+        hasSignatureHeader: Boolean(sig),
+        contentType: req.headers["content-type"] || null,
+        bodyIsBuffer: Buffer.isBuffer(req.body),
+        bodyType: typeof req.body,
+      });
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
