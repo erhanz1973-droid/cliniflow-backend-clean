@@ -4133,7 +4133,7 @@ app.post(
             typeof sub?.customer === "string" ? String(sub.customer) : String(sub?.customer?.id || "");
           await upsertClinicStripeStateById({
             clinicId,
-            plan: "pro",
+            plan: "free",
             customerId: customerId || null,
             subscriptionId: sub?.id || null,
             priceId: null,
@@ -4144,6 +4144,48 @@ app.post(
         }
       } catch (e) {
         console.error("[customer.subscription.deleted]", e);
+      }
+    }
+
+    if (event.type === "invoice.payment_failed") {
+      const invoice = event.data.object;
+      const subscriptionId =
+        invoice?.subscription == null
+          ? ""
+          : typeof invoice.subscription === "string"
+            ? String(invoice.subscription).trim()
+            : String(invoice.subscription?.id || "").trim();
+      if (subscriptionId) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          const clinicId = await resolveClinicIdForStripeSubscription(sub);
+          if (!clinicId) {
+            console.warn("[invoice.payment_failed] clinic unresolved", {
+              subscriptionId,
+              customerId: sub?.customer || null,
+            });
+          } else {
+            const priceId = sub?.items?.data?.[0]?.price?.id || null;
+            const plan = inferPlanKeyFromPriceId(priceId) || "pro";
+            const periodEndUnix = Number(sub?.current_period_end || 0);
+            const currentPeriodEnd =
+              periodEndUnix > 0 ? new Date(periodEndUnix * 1000).toISOString() : null;
+            const customerId =
+              typeof sub?.customer === "string" ? String(sub.customer) : String(sub?.customer?.id || "");
+            await upsertClinicStripeStateById({
+              clinicId,
+              plan,
+              customerId: customerId || null,
+              subscriptionId,
+              priceId,
+              status: String(sub?.status || "past_due"),
+              currentPeriodEnd,
+            });
+            console.log("[invoice.payment_failed] clinic status refreshed:", clinicId);
+          }
+        } catch (e) {
+          console.error("[invoice.payment_failed]", e);
+        }
       }
     }
 
@@ -11394,8 +11436,11 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
       req.body?.tier || req.body?.plan || req.body?.product
     );
     const priceId = resolveCheckoutPriceIdFromRequest(req.body || {});
-    console.log("Stripe key prefix:", process.env.STRIPE_SECRET_KEY?.slice(0, 7));
-    console.log("priceId:", priceId);
+    const stripeDbg = String(process.env.STRIPE_VERBOSE_LOGS || "").trim() === "1";
+    if (stripeDbg) {
+      console.log("Stripe key prefix:", process.env.STRIPE_SECRET_KEY?.slice(0, 7));
+      console.log("priceId:", priceId);
+    }
     const bodyClinicId = String(req.body?.clinicId || "").trim();
 
     const sessionClinicId =
@@ -11453,21 +11498,33 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
     ).trim();
 
     const mode = "subscription";
-    console.log("[stripe checkout] mode", mode);
+    if (stripeDbg) {
+      console.log("[stripe checkout] mode", mode);
+    }
+    const metaStripe = {
+      clinicId: String(sessionClinicId),
+      clinicName: clinicNameForMetadata || "",
+      plan: String(planKeyForMetadata),
+      saasPlan: String(saasPlans.normalizePlanKey(saasPlanHint)),
+    };
     const checkoutSession = await stripe.checkout.sessions.create({
       mode,
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: successUrl,
       cancel_url: cancelUrl,
-      metadata: {
-        clinicId: String(sessionClinicId),
-        clinicName: clinicNameForMetadata || "",
-        plan: String(planKeyForMetadata),
-        saasPlan: String(saasPlans.normalizePlanKey(saasPlanHint)),
+      metadata: metaStripe,
+      subscription_data: {
+        metadata: {
+          clinicId: String(sessionClinicId),
+          clinicName: clinicNameForMetadata || "",
+          plan: String(planKeyForMetadata),
+        },
       },
     });
-    console.log("[stripe checkout] metadata", checkoutSession?.metadata || null);
+    if (stripeDbg) {
+      console.log("[stripe checkout] metadata", checkoutSession?.metadata || null);
+    }
 
     return res.json({ ok: true, url: checkoutSession.url });
   } catch (e) {
@@ -11476,8 +11533,8 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
   }
 });
 
-// TEMP DEBUG: Sync a clinic's Stripe subscription fields manually.
-app.post("/api/debug/stripe-sync-clinic", async (req, res) => {
+// Debug: Sync this clinic's Stripe subscription fields from Stripe (authenticated admin JWT only).
+app.post("/api/debug/stripe-sync-clinic", requireAdminAuth, async (req, res) => {
   try {
     if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
       return res.status(503).json({ ok: false, error: "supabase_unavailable" });
@@ -11487,21 +11544,18 @@ app.post("/api/debug/stripe-sync-clinic", async (req, res) => {
       return res.status(503).json({ ok: false, error: "stripe_not_configured" });
     }
 
-    const clinicIdRaw = String(
-      req.body?.clinicId ||
-      req.clinicId ||
-      req.user?.clinicId ||
-      ""
-    ).trim();
+    const clinicIdRaw = String(req.clinicId || "").trim();
     const subscriptionId = String(req.body?.subscriptionId || "").trim();
 
     if (!clinicIdRaw) {
-      return res.status(400).json({ ok: false, error: "clinic_id_required" });
+      return res.status(401).json({ ok: false, error: "clinic_required" });
     }
     if (!subscriptionId) {
       return res.status(400).json({ ok: false, error: "subscription_id_required" });
     }
-    if (req.clinicId && String(req.clinicId).trim() !== clinicIdRaw) {
+
+    const bodyClinicProbe = String(req.body?.clinicId || "").trim();
+    if (bodyClinicProbe && bodyClinicProbe !== clinicIdRaw) {
       return res.status(403).json({ ok: false, error: "clinic_mismatch" });
     }
 
