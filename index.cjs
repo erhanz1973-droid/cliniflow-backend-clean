@@ -3662,7 +3662,8 @@ function inferSaasPlanFromStripePriceId(priceId) {
 function normalizeCheckoutTier(rawTier) {
   const t = String(rawTier || "").trim().toLowerCase();
   if (!t) return "";
-  if (["basic", "pro", "starter"].includes(t)) return "basic";
+  if (["basic", "starter"].includes(t)) return "basic";
+  if (["pro"].includes(t)) return "pro";
   if (["premium", "enterprise"].includes(t)) return "premium";
   return "";
 }
@@ -3671,6 +3672,11 @@ function resolveCheckoutPriceIdFromRequest(body) {
   const direct = String(body?.priceId || "").trim();
   if (direct) return direct;
   const tier = normalizeCheckoutTier(body?.tier || body?.plan || body?.product);
+  if (tier === "pro")
+    return (
+      String(process.env.STRIPE_PRICE_PRO || "").trim() ||
+      String(process.env.STRIPE_PRICE_BASIC || "").trim()
+    );
   if (tier === "basic") return String(process.env.STRIPE_PRICE_BASIC || "").trim();
   if (tier === "premium")
     return (
@@ -11232,6 +11238,9 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
       return res.status(503).json({ ok: false, error: "stripe_not_configured" });
     }
 
+    const requestedTier = normalizeCheckoutTier(
+      req.body?.tier || req.body?.plan || req.body?.product
+    );
     const priceId = resolveCheckoutPriceIdFromRequest(req.body || {});
     console.log("Stripe key prefix:", process.env.STRIPE_SECRET_KEY?.slice(0, 7));
     console.log("priceId:", priceId);
@@ -11244,6 +11253,13 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
           ? String(req.user.clinicId).trim()
           : "";
 
+    if (!priceId && requestedTier) {
+      return res.status(400).json({
+        ok: false,
+        error: "price_not_configured_for_tier",
+        message: `Stripe price id is not configured for tier: ${requestedTier}`,
+      });
+    }
     if (!/^price_[a-zA-Z0-9]+$/.test(priceId)) {
       return res.status(400).json({ ok: false, error: "invalid_price_id" });
     }
