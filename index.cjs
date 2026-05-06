@@ -35007,16 +35007,34 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     todayEvents.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     
     upcoming.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    /** Dashboard “Tüm event'ler (geçmiş ve gelecek)”: kovalar dışında kalan kayıtlar dahil tam liste */
+    const adminEventsTimelineTs = (evt) => {
+      let t = Number(evt?.timestamp);
+      if (!Number.isFinite(t) || t <= 0) {
+        t = evt?.timelineAt ? Date.parse(String(evt.timelineAt)) : 0;
+      }
+      return Number.isFinite(t) ? t : 0;
+    };
+    const timeline = [...allEvents]
+      .filter((evt) => {
+        const st = String(evt?.status || "").toUpperCase();
+        if (st === "CANCELLED" || st === "CANCELED") return false;
+        return adminEventsTimelineTs(evt) > 0;
+      })
+      .sort((a, b) => adminEventsTimelineTs(a) - adminEventsTimelineTs(b));
     
     res.json({
       ok: true,
       overdue,
       today: todayEvents,
       upcoming,
+      timeline,
       total: allEvents.length,
       overdueCount: overdue.length,
       todayCount: todayEvents.length,
-      upcomingCount: upcoming.length
+      upcomingCount: upcoming.length,
+      timelineCount: timeline.length,
     });
   } catch (error) {
 

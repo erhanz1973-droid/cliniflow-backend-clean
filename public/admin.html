@@ -1540,7 +1540,10 @@
         }
       } catch (_) {}
 
-      const rawBuckets = [...(data.overdue || []), ...(data.today || []), ...(data.upcoming || [])];
+      const rawBuckets =
+        Array.isArray(data.timeline) && data.timeline.length > 0
+          ? data.timeline
+          : [...(data.overdue || []), ...(data.today || []), ...(data.upcoming || [])];
       let timelineInvalid = 0;
       const allEvents = [];
       for (let i = 0; i < rawBuckets.length; i++) {
@@ -1564,13 +1567,33 @@
       const bannerEl = document.getElementById("overdueBanner");
       if (bannerEl) bannerEl.style.display = "none";
 
-      const overdueCount = (data.overdue || []).length;
-      const todayEvents = data.today || [];
-      const tomorrow = new Date();
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(todayStart);
+      todayEnd.setHours(23, 59, 59, 999);
+      const todayStartMs = todayStart.getTime();
+      const todayEndMs = todayEnd.getTime();
+
+      const treatmentTypes = ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB"];
+      const overdueCount = allEvents.filter((evt) => {
+        const ts = adminDashboardEventInstantMs(evt);
+        if (!Number.isFinite(ts)) return false;
+        const st = String(evt.status || "").toUpperCase();
+        if (st === "DONE" || st === "COMPLETED" || st === "CANCELLED" || st === "CANCELED") return false;
+        const ty = String(evt.type || "").toUpperCase();
+        if (!treatmentTypes.includes(ty)) return false;
+        return ts < todayStartMs;
+      }).length;
+
+      const todayEvents = allEvents.filter((evt) => {
+        const ts = adminDashboardEventInstantMs(evt);
+        return Number.isFinite(ts) && ts >= todayStartMs && ts <= todayEndMs;
+      });
+
+      const tomorrow = new Date(todayStart);
       tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
       const tomorrowStart = tomorrow.getTime();
-      const tomorrowEnd = tomorrow.getTime() + (24 * 60 * 60 * 1000) - 1;
+      const tomorrowEnd = tomorrowStart + (24 * 60 * 60 * 1000) - 1;
 
       const tomorrowEvents = allEvents.filter((evt) => {
         const ts = adminDashboardEventInstantMs(evt);
