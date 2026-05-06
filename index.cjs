@@ -299,6 +299,7 @@ const {
   updateClinic,
   getAllClinics,
   getAdminByEmailAndClinicCode,
+  expandPatientIdLookupKeys,
   getPatientById,
   getPatientByPhone,
   getPatientByEmail,
@@ -778,7 +779,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * - legacy `patients.patient_id` strings (e.g. TD43) → resolved to UUID when Supabase is on
  */
 app.param("patientId", (req, res, next, value) => {
-  const raw = String(value ?? "").trim();
+  let raw = String(value ?? "").normalize("NFKC").trim();
+  raw = raw.replace(/[\u2010-\u2015\u2212]/g, "-");
   if (!raw) {
     return res.status(400).json({
       ok: false,
@@ -15997,24 +15999,34 @@ async function fetchPatientTreatmentsRowSupabase(patientId, clinicIdOrNull) {
     return { error: { code: "PGRST116", message: "clinic_id required for patient treatments row" } };
   }
   const cid = String(clinicIdOrNull).trim();
-  // Prefer `patient_id` when available; fall back to `id`.
-  let q1 = supabase
-    .from("patients")
-    .select("id, clinic_id, treatments, patient_id")
-    .eq("patient_id", patientId)
-    .eq("clinic_id", cid);
-  const r1 = await q1.maybeSingle();
-  if (!r1.error && r1.data) return { data: r1.data, key: "patient_id" };
+  const keys = expandPatientIdLookupKeys(patientId);
+  const keyList = keys.length ? keys : [String(patientId || "").trim()].filter(Boolean);
+  let lastMissError = null;
 
-  const msg = String(r1.error?.message || "");
-  const isMissingPatientIdCol = msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
-  const isNotFound = String(r1.error?.code || "") === "PGRST116";
-  if (!isMissingPatientIdCol && !isNotFound) return { error: r1.error };
+  for (const key of keyList) {
+    // Prefer `patient_id` when available; fall back to `id`.
+    let q1 = supabase
+      .from("patients")
+      .select("id, clinic_id, treatments, patient_id")
+      .eq("patient_id", key)
+      .eq("clinic_id", cid);
+    const r1 = await q1.maybeSingle();
+    if (!r1.error && r1.data) return { data: r1.data, key: "patient_id" };
 
-  let q2 = supabase.from("patients").select("id, clinic_id, treatments").eq("id", patientId).eq("clinic_id", cid);
-  const r2 = await q2.maybeSingle();
-  if (!r2.error && r2.data) return { data: r2.data, key: "id" };
-  return { error: r2.error || r1.error };
+    const msg = String(r1.error?.message || "");
+    const isMissingPatientIdCol = msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
+    const isNotFound = String(r1.error?.code || "") === "PGRST116";
+    if (!isMissingPatientIdCol && !isNotFound) {
+      return { error: r1.error };
+    }
+
+    let q2 = supabase.from("patients").select("id, clinic_id, treatments").eq("id", key).eq("clinic_id", cid);
+    const r2 = await q2.maybeSingle();
+    if (!r2.error && r2.data) return { data: r2.data, key: "id" };
+    lastMissError = r2.error || r1.error;
+  }
+
+  return { error: lastMissError || { code: "PGRST116", message: "patient row not found" } };
 }
 
 async function loadExistingTreatmentsPayload(patientId, clinicIdOrNull, treatmentsFile, fallbackPayload) {
