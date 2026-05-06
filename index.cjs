@@ -11476,6 +11476,110 @@ app.post("/api/stripe/create-checkout", requireAdminAuth, async (req, res) => {
   }
 });
 
+// TEMP DEBUG: Sync a clinic's Stripe subscription fields manually.
+app.post("/api/debug/stripe-sync-clinic", requireAdminAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+      return res.status(503).json({ ok: false, error: "supabase_unavailable" });
+    }
+    const secret = String(process.env.STRIPE_SECRET_KEY || "").trim();
+    if (!secret) {
+      return res.status(503).json({ ok: false, error: "stripe_not_configured" });
+    }
+
+    const clinicIdRaw = String(
+      req.body?.clinicId ||
+      req.clinicId ||
+      req.user?.clinicId ||
+      ""
+    ).trim();
+    const subscriptionId = String(req.body?.subscriptionId || "").trim();
+
+    if (!clinicIdRaw) {
+      return res.status(400).json({ ok: false, error: "clinic_id_required" });
+    }
+    if (!subscriptionId) {
+      return res.status(400).json({ ok: false, error: "subscription_id_required" });
+    }
+    if (req.clinicId && String(req.clinicId).trim() !== clinicIdRaw) {
+      return res.status(403).json({ ok: false, error: "clinic_mismatch" });
+    }
+
+    const stripe = require("stripe")(secret);
+    const sub = await stripe.subscriptions.retrieve(subscriptionId);
+    const customerId =
+      typeof sub?.customer === "string"
+        ? String(sub.customer).trim()
+        : String(sub?.customer?.id || "").trim();
+    const priceId = String(sub?.items?.data?.[0]?.price?.id || "").trim();
+    const status = String(sub?.status || "").trim();
+    const periodEndUnix = Number(sub?.current_period_end || 0);
+    const currentPeriodEnd =
+      periodEndUnix > 0 ? new Date(periodEndUnix * 1000).toISOString() : null;
+    const plan = inferPlanKeyFromPriceId(priceId) || "pro";
+
+    const updatePayload = {
+      stripe_customer_id: customerId || null,
+      stripe_subscription_id: subscriptionId,
+      stripe_price_id: priceId || null,
+      stripe_status: status || null,
+      stripe_current_period_end: currentPeriodEnd,
+      plan: saasPlans.normalizePlanKey(plan),
+      updated_at: new Date().toISOString(),
+    };
+
+    let query = supabase
+      .from("clinics")
+      .update(updatePayload)
+      .eq("id", clinicIdRaw)
+      .select("id, plan, stripe_customer_id, stripe_subscription_id, stripe_price_id, stripe_status, stripe_current_period_end")
+      .maybeSingle();
+    let { data, error } = await query;
+
+    if (error) {
+      const msg = String(error.message || "");
+      if (
+        /stripe_price_id|stripe_status|stripe_current_period_end|column|schema|does not exist/i.test(msg)
+      ) {
+        const fallbackPayload = {
+          stripe_customer_id: customerId || null,
+          stripe_subscription_id: subscriptionId,
+          plan: saasPlans.normalizePlanKey(plan),
+          updated_at: new Date().toISOString(),
+        };
+        ({ data, error } = await supabase
+          .from("clinics")
+          .update(fallbackPayload)
+          .eq("id", clinicIdRaw)
+          .select("id, plan, stripe_customer_id, stripe_subscription_id")
+          .maybeSingle());
+      }
+    }
+
+    return res.json({
+      ok: !error,
+      clinicId: clinicIdRaw,
+      extracted: {
+        customerId: customerId || null,
+        subscriptionId,
+        priceId: priceId || null,
+        status: status || null,
+        currentPeriodEnd,
+        plan,
+      },
+      updatePayload,
+      data: data || null,
+      error: error || null,
+    });
+  } catch (e) {
+    return res.status(500).json({
+      ok: false,
+      error: "stripe_sync_failed",
+      message: e?.message || "internal_error",
+    });
+  }
+});
+
 // ================== ADMIN LIST ==================
 app.get("/api/admin/registrations", (req, res) => {
   const raw = readJson(REG_FILE, {});
