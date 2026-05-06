@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v21');
+  console.log('I18N FILE VERSION:', 'v22');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -1724,7 +1724,7 @@
           logout: "Выход",
           clinic: "Клиника"
         },
-        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Путешествие", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
+        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Поездки", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
         charts: {
           metricTitleMonthlyPatients: "Количество зарегистрированных пациентов по месяцам",
           metricTitleMonthlyProcedures: "Количество процедур по месяцам",
@@ -1893,7 +1893,7 @@
       auth: { email: "Эл. почта", password: "Пароль", confirm_password: "Подтвердите пароль", name: "Имя и фамилия" },
       patients: {
         title: "Пациенты", search: "Поиск пациентов...", filter: "Фильтр",
-        filterAll: "Все", approve: "Одобрить", treatment: "Лечение", chat: "Чат", travel: "Путешествие", health: "Здоровье", files: "📁 Файлы",
+        filterAll: "Все", approve: "Одобрить", treatment: "Лечение", chat: "Чат", travel: "Поездки", health: "Здоровье", files: "📁 Файлы",
         approveConfirm: "Вы хотите одобрить пациента? ({patientId})", approveSuccess: "✅ Пациент одобрен",
         before: "До", after: "После", phone: "Телефон",
         status: { PENDING: "Ожидание", APPROVED: "Одобрено" },
