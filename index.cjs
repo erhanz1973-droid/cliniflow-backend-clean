@@ -43491,8 +43491,26 @@ async function handleDoctorInboxSummary(req, res) {
       };
     };
 
-    const todayAppointments = (todayRaw || []).map((r) => mapAppointment(r, todayStr));
-    const tomorrowAppointments = (tomorrowRaw || []).map((r) => mapAppointment(r, tomorrowStr));
+    const dedupeDashboardAppointments = (rows) => {
+      const out = [];
+      const seen = new Set();
+      for (const row of rows || []) {
+        const key = [
+          String(row?.date || "").trim(),
+          String(row?.time || "").trim(),
+          String(row?.patientId || "").trim().toLowerCase(),
+          String(row?.procedureSummary || "").trim().toLowerCase(),
+          String(row?.chairNumber || "").trim().toLowerCase(),
+        ].join("|");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(row);
+      }
+      return out;
+    };
+
+    const todayAppointments = dedupeDashboardAppointments((todayRaw || []).map((r) => mapAppointment(r, todayStr)));
+    const tomorrowAppointments = dedupeDashboardAppointments((tomorrowRaw || []).map((r) => mapAppointment(r, tomorrowStr)));
 
     const countTimelineBySource = (rows) => {
       const b = { tev: 0, encounter: 0, tpi: 0, total: 0 };
@@ -51497,8 +51515,14 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
     }
 
     // Keep Doctor Tasks wall-clock time consistent with dashboard/calendar timezone.
-    const clinicTzRaw = await resolveClinicIanaTzForScheduledWrites(req?.doctor?.clinic_id || req?.clinicId || null);
-    const doctorTaskTz = String(clinicTzRaw || "").trim() || "UTC";
+    const clinicIdForTz =
+      req?.doctor?.clinic_id ||
+      req?.clinicId ||
+      null;
+    const clinicCodeForTz =
+      String(req?.clinicCode || req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim();
+    const clinicTzRaw = await resolveClinicIanaTzForScheduledWrites(clinicIdForTz);
+    const doctorTaskTz = resolveDashboardCalendarTimeZone(clinicTzRaw, null, clinicCodeForTz);
 
     const planSelects = [
       'id, encounter_id, patient_id, created_by_doctor_id, status, created_at',
