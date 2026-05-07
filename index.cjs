@@ -34123,11 +34123,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       });
     };
 
-    const timelineAddEventDropLogSources = new Set([
+    const timelineAddEventTraceSources = new Set([
       "treatment",
       "patient_treatments",
       "encounter_treatments",
       "encounter_treatment",
+      "travel",
     ]);
 
     const logTimelineProcedureDoctorFields = (source, procLike, extra = {}) => {
@@ -34193,7 +34194,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const timelineAt = evt.timelineAt || evt.timeline_at || null;
       const iso = timelineAt || dateTimeToIso(evt.date, evt.time) || toIso(evt.timestamp);
       if (!iso) {
-        if (adminTimelineProcRawDebug && timelineAddEventDropLogSources.has(src0)) {
+        if (adminTimelineProcRawDebug && timelineAddEventTraceSources.has(src0)) {
           console.log("[timeline] addEvent DROP no_iso", {
             source: src0,
             rawId: evtRaw?.id ?? evtRaw?.procedureId,
@@ -34214,7 +34215,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         Number.isFinite(ts) &&
         ts < currentPatientMembershipStartMs
       ) {
-        if (adminTimelineProcRawDebug && timelineAddEventDropLogSources.has(src0)) {
+        if (adminTimelineProcRawDebug && timelineAddEventTraceSources.has(src0)) {
           console.log("[timeline] addEvent DROP before_membership", {
             source: src0,
             rawId: evtRaw?.id,
@@ -34237,7 +34238,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         if (
           rangeDrop &&
           adminTimelineProcRawDebug &&
-          timelineAddEventDropLogSources.has(src0)
+          timelineAddEventTraceSources.has(src0)
         ) {
           console.log("[timeline] addEvent DROP date_range", {
             source: src0,
@@ -34256,6 +34257,18 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         iso,
         ts
       );
+      if (adminTimelineProcRawDebug && timelineAddEventTraceSources.has(src0)) {
+        const rawId = String(evtRaw?.id || evtRaw?.procedureId || "").trim();
+        console.log("[timeline] ADD_EVENT_PUSH", {
+          source: src0,
+          rawId,
+          patientId: evtRaw?.patientId ?? merged?.patientId ?? null,
+          TIMELINE_AT: iso,
+          STATUS_NORMALIZED: merged?.status ?? null,
+          MIRROR_PREFIX_CHECK: rawId.startsWith("encounter-treatment-"),
+          finalEvent: merged,
+        });
+      }
       allEvents.push(merged);
     };
 
