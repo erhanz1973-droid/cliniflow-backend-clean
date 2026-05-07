@@ -14805,6 +14805,12 @@ async function mergeEncounterTreatmentsIntoPatientTreatmentsData(data, patientId
 async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, treatmentRow) {
   if (!isSupabaseEnabled() || !encounterId || !treatmentRow?.id) return;
   try {
+    const mirrorProcedureId = String(treatmentRow?.id || "").trim() || null;
+    console.log("[MIRROR_WRITE_START]", {
+      encounterId: String(encounterId || "").trim() || null,
+      patientId: null,
+      procedureId: mirrorProcedureId,
+    });
     const eid = String(encounterId || "").trim();
     const { data: encRow, error: encErr } = await supabase
       .from("patient_encounters")
@@ -14814,6 +14820,11 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
     if (encErr || !encRow?.patient_id) return;
 
     const pidEnc = String(encRow.patient_id).trim();
+    console.log("[MIRROR_WRITE_START]", {
+      encounterId: eid,
+      patientId: pidEnc || null,
+      procedureId: mirrorProcedureId,
+    });
     let encCid = encRow.clinic_id != null ? String(encRow.clinic_id).trim() : "";
     if (!encCid) {
       const pr = await supabase.from("patients").select("clinic_id").eq("id", pidEnc).maybeSingle();
@@ -14824,12 +14835,23 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
       return;
     }
     const { data: trRow, error: trErr } = await fetchPatientTreatmentsRowSupabase(pidEnc, encCid);
+    console.log("[MIRROR_PATIENT_FOUND]", {
+      patientId: pidEnc || null,
+      found: Boolean(trRow?.id),
+      error: trErr?.message || null,
+      procedureId: mirrorProcedureId,
+    });
     if (trErr || !trRow?.id) {
       console.warn("[ENCOUNTER TREATMENT MIRROR] patient row:", trErr?.message || "not_found");
       return;
     }
     const patientUuid = String(trRow.id).trim();
     const base = isPlainObject(trRow.treatments) ? trRow.treatments : {};
+    console.log("[MIRROR_BEFORE]", {
+      patientId: patientUuid || null,
+      procedureId: mirrorProcedureId,
+      treatmentsJson: base,
+    });
     const publicPid =
       canonicalPatientPublicId(base.patientId) ||
       canonicalPatientPublicId(trRow?.patient_id) ||
@@ -14853,6 +14875,11 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
       encounter_id: treatmentRow.encounter_id || eid,
     };
     mergeEncounterTreatmentRowsIntoPatientTeethPayload(payload, [rowForMerge]);
+    console.log("[MIRROR_AFTER]", {
+      patientId: patientUuid || null,
+      procedureId: mirrorProcedureId,
+      updatedTreatmentsJson: payload,
+    });
     const mirrorProcCount = (payload.teeth || []).reduce(
       (sum, t) => sum + (Array.isArray(t?.procedures) ? t.procedures.length : 0),
       0
@@ -14873,8 +14900,18 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
       "doctor_encounter_treatment"
     );
     if (!saveRes?.ok) {
+      console.log("[MIRROR_SAVE_RESULT]", {
+        patientId: patientUuid || null,
+        procedureId: mirrorProcedureId,
+        result: saveRes?.error || "error",
+      });
       console.warn("[ENCOUNTER TREATMENT MIRROR] save failed:", saveRes?.error?.message || saveRes?.error);
     } else {
+      console.log("[MIRROR_SAVE_RESULT]", {
+        patientId: patientUuid || null,
+        procedureId: mirrorProcedureId,
+        result: "ok",
+      });
       if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
         console.log("[ENCOUNTER TREATMENT MIRROR] save ok", {
           patientUuid,
