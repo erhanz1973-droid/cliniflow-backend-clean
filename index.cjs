@@ -11290,12 +11290,15 @@ app.get("/api/admin/billing/plans", requireAdminAuth, (req, res) => {
 
 // GET /api/clinic/usage — dashboard plan row (clinic-column limits + live counts)
 app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
+  /** Populated progressively for crash diagnostics (no procedures[] in this endpoint). */
+  let usageDiag = { step: "start", cid: null, activeCount: null, uploadsVal: null, referralCount: null };
   try {
     const clinicId = req.clinicId || req.clinic?.id;
     if (!clinicId || String(clinicId).trim() === "") {
       return res.status(401).json({ error: "unauthorized" });
     }
     const cid = String(clinicId).trim();
+    usageDiag.cid = cid;
     if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
       return res.status(503).json({ error: "database_unavailable" });
     }
@@ -11317,14 +11320,20 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
     if (!clinic) {
       return res.status(404).json({ error: "clinic_not_found" });
     }
+    usageDiag.step = "after_clinic_row";
 
     const { getActiveTreatmentsCount, countMonthlyUploadsForClinic } = require("./lib/saasUsage.cjs");
     const activeCount = await getActiveTreatmentsCount(cid, {
       clinicCode: req.clinicCode,
     });
+    usageDiag.step = "after_active_treatments";
+    usageDiag.activeCount = activeCount;
+
     const uploadsR = await countMonthlyUploadsForClinic(supabase, cid, {
       clinicCode: req.clinicCode,
     });
+    usageDiag.step = "after_uploads";
+    usageDiag.uploadsVal = uploadsR?.value;
 
     let referralCount = 0;
     const { count: refCount, error: refErr } = await supabase
@@ -11334,6 +11343,13 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
     if (!refErr && refCount != null) {
       referralCount = refCount;
     }
+    usageDiag.step = "before_response";
+    usageDiag.referralCount = referralCount;
+    usageDiag.counts = {
+      active_treatments: activeCount,
+      monthly_uploads: uploadsR?.value,
+      referrals: referralCount,
+    };
 
     const limits = {
       active_treatments: clinic.patient_limit ?? clinic.max_patients ?? 999999,
@@ -11351,6 +11367,17 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
       },
     });
   } catch (e) {
+    console.error("[clinic usage] fatal", e?.message || e, e?.stack || "");
+    console.error("[clinic usage] diag", {
+      clinicId: usageDiag.cid,
+      step: usageDiag.step,
+      counts: usageDiag.counts,
+      activeCount: usageDiag.activeCount,
+      uploadsVal: usageDiag.uploadsVal,
+      referralCount: usageDiag.referralCount,
+      proceduresLen: "(n/a — usage counts Supabase aggregates, not procedures[])",
+      normalizedLen: "(n/a)",
+    });
     console.error("[GET /api/clinic/usage]", e);
     return res.status(500).json({ error: e?.message || "internal_error" });
   }
