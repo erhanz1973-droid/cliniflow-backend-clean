@@ -780,6 +780,17 @@ function legacyMessageFromInsertedRow(row, insertedTable) {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const P_UUID_RE = /^p_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** Canonical external patient identity for payloads/routes: p_<uuid>; legacy ids unchanged. */
+function canonicalPatientPublicId(patientIdRaw) {
+  const raw = String(patientIdRaw || "").trim();
+  if (!raw) return "";
+  const m = P_UUID_RE.exec(raw);
+  if (m) return `p_${String(m[1]).toLowerCase()}`;
+  if (UUID_RE.test(raw)) return `p_${raw.toLowerCase()}`;
+  return raw;
+}
 
 /**
  * :patientId accepts:
@@ -14819,10 +14830,14 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
     }
     const patientUuid = String(trRow.id).trim();
     const base = isPlainObject(trRow.treatments) ? trRow.treatments : {};
+    const publicPid =
+      canonicalPatientPublicId(base.patientId) ||
+      canonicalPatientPublicId(trRow?.patient_id) ||
+      canonicalPatientPublicId(patientUuid);
     const payload = {
       schemaVersion: 1,
       updatedAt: now(),
-      patientId: String(base.patientId || patientUuid),
+      patientId: publicPid || String(base.patientId || patientUuid),
       teeth: Array.isArray(base.teeth)
         ? base.teeth.map((t) => ({
             ...t,
@@ -14926,10 +14941,14 @@ async function mirrorEncounterDiagnosesToPatientTreatmentsJson(encounterId, inse
       });
     }
 
+    const publicPid =
+      canonicalPatientPublicId(base.patientId) ||
+      canonicalPatientPublicId(trRow?.patient_id) ||
+      canonicalPatientPublicId(patientUuid);
     const payload = {
       schemaVersion: 1,
       updatedAt: now(),
-      patientId: String(base.patientId || patientUuid),
+      patientId: publicPid || String(base.patientId || patientUuid),
       teeth: Object.values(merged),
       formCompleted: base.formCompleted,
       formCompletedAt: base.formCompletedAt,
@@ -20081,7 +20100,7 @@ app.post("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asy
   const payload = {
     schemaVersion: existing.schemaVersion || 1,
     updatedAt: now(),
-    patientId,
+    patientId: canonicalPatientPublicId(patientId) || patientId,
     teeth,
     formCompleted: isFormCompleted,
   };
@@ -20365,7 +20384,7 @@ app.put("/api/patient/:patientId/treatments/:procedureId", requirePatientTreatme
   const payload = {
     schemaVersion: existing.schemaVersion || 1,
     updatedAt: now(),
-    patientId,
+    patientId: canonicalPatientPublicId(patientId) || patientId,
     teeth,
     formCompleted: isFormCompleted,
   };
@@ -20540,7 +20559,7 @@ app.delete("/api/patient/:patientId/treatments/:procedureId", requirePatientTrea
   const payload = {
     schemaVersion: existing.schemaVersion || 1,
     updatedAt: now(),
-    patientId,
+    patientId: canonicalPatientPublicId(patientId) || patientId,
     teeth,
     formCompleted: isFormCompleted,
   };
