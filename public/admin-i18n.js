@@ -2886,7 +2886,8 @@
   window.rerenderAll = rerenderAll;
 
   function bindAdminLangButtons() {
-    document.querySelectorAll('.lang-btn').forEach(function (btn) {
+    const allowed = new Set(['tr', 'en', 'ru', 'ka']);
+    document.querySelectorAll('#alLang .lang-btn, #lang-switcher .lang-btn').forEach(function (btn) {
       if (btn.getAttribute('data-i18n-listener') === '1') return;
       btn.setAttribute('data-i18n-listener', '1');
       function run(e) {
@@ -2894,8 +2895,8 @@
           e.preventDefault();
           e.stopPropagation();
         }
-        const lang = btn.getAttribute('data-lang');
-        if (!lang) return;
+        const lang = String((e && e.currentTarget && e.currentTarget.getAttribute('data-lang')) || btn.getAttribute('data-lang') || '').trim().toLowerCase();
+        if (!allowed.has(lang)) return;
         console.log('LANG CLICKED:', lang);
         if (window.i18n && typeof window.i18n.setLang === 'function') {
           window.i18n.setLang(lang);
