@@ -128,6 +128,29 @@ function categoryForType(type) {
   return t ? t.category : null;
 }
 
+const PROC_UUID_RE_COMPARE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ENCOUNTER_TREATMENT_ID_RE_COMPARE =
+  /^encounter-treatment-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** Normalize id for equality: plain UUID ↔ encounter-treatment-<uuid>. */
+function canonicalProcedureKeyForCompare(idRaw) {
+  const s = String(idRaw || "").trim();
+  if (!s) return "";
+  const m = ENCOUNTER_TREATMENT_ID_RE_COMPARE.exec(s);
+  if (m) return m[1].toLowerCase();
+  if (PROC_UUID_RE_COMPARE.test(s)) return s.toLowerCase();
+  return s.toLowerCase();
+}
+
+function procedureRecordMatchesIncomingProcedureId(proc, incomingProcedureId) {
+  const needle = canonicalProcedureKeyForCompare(incomingProcedureId);
+  if (!needle) return false;
+  const k1 = canonicalProcedureKeyForCompare(proc?.procedureId);
+  const k2 = canonicalProcedureKeyForCompare(proc?.id);
+  return needle === k1 || needle === k2;
+}
+
 /**
  * A tooth is locked if there is a COMPLETED extraction procedure in history.
  * @param {Array<any>} procedures
@@ -150,7 +173,7 @@ function validateToothUpsert(existingProcedures, incoming) {
   const procedures = Array.isArray(existingProcedures) ? existingProcedures : [];
   const locked = isToothLocked(procedures);
 
-  const existing = procedures.find((p) => String(p?.procedureId || p?.id || "") === String(incoming.procedureId));
+  const existing = procedures.find((p) => procedureRecordMatchesIncomingProcedureId(p, incoming.procedureId));
   const isNew = !existing;
   if (locked && isNew) {
     return { ok: false, error: "tooth_locked", locked: true };
@@ -162,8 +185,7 @@ function validateToothUpsert(existingProcedures, incoming) {
 
   if (incoming.status === "ACTIVE") {
     const hasOtherActiveSameCat = procedures.some((p) => {
-      const pid = String(p?.procedureId || p?.id || "");
-      if (pid === String(incoming.procedureId)) return false;
+      if (procedureRecordMatchesIncomingProcedureId(p, incoming.procedureId)) return false;
       return normalizeStatus(p?.status) === "ACTIVE" && categoryForType(p?.type) === incoming.category;
     });
     if (hasOtherActiveSameCat) {

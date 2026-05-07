@@ -1190,10 +1190,10 @@
 
   function hasActiveConflictUI(tooth, category, excludeProcedureId){
     const procs = tooth?.procedures || [];
-    const ex = String(excludeProcedureId || "");
+    const ex = String(excludeProcedureId || "").trim();
     return procs.some((p) => {
-      const pid = String(p?.procedureId || p?.id || "");
-      if (ex && pid === ex) return false;
+      // Must match procedureRecordMatchesId: same row can have id vs procedureId vs encounter-treatment-<uuid>.
+      if (ex && procedureRecordMatchesId(p, ex)) return false;
       return normalizeStatusUI(p?.status) === "ACTIVE" && TYPE_TO_CATEGORY[String(p?.type||"").toUpperCase()] === category;
     });
   }
