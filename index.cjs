@@ -332,6 +332,7 @@ const {
   normalizeAdminTimelineEventForIngest,
   finalizeAdminTimelineAfterIso,
   timelineDebugProcedureIdentity,
+  normalizeTimelineProcedureId,
 } = require("./lib/adminTimelineNormalize.cjs");
 const { attachAdminTenantContext, logAdminQuery } = require("./lib/clinicTenant.cjs");
 const {
@@ -34002,6 +34003,55 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
     const adminTimelineProcDebug =
       String(process.env.ADMIN_TIMELINE_PROC_DEBUG || "").trim() === "1";
+    const adminTimelineProcRawDebug =
+      String(process.env.ADMIN_TIMELINE_PROC_RAW_DEBUG || "").trim() === "1";
+
+    const procedureEncounterMirrorPrefixLooksLike = (proc) =>
+      String(proc?.id || proc?.procedureId || "")
+        .trim()
+        .startsWith("encounter-treatment-");
+
+    const timelineProcedureSafeJson = (proc) => {
+      try {
+        return JSON.stringify(
+          proc,
+          (_, v) => (typeof v === "bigint" ? String(v) : v)
+        );
+      } catch (_) {
+        return "[unserializable proc]";
+      }
+    };
+
+    /** Deep trace: set ADMIN_TIMELINE_PROC_RAW_DEBUG=1 on Railway. */
+    const logTimelineProcedureRawIngest = (source, proc, ctx = {}) => {
+      if (!adminTimelineProcRawDebug) return;
+      const idRaw = String(proc?.id || proc?.procedureId || "").trim();
+      const mirror = procedureEncounterMirrorPrefixLooksLike(proc);
+      const tl = ctx.timelineAtResolved != null ? ctx.timelineAtResolved : null;
+      const rawSt = proc?.status;
+      const normSt = procedures.normalizeStatus(proc?.status || "PLANNED");
+      console.log("[timeline] PROC_INGEST_RAW", source, {
+        patientId: ctx.patientId,
+        toothId: ctx.toothId,
+        PROC_RAW: proc,
+        PROC_JSON: timelineProcedureSafeJson(proc),
+        MIRROR_PREFIX_CHECK: mirror,
+        TIMELINE_AT: tl,
+        STATUS_RAW: rawSt,
+        STATUS_NORMALIZED: normSt,
+        idRaw,
+        idNormalizeTimeline: normalizeTimelineProcedureId(idRaw),
+        ...ctx,
+      });
+    };
+
+    const timelineAddEventDropLogSources = new Set([
+      "treatment",
+      "patient_treatments",
+      "encounter_treatments",
+      "encounter_treatment",
+    ]);
+
     const logTimelineProcedureDoctorFields = (source, procLike, extra = {}) => {
       if (!adminTimelineProcDebug) return;
       const p = procLike && typeof procLike === "object" ? procLike : {};
@@ -34058,12 +34108,27 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     };
 
     const addEvent = (evtRaw) => {
+      const src0 = String(evtRaw?.source || "");
       const evt = normalizeAdminTimelineEventForIngest(evtRaw, {
         defaultClinicId: req.clinicId,
       });
       const timelineAt = evt.timelineAt || evt.timeline_at || null;
       const iso = timelineAt || dateTimeToIso(evt.date, evt.time) || toIso(evt.timestamp);
-      if (!iso) return;
+      if (!iso) {
+        if (adminTimelineProcRawDebug && timelineAddEventDropLogSources.has(src0)) {
+          console.log("[timeline] addEvent DROP no_iso", {
+            source: src0,
+            rawId: evtRaw?.id ?? evtRaw?.procedureId,
+            patientId: evtRaw?.patientId,
+            date: evtRaw?.date,
+            time: evtRaw?.time,
+            timelineAtField: timelineAt,
+            timestamp: evtRaw?.timestamp,
+            statusRaw: evtRaw?.status,
+          });
+        }
+        return;
+      }
       const ts = Date.parse(iso);
       if (
         Number.isFinite(currentPatientMembershipStartMs) &&
@@ -34071,17 +34136,42 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         Number.isFinite(ts) &&
         ts < currentPatientMembershipStartMs
       ) {
+        if (adminTimelineProcRawDebug && timelineAddEventDropLogSources.has(src0)) {
+          console.log("[timeline] addEvent DROP before_membership", {
+            source: src0,
+            rawId: evtRaw?.id,
+            patientId: evtRaw?.patientId,
+            ts,
+            currentPatientMembershipStartMs,
+          });
+        }
         return;
       }
       if (hasRangeFilter) {
         const evtDateStr = String(evt?.date || "").trim();
+        let rangeDrop = false;
         if (/^\d{4}-\d{2}-\d{2}$/.test(evtDateStr)) {
-          if (evtDateStr < startDate || evtDateStr > endDate) return;
+          if (evtDateStr < startDate || evtDateStr > endDate) rangeDrop = true;
         } else if (Number.isFinite(ts)) {
-          // Tolerate timezone shifts for events that don't carry explicit YYYY-MM-DD.
           const marginMs = 24 * 60 * 60 * 1000;
-          if (ts < (rangeStartTs - marginMs) || ts > (rangeEndTs + marginMs)) return;
+          if (ts < (rangeStartTs - marginMs) || ts > (rangeEndTs + marginMs)) rangeDrop = true;
         }
+        if (
+          rangeDrop &&
+          adminTimelineProcRawDebug &&
+          timelineAddEventDropLogSources.has(src0)
+        ) {
+          console.log("[timeline] addEvent DROP date_range", {
+            source: src0,
+            rawId: evtRaw?.id,
+            patientId: evtRaw?.patientId,
+            evtDateStr,
+            ts,
+            startDate,
+            endDate,
+          });
+        }
+        if (rangeDrop) return;
       }
       const merged = finalizeAdminTimelineAfterIso(
         { ...evt, timelineAt: iso },
@@ -34682,6 +34772,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               toIso(proc?.created_at) ||
               parseTravelDate(proc?.date, procTime) ||
               dateTimeToIso(proc?.date, procTime);
+            logTimelineProcedureRawIngest("patients.treatments_teeth", proc, {
+              patientId,
+              toothId,
+              timelineAtResolved: timelineAt || null,
+            });
             if (!timelineAt) {
               logTimelineProcedureDoctorFields("patients.treatments_teeth_skip_no_time", proc, {
                 patientId,
@@ -34782,6 +34877,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               toIso(proc?.created_at) ||
               parseTravelDate(proc?.date, procTime) ||
               dateTimeToIso(proc?.date, procTime);
+            logTimelineProcedureRawIngest("patient_treatments_table", proc, {
+              patientId,
+              toothId,
+              timelineAtResolved: timelineAt || null,
+            });
             if (!timelineAt) {
               logTimelineProcedureDoctorFields("patient_treatments_table_skip_no_time", proc, {
                 patientId,

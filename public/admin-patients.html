@@ -42,21 +42,26 @@
   </script>
   <style>
     :root {
-      --bg:#111827;
-      --card:#1f2937;
-      --b:#374151;
+      --bg:#f1f5f9;
+      --card:#ffffff;
+      --b:#e2e8f0;
+      --b-strong:#cbd5e1;
       --p:#2563eb;
       --g:#16a34a;
       --r:#dc2626;
       --y:#f59e0b;
-      --muted:#a7b2c8;
-      --link:#6aa6ff;
+      --muted:#64748b;
+      --text:#0f172a;
+      --text-soft:#334155;
+      --link:#2563eb;
+      --input-bg:#ffffff;
+      --input-text:#0f172a;
     }
-    body{ font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:#e6eaf2; }
-    body.al-ready { background: var(--bg); color: #e6eaf2; }
-    .wrap{ max-width:1200px; margin:0 auto; padding:20px; }
+    body{ font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:var(--text); }
+    body.al-ready { background: var(--bg); color: var(--text); }
+    .wrap{ max-width:1280px; width:100%; margin:0 auto; padding:24px 20px 40px; box-sizing:border-box; }
     header{ margin-bottom:20px; border-bottom:1px solid var(--b); padding-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; }
-    h1{ font-size:24px; margin:0 0 20px; font-weight:700; }
+    h1{ font-size:24px; margin:0 0 20px; font-weight:700; color:var(--text); }
 
     .navbar {
       display: flex;
@@ -64,8 +69,11 @@
       align-items: center;
       gap: 24px;
       margin-bottom: 24px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--b);
+      padding: 16px 18px;
+      border: 1px solid var(--b);
+      border-radius: 14px;
+      background: var(--card);
+      box-shadow: 0 1px 3px rgba(15,23,42,0.06);
       flex-wrap: wrap;
     }
     .navbar-left {
@@ -90,7 +98,7 @@
     }
     .navbar-clinic-name {
       font-size: 16px;
-      color: var(--muted);
+      color: var(--text-soft);
       font-weight: 600;
     }
     .navbar-center {
@@ -106,7 +114,7 @@
       align-items: center;
     }
     .nav-link {
-      color: var(--muted);
+      color: var(--text-soft);
       text-decoration: none;
       font-weight: 500;
       padding: 8px 12px;
@@ -116,8 +124,8 @@
       transition: all 0.2s;
     }
     .nav-link:hover {
-      color: #e6eaf2;
-      background: rgba(55, 65, 81, 0.3);
+      color: var(--text);
+      background: #eff6ff;
     }
     .nav-link.active {
       color: #fff;
@@ -128,10 +136,13 @@
       color: var(--muted);
       padding: 6px 10px;
       font-size: 13px;
+      border: 1px solid var(--b);
+      background: #f8fafc;
     }
     .nav-link.secondary:hover {
-      color: #e6eaf2;
-      background: rgba(55, 65, 81, 0.2);
+      color: var(--text);
+      background: #f1f5f9;
+      border-color: var(--b-strong);
     }
     .lang-toggle {
       display: flex;
@@ -140,6 +151,8 @@
       border-radius: 6px;
       font-size: 13px;
       color: var(--muted);
+      border: 1px solid var(--b);
+      background: #f8fafc;
     }
     .lang-toggle span {
       cursor: pointer;
@@ -166,10 +179,10 @@
       font-size:11px;
       font-weight:700;
       padding:0 4px;
-      border:2px solid var(--bg);
+      border:2px solid var(--card);
     }
 
-    .card{ background:var(--card); border:0.5px solid rgba(55, 65, 81, 0.5); border-radius:16px; padding:24px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.05); }
+    .card{ background:var(--card); border:1px solid var(--b); border-radius:16px; padding:24px; box-shadow:0 4px 24px rgba(15,23,42,0.06); }
     .toolbar{ display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
     .toolbar-left{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .toolbar-right{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
@@ -177,13 +190,14 @@
     input, select{
       padding:10px 12px;
       border-radius:10px;
-      border:1px solid var(--b);
-      background:#1f2937;
-      color:#e6eaf2;
+      border:1px solid var(--b-strong);
+      background:var(--input-bg);
+      color:var(--input-text);
       font-size:14px;
       min-width:240px;
     }
     input::placeholder{ color:#94a3b8; }
+    select option { color: var(--input-text); background: var(--input-bg); }
 
     /* Mini Card Grid Layout */
     .patients-grid {
@@ -194,21 +208,22 @@
     }
     .patient-card {
       background: var(--card);
-      border: 0.5px solid rgba(55, 65, 81, 0.5);
+      border: 1px solid var(--b);
       border-radius: 16px;
       padding: 20px;
       transition: all 0.2s;
       cursor: pointer;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
     }
     .patient-card:hover {
-      border-color: #3b82f6;
-      background: #0b1220;
+      border-color: #93c5fd;
+      background: #f8fafc;
+      box-shadow: 0 4px 16px rgba(37,99,235,0.08);
     }
     .patient-card.selected {
       outline: 2px solid #2563eb;
       outline-offset: -2px;
-      background: #0b1220;
+      background: #eff6ff;
       border-color: #2563eb;
     }
     .patient-avatar-img {
@@ -222,8 +237,8 @@
       width: 40px;
       height: 40px;
       border-radius: 50%;
-      background: #1e3a5f;
-      color: #60a5fa;
+      background: #dbeafe;
+      color: #1d4ed8;
       font-size: 14px;
       font-weight: 700;
       display: flex;
@@ -240,7 +255,7 @@
     .patient-name {
       font-weight: 700;
       font-size: 16px;
-      color: #ffffff;
+      color: var(--text);
       margin: 0;
       flex: 1;
     }
@@ -286,7 +301,7 @@
     }
     .progress-bar-container {
       height: 8px;
-      background: #1f2937;
+      background: #e2e8f0;
       border-radius: 4px;
       overflow: hidden;
       position: relative;
@@ -313,11 +328,11 @@
       padding: 8px 12px;
     }
 
-    code{ background:#0b1220; padding:2px 6px; border-radius:6px; border:1px solid #1f2937; color:#e6eaf2; }
+    code{ background:#f1f5f9; padding:2px 6px; border-radius:6px; border:1px solid var(--b); color:var(--text); }
 
-    .status{ display:inline-block; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:800; border:1px solid #334155; text-transform:uppercase; }
-    .status.PENDING{ background:#0b1220; color:#fef3c7; border-color:#92400e; }
-    .status.APPROVED{ background:#064e3b; color:#6ee7b7; border-color:#059669; }
+    .status{ display:inline-block; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:800; border:1px solid var(--b-strong); text-transform:uppercase; }
+    .status.PENDING{ background:#fffbeb; color:#b45309; border-color:#fcd34d; }
+    .status.APPROVED{ background:#ecfdf5; color:#047857; border-color:#6ee7b7; }
 
     button{ padding:8px 14px; border-radius:10px; border:1px solid transparent; cursor:pointer; font-size:13px; font-weight:800; transition:opacity 0.2s; }
     button:hover{ opacity:0.92; }
@@ -326,33 +341,34 @@
     /* Primary: Treatment (most important) */
     .btn-treatment{ background:var(--p); color:#fff; border-color:var(--p); }
     /* Secondary: Chat (secondary importance) */
-    .btn-chat{ background:transparent; border-color:#334155; color:#e6eaf2; }
-    .btn-chat:hover{ background:#1f2937; border-color:#4b5563; }
+    .btn-chat{ background:#fff; border-color:var(--b-strong); color:var(--text-soft); }
+    .btn-chat:hover{ background:#f8fafc; border-color:#cbd5e1; color:var(--text); }
     /* Ghost: Travel / Health / Files (tertiary, less visual weight) */
-    .btn-travel, .btn-health, .btn-files{ background:transparent; border-color:#334155; color:var(--muted); }
-    .btn-travel:hover, .btn-health:hover{ background:#1f2937; border-color:#4b5563; color:#e6eaf2; }
-    .btn-files{ border-color:#4b5563; color:#a78bfa; }
-    .btn-files:hover{ background:#1e1b4b; border-color:#7c3aed; color:#c4b5fd; }
-    .btn-ghost{ background:transparent; border-color:#334155; color:#e6eaf2; }
+    .btn-travel, .btn-health, .btn-files{ background:#fff; border-color:var(--b-strong); color:var(--text-soft); }
+    .btn-travel:hover, .btn-health:hover{ background:#f8fafc; border-color:#cbd5e1; color:var(--text); }
+    .btn-files{ border-color:#c4b5fd; color:#6d28d9; }
+    .btn-files:hover{ background:#f5f3ff; border-color:#a78bfa; color:#5b21b6; }
+    .btn-ghost{ background:#fff; border-color:var(--b-strong); color:var(--text-soft); }
 
     .actions{ display:flex; gap:8px; flex-wrap:wrap; }
     .loading{ text-align:center; padding:40px; color:var(--muted); }
-    .error{ background:#7f1d1d; border:1px solid #dc2626; color:#fca5a5; padding:12px; border-radius:10px; margin-bottom:16px; }
-    .token-info{ background:#0b1220; border:1px solid #334155; padding:12px; border-radius:10px; margin-bottom:16px; font-size:13px; color:#e6eaf2; }
+    .error{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:12px; border-radius:10px; margin-bottom:16px; }
+    .token-info{ background:#eff6ff; border:1px solid #bfdbfe; padding:12px; border-radius:10px; margin-bottom:16px; font-size:13px; color:#1e3a8a; }
 
     .selected-bar{
       position:sticky;
       top:0;
       z-index:5;
-      background:rgba(2,6,23,0.92);
-      backdrop-filter: blur(6px);
-      border:1px solid #334155;
+      background:rgba(255,255,255,0.95);
+      backdrop-filter: blur(8px);
+      border:1px solid var(--b);
       border-radius:12px;
-      padding:12px;
-      margin-bottom:12px;
+      padding:14px 16px;
+      margin-bottom:16px;
       display:none;
+      box-shadow:0 4px 20px rgba(15,23,42,0.08);
     }
-    .selected-title{ font-weight:900; }
+    .selected-title{ font-weight:900; color:var(--text); }
     .selected-meta{ color:var(--muted); font-size:13px; margin-top:2px; }
     
     /* Modal Styles */
@@ -372,12 +388,16 @@
     .modal-content {
       background: var(--card);
       border: 1px solid var(--b);
-      border-radius: 12px;
-      max-width: 500px;
-      width: 90%;
+      border-radius: 16px;
+      width: min(720px, 96vw);
+      max-width: min(720px, 96vw);
+      min-width: min(720px, 96vw);
+      min-height: min(420px, 85vh);
       max-height: 90vh;
       overflow-y: auto;
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);
+      box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.18);
+      display: flex;
+      flex-direction: column;
     }
     
     .modal-header {
@@ -392,7 +412,7 @@
       margin: 0;
       font-size: 18px;
       font-weight: 600;
-      color: #e6eaf2;
+      color: var(--text);
     }
     
     .modal-close {
@@ -412,12 +432,14 @@
     }
     
     .modal-close:hover {
-      background: var(--b);
-      color: #e6eaf2;
+      background: #f1f5f9;
+      color: var(--text);
     }
     
     .modal-body {
-      padding: 20px;
+      padding: 24px;
+      flex: 1;
+      min-height: 0;
     }
     
     .modal-footer {
@@ -426,6 +448,9 @@
       display: flex;
       gap: 12px;
       justify-content: flex-end;
+      flex-shrink: 0;
+      background: #fafafa;
+      border-radius: 0 0 16px 16px;
     }
     
     .form-row {
@@ -442,21 +467,31 @@
     .form-group label {
       display: block;
       margin-bottom: 6px;
-      font-weight: 500;
-      color: #e6eaf2;
+      font-weight: 600;
+      color: var(--text-soft);
       font-size: 14px;
     }
     
     .form-group input,
     .form-group textarea {
       width: 100%;
-      padding: 10px 12px;
-      border: 1px solid var(--b);
-      border-radius: 6px;
-      background: var(--bg);
-      color: #e6eaf2;
-      font-size: 14px;
-      transition: border-color 0.2s;
+      padding: 12px 14px;
+      border: 1px solid var(--b-strong);
+      border-radius: 10px;
+      background: var(--input-bg);
+      color: var(--input-text);
+      font-size: 15px;
+      line-height: 1.45;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      box-sizing: border-box;
+    }
+    .form-group textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+    .form-group input[type="date"] {
+      min-height: 48px;
+      color-scheme: light;
     }
     
     .form-group input:focus,
@@ -470,9 +505,9 @@
       background: var(--g);
       color: #fff;
       border: none;
-      padding: 10px 16px;
-      border-radius: 6px;
-      font-weight: 500;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
     }
@@ -486,10 +521,12 @@
       .form-row {
         grid-template-columns: 1fr;
       }
-      
       .modal-content {
-        width: 95%;
-        margin: 20px;
+        width: 96vw;
+        max-width: 96vw;
+        min-width: 0;
+        min-height: min(380px, 80vh);
+        margin: 12px;
       }
     }
   </style>
@@ -498,7 +535,7 @@
   <div class="wrap">
     <header>
       <h1>👥 Clinifly Admin – Patients</h1>
-      <div id="usageBadge" style="display:none; padding:6px 10px; border:1px solid #334155; border-radius:999px; background:#0b1220; color:#e6eaf2; font-size:12px; font-weight:800; margin-top:12px;"></div>
+      <div id="usageBadge" style="display:none; padding:6px 12px; border:1px solid #cbd5e1; border-radius:999px; background:#eff6ff; color:#1e40af; font-size:12px; font-weight:800; margin-top:12px;"></div>
     </header>
 
 
@@ -769,11 +806,13 @@
       }
       el.style.display = "inline-flex";
       if (maxPatients !== null && maxPatients !== undefined && used >= maxPatients) {
-        el.style.borderColor = "#dc2626";
-        el.style.color = "#fecaca";
+        el.style.borderColor = "#f87171";
+        el.style.background = "#fef2f2";
+        el.style.color = "#b91c1c";
       } else {
-        el.style.borderColor = "#334155";
-        el.style.color = "#e6eaf2";
+        el.style.borderColor = "#cbd5e1";
+        el.style.background = "#eff6ff";
+        el.style.color = "#1e40af";
       }
     }
 
@@ -1112,14 +1151,14 @@ if (Array.isArray(json)) {
             `}
             
             <!-- Doctor Assignment Section -->
-            <div class="doctor-assignment" style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+            <div class="doctor-assignment" style="margin-top: 12px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
               <div style="display: flex; align-items: center; gap: 8px;">
-                <label style="font-size: 12px; color: #9ca3af;">Assign Doctor:</label>
+                <label style="font-size: 12px; color: #64748b; font-weight:600;">Assign Doctor:</label>
                 <select 
                   id="doctor-${escapeHtml(patientId)}"
                   class="doctor-select"
                   onchange="assignDoctor('${escapeHtml(patientId)}', this.value)"
-                  style="flex:1; padding:6px 8px; background:var(--b); border:1px solid #4b5563; border-radius:6px; color:#e6eaf2; font-size:12px;">
+                  style="flex:1; padding:8px 10px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; color:#0f172a; font-size:12px;">
                   ${!p.primary_doctor_id ? `<option value="" selected disabled>Select Doctor</option>` : ''}
                   ${primaryDoctorIdStr && !DOCTORS_CACHE.some(function (d) {
                     return normalizeDoctorKey(d.id) === primaryNk || (d.doctor_id && String(d.doctor_id).trim() === primaryDoctorIdStr);
@@ -1290,13 +1329,14 @@ if (Array.isArray(json)) {
 
       const content = document.createElement('div');
       content.style.cssText = `
-        background: var(--card, #1f2937);
-        border: 1px solid var(--border, #374151);
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
         border-radius: 16px;
         padding: 32px;
         max-width: 480px;
-        width: 90%;
+        width: min(480px, 92vw);
         text-align: center;
+        box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.15);
       `;
 
       const title = window.i18n ? window.i18n.t('patients.limits.title') : 'Aktif Hasta Limiti';
@@ -1309,8 +1349,8 @@ if (Array.isArray(json)) {
 
       content.innerHTML = `
         <h2 style="margin: 0 0 16px 0; color: var(--warning, #f59e0b); font-size: 24px;">⚠️ ${title}</h2>
-        <p style="margin: 0 0 8px 0; color: var(--text, #e6eaf2); font-size: 16px;">${message}</p>
-        <p style="margin: 0 0 24px 0; color: var(--muted, #a7b2c8); font-size: 14px;">${upgradeMessage}</p>
+        <p style="margin: 0 0 8px 0; color: #0f172a; font-size: 16px;">${message}</p>
+        <p style="margin: 0 0 24px 0; color: #64748b; font-size: 14px;">${upgradeMessage}</p>
         <div style="display: flex; gap: 12px; justify-content: center;">
           <button onclick="window.open('/pricing.html', '_blank')" style="
             background: var(--primary, #2563eb);
@@ -1322,9 +1362,9 @@ if (Array.isArray(json)) {
             cursor: pointer;
           ">${upgradeButton}</button>
           <button onclick="this.closest('div[style*=fixed]').remove()" style="
-            background: transparent;
-            color: var(--muted, #a7b2c8);
-            border: 1px solid var(--border, #374151);
+            background: #f8fafc;
+            color: #475569;
+            border: 1px solid #e2e8f0;
             padding: 12px 24px;
             border-radius: 8px;
             font-weight: 600;
