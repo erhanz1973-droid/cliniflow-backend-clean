@@ -107,6 +107,7 @@
       display: block;
       font-size: 11px;
     }
+    .appt-meta-text + .appt-meta-text { margin-top: 1px; }
     .status-badge {
       display: inline-block;
       padding: 1px 6px;
@@ -836,19 +837,22 @@
             const compactTime = fmtTime(item.startAt, item.endAt, lang);
             const procAndTooth = `${item.treatment || '-'}` + (item.tooth ? ` • 🦷 ${item.tooth}` : '');
             const chairTxt = normalizeChairText(item.chair) || '-';
-            const metaPrefix = doctorFilter ? '' : `${item.doctor || '-'} • `;
+            const doctorTxt = item.doctor || '-';
+            const patientTxt = item.patient || '-';
             const visualSpanSlots = Math.max(MIN_VISUAL_CARD_SPAN_SLOTS, Number(entry?.spanSlots) || 1);
             const visualMinHeight = (visualSpanSlots * 34) - 2;
+            const cardTitle = `Hasta: ${patientTxt} | Doktor: ${doctorTxt} | Saat: ${compactTime} | Islem: ${procAndTooth} | Koltuk: ${chairTxt}`;
             return `
-            <div class="appt-card" style="min-height:${visualMinHeight}px;">
+            <div class="appt-card" style="min-height:${visualMinHeight}px;" title="${cardTitle}">
               <div class="appt-time">${compactTime}</div>
               <div class="appt-main">
                 <div class="appt-row-top">
-                  <div class="appt-patient">${item.patient || '-'}</div>
+                  <div class="appt-patient">${patientTxt}</div>
                   <span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span>
                 </div>
                 <div class="appt-meta">
-                  <span class="appt-meta-text">${procAndTooth}${chairTxt ? ` • ${chairTxt}` : ''}${metaPrefix ? ` • ${metaPrefix.replace(/\s*•\s*$/, '')}` : ''}</span>
+                  <span class="appt-meta-text">${procAndTooth}${chairTxt ? ` • Chair ${chairTxt}` : ''}</span>
+                  <span class="appt-meta-text">Dr. ${doctorTxt}</span>
                 </div>
               </div>
               <div class="appt-chevron">›</div>
