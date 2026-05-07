@@ -43460,20 +43460,35 @@ async function handleDoctorInboxSummary(req, res) {
           }
       }
       if (timeVal && String(timeVal).length > 5) timeVal = String(timeVal).slice(0, 5);
-      const localScheduledIsoNoTz =
+      let localScheduledIsoNoTz =
         dateVal && timeVal
           ? `${String(dateVal).slice(0, 10)}T${String(timeVal).slice(0, 5)}:00`
           : null;
+      let localScheduledIsoWithOffset = localScheduledIsoNoTz;
+      if (startInst != null && String(startInst).trim() !== "") {
+        const sd2 = new Date(String(startInst));
+        if (Number.isFinite(sd2.getTime())) {
+          try {
+            const dPart = formatInTimeZone(sd2, dashboardCalendarTz, "yyyy-MM-dd");
+            const tPart = formatInTimeZone(sd2, dashboardCalendarTz, "HH:mm");
+            const zPart = formatInTimeZone(sd2, dashboardCalendarTz, "XXX");
+            localScheduledIsoNoTz = `${dPart}T${tPart}:00`;
+            localScheduledIsoWithOffset = `${dPart}T${tPart}:00${zPart}`;
+          } catch (_) {
+            /* keep fallback */
+          }
+        }
+      }
       const patient = patientMap.get(a.patient_id) || null;
       const st = String(a.status || "").toLowerCase();
       return {
         appointmentId: String(a.id || ""),
         // Keep scheduledAt in clinic-local wall clock to prevent mobile-side UTC re-shift.
-        scheduledAt: localScheduledIsoNoTz,
+        scheduledAt: localScheduledIsoWithOffset,
         scheduledAtUtc: scheduledAt,
         // Local wall-clock schedule for mobile UI mapping (avoid UTC re-shift in app).
-        scheduled_date: localScheduledIsoNoTz,
-        scheduledDate: localScheduledIsoNoTz,
+        scheduled_date: localScheduledIsoWithOffset,
+        scheduledDate: localScheduledIsoWithOffset,
         displayTime,
         timezone: dashboardCalendarTz,
         date: dateVal || fallbackDay,
@@ -51762,7 +51777,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       const d = new Date(s);
       if (Number.isFinite(d.getTime())) {
         try {
-          return formatInTimeZone(d, doctorTaskTz, "yyyy-MM-dd'T'HH:mm");
+          return formatInTimeZone(d, doctorTaskTz, "yyyy-MM-dd'T'HH:mm:ssXXX");
         } catch (_) {}
       }
       // Fallback for malformed/non-ISO values: keep civil time without offset.
