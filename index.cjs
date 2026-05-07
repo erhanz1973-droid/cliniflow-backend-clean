@@ -328,6 +328,11 @@ const {
   savePushSubscription,
   getPushSubscriptionsByPatient,
 } = require("./lib/supabase");
+const {
+  normalizeAdminTimelineEventForIngest,
+  finalizeAdminTimelineAfterIso,
+  timelineDebugProcedureIdentity,
+} = require("./lib/adminTimelineNormalize.cjs");
 const { attachAdminTenantContext, logAdminQuery } = require("./lib/clinicTenant.cjs");
 const {
   normalizePhone: normalizePhoneE164,
@@ -11313,8 +11318,12 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
     }
 
     const { getActiveTreatmentsCount, countMonthlyUploadsForClinic } = require("./lib/saasUsage.cjs");
-    const activeCount = await getActiveTreatmentsCount(cid);
-    const uploadsR = await countMonthlyUploadsForClinic(supabase, cid);
+    const activeCount = await getActiveTreatmentsCount(cid, {
+      clinicCode: req.clinicCode,
+    });
+    const uploadsR = await countMonthlyUploadsForClinic(supabase, cid, {
+      clinicCode: req.clinicCode,
+    });
 
     let referralCount = 0;
     const { count: refCount, error: refErr } = await supabase
@@ -11685,16 +11694,45 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
     // Patients registered in the reporting window — created_at only (no updated_at; avoids noise / wrong signals)
     const startIso = startDate.toISOString();
     const endIso = endDate.toISOString();
-    const { data: byCreated, error: e1 } = await supabase
-      .from("patients")
-      .select("id, created_at, clinic_id")
-      .eq("clinic_id", clinicId)
-      .gte("created_at", startIso)
-      .lte("created_at", endIso);
-    if (e1) {
+    const codeUpper = String(req.clinicCode || "").trim().toUpperCase();
+    const seenIds = new Set();
+    const patients = [];
+    const ingestCreated = (rows) => {
+      for (const p of rows || []) {
+        if (!p?.id || !p.created_at) continue;
+        const id = String(p.id).trim();
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        patients.push(p);
+      }
+    };
+    const fetchCreatedPage = async (filterCol, filterVal) => {
+      const PAGE = 800;
+      for (let off = 0; ; off += PAGE) {
+        const q = supabase
+          .from("patients")
+          .select("id, created_at, clinic_id, clinic_code")
+          .eq(filterCol, filterVal)
+          .gte("created_at", startIso)
+          .lte("created_at", endIso)
+          .range(off, off + PAGE - 1);
+        const { data, error: e1 } = await q;
+        if (e1) return e1;
+        ingestCreated(data);
+        if (!data || data.length < PAGE) break;
+      }
+      return null;
+    };
+    let fetchErr = await fetchCreatedPage("clinic_id", clinicId);
+    if (fetchErr) {
       return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
     }
-    const patients = byCreated || [];
+    if (codeUpper) {
+      fetchErr = await fetchCreatedPage("clinic_code", codeUpper);
+      if (fetchErr) {
+        return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
+      }
+    }
     
     // Group by calendar month of registration (each patient counts once, in their created_at month)
     const monthlyData = {};
@@ -11709,7 +11747,10 @@ app.get("/api/admin/metrics/monthly-active-patients", requireAdminAuth, async (r
     
     patients.forEach((patient) => {
       if (!patient || !patient.id) return;
-      if (patient.clinic_id != null && String(patient.clinic_id) !== clinicId) return;
+      const rowCid = patient.clinic_id != null ? String(patient.clinic_id).trim() : "";
+      const rowCode = patient.clinic_code != null ? String(patient.clinic_code).trim().toUpperCase() : "";
+      if (rowCid && rowCid !== clinicId && (!codeUpper || rowCode !== codeUpper)) return;
+      if (!rowCid && codeUpper && rowCode && rowCode !== codeUpper) return;
       if (!patient.created_at) return;
       const d = new Date(patient.created_at);
       const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -11780,16 +11821,37 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
     
 
     
-    // All clinic patients (for procedures JSON) — scoped by clinic_id only; bucketing by procedure timestamps
-    const { data: patients, error } = await supabase
-      .from("patients")
-      .select("id, created_at, updated_at, treatments, clinic_id")
-      .eq("clinic_id", clinicId);
-    
-    if (error) {
-
+    const codeUpper = String(req.clinicCode || "").trim().toUpperCase();
+    /** Merge patients by clinic_id and optional clinic_code (same membership model as timeline). */
+    const accByPatient = new Map();
+    const loadPatientsPage = async (col, val) => {
+      const PAGE = 800;
+      for (let off = 0; ; off += PAGE) {
+        const { data, error: pe } = await supabase
+          .from("patients")
+          .select("id, patient_id, created_at, updated_at, treatments, clinic_id, clinic_code")
+          .eq(col, val)
+          .range(off, off + PAGE - 1);
+        if (pe) return pe;
+        for (const row of data || []) {
+          const pk = String(row?.id || "").trim();
+          if (pk && !accByPatient.has(pk)) accByPatient.set(pk, row);
+        }
+        if (!data || data.length < PAGE) break;
+      }
+      return null;
+    };
+    let pErr = await loadPatientsPage("clinic_id", clinicId);
+    if (pErr) {
       return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
     }
+    if (codeUpper) {
+      pErr = await loadPatientsPage("clinic_code", codeUpper);
+      if (pErr) {
+        return res.status(500).json({ ok: false, error: "Failed to fetch patients" });
+      }
+    }
+    const patients = [...accByPatient.values()];
     
     const startMs = startDate.getTime();
     const endMs = endDate.getTime();
@@ -11797,20 +11859,75 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
       const d = new Date(ts);
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     };
-    
-    // Group procedures by month and count them
+
+    const toIsoM = (tsOrIso) => {
+      if (!tsOrIso && tsOrIso !== 0) return null;
+      if (typeof tsOrIso === "string") {
+        const t = Date.parse(tsOrIso);
+        return Number.isFinite(t) ? new Date(t).toISOString() : null;
+      }
+      const n = Number(tsOrIso);
+      return Number.isFinite(n) ? new Date(n).toISOString() : null;
+    };
+
     const monthlyData = {};
-    
-    // Initialize months
     for (let i = 0; i < monthsCount; i++) {
       const monthDate = new Date();
       monthDate.setMonth(monthDate.getMonth() - i);
-      const monthKey = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
+      const monthKey = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}`;
       monthlyData[monthKey] = 0;
     }
-    
-    (patients || []).forEach((patient) => {
-      if (patient && patient.clinic_id != null && String(patient.clinic_id) !== clinicId) return;
+
+    const bumpProcMonth = (proc, patientRow) => {
+      const procTimeRaw =
+        proc?.time ??
+        proc?.scheduledTime ??
+        proc?.appointmentTime ??
+        proc?.appointment_time ??
+        "";
+      const procTime =
+        procTimeRaw === "" || procTimeRaw == null ? "" : String(procTimeRaw).trim();
+      const isoCandidate =
+        toIsoM(proc?.scheduledAt) ||
+        toIsoM(proc?.scheduled_at) ||
+        toIsoM(proc?.startAt) ||
+        toIsoM(proc?.start_at) ||
+        toIsoM(proc?.appointmentAt) ||
+        toIsoM(proc?.appointment_at) ||
+        toIsoM(proc?.scheduledFor) ||
+        parseTravelDate(proc?.date, procTime) ||
+        toIsoM(proc?.createdAt) ||
+        toIsoM(proc?.created_at) ||
+        toIsoM(proc?.updatedAt);
+      let ts = isoCandidate ? Date.parse(isoCandidate) : NaN;
+      const rawFallback =
+        proc.scheduledAt != null
+          ? proc.scheduledAt
+          : proc.createdAt != null
+            ? proc.createdAt
+            : proc.updatedAt;
+      const ts2 =
+        typeof rawFallback === "number"
+          ? rawFallback
+          : rawFallback != null
+            ? Date.parse(String(rawFallback))
+            : NaN;
+      if (!Number.isFinite(ts) && Number.isFinite(ts2)) ts = ts2;
+      if (!Number.isFinite(ts) && patientRow?.updated_at) {
+        ts = new Date(patientRow.updated_at).getTime();
+      }
+      if (!Number.isFinite(ts) || ts < startMs || ts > endMs) return false;
+      const mk = monthKeyForTs(ts);
+      if (monthlyData[mk] !== undefined) monthlyData[mk] += 1;
+      return true;
+    };
+
+    patients.forEach((patient) => {
+      const rowCid = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
+      const rowCode =
+        patient?.clinic_code != null ? String(patient.clinic_code).trim().toUpperCase() : "";
+      if (rowCid && rowCid !== clinicId && (!codeUpper || rowCode !== codeUpper)) return;
+      if (!rowCid && codeUpper && rowCode && rowCode !== codeUpper) return;
       let treatments;
       try {
         treatments = typeof patient.treatments === "string" ? JSON.parse(patient.treatments) : patient.treatments;
@@ -11821,20 +11938,67 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
       Object.values(treatments.teeth).forEach((tooth) => {
         if (!tooth.procedures || !Array.isArray(tooth.procedures)) return;
         tooth.procedures.forEach((proc) => {
-          const raw =
-            proc.scheduledAt != null
-              ? proc.scheduledAt
-              : proc.createdAt != null
-                ? proc.createdAt
-                : proc.updatedAt;
-          let ts = typeof raw === "number" ? raw : raw != null ? Date.parse(String(raw)) : NaN;
-          if (!Number.isFinite(ts)) ts = patient.updated_at ? new Date(patient.updated_at).getTime() : NaN;
-          if (!Number.isFinite(ts) || ts < startMs || ts > endMs) return;
-          const mk = monthKeyForTs(ts);
-          if (monthlyData[mk] !== undefined) monthlyData[mk] += 1;
+          bumpProcMonth(proc, patient);
         });
       });
     });
+
+    /** patient_treatments table (doctor app mirror) — same date rules as timeline */
+    try {
+      const PT_PAGE = 500;
+      for (let pto = 0; ; pto += PT_PAGE) {
+        const { data: ptRows, error: ptErr } = await supabase
+          .from("patient_treatments")
+          .select("treatments_data, clinic_id, patient_id")
+          .eq("clinic_id", clinicId)
+          .range(pto, pto + PT_PAGE - 1);
+        if (ptErr) break;
+        for (const row of ptRows || []) {
+          let td = null;
+          try {
+            td =
+              typeof row?.treatments_data === "string"
+                ? JSON.parse(row.treatments_data)
+                : row?.treatments_data;
+          } catch (_) {
+            td = null;
+          }
+          const teeth = Array.isArray(td?.teeth) ? td.teeth : [];
+          for (const tooth of teeth) {
+            const procs = Array.isArray(tooth?.procedures) ? tooth.procedures : [];
+            for (const proc of procs) bumpProcMonth(proc, { updated_at: null });
+          }
+        }
+        if (!ptRows || ptRows.length < PT_PAGE) break;
+      }
+    } catch (_) {}
+
+    /** encounter_treatments.scheduled_at — chunked by encounters in this clinic */
+    try {
+      const { chunk: chunkEnc } = require("./lib/saasUsage.cjs");
+      const { data: encRows } = await supabase
+        .from("patient_encounters")
+        .select("id")
+        .eq("clinic_id", clinicId)
+        .limit(8000);
+      const encIds = (encRows || []).map((e) => String(e?.id || "").trim()).filter(Boolean);
+      for (const part of chunkEnc(encIds, 120)) {
+        const { data: etRows, error: etE } = await supabase
+          .from("encounter_treatments")
+          .select("scheduled_at, created_at, status")
+          .in("encounter_id", part);
+        if (etE) continue;
+        for (const row of etRows || []) {
+          const st = String(row?.status || "").toLowerCase().replace(/-/g, "_");
+          if (["cancelled", "canceled", "completed", "done", "closed"].includes(st)) continue;
+          const iso = row.scheduled_at || row.created_at;
+          const ts = iso ? Date.parse(String(iso)) : NaN;
+          if (!Number.isFinite(ts) || ts < startMs || ts > endMs) continue;
+          const mk = monthKeyForTs(ts);
+          if (monthlyData[mk] !== undefined) monthlyData[mk] += 1;
+        }
+      }
+    } catch (_) {}
     
     // Convert to array and sort by month
     const result = Object.entries(monthlyData)
@@ -13992,6 +14156,7 @@ function mapEncounterTreatmentStatusToPatientJsonStatus(stRaw) {
   if (st === "CANCELLED" || st === "CANCELED") return "CANCELLED";
   if (st === "SCHEDULED") return "SCHEDULED";
   if (st === "IN_PROGRESS" || st === "ACTIVE") return "ACTIVE";
+  if (st === "PENDING" || st === "ASSIGNED" || st === "WAITING" || st === "PROPOSED") return "PLANNED";
   return "ACTIVE";
 }
 
@@ -33834,7 +33999,30 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       }
     };
     const upcomingInstantLimit = now + 180 * 24 * 60 * 60 * 1000;
-    
+
+    const adminTimelineProcDebug =
+      String(process.env.ADMIN_TIMELINE_PROC_DEBUG || "").trim() === "1";
+    const logTimelineProcedureDoctorFields = (source, procLike, extra = {}) => {
+      if (!adminTimelineProcDebug) return;
+      const p = procLike && typeof procLike === "object" ? procLike : {};
+      console.log("[timeline] procedure doctor fields", {
+        source,
+        createdBy:
+          p.created_by ??
+          p.createdBy ??
+          p.created_by_doctor_id ??
+          p.createdByDoctorId ??
+          null,
+        assignedDoctor: p.assigned_doctor_id ?? p.assignedDoctorId ?? null,
+        doctorId: p.doctor_id ?? p.doctorId ?? null,
+        status: p.status ?? null,
+        clinicId: p.clinic_id ?? p.clinicId ?? extra.clinicId ?? null,
+        patientId: extra.patientId ?? p.patient_id ?? null,
+        procedureId: p.id ?? p.procedure_id ?? p.procedureId ?? null,
+        ...extra,
+      });
+    };
+
     const allEvents = [];
     let currentPatientMembershipStartMs = 0;
 
@@ -33869,7 +34057,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       return new Date(t).toISOString();
     };
 
-    const addEvent = (evt) => {
+    const addEvent = (evtRaw) => {
+      const evt = normalizeAdminTimelineEventForIngest(evtRaw, {
+        defaultClinicId: req.clinicId,
+      });
       const timelineAt = evt.timelineAt || evt.timeline_at || null;
       const iso = timelineAt || dateTimeToIso(evt.date, evt.time) || toIso(evt.timestamp);
       if (!iso) return;
@@ -33892,11 +34083,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           if (ts < (rangeStartTs - marginMs) || ts > (rangeEndTs + marginMs)) return;
         }
       }
-      allEvents.push({
-        ...evt,
-        timelineAt: iso,
-        timestamp: Number.isFinite(ts) ? ts : (evt.timestamp || 0),
-      });
+      const merged = finalizeAdminTimelineAfterIso(
+        { ...evt, timelineAt: iso },
+        iso,
+        ts
+      );
+      allEvents.push(merged);
     };
 
     // PRODUCTION: Supabase patients are source of truth
@@ -34267,10 +34459,6 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         }
       }
 
-      const isMirroredEncounterTreatmentProcedure = (proc) => {
-        const sid = String(proc?.id || proc?.procedureId || "").trim();
-        return sid.startsWith("encounter-treatment-");
-      };
 
       // encounter_treatments (doktor uygulaması) — dashboard'ta JSON/stale mirror'dan bağımsız doğru zaman çizelgesi
       try {
@@ -34281,7 +34469,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             const { data: etData, error: etErr } = await supabase
               .from("encounter_treatments")
               .select(
-                "id, encounter_id, tooth_number, procedure_type, status, scheduled_at, created_at, updated_at, chair, assigned_doctor_id"
+                "id, encounter_id, tooth_number, procedure_type, status, scheduled_at, created_at, updated_at, chair, assigned_doctor_id, created_by_doctor_id"
               )
               .in("encounter_id", chunk);
             const ec = String(etErr?.code || "");
@@ -34310,12 +34498,23 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           if (st === "CANCELLED" || st === "CANCELED") continue;
           const dt = new Date(Date.parse(timelineAt));
           const assignDoc = String(row.assigned_doctor_id || "").trim();
-          const docLabel = String(doctorNameById.get(assignDoc) || prowDoctorName || "").trim();
+          const createdByDoc = String(row.created_by_doctor_id || "").trim();
+          const leadingDoc = assignDoc || createdByDoc;
+          const docLabel = String(
+            (leadingDoc && doctorNameById.get(leadingDoc)) ||
+              prowDoctorName ||
+              ""
+          ).trim();
           const procChair = String(row.chair || "").trim();
           const procType = String(row.procedure_type || "TREATMENT").trim();
           const toothNum = row.tooth_number;
           const normalizedLabel = mapEncounterTreatmentStatusToPatientJsonStatus(row.status);
           currentPatientMembershipStartMs = prow?.created_at ? Date.parse(String(prow.created_at)) : 0;
+          logTimelineProcedureDoctorFields("encounter_treatments", row, {
+            patientId,
+            encounterId: encId,
+            leadingDoctorId: leadingDoc || null,
+          });
           const enriched = applyEventPrices(
             [
               {
@@ -34336,6 +34535,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
                 source: "encounter_treatments",
                 toothId: toothNum != null ? String(toothNum) : undefined,
                 timelineAt,
+                meta: {
+                  encounter_treatment_id: row.id,
+                  assigned_doctor_id: assignDoc || undefined,
+                  created_by_doctor_id: createdByDoc || undefined,
+                },
               },
             ],
             priceMap
@@ -34452,7 +34656,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const toothId = tooth?.toothId;
           const procs = Array.isArray(tooth?.procedures) ? tooth.procedures : [];
           procs.forEach((proc) => {
-            if (isMirroredEncounterTreatmentProcedure(proc)) return;
+            logTimelineProcedureDoctorFields("patients.treatments_teeth", proc, {
+              patientId,
+              clinicId: p?.clinic_id,
+            });
             // scheduledAt / createdAt (ms or ISO), else wall date+time (admin often stores DD.MM.YYYY)
             const procTimeRaw =
               proc?.time ??
@@ -34464,16 +34671,32 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               procTimeRaw === "" || procTimeRaw == null ? "" : String(procTimeRaw).trim();
             const timelineAt =
               toIso(proc?.scheduledAt) ||
+              toIso(proc?.scheduled_at) ||
+              toIso(proc?.startAt) ||
+              toIso(proc?.start_at) ||
+              toIso(proc?.appointmentAt) ||
+              toIso(proc?.appointment_at) ||
+              toIso(proc?.scheduledFor) ||
+              toIso(proc?.scheduled_for) ||
               toIso(proc?.createdAt) ||
+              toIso(proc?.created_at) ||
               parseTravelDate(proc?.date, procTime) ||
               dateTimeToIso(proc?.date, procTime);
-            if (!timelineAt) return;
+            if (!timelineAt) {
+              logTimelineProcedureDoctorFields("patients.treatments_teeth_skip_no_time", proc, {
+                patientId,
+                clinicId: p?.clinic_id,
+              });
+              return;
+            }
             const dt = new Date(Date.parse(timelineAt));
             const procedureDoctorId = String(
               proc?.assignedDoctorId ||
               proc?.assigned_doctor_id ||
               proc?.doctorId ||
               proc?.doctor_id ||
+              proc?.createdByDoctorId ||
+              proc?.created_by_doctor_id ||
               proc?.meta?.doctorId ||
               proc?.meta?.doctor_id ||
               ""
@@ -34534,7 +34757,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           const toothId = tooth?.id ?? tooth?.toothId;
           const procs = Array.isArray(tooth?.procedures) ? tooth.procedures : [];
           procs.forEach((proc) => {
-            if (isMirroredEncounterTreatmentProcedure(proc)) return;
+            logTimelineProcedureDoctorFields("patient_treatments_table", proc, {
+              patientId,
+              clinicId: p?.clinic_id,
+            });
             const procTimeRaw =
               proc?.time ??
               proc?.scheduledTime ??
@@ -34546,17 +34772,31 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             const timelineAt =
               toIso(proc?.scheduledAt) ||
               toIso(proc?.scheduled_at) ||
+              toIso(proc?.startAt) ||
+              toIso(proc?.start_at) ||
+              toIso(proc?.appointmentAt) ||
+              toIso(proc?.appointment_at) ||
+              toIso(proc?.scheduledFor) ||
+              toIso(proc?.scheduled_for) ||
               toIso(proc?.createdAt) ||
               toIso(proc?.created_at) ||
               parseTravelDate(proc?.date, procTime) ||
               dateTimeToIso(proc?.date, procTime);
-            if (!timelineAt) return;
+            if (!timelineAt) {
+              logTimelineProcedureDoctorFields("patient_treatments_table_skip_no_time", proc, {
+                patientId,
+                clinicId: p?.clinic_id,
+              });
+              return;
+            }
             const dt = new Date(Date.parse(timelineAt));
             const procStatus = String(proc?.status || "PLANNED").toUpperCase();
             if (procStatus === "CANCELLED") return;
             const procDoctorId = String(
               proc?.assignedDoctorId || proc?.assigned_doctor_id ||
-              proc?.doctorId || proc?.doctor_id || ""
+              proc?.doctorId || proc?.doctor_id ||
+              proc?.createdByDoctorId || proc?.created_by_doctor_id ||
+              ""
             ).trim();
             const procDoctorName = String(
               proc?.assignedDoctorName || proc?.doctorName || proc?.doctor ||
@@ -34678,12 +34918,20 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
           if (itemRows.length > 0) {
             itemRows.forEach((item) => {
+                logTimelineProcedureDoctorFields("encounter_treatment_plan_item", item, {
+                  patientId,
+                  clinicId: p?.clinic_id,
+                });
                 const timelineAt =
                   toIso(item?.scheduled_at) ||
                   toIso(item?.scheduledAt) ||
                   toIso(item?.scheduled_for) ||
+                  toIso(item?.start_at) ||
+                  toIso(item?.startAt) ||
                   toIso(item?.appointment_at) ||
+                  toIso(item?.appointmentAt) ||
                   dateTimeToIso(item?.appointment_date, item?.time || "00:00") ||
+                  dateTimeToIso(item?.scheduled_date, item?.time || "00:00") ||
                   dateTimeToIso(item?.date, item?.time || "00:00") ||
                   toIso(item?.created_at) ||
                   toIso(item?.updated_at);
@@ -34694,13 +34942,26 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
                 const procedureType = procedureCode.toUpperCase();
                 const toothIdRaw = item?.tooth_fdi_code ?? item?.tooth_number;
                 const normalizedStatus = procedures.normalizeStatus(item?.status || "PLANNED");
+                const itemDocId = String(
+                  item?.assigned_doctor_id ??
+                  item?.doctor_id ??
+                  item?.assignedDoctorId ??
+                  item?.doctorId ??
+                  ""
+                ).trim();
+                const createdByItem = String(
+                  item?.created_by_doctor_id ?? item?.created_by ?? ""
+                ).trim();
+                const leadingItemDoc = itemDocId || createdByItem;
+                const itemDoctorName =
+                  (leadingItemDoc && doctorNameById.get(leadingItemDoc)) || patientDoctorName || "";
 
                 const encounterEnriched = applyEventPrices([{
                   id: item?.id || `enc_item_${patientId}_${timelineAt}`,
                   patientId,
                   patient: patientName,
                   patientName,
-                  doctor: patientDoctorName,
+                  doctor: String(itemDoctorName).trim(),
                   type: ["CONSULT", "FOLLOWUP", "LAB"].includes(procedureType) ? procedureType : "TREATMENT",
                   eventType: procedureType,
                   treatment: procedureType,
@@ -34714,6 +34975,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
                   source: "encounter_treatment",
                   toothId: toothIdRaw ? String(toothIdRaw) : undefined,
                   timelineAt,
+                  meta: {
+                    treatment_plan_item_id: item?.id,
+                    assigned_doctor_id: itemDocId || undefined,
+                    created_by_doctor_id: createdByItem || undefined,
+                  },
                 }], priceMap)[0];
                 addEvent(encounterEnriched);
               });
@@ -34949,7 +35215,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
     const timelineEventDebugKey = (evt) => {
       if (!evt || typeof evt !== "object") return "";
-      const id = String(evt.id || evt.procedureId || "").trim();
+      const id = timelineDebugProcedureIdentity(evt);
       const pid = canonicalPatientIdForTimeline(String(evt.patientId || "").trim());
       const src = String(evt.source || "").trim();
       const typ = String(evt.eventType || evt.type || evt.treatment || "").trim();
@@ -34976,6 +35242,13 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     console.log("[timeline] raw procedures", timelineDbgRawProcedures);
 
     console.log("[EVENTS] Total raw events collected:", allEvents.length, "for clinic:", req.clinicCode);
+    for (let ei = 0; ei < allEvents.length; ei++) {
+      const ev = allEvents[ei];
+      if (!ev || typeof ev !== "object") continue;
+      allEvents[ei] = normalizeAdminTimelineEventForIngest(ev, {
+        defaultClinicId: req.clinicId,
+      });
+    }
     const dedupedEvents = dedupeAdminTimelineEvents(allEvents);
     if (dedupedEvents.length !== allEvents.length) {
       console.log("[EVENTS] After dedupe:", dedupedEvents.length, "(removed", allEvents.length - dedupedEvents.length, "duplicate/stale rows)");

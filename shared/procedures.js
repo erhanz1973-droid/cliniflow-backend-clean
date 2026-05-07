@@ -68,6 +68,15 @@ function normalizeStatus(s) {
   const raw = String(s || "PLANNED").trim().toUpperCase();
   if (raw === "DONE") return "COMPLETED";
   if (raw === "IN_PROGRESS") return "ACTIVE";
+  if (
+    raw === "SCHEDULED" ||
+    raw === "PENDING" ||
+    raw === "ASSIGNED" ||
+    raw === "CONFIRMED" ||
+    raw === "PROPOSED" ||
+    raw === "WAITING"
+  )
+    return "PLANNED";
   if (raw === "PLANNED" || raw === "ACTIVE" || raw === "COMPLETED" || raw === "CANCELLED") return raw;
   return "PLANNED";
 }
