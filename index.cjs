@@ -43468,7 +43468,9 @@ async function handleDoctorInboxSummary(req, res) {
       const st = String(a.status || "").toLowerCase();
       return {
         appointmentId: String(a.id || ""),
-        scheduledAt,
+        // Keep scheduledAt in clinic-local wall clock to prevent mobile-side UTC re-shift.
+        scheduledAt: localScheduledIsoNoTz,
+        scheduledAtUtc: scheduledAt,
         // Local wall-clock schedule for mobile UI mapping (avoid UTC re-shift in app).
         scheduled_date: localScheduledIsoNoTz,
         scheduledDate: localScheduledIsoNoTz,
@@ -51807,6 +51809,15 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           due_date: dueDateLocal,
           time: dueDateLocal ? String(dueDateLocal).slice(11, 16) : null,
           timezone: doctorTaskTz,
+          scheduledAt: dueDateLocal,
+          scheduledAtUtc:
+            item?.due_date ||
+            item?.scheduled_at ||
+            item?.appointment_date ||
+            item?.date ||
+            null,
+          scheduled_date: dueDateLocal,
+          scheduledDate: dueDateLocal,
           scheduled_by: 'DOCTOR',
           priority: String(item?.priority || 'MEDIUM').toUpperCase(),
           high_priority: item?.high_priority === true,
@@ -51953,6 +51964,10 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           due_date: dueDateLocal,
           time: dueDateLocal ? String(dueDateLocal).slice(11, 16) : null,
           timezone: doctorTaskTz,
+          scheduledAt: dueDateLocal,
+          scheduledAtUtc: et?.scheduled_at || et?.created_at || null,
+          scheduled_date: dueDateLocal,
+          scheduledDate: dueDateLocal,
           scheduled_by: 'DOCTOR',
           priority: 'MEDIUM',
           high_priority: false,
