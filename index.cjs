@@ -16615,10 +16615,11 @@ function coerceScheduledAtInputToUtcIso(raw, ianaTzHint, contextLabel = "schedul
   }
 }
 
-async function resolveClinicIanaTzForScheduledWrites(clinicId) {
+async function resolveClinicIanaTzForScheduledWrites(clinicId, clinicCodeRaw) {
   const id = String(clinicId || "").trim();
   if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-    return "UTC";
+    const fromCodeOnly = resolveDashboardCalendarTimeZone("", "", clinicCodeRaw);
+    return validateIANATimeZoneId(fromCodeOnly) || "UTC";
   }
   try {
     const row = await getClinicById(id);
@@ -16631,6 +16632,8 @@ async function resolveClinicIanaTzForScheduledWrites(clinicId) {
   } catch (_) {
     /* ignore */
   }
+  const fromCode = resolveDashboardCalendarTimeZone("", "", clinicCodeRaw);
+  if (validateIANATimeZoneId(fromCode)) return fromCode;
   return "UTC";
 }
 
@@ -45509,7 +45512,8 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
     let { tooth_number, procedure_type, procedure_id, scheduled_at, chair, assigned_doctor_id } = req.body || {};
     const doctorUuid = String(req?.doctor?.id || req.doctorId || '').trim();
     const clinicId = String(req?.doctor?.clinic_id || '').trim();
-    const clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(clinicId);
+    const clinicCodeForTz = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || req?.clinicCode || "").trim();
+    const clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(clinicId, clinicCodeForTz);
 
     if (
       saasEnforcement.limitsEnabled() &&
@@ -45714,7 +45718,8 @@ async function handleDoctorEncounterTreatmentPut(req, res) {
     }
 
     const { status, chair, assigned_doctor_id, scheduled_at, notes, encounter_id } = req.body || {};
-    const clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(req?.doctor?.clinic_id);
+    const clinicCodeForTz = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || req?.clinicCode || "").trim();
+    const clinicTzWrite = await resolveClinicIanaTzForScheduledWrites(req?.doctor?.clinic_id, clinicCodeForTz);
 
     const updateFields = {
       updated_at: new Date().toISOString(),
