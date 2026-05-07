@@ -43460,11 +43460,18 @@ async function handleDoctorInboxSummary(req, res) {
           }
       }
       if (timeVal && String(timeVal).length > 5) timeVal = String(timeVal).slice(0, 5);
+      const localScheduledIsoNoTz =
+        dateVal && timeVal
+          ? `${String(dateVal).slice(0, 10)}T${String(timeVal).slice(0, 5)}:00`
+          : null;
       const patient = patientMap.get(a.patient_id) || null;
       const st = String(a.status || "").toLowerCase();
       return {
         appointmentId: String(a.id || ""),
         scheduledAt,
+        // Local wall-clock schedule for mobile UI mapping (avoid UTC re-shift in app).
+        scheduled_date: localScheduledIsoNoTz,
+        scheduledDate: localScheduledIsoNoTz,
         displayTime,
         timezone: dashboardCalendarTz,
         date: dateVal || fallbackDay,
