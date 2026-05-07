@@ -45579,7 +45579,9 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
     }
 
     await mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, data);
+    console.timeLog('doctor-save', 'after mirror update');
     bumpTreatmentsCache();
+    console.timeLog('doctor-save', 'before response');
     return res.json({
       ok: true,
       treatment: {
@@ -45862,17 +45864,33 @@ app.get('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (
  * cliniflow-app treatment-plan: securePost — encounter_id body içinde opsiyonel; yoksa hastanın erişilebilir en yeni encounter'ı.
  */
 app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async (req, res) => {
+  console.time('doctor-save');
+  let doctorSaveTimerEnded = false;
+  const endDoctorSaveTimer = () => {
+    if (doctorSaveTimerEnded) return;
+    doctorSaveTimerEnded = true;
+    console.timeEnd('doctor-save');
+  };
   try {
     const patientId = String(req.params.patientId || '').trim();
-    if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
-    if (!isSupabaseEnabled()) return res.status(500).json({ ok: false, error: 'supabase_not_configured' });
+    if (!patientId) {
+      endDoctorSaveTimer();
+      return res.status(400).json({ ok: false, error: 'patient_id_required' });
+    }
+    if (!isSupabaseEnabled()) {
+      endDoctorSaveTimer();
+      return res.status(500).json({ ok: false, error: 'supabase_not_configured' });
+    }
     const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
     const patient = await resolvePatientRowWithAdminFallback(patientId, docCid, "[DOCTOR PATIENT TREATMENTS POST]");
+    console.timeLog('doctor-save', 'after patient lookup');
     if (!patient?.id) {
+      endDoctorSaveTimer();
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
     const statusRaw = String(patient?.status || '').toUpperCase();
     if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
+      endDoctorSaveTimer();
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
 
@@ -45892,11 +45910,13 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
     }
 
     if (!isAssigned) {
+      endDoctorSaveTimer();
       return res.status(403).json({ ok: false, error: 'patient_not_assigned' });
     }
 
     const internalUuid = String(patient?.id || '').trim();
     if (!internalUuid) {
+      endDoctorSaveTimer();
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
 
@@ -45909,11 +45929,13 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
 
     if (encListErr) {
       console.error('[DOCTOR PATIENT TREATMENTS POST] patient_encounters:', encListErr);
+      endDoctorSaveTimer();
       return res.status(500).json({ ok: false, error: 'encounters_fetch_failed' });
     }
 
     const rowList = (encRows || []).filter((e) => e && e.id);
     if (!rowList.length) {
+      endDoctorSaveTimer();
       return res.status(400).json({ ok: false, error: 'no_encounter_for_patient' });
     }
 
@@ -45924,18 +45946,24 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
     if (bodyEncRaw) {
       const match = rowList.find((e) => norm(e.id) === norm(bodyEncRaw));
       if (!match) {
+        endDoctorSaveTimer();
         return res.status(400).json({ ok: false, error: 'invalid_encounter_id' });
       }
       resolvedEncounterId = String(match.id);
     } else {
       // Access is already validated at patient level above; select latest patient encounter directly.
       resolvedEncounterId = String(rowList[0]?.id || '').trim();
-      if (!resolvedEncounterId) return res.status(400).json({ ok: false, error: 'no_encounter_for_patient' });
+      if (!resolvedEncounterId) {
+        endDoctorSaveTimer();
+        return res.status(400).json({ ok: false, error: 'no_encounter_for_patient' });
+      }
     }
-
-    return doctorPostEncounterTreatmentInner(resolvedEncounterId, req, res);
+    const response = await doctorPostEncounterTreatmentInner(resolvedEncounterId, req, res);
+    endDoctorSaveTimer();
+    return response;
   } catch (err) {
     console.error('[DOCTOR PATIENT TREATMENTS POST] exception:', err);
+    endDoctorSaveTimer();
     return res.status(500).json({ ok: false, error: err.message || 'server_error' });
   }
 });
