@@ -14853,6 +14853,20 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
       encounter_id: treatmentRow.encounter_id || eid,
     };
     mergeEncounterTreatmentRowsIntoPatientTeethPayload(payload, [rowForMerge]);
+    const mirrorProcCount = (payload.teeth || []).reduce(
+      (sum, t) => sum + (Array.isArray(t?.procedures) ? t.procedures.length : 0),
+      0
+    );
+    if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
+      console.log("[ENCOUNTER TREATMENT MIRROR] payload built", {
+        encounterId: eid,
+        patientUuid,
+        patientPublicId: payload.patientId,
+        teethCount: Array.isArray(payload.teeth) ? payload.teeth.length : 0,
+        procedureCount: mirrorProcCount,
+        mirroredRowId: treatmentRow?.id || null,
+      });
+    }
     const saveRes = await saveTreatmentsSupabaseWithFallback(
       patientUuid,
       payload,
@@ -14861,6 +14875,14 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
     if (!saveRes?.ok) {
       console.warn("[ENCOUNTER TREATMENT MIRROR] save failed:", saveRes?.error?.message || saveRes?.error);
     } else {
+      if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
+        console.log("[ENCOUNTER TREATMENT MIRROR] save ok", {
+          patientUuid,
+          patientPublicId: payload.patientId,
+          usedFallback: Boolean(saveRes?.usedFallback),
+          procedureCount: mirrorProcCount,
+        });
+      }
       invalidateTreatmentsCacheForPatient(patientUuid);
     }
   } catch (e) {
