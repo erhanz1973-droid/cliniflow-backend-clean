@@ -11362,12 +11362,13 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
       limits,
       usage: {
         active_treatments: activeCount,
-        monthly_uploads: uploadsR.value,
+        monthly_uploads: uploadsR?.value ?? 0,
         referrals: referralCount,
       },
     });
   } catch (e) {
-    console.error("[clinic usage] fatal", e?.message || e, e?.stack || "");
+    console.error("[clinic usage] fatal", e);
+    if (e?.stack) console.error("[clinic usage] stack", e.stack);
     console.error("[clinic usage] diag", {
       clinicId: usageDiag.cid,
       step: usageDiag.step,
@@ -11375,8 +11376,9 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
       activeCount: usageDiag.activeCount,
       uploadsVal: usageDiag.uploadsVal,
       referralCount: usageDiag.referralCount,
-      proceduresLen: "(n/a — usage counts Supabase aggregates, not procedures[])",
-      normalizedLen: "(n/a)",
+      proceduresLen: null,
+      normalizedLen: null,
+      note: "usage endpoint uses DB counts only; no procedures[] / normalization array",
     });
     console.error("[GET /api/clinic/usage]", e);
     return res.status(500).json({ error: e?.message || "internal_error" });
