@@ -41,28 +41,89 @@
     .head-day strong { font-size:12px; color:#334155; }
     .head-day span { font-size:11px; color:#64748b; font-weight:600; }
     .time-cell { font-size:12px; color:#475569; background:#fcfdff; font-weight:600; }
-    .slot-cell { padding:3px; }
+    .slot-cell { padding:2px; }
     .view-tog { font-weight: 600; }
     .view-tog.is-active { background: var(--blue, #2563eb); color: #fff; border-color: var(--blue, #2563eb); }
     .cal-month-block { margin-bottom: 24px; }
     .cal-month-block + .cal-month-block { border-top: 1px solid var(--border); padding-top: 16px; }
 
     .appt-card {
-      border: 1px solid var(--border); border-radius: 8px;
-      padding: 5px 8px; margin-bottom: 3px; background: var(--card);
-      font-size: 12px; min-height: 44px; transition: box-shadow .15s;
-      display: grid; grid-template-columns: 56px 1fr 14px; gap: 8px; align-items: center;
-      line-height: 1.2;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px 6px;
+      margin-bottom: 2px;
+      background: var(--card);
+      font-size: 12px;
+      min-height: 34px;
+      transition: box-shadow .15s;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      line-height: 1.15;
     }
     .appt-card:hover { box-shadow: var(--shadow-md); }
     .appt-card:last-child { margin-bottom:0; }
-    .appt-time { font-weight: 700; color: #0f172a; font-size: 11px; white-space: nowrap; }
-    .appt-main { min-width: 0; display:flex; flex-direction:column; gap:2px; }
-    .appt-patient { font-weight:700; color:#0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .appt-meta { color:#64748b; display:flex; align-items:center; gap:6px; min-width:0; }
-    .appt-meta-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .status-badge { display:inline-block; padding:1px 7px; border-radius:999px; font-size:10px; font-weight:700; flex-shrink:0; }
-    .appt-chevron { color:#94a3b8; font-size: 14px; text-align:right; }
+    .appt-time {
+      width: 44px;
+      flex: 0 0 44px;
+      font-weight: 700;
+      color: #0f172a;
+      font-size: 10px;
+      white-space: nowrap;
+      text-align: center;
+    }
+    .appt-main {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .appt-row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-width: 0;
+    }
+    .appt-patient {
+      font-weight: 700;
+      color: #0f172a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      font-size: 12px;
+    }
+    .appt-meta {
+      color: #64748b;
+      min-width: 0;
+    }
+    .appt-meta-text {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: block;
+      font-size: 11px;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      flex-shrink: 0;
+      margin: 0;
+    }
+    .appt-chevron {
+      color: #94a3b8;
+      font-size: 12px;
+      line-height: 1;
+      width: 10px;
+      flex: 0 0 10px;
+      text-align: right;
+    }
     .status-proposed  { background:#fef3c7; color:#92400e; }
     .status-confirmed { background:#dcfce7; color:#166534; }
     .status-other     { background:#e2e8f0; color:#334155; }
@@ -781,10 +842,12 @@
             <div class="appt-card">
               <div class="appt-time">${compactTime}</div>
               <div class="appt-main">
-                <div class="appt-patient">${item.patient || '-'}</div>
-                <div class="appt-meta">
-                  <span class="appt-meta-text">${metaPrefix}${procAndTooth} • ${chairTxt}</span>
+                <div class="appt-row-top">
+                  <div class="appt-patient">${item.patient || '-'}</div>
                   <span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span>
+                </div>
+                <div class="appt-meta">
+                  <span class="appt-meta-text">${procAndTooth}${chairTxt ? ` • ${chairTxt}` : ''}${metaPrefix ? ` • ${metaPrefix.replace(/\s*•\s*$/, '')}` : ''}</span>
                 </div>
               </div>
               <div class="appt-chevron">›</div>
