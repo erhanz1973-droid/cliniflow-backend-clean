@@ -34796,6 +34796,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           .flatMap((encs) => (encs || []).map((e) => String(e?.id || "")))
           .filter(Boolean)
       )];
+      // encounter_id -> patient_id fallback map for rows discovered outside patients list linkage
+      const encounterPatientFallbackByEncounterId = new Map();
       // patientId → Set<planId>
       const planIdsByPatientId = new Map();
       try {
@@ -34847,6 +34849,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               const encId = String(row?.encounter_id || "").trim();
               const pid = String(row?.patient_id || "").trim();
               if (encId) mergedEncounterIds.add(encId);
+              if (encId && pid) encounterPatientFallbackByEncounterId.set(encId, pid);
               const planId = String(row?.id || "").trim();
               if (pid && planId) registerPlanUnderPatientAliases(pid, planId);
             }
@@ -34952,6 +34955,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         for (const enc of encs || []) {
           const eid = String(enc?.id || "").trim();
           if (eid) encounterIdToPatientIdForDashboard.set(eid, pid);
+        }
+      }
+      // Add fallback pairs collected from clinic-scoped treatment plans.
+      for (const [eid, pid] of encounterPatientFallbackByEncounterId.entries()) {
+        if (eid && pid && !encounterIdToPatientIdForDashboard.has(eid)) {
+          encounterIdToPatientIdForDashboard.set(eid, pid);
         }
       }
 
