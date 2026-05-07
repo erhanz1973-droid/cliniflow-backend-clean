@@ -16599,6 +16599,13 @@ function coerceScheduledAtInputToUtcIso(raw, ianaTzHint, contextLabel = "schedul
   if (datetimeStringHasExplicitUtcOffset(spaceToT)) {
     return assertUtcIsoScheduledAt(spaceToT, contextLabel);
   }
+  // Heuristic for idempotency:
+  // Some clients send machine-generated ISO-like strings without timezone suffix
+  // (e.g. "2026-05-08T19:00:00.000"). Re-interpreting these as clinic-local time
+  // on every save causes +offset drift each round-trip. Treat such payloads as UTC.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(spaceToT)) {
+    return assertUtcIsoScheduledAt(`${spaceToT}Z`, contextLabel);
+  }
   const zone = validateIANATimeZoneId(ianaTzHint) || "UTC";
   try {
     if (/^\d{4}-\d{2}-\d{2}$/.test(spaceToT)) {
