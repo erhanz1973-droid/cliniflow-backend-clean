@@ -681,20 +681,14 @@
 
   const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
 
-  // ── Plan & usage (mock until /api/admin/billing/usage is wired) ─────────────
-  const PLAN_USAGE_MOCK = {
-    plan: "free",
-    usage: {
-      activeTreatments: 3,
-      uploads: 12,
-      referrals: 2,
-    },
-    limits: {
-      free: { activeTreatments: 5, uploads: 30, referrals: 5 },
-      basic: { activeTreatments: 30, uploads: 300, referrals: 50 },
-      pro: { activeTreatments: null, uploads: null, referrals: null },
-    },
+  // ── Plan & usage ─────────────────────────────────────────────────────────────
+  // Keep cards stable: never show mock/optimistic numbers before real API data.
+  const PLAN_USAGE_DEFAULT_LIMITS = {
+    free: { activeTreatments: null, uploads: null, referrals: null },
+    basic: { activeTreatments: null, uploads: null, referrals: null },
+    pro: { activeTreatments: null, uploads: null, referrals: null },
   };
+  let planUsageRequestSeq = 0;
 
   function planUsageIsUnlimited(limit) {
     return limit == null || limit === -1;
@@ -726,7 +720,8 @@
   }
 
   /**
-   * Renders plan + usage into #containerId. Uses mock data from PLAN_USAGE_MOCK unless overridden.
+   * Renders plan + usage into #containerId.
+   * Uses placeholders ("—") until final clinic-scoped API data arrives.
    * @param {string} containerId
    * @param {{ plan?: string, usage?: object, limits?: object }} [override]
    */
@@ -737,10 +732,11 @@
     const t = planUsageT;
     const unlimitedLabel = t("dashboard.unlimited");
 
-    const plan = String((override && override.plan) || PLAN_USAGE_MOCK.plan || "free").toLowerCase();
-    const usage = Object.assign({}, PLAN_USAGE_MOCK.usage, (override && override.usage) || {});
-    const limits = Object.assign({}, PLAN_USAGE_MOCK.limits, (override && override.limits) || {});
-    const tierLimits = limits[plan] || limits.free || {};
+    const hasUsage = !!(override && override.usage && typeof override.usage === "object");
+    const plan = String((override && override.plan) || "free").toLowerCase();
+    const usage = hasUsage ? Object.assign({}, (override && override.usage) || {}) : {};
+    const limits = Object.assign({}, PLAN_USAGE_DEFAULT_LIMITS, (override && override.limits) || {});
+    const tierLimits = limits[plan] || limits.free || PLAN_USAGE_DEFAULT_LIMITS.free;
 
     const rows = [
       { key: "activeTreatments", label: t("dashboard.activeTreatments"), used: usage.activeTreatments, limit: tierLimits.activeTreatments },
@@ -749,22 +745,24 @@
     ];
 
     let worst = "ok";
-    rows.forEach((r) => {
-      const lv = planUsageRowLevel(r.used, r.limit);
-      if (lv === "crit") worst = "crit";
-      else if (lv === "warn" && worst !== "crit") worst = "warn";
-    });
+    if (hasUsage) {
+      rows.forEach((r) => {
+        const lv = planUsageRowLevel(r.used, r.limit);
+        if (lv === "crit") worst = "crit";
+        else if (lv === "warn" && worst !== "crit") worst = "warn";
+      });
+    }
 
     let alertHtml = "";
-    if (worst === "crit") {
+    if (hasUsage && worst === "crit") {
       alertHtml =
         '<p class="plan-alert crit">' + t("dashboard.planAlertCrit") + "</p>";
-    } else if (worst === "warn") {
+    } else if (hasUsage && worst === "warn") {
       alertHtml =
         '<p class="plan-alert warn">' + t("dashboard.planAlertWarn") + "</p>";
     }
 
-    const planTitle = plan.toUpperCase();
+    const planTitle = hasUsage ? plan.toUpperCase() : "—";
 
     root.innerHTML =
       '<section class="plan-usage-widget">' +
@@ -792,7 +790,7 @@
             '<span class="plan-row-value"' +
             (vid ? ' id="' + vid + '"' : "") +
             ">" +
-            planUsageFormatPair(r.used, r.limit, unlimitedLabel) +
+            (hasUsage ? planUsageFormatPair(r.used, r.limit, unlimitedLabel) : "—") +
             "</span>" +
             "</div>"
           );
@@ -862,7 +860,7 @@
   function limitsFromBillingCatalog(catalog) {
     try {
       const p = catalog && catalog.plans;
-      if (!p || !p.FREE) return PLAN_USAGE_MOCK.limits;
+      if (!p || !p.FREE) return PLAN_USAGE_DEFAULT_LIMITS;
       return {
         free: {
           activeTreatments: p.FREE.activeTreatments,
@@ -881,12 +879,13 @@
         },
       };
     } catch (e) {
-      return PLAN_USAGE_MOCK.limits;
+      return PLAN_USAGE_DEFAULT_LIMITS;
     }
   }
 
   async function loadPlanUsageWidget() {
     const token = getAdminToken();
+    const reqSeq = ++planUsageRequestSeq;
     renderPlanWidget("planUsageWidgetMount");
     if (!token) return;
     try {
@@ -898,6 +897,7 @@
         return;
       }
       const data = await res.json();
+      if (reqSeq !== planUsageRequestSeq) return;
       updateDashboardUI(data);
     } catch (e) {
       console.warn("[PLAN USAGE]", e);
@@ -1455,6 +1455,7 @@
 
   // Add loading flag to prevent race conditions
   let eventsLoading = false;
+  let eventsRequestSeq = 0;
 
   /** Normalize edilmiş timeline anı — safeDate ile. */
   function adminDashboardEventInstantMs(evt) {
@@ -1469,6 +1470,7 @@
     }
     
     eventsLoading = true;
+    const reqSeq = ++eventsRequestSeq;
     
     try {
       const upcomingEl = document.getElementById("upcomingList");
@@ -1507,6 +1509,7 @@
       }
       
       const data = await r.json();
+      if (reqSeq !== eventsRequestSeq) return;
       console.log("[loadEvents] Response data:", data);
       console.log("[loadEvents] Counts — overdue:", (data.overdue||[]).length, "today:", (data.today||[]).length, "upcoming:", (data.upcoming||[]).length, "total:", data.total);
 
@@ -1694,6 +1697,7 @@
   }
   window.initMetricCardTitles = initMetricCardTitles;
 
+  let dashboardInitDone = false;
   window.renderDashboard = function() {
     initMetricCardTitles();
     if (!document.getElementById("upcomingList")) return;
@@ -1710,6 +1714,8 @@
   };
   
   function initializeDashboard() {
+    if (dashboardInitDone) return;
+    dashboardInitDone = true;
     initMetricCardTitles();
     loadPlanUsageWidget();
     loadClinicInfo();
@@ -1728,6 +1734,7 @@
 
   // Load monthly active patients metrics
   async function loadMonthlyActivePatients() {
+    const reqSeq = (loadMonthlyActivePatients._seq = (loadMonthlyActivePatients._seq || 0) + 1);
     try {
       const token = getAdminToken();
       if (!token) return;
@@ -1738,6 +1745,7 @@
       
       if (!res.ok) { if (window.handle401 && window.handle401(res.status)) return; throw new Error(`HTTP ${res.status}`); }
       const data = await res.json();
+      if (reqSeq !== loadMonthlyActivePatients._seq) return;
       
       if (!data.ok || !Array.isArray(data.data)) {
         console.warn('[METRICS] No data available');
@@ -1749,6 +1757,7 @@
       updateActivePatientsUI(data);
       
     } catch (error) {
+      if (reqSeq !== loadMonthlyActivePatients._seq) return;
       console.error('[METRICS] Error loading monthly active patients:', error);
       updateActivePatientsUI(null);
     }
@@ -1890,6 +1899,7 @@ function updateActivePatientsUI(data) {
 
   // Load monthly procedures metrics
   async function loadMonthlyProcedures() {
+    const reqSeq = (loadMonthlyProcedures._seq = (loadMonthlyProcedures._seq || 0) + 1);
     try {
       const token = getAdminToken();
       if (!token) return;
@@ -1900,6 +1910,7 @@ function updateActivePatientsUI(data) {
       
       if (!res.ok) { if (window.handle401 && window.handle401(res.status)) return; throw new Error(`HTTP ${res.status}`); }
       const data = await res.json();
+      if (reqSeq !== loadMonthlyProcedures._seq) return;
       
       if (!data.ok || !Array.isArray(data.data)) {
         console.warn('[METRICS] No procedures data available');
@@ -1911,6 +1922,7 @@ function updateActivePatientsUI(data) {
       updateMonthlyProceduresUI(data);
       
     } catch (error) {
+      if (reqSeq !== loadMonthlyProcedures._seq) return;
       console.error('[METRICS] Error loading monthly procedures:', error);
       updateMonthlyProceduresUI(null);
     }
