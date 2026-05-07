@@ -34390,6 +34390,22 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         const queryEndIso = hasRangeFilter
           ? `${endDate}T23:59:59.999Z`
           : new Date(upcomingInstantLimit).toISOString();
+        const queryStartDate = String(queryStartIso).slice(0, 10);
+        const queryEndDate = String(queryEndIso).slice(0, 10);
+        const clinicPatientIds = new Set();
+        try {
+          const p1 = await supabase.from("patients").select("id, patient_id").eq("clinic_id", req.clinicId).limit(4000);
+          if (!p1.error) {
+            (p1.data || []).forEach((p) => {
+              if (p?.id) clinicPatientIds.add(String(p.id));
+              if (p?.patient_id) clinicPatientIds.add(String(p.patient_id));
+            });
+          }
+          const t1 = await supabase.from("patient_chat_threads").select("patient_id").eq("clinic_id", req.clinicId).limit(4000);
+          if (!t1.error) (t1.data || []).forEach((r) => r?.patient_id && clinicPatientIds.add(String(r.patient_id)));
+        } catch (_) {
+          /* non-fatal */
+        }
 
         const mapAppointmentRowToTimelineEvent = (row, sourceLabel) => {
           const startRaw =
@@ -34431,15 +34447,27 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         };
 
         const fetchAppointmentLikeRows = async (tableName) => {
+          const pidList = cleanUuids([...clinicPatientIds]).slice(0, 2000);
           const attempts = [
             () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("start_time", queryStartIso).lte("start_time", queryEndIso),
             () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("start_at", queryStartIso).lte("start_at", queryEndIso),
             () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("scheduled_at", queryStartIso).lte("scheduled_at", queryEndIso),
+            () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("date", queryStartDate).lte("date", queryEndDate),
+            () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("appointment_date", queryStartDate).lte("appointment_date", queryEndDate),
             () => req.clinicCode
               ? supabase.from(tableName).select("*").eq("clinic_code", String(req.clinicCode || "").trim().toUpperCase()).gte("start_time", queryStartIso).lte("start_time", queryEndIso)
               : Promise.resolve({ data: [], error: null }),
             () => req.clinicCode
               ? supabase.from(tableName).select("*").eq("clinic_code", String(req.clinicCode || "").trim().toUpperCase()).gte("start_at", queryStartIso).lte("start_at", queryEndIso)
+              : Promise.resolve({ data: [], error: null }),
+            () => req.clinicCode
+              ? supabase.from(tableName).select("*").eq("clinic_code", String(req.clinicCode || "").trim().toUpperCase()).gte("date", queryStartDate).lte("date", queryEndDate)
+              : Promise.resolve({ data: [], error: null }),
+            () => pidList.length
+              ? supabase.from(tableName).select("*").in("patient_id", pidList).gte("date", queryStartDate).lte("date", queryEndDate)
+              : Promise.resolve({ data: [], error: null }),
+            () => pidList.length
+              ? supabase.from(tableName).select("*").in("patient_id", pidList).gte("start_time", queryStartIso).lte("start_time", queryEndIso)
               : Promise.resolve({ data: [], error: null }),
           ];
           for (const run of attempts) {
