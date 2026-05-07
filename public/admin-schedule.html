@@ -216,6 +216,7 @@
     // Date.getDay(): 0 = Sunday … 6 = Saturday. Do not subtract 1 from getDay().
     // Week columns: Sun → Sat (Sunday in range: weekStart + 0 .. +6).
     const SLOT_MINUTES = 10;
+    const MIN_VISUAL_CARD_SPAN_SLOTS = 3;
     const START_HOUR = 8;
     const END_HOUR = 20;
     const SLOT_START_MINUTES = START_HOUR * 60;
@@ -810,7 +811,7 @@
           if (rowIdx >= slots.length) break;
           const key = `${rowIdx}|${dayIdx}`;
           if (!map[key]) map[key] = [];
-          map[key].push({ item, isStart: offset === 0 });
+          map[key].push({ item, isStart: offset === 0, spanSlots });
         }
       });
 
@@ -831,15 +832,15 @@
           const key = `${slotIdx}|${dayIdx}`;
           const cards = (map[key] || []).map((entry) => {
             const item = entry.item;
-            if (!entry.isStart) {
-              return `<div class="appt-card" style="opacity:0.35;border-style:dashed;">&nbsp;</div>`;
-            }
+            if (!entry.isStart) return '';
             const compactTime = fmtTime(item.startAt, item.endAt, lang);
             const procAndTooth = `${item.treatment || '-'}` + (item.tooth ? ` • 🦷 ${item.tooth}` : '');
             const chairTxt = normalizeChairText(item.chair) || '-';
             const metaPrefix = doctorFilter ? '' : `${item.doctor || '-'} • `;
+            const visualSpanSlots = Math.max(MIN_VISUAL_CARD_SPAN_SLOTS, Number(entry?.spanSlots) || 1);
+            const visualMinHeight = (visualSpanSlots * 34) - 2;
             return `
-            <div class="appt-card">
+            <div class="appt-card" style="min-height:${visualMinHeight}px;">
               <div class="appt-time">${compactTime}</div>
               <div class="appt-main">
                 <div class="appt-row-top">
