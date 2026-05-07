@@ -15552,14 +15552,17 @@ async function fetchPatientTravelRowSupabase(patientId, clinicIdOrNull) {
   const keyList = keys.length ? keys : [String(patientId || "").trim()].filter(Boolean);
   let lastMissError = null;
 
+  const firstRow = (rows) => (Array.isArray(rows) && rows.length > 0 ? rows[0] : null);
+
   for (const key of keyList) {
     let q1 = supabase
       .from("patients")
       .select("id, clinic_id, travel, patient_id")
       .eq("patient_id", key);
     if (useClinic) q1 = q1.eq("clinic_id", cid);
-    const r1 = await q1.maybeSingle();
-    if (!r1.error && r1.data) return { data: r1.data, key: "patient_id" };
+    const r1 = await q1.limit(2);
+    const row1 = firstRow(r1.data);
+    if (!r1.error && row1) return { data: row1, key: "patient_id" };
 
     const msg = String(r1.error?.message || "");
     const isMissingPatientIdCol =
@@ -15569,8 +15572,9 @@ async function fetchPatientTravelRowSupabase(patientId, clinicIdOrNull) {
 
     let q2 = supabase.from("patients").select("id, clinic_id, travel, patient_id").eq("id", key);
     if (useClinic) q2 = q2.eq("clinic_id", cid);
-    const r2 = await q2.maybeSingle();
-    if (!r2.error && r2.data) return { data: r2.data, key: "id" };
+    const r2 = await q2.limit(2);
+    const row2 = firstRow(r2.data);
+    if (!r2.error && row2) return { data: row2, key: "id" };
     lastMissError = r2.error || r1.error;
   }
 
