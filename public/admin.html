@@ -1676,6 +1676,16 @@
       todayEnd.setHours(23, 59, 59, 999);
       const todayStartMs = todayStart.getTime();
       const todayEndMs = todayEnd.getTime();
+      const isCompletedAndExpired = (evt) => {
+        const st = String(evt?.status || "").toUpperCase();
+        const isCompleted = st === "DONE" || st === "COMPLETED";
+        if (!isCompleted) return false;
+        const ts = adminDashboardEventInstantMs(evt);
+        if (!Number.isFinite(ts)) return false;
+        // Show completed items on completion day; hide automatically from next day.
+        return ts < todayStartMs;
+      };
+      const visibleEvents = allEvents.filter((evt) => !isCompletedAndExpired(evt));
 
       const treatmentTypes = ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB"];
       const overdueCount = allEvents.filter((evt) => {
@@ -1688,7 +1698,7 @@
         return ts < todayStartMs;
       }).length;
 
-      const todayEvents = allEvents.filter((evt) => {
+      const todayEvents = visibleEvents.filter((evt) => {
         const ts = adminDashboardEventInstantMs(evt);
         return Number.isFinite(ts) && ts >= todayStartMs && ts <= todayEndMs;
       });
@@ -1698,7 +1708,7 @@
       const tomorrowStart = tomorrow.getTime();
       const tomorrowEnd = tomorrowStart + (24 * 60 * 60 * 1000) - 1;
 
-      const tomorrowEvents = allEvents.filter((evt) => {
+      const tomorrowEvents = visibleEvents.filter((evt) => {
         const ts = adminDashboardEventInstantMs(evt);
         return Number.isFinite(ts) && ts >= tomorrowStart && ts <= tomorrowEnd;
       });
@@ -1755,7 +1765,7 @@
       allEvents.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
       // Render timeline (will load patient names if needed)
-      await renderUpcomingList(allEvents);
+      await renderUpcomingList(visibleEvents);
 
     } catch (error) {
       console.error("[loadEvents] Error:", error);
