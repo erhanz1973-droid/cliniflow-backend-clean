@@ -33541,7 +33541,8 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
         ? [...clinicPatientIds]
         : [...(clinicPatientIds || [])]
       : [];
-    const uniq = [...new Set(raw.map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 2500);
+    // patient_encounters.patient_id is UUID typed — never send p_<uuid>/legacy ids to .in()
+    const uniq = cleanUuids(raw).slice(0, 2500);
     for (let i = 0; i < uniq.length; i += 80) {
       const chunk = uniq.slice(i, i + 80);
       const { data, error } = await supabase.from("patient_encounters").select("id, patient_id").in("patient_id", chunk);
@@ -34630,7 +34631,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       // ────────────────────────────────────────────────────────────────────────
 
       // Pre-fetch all patient encounters in ONE parallel batch (avoids sequential N queries)
-      const allPatientFkIds = allPatientFkInClauseKeysForClinicTimeline(list);
+      // patient_encounters.patient_id is UUID typed — sanitize alias keys before querying.
+      const allPatientFkIds = cleanUuids(allPatientFkInClauseKeysForClinicTimeline(list));
       const encountersByPatientId = new Map(); // literal patient_id key from row → encounter[]
       if (allPatientFkIds.length > 0) {
         try {
