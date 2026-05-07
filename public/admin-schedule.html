@@ -41,22 +41,28 @@
     .head-day strong { font-size:12px; color:#334155; }
     .head-day span { font-size:11px; color:#64748b; font-weight:600; }
     .time-cell { font-size:12px; color:#475569; background:#fcfdff; font-weight:600; }
-    .slot-cell { padding:4px; }
+    .slot-cell { padding:3px; }
     .view-tog { font-weight: 600; }
     .view-tog.is-active { background: var(--blue, #2563eb); color: #fff; border-color: var(--blue, #2563eb); }
     .cal-month-block { margin-bottom: 24px; }
     .cal-month-block + .cal-month-block { border-top: 1px solid var(--border); padding-top: 16px; }
 
     .appt-card {
-      border: 1px solid var(--border); border-radius: 8px; padding: 6px;
-      margin-bottom: 4px; background: var(--card); font-size: 12px;
-      transition: box-shadow .15s;
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 5px 8px; margin-bottom: 3px; background: var(--card);
+      font-size: 12px; min-height: 44px; transition: box-shadow .15s;
+      display: grid; grid-template-columns: 56px 1fr 14px; gap: 8px; align-items: center;
+      line-height: 1.2;
     }
     .appt-card:hover { box-shadow: var(--shadow-md); }
     .appt-card:last-child { margin-bottom:0; }
-    .appt-patient { font-weight:700; color:#0f172a; }
-    .appt-meta { color:#64748b; margin-top:2px; }
-    .status-badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:700; margin-top:4px; }
+    .appt-time { font-weight: 700; color: #0f172a; font-size: 11px; white-space: nowrap; }
+    .appt-main { min-width: 0; display:flex; flex-direction:column; gap:2px; }
+    .appt-patient { font-weight:700; color:#0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .appt-meta { color:#64748b; display:flex; align-items:center; gap:6px; min-width:0; }
+    .appt-meta-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .status-badge { display:inline-block; padding:1px 7px; border-radius:999px; font-size:10px; font-weight:700; flex-shrink:0; }
+    .appt-chevron { color:#94a3b8; font-size: 14px; text-align:right; }
     .status-proposed  { background:#fef3c7; color:#92400e; }
     .status-confirmed { background:#dcfce7; color:#166534; }
     .status-other     { background:#e2e8f0; color:#334155; }
@@ -767,11 +773,21 @@
             if (!entry.isStart) {
               return `<div class="appt-card" style="opacity:0.35;border-style:dashed;">&nbsp;</div>`;
             }
+            const compactTime = fmtTime(item.startAt, item.endAt, lang);
+            const procAndTooth = `${item.treatment || '-'}` + (item.tooth ? ` • 🦷 ${item.tooth}` : '');
+            const chairTxt = normalizeChairText(item.chair) || '-';
+            const metaPrefix = doctorFilter ? '' : `${item.doctor || '-'} • `;
             return `
             <div class="appt-card">
-              <div class="appt-patient">${item.patient || '-'}</div>
-              <div class="appt-meta">${doctorFilter ? '' : `${item.doctor || '-'} • `}${item.tooth ? `🦷 ${item.tooth} • ` : ''}${normalizeChairText(item.chair) || '-'} • ${fmtTime(item.startAt, item.endAt, lang)}${item.treatment ? ` • ${item.treatment}` : ''}</div>
-              <div><span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span></div>
+              <div class="appt-time">${compactTime}</div>
+              <div class="appt-main">
+                <div class="appt-patient">${item.patient || '-'}</div>
+                <div class="appt-meta">
+                  <span class="appt-meta-text">${metaPrefix}${procAndTooth} • ${chairTxt}</span>
+                  <span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span>
+                </div>
+              </div>
+              <div class="appt-chevron">›</div>
             </div>
           `;
           }).join('');
