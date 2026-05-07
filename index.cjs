@@ -51496,6 +51496,10 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       return res.json({ ok: true, tasks: [] });
     }
 
+    // Keep Doctor Tasks wall-clock time consistent with dashboard/calendar timezone.
+    const clinicTzRaw = await resolveClinicIanaTzForScheduledWrites(req?.doctor?.clinic_id || req?.clinicId || null);
+    const doctorTaskTz = String(clinicTzRaw || "").trim() || "UTC";
+
     const planSelects = [
       'id, encounter_id, patient_id, created_by_doctor_id, status, created_at',
       'id, encounter_id, patient_id, created_by_doctor_id, created_at',
@@ -51729,7 +51733,13 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
     const normalizeDueDateForDisplay = (raw) => {
       if (!raw) return null;
       const s = String(raw).trim();
-      // Strip timezone offset (+HH:MM, +00:00, Z) and sub-seconds, keep YYYY-MM-DDTHH:MM
+      const d = new Date(s);
+      if (Number.isFinite(d.getTime())) {
+        try {
+          return formatInTimeZone(d, doctorTaskTz, "yyyy-MM-dd'T'HH:mm");
+        } catch (_) {}
+      }
+      // Fallback for malformed/non-ISO values: keep civil time without offset.
       return s.replace(/(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, '').slice(0, 16) || null;
     };
 
@@ -51748,6 +51758,16 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
         const patientId = planPid || encPid;
         const status = normalizePlanItemStatusForTasks(item?.status);
 
+        const dueDateLocal = normalizeDueDateForDisplay(
+          item?.due_date ||
+          item?.scheduled_at ||
+          item?.appointment_date ||
+          item?.date ||
+          item?.updated_at ||
+          item?.created_at ||
+          plan?.created_at ||
+          encounter?.created_at
+        );
         return {
           id: String(item?.id || ''),
           patient_id: patientId,
@@ -51760,16 +51780,9 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           type: String(item?.type || 'PROCEDURE').toUpperCase(),
           procedure_name: String(item?.procedure_name || item?.procedure_code || 'Procedure'),
           procedure_category: String(item?.category || ''),
-          due_date: normalizeDueDateForDisplay(
-            item?.due_date ||
-            item?.scheduled_at ||
-            item?.appointment_date ||
-            item?.date ||
-            item?.updated_at ||
-            item?.created_at ||
-            plan?.created_at ||
-            encounter?.created_at
-          ),
+          due_date: dueDateLocal,
+          time: dueDateLocal ? String(dueDateLocal).slice(11, 16) : null,
+          timezone: doctorTaskTz,
           scheduled_by: 'DOCTOR',
           priority: String(item?.priority || 'MEDIUM').toUpperCase(),
           high_priority: item?.high_priority === true,
@@ -51899,6 +51912,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           .replace(/_/g, ' ')
           .trim() || 'Procedure';
 
+        const dueDateLocal = normalizeDueDateForDisplay(et?.scheduled_at || et?.created_at);
         return {
           id: String(et?.id || ''),
           patient_id: patientId,
@@ -51912,7 +51926,9 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           type: 'PROCEDURE',
           procedure_name: procLabel,
           procedure_category: '',
-          due_date: normalizeDueDateForDisplay(et?.scheduled_at || et?.created_at),
+          due_date: dueDateLocal,
+          time: dueDateLocal ? String(dueDateLocal).slice(11, 16) : null,
+          timezone: doctorTaskTz,
           scheduled_by: 'DOCTOR',
           priority: 'MEDIUM',
           high_priority: false,
