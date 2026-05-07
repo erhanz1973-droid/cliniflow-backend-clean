@@ -16395,52 +16395,57 @@ async function updatePatientTreatmentRowSupabase(patientId, clinicIdOrNull, upda
 }
 
 async function fetchPatientTreatmentEventsRowSupabase(patientId, clinicIdOrNull) {
-  // Prefer `patient_id` when available; fall back to `id`.
-  let q1 = supabase
-    .from("patients")
-    .select("id, clinic_id, patient_id, treatment_events")
-    .eq("patient_id", patientId);
-  if (clinicIdOrNull) q1 = q1.eq("clinic_id", clinicIdOrNull);
-  const r1 = await q1.single();
-  if (!r1.error) return { data: r1.data, key: "patient_id" };
+  const cidRaw = clinicIdOrNull != null ? String(clinicIdOrNull).trim() : "";
+  const useClinic = Boolean(cidRaw);
+  const cid = cidRaw || null;
 
-  const msg = String(r1.error?.message || "");
-  const isMissingPatientIdCol =
-    msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
-  const isNotFound = String(r1.error?.code || "") === "PGRST116";
-  if (!isMissingPatientIdCol && !isNotFound) return { error: r1.error };
+  const keys = expandPatientIdLookupKeys(patientId);
+  const keyList = keys.length ? keys : [String(patientId || "").trim()].filter(Boolean);
+  let lastMissError = null;
 
-  let q2 = supabase.from("patients").select("id, clinic_id, treatment_events").eq("id", patientId);
-  if (clinicIdOrNull) q2 = q2.eq("clinic_id", clinicIdOrNull);
-  const r2 = await q2.single();
-  if (!r2.error) return { data: r2.data, key: "id" };
-  return { error: r2.error };
+  for (const key of keyList) {
+    let q1 = supabase
+      .from("patients")
+      .select("id, clinic_id, patient_id, treatment_events")
+      .eq("patient_id", key);
+    if (useClinic) q1 = q1.eq("clinic_id", cid);
+    const r1 = await q1.maybeSingle();
+    if (!r1.error && r1.data) return { data: r1.data, key: "patient_id" };
+
+    const msg = String(r1.error?.message || "");
+    const isMissingPatientIdCol =
+      msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
+    const isNotFound = String(r1.error?.code || "") === "PGRST116";
+    if (!isMissingPatientIdCol && !isNotFound) return { error: r1.error };
+
+    let q2 = supabase
+      .from("patients")
+      .select("id, clinic_id, patient_id, treatment_events")
+      .eq("id", key);
+    if (useClinic) q2 = q2.eq("clinic_id", cid);
+    const r2 = await q2.maybeSingle();
+    if (!r2.error && r2.data) return { data: r2.data, key: "id" };
+    lastMissError = r2.error || r1.error;
+  }
+
+  return { error: lastMissError || { code: "PGRST116", message: "patient row not found" } };
 }
 
 async function updatePatientTreatmentEventsRowSupabase(patientId, clinicIdOrNull, events) {
-  // Prefer `patient_id` when available; fall back to `id`.
-  let q1 = supabase
+  const fetched = await fetchPatientTreatmentEventsRowSupabase(patientId, clinicIdOrNull);
+  if (fetched.error) return { error: fetched.error };
+  const rowId = fetched.data?.id;
+  if (!rowId) return { error: { code: "PGRST116", message: "patient row not found" } };
+
+  const r = await supabase
     .from("patients")
     .update({ treatment_events: events, updated_at: new Date().toISOString() })
-    .eq("patient_id", patientId);
-  if (clinicIdOrNull) q1 = q1.eq("clinic_id", clinicIdOrNull);
-  const r1 = await q1.select("id, clinic_id, patient_id, treatment_events").single();
-  if (!r1.error) return { data: r1.data, key: "patient_id" };
-
-  const msg = String(r1.error?.message || "");
-  const isMissingPatientIdCol =
-    msg.toLowerCase().includes("patient_id") && msg.toLowerCase().includes("does not exist");
-  const isNotFound = String(r1.error?.code || "") === "PGRST116";
-  if (!isMissingPatientIdCol && !isNotFound) return { error: r1.error };
-
-  let q2 = supabase
-    .from("patients")
-    .update({ treatment_events: events, updated_at: new Date().toISOString() })
-    .eq("id", patientId);
-  if (clinicIdOrNull) q2 = q2.eq("clinic_id", clinicIdOrNull);
-  const r2 = await q2.select("id, clinic_id, treatment_events").single();
-  if (!r2.error) return { data: r2.data, key: "id" };
-  return { error: r2.error };
+    .eq("id", rowId)
+    .select("id, clinic_id, patient_id, treatment_events")
+    .maybeSingle();
+  if (r.error) return { error: r.error };
+  if (!r.data) return { error: { code: "PGRST116", message: "patient row not found" } };
+  return { data: r.data, key: "id" };
 }
 
 // ================== PATIENT TREATMENT EVENTS (independent from travel) ==================
