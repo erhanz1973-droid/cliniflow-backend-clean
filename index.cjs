@@ -34791,7 +34791,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
       // ── Batch pre-fetch treatment_plans for ALL patients ────────────────────
       // Avoids N×2 sequential treatment_plans queries inside the patient loop.
-      const allEncounterIds = [...new Set(
+      let allEncounterIds = [...new Set(
         [...encountersByPatientId.values()]
           .flatMap((encs) => (encs || []).map((e) => String(e?.id || "")))
           .filter(Boolean)
@@ -34822,6 +34822,39 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             planIdsByPatientId.get(ak).add(planId);
           }
         };
+        // Extra clinic-scoped plan scan: captures legacy patients not present in patients list
+        // but still having treatment_plans/encounters in this clinic (e.g. Basar-type cases).
+        try {
+          const clinicPlanRows = [];
+          const q1 = await supabase
+            .from("treatment_plans")
+            .select(selTp)
+            .eq("clinic_id", req.clinicId)
+            .limit(4000);
+          if (!q1.error && Array.isArray(q1.data)) clinicPlanRows.push(...q1.data);
+          if (req.clinicCode) {
+            const q2 = await supabase
+              .from("treatment_plans")
+              .select(selTp)
+              .eq("clinic_code", String(req.clinicCode || "").trim().toUpperCase())
+              .limit(4000);
+            if (!q2.error && Array.isArray(q2.data)) clinicPlanRows.push(...q2.data);
+          }
+          if (clinicPlanRows.length > 0) {
+            const mergedEncounterIds = new Set(allEncounterIds);
+            for (const row of clinicPlanRows) {
+              if (!eventsSatelliteRowClinicOk(row, req.clinicId)) continue;
+              const encId = String(row?.encounter_id || "").trim();
+              const pid = String(row?.patient_id || "").trim();
+              if (encId) mergedEncounterIds.add(encId);
+              const planId = String(row?.id || "").trim();
+              if (pid && planId) registerPlanUnderPatientAliases(pid, planId);
+            }
+            allEncounterIds = [...mergedEncounterIds];
+          }
+        } catch (_) {
+          /* non-fatal */
+        }
         for (let i = 0; i < allEncounterIds.length; i += 100) {
           await runTreatmentPlansIn("encounter_id", allEncounterIds.slice(i, i + 100));
         }
