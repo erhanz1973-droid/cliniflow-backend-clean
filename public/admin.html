@@ -1088,7 +1088,11 @@
     const year = date.getFullYear();
     const dateFormatted = `${weekday}, ${day} ${month} ${year}`;
 
-    const resolvedTime = timeStr || (hasTimePart ? date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) : "");
+    // If source already has a full instant (timelineAt / ISO), always derive time from that instant
+    // in browser local timezone. Do not override with evt.time (can be server-UTC formatted).
+    const resolvedTime = hasTimePart
+      ? date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+      : (timeStr || "");
     return resolvedTime ? `${dateFormatted} ${resolvedTime}` : dateFormatted;
   }
 
