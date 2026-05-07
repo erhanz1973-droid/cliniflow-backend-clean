@@ -151,6 +151,14 @@
     if (logoutLabel) logoutLabel.textContent = tn('dashboard.sidebar.logout');
   }
 
+  function refreshLayoutI18n() {
+    updateSidebarLabels();
+    const clinicEl = document.getElementById('alClinicName');
+    if (clinicEl && !String(clinicEl.textContent || '').trim()) {
+      clinicEl.textContent = tn('dashboard.sidebar.clinic');
+    }
+  }
+
   /* ── Build topbar HTML ───────────────────────────────────── */
   function buildTopbar(pageTitle) {
     return `
@@ -223,9 +231,13 @@
     // Hook into i18n updates to refresh sidebar labels
     const prevOnI18nUpdated = window.onI18nUpdated;
     window.onI18nUpdated = function () {
-      updateSidebarLabels();
+      refreshLayoutI18n();
       if (typeof prevOnI18nUpdated === 'function') prevOnI18nUpdated();
     };
+    // admin-i18n emits this on init and every language switch
+    document.addEventListener('i18n:ready', refreshLayoutI18n);
+    // Initial pass (covers first paint before i18n emits)
+    setTimeout(refreshLayoutI18n, 0);
   }
 
   /* ── Load clinic name ────────────────────────────────────── */
