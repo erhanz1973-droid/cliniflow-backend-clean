@@ -35018,6 +35018,31 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             priceMap
           )[0];
           addEvent(enriched);
+          // Also emit a compact APPOINTMENT view for timeline parity with calendar slots.
+          // This avoids treatment-status/source dedupe collisions hiding scheduled slots.
+          addEvent({
+            id: `encounter_appt_${row.id}`,
+            patientId,
+            patient: patientName,
+            patientName,
+            doctor: docLabel,
+            chair: procChair,
+            type: "APPOINTMENT",
+            eventType: "APPOINTMENT",
+            title: `${procType} • Tooth ${toothNum}`,
+            description: "",
+            date: dt.toISOString().split("T")[0],
+            time: null,
+            status: procedures.normalizeStatus(normalizedLabel),
+            source: "encounter_appointment",
+            toothId: toothNum != null ? String(toothNum) : undefined,
+            timelineAt,
+            meta: {
+              encounter_treatment_id: row.id,
+              assigned_doctor_id: assignDoc || undefined,
+              created_by_doctor_id: createdByDoc || undefined,
+            },
+          });
         }
       } catch (etDashErr) {
         console.warn("[ADMIN EVENTS] encounter_treatments dashboard merge:", etDashErr?.message || etDashErr);
