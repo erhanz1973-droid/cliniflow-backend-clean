@@ -34553,6 +34553,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       ];
 
       let list = [];
+      // clinic-linked patient ids discovered from auxiliary tables (thread/encounter), even if
+      // patients row cannot be hydrated for current select clause.
+      const clinicLinkedPatientIds = new Set();
       // Try cached clause first to avoid schema-discovery overhead on every request
       const patientClausesToTry = _eventsPatientSelectClause
         ? [_eventsPatientSelectClause, ...patientSelectCandidates.filter(c => c !== _eventsPatientSelectClause)]
@@ -34620,6 +34623,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           (rows || []).forEach((r) => {
             const pid = String(r?.patient_id || "").trim();
             if (pid) fallbackPatientIds.add(pid);
+            if (pid) clinicLinkedPatientIds.add(pid);
           });
         };
         const thr = await supabase
@@ -34758,7 +34762,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
 
       // Pre-fetch all patient encounters in ONE parallel batch (avoids sequential N queries)
       // patient_encounters.patient_id is UUID typed — sanitize alias keys before querying.
-      const allPatientFkIds = cleanUuids(allPatientFkInClauseKeysForClinicTimeline(list));
+      const allPatientFkIds = cleanUuids([
+        ...allPatientFkInClauseKeysForClinicTimeline(list),
+        ...clinicLinkedPatientIds,
+      ]);
       const encountersByPatientId = new Map(); // literal patient_id key from row → encounter[]
       if (allPatientFkIds.length > 0) {
         try {
