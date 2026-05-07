@@ -33566,8 +33566,8 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     const chunk = encIds.slice(i, i + 100);
     let etList = null;
     for (const sel of [
-      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_at, updated_at",
-      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id",
+      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_by_doctor_id, created_at, updated_at",
+      "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number, assigned_doctor_id, created_by_doctor_id",
       "id, encounter_id, scheduled_at, status, procedure_type, chair, tooth_number",
     ]) {
       const { data: etData, error: etErr } = await supabase
@@ -33594,7 +33594,9 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     [...encToPatient.values()].map((p) => String(p || "").trim()).filter(Boolean)
   );
   const doctorIds = new Set(
-    etMerged.map((r) => String(r?.assigned_doctor_id || r?.doctor_id || "").trim()).filter(Boolean)
+    etMerged
+      .map((r) => String(r?.assigned_doctor_id || r?.doctor_id || r?.created_by_doctor_id || "").trim())
+      .filter(Boolean)
   );
 
   /** @type {Map<string,string>} */
@@ -33686,7 +33688,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     if (!pid) continue;
     const startAt = toIsoSafe(row.scheduled_at);
     if (!startAt) continue;
-    const assignDoc = String(row.assigned_doctor_id || row.doctor_id || "").trim();
+    const assignDoc = String(row.assigned_doctor_id || row.doctor_id || row.created_by_doctor_id || "").trim();
     const procType = String(row.procedure_type || "TREATMENT").trim();
     const toothRaw = row.tooth_number;
     const tooth_number = (() => {
@@ -34471,39 +34473,52 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         }
       }
       const doctorNameById = new Map();
-      const clinicDoctorIds = [...new Set(
-        (list || [])
-          .map((row) => String(row?.primary_doctor_id || row?.doctor_id || "").trim())
-          .filter(Boolean)
-      )];
-      if (clinicDoctorIds.length > 0) {
-        const doctorResult = await supabase
-          .from("doctors")
-          .select("id, doctor_id, name, full_name, email")
-          .in("id", clinicDoctorIds);
-
-        if (doctorResult.error && ["42703", "PGRST204"].includes(String(doctorResult.error.code || ""))) {
-          const fallbackDoctorResult = await supabase
+      const applyDoctorRowsToMap = (rows) => {
+        (rows || []).forEach((doc) => {
+          const keyA = String(doc?.id || "").trim();
+          const keyB = String(doc?.doctor_id || "").trim();
+          const label = String(doc?.name || doc?.full_name || doc?.email || keyA || keyB || "").trim();
+          if (!label) return;
+          if (keyA) doctorNameById.set(keyA, label);
+          if (keyB) doctorNameById.set(keyB, label);
+        });
+      };
+      // Build a full clinic doctor alias map (UUID + doctor_id code) to avoid mixed-id blind spots.
+      const doctorScopeAttempts = [
+        () => supabase.from("doctors").select("id, doctor_id, name, full_name, email").eq("clinic_id", req.clinicId).limit(800),
+        () => req.clinicCode
+          ? supabase.from("doctors").select("id, doctor_id, name, full_name, email").eq("clinic_code", String(req.clinicCode).trim().toUpperCase()).limit(800)
+          : Promise.resolve({ data: [], error: null }),
+      ];
+      for (const run of doctorScopeAttempts) {
+        try {
+          const r = await run();
+          if (!r?.error && Array.isArray(r?.data)) applyDoctorRowsToMap(r.data);
+        } catch (_) {
+          /* non-fatal */
+        }
+      }
+      // Safety fallback: if clinic-scoped query is empty, try targeted ids seen on patient rows.
+      if (doctorNameById.size === 0) {
+        const clinicDoctorIds = [...new Set(
+          (list || [])
+            .map((row) => String(row?.primary_doctor_id || row?.doctor_id || "").trim())
+            .filter(Boolean)
+        )];
+        if (clinicDoctorIds.length > 0) {
+          const doctorResult = await supabase
             .from("doctors")
             .select("id, doctor_id, name, full_name, email")
-            .in("doctor_id", clinicDoctorIds);
-          if (!fallbackDoctorResult.error) {
-            (fallbackDoctorResult.data || []).forEach((doc) => {
-              const keyA = String(doc?.id || "").trim();
-              const keyB = String(doc?.doctor_id || "").trim();
-              const label = String(doc?.name || doc?.full_name || doc?.email || keyA || keyB || "").trim();
-              if (keyA && label) doctorNameById.set(keyA, label);
-              if (keyB && label) doctorNameById.set(keyB, label);
-            });
+            .in("id", clinicDoctorIds);
+          if (!doctorResult.error) {
+            applyDoctorRowsToMap(doctorResult.data);
+          } else if (["42703", "PGRST204"].includes(String(doctorResult.error.code || ""))) {
+            const fallbackDoctorResult = await supabase
+              .from("doctors")
+              .select("id, doctor_id, name, full_name, email")
+              .in("doctor_id", clinicDoctorIds);
+            if (!fallbackDoctorResult.error) applyDoctorRowsToMap(fallbackDoctorResult.data);
           }
-        } else if (!doctorResult.error) {
-          (doctorResult.data || []).forEach((doc) => {
-            const keyA = String(doc?.id || "").trim();
-            const keyB = String(doc?.doctor_id || "").trim();
-            const label = String(doc?.name || doc?.full_name || doc?.email || keyA || keyB || "").trim();
-            if (keyA && label) doctorNameById.set(keyA, label);
-            if (keyB && label) doctorNameById.set(keyB, label);
-          });
         }
       }
 
