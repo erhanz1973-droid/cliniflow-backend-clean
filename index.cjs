@@ -14233,6 +14233,91 @@ function dedupeAdminTimelineEvents(events) {
   return [...best.values()];
 }
 
+/**
+ * Çok kaynaklı merge sonrası: aynı dişte aynı prosedür tipi + aynı planlanmış dakika
+ * iki kez görünebiliyor (JSON UUID ≠ encounter-treatment satırı). En güncel / güvenilir
+ * kaydı bırak, fiyat alanlarını birleştir.
+ */
+function dedupeTreatmentsPayloadToothProcedures(data) {
+  if (!data || !Array.isArray(data.teeth)) return;
+
+  const msOf = (p) => {
+    if (!p || typeof p !== "object") return NaN;
+    const n = Number(p.scheduledAt);
+    if (Number.isFinite(n)) return n;
+    if (p.scheduled_at != null && String(p.scheduled_at).trim()) {
+      const t = Date.parse(String(p.scheduled_at).trim());
+      if (Number.isFinite(t)) return t;
+    }
+    const d = Number(p.date);
+    if (Number.isFinite(d)) return d;
+    return NaN;
+  };
+
+  const typOf = (p) =>
+    String(p?.type || p?.procedure_type || p?.procedureType || "").trim().toUpperCase();
+
+  const statusRank = (p) => {
+    const s = String(p?.status || "").toUpperCase();
+    if (s === "COMPLETED" || s === "DONE") return 5;
+    if (s === "CANCELLED" || s === "CANCELED") return 4;
+    if (s === "ACTIVE" || s === "IN_PROGRESS") return 3;
+    if (s === "SCHEDULED" || s === "ASSIGNED" || s === "PENDING" || s === "WAITING") return 2;
+    if (s === "PLANNED" || s === "PROPOSED" || s === "CONFIRMED") return 1;
+    return 2;
+  };
+
+  const sourceTrust = (p) => {
+    const meta = String(p?.meta?.source || "").toLowerCase();
+    if (meta.includes("encounter_treatment")) return 4;
+    const id = String(p?.id || p?.procedureId || "");
+    if (id.startsWith("encounter-treatment-")) return 3;
+    return 2;
+  };
+
+  const compositeRank = (p) => statusRank(p) * 100 + sourceTrust(p);
+
+  for (const tooth of data.teeth) {
+    if (!Array.isArray(tooth.procedures) || tooth.procedures.length < 2) continue;
+    const procs = tooth.procedures;
+    const noTime = [];
+    const buckets = new Map();
+    for (const p of procs) {
+      const ms = msOf(p);
+      if (!Number.isFinite(ms)) {
+        noTime.push(p);
+        continue;
+      }
+      const ty = typOf(p) || "_UNKNOWN";
+      const minute = Math.floor(ms / 60000);
+      const k = `${ty}|${minute}`;
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(p);
+    }
+
+    const out = [];
+    for (const [, arr] of buckets) {
+      if (arr.length === 1) {
+        out.push(arr[0]);
+        continue;
+      }
+      arr.sort((a, b) => compositeRank(b) - compositeRank(a));
+      const keeper = arr[0];
+      for (let i = 1; i < arr.length; i++) {
+        const drop = arr[i];
+        keeper.unit_price = keeper.unit_price ?? drop.unit_price;
+        keeper.total_price = keeper.total_price ?? drop.total_price;
+        keeper.currency = keeper.currency ?? drop.currency;
+        keeper.quantity = keeper.quantity ?? drop.quantity;
+        keeper.notes = keeper.notes || drop.notes;
+      }
+      out.push(keeper);
+    }
+    out.push(...noTime);
+    tooth.procedures = out;
+  }
+}
+
 function mergeEncounterTreatmentRowsIntoPatientTeethPayload(
   data,
   encounterTreatmentRows,
@@ -18355,6 +18440,7 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
       await mergeEncounterTreatmentsIntoPatientTreatmentsData(cachedPayload, patientId);
       const cacheClinicId = await resolveClinicIdForPatientTreatmentPrices(req, patientId);
       await applyPatientTreatmentsAppointmentsOverlay(cachedPayload, patientId, cacheClinicId);
+      dedupeTreatmentsPayloadToothProcedures(cachedPayload);
       await enrichTreatmentsDataDoctorDisplayFields(cachedPayload, patientId);
       await applyClinicCatalogPricesToTreatmentsData(cachedPayload, cacheClinicId);
       return res.json(cachedPayload);
@@ -19488,6 +19574,7 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
     priceClinicId = await resolveClinicIdForPatientTreatmentPrices(req, patientId);
   }
   await applyPatientTreatmentsAppointmentsOverlay(data, patientId, priceClinicId);
+  dedupeTreatmentsPayloadToothProcedures(data);
   await enrichTreatmentsDataDoctorDisplayFields(data, patientId);
 
   if (!skipTreatmentsCache) {
