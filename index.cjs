@@ -10053,14 +10053,23 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
           level3: null,
         };
       let clinicPayload = null;
-      if (p?.clinic_id && clinicData?.id) {
+      // Always attach clinic embed when we resolved clinic row (even if patients.clinic_id is null — embed/FK-only rows).
+      if (clinicData?.id) {
+        const mapsFromRow = String(pickGoogleMapsUrlFromClinicRow(clinicData) || "").trim();
         clinicPayload = {
           id: String(clinicData.id),
           name:
             (clinicNameResolved || String(clinicData.name || "").trim() || "").trim() || "",
           logo: resolvedClinicLogoForPayload,
+          ...(mapsFromRow ? { googleMapsUrl: mapsFromRow } : {}),
         };
       }
+      const clinicIdForResponse =
+        p?.clinic_id != null && String(p.clinic_id).trim() !== ""
+          ? String(p.clinic_id).trim()
+          : clinicData?.id != null && String(clinicData.id).trim() !== ""
+            ? String(clinicData.id).trim()
+            : null;
       return res.json({
         ok: true,
         patientId: req.patientId,
@@ -10069,7 +10078,7 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
         name: meName,
         phone: p?.phone || "",
         email: p?.email || "",
-        clinic_id: p?.clinic_id ? String(p.clinic_id) : null,
+        clinic_id: clinicIdForResponse,
         clinic_name: clinicNameResolved || null,
         clinic: clinicPayload,
         clinicCode,
@@ -34930,6 +34939,26 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     }
     }
     
+    /** Procedure / treatment-like rows for Clinic Timeline debugging (temporary). */
+    const isTimelineProcedureEvent = (evt) => {
+      if (!evt || typeof evt !== "object") return false;
+      const src = String(evt.source || "");
+      const typ = String(evt.type || "").toUpperCase();
+      if (
+        src === "treatment" ||
+        src === "patient_treatments" ||
+        src === "encounter_treatment" ||
+        src === "encounter_treatments"
+      ) {
+        return true;
+      }
+      return ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB", "TREATMENT_EVENT"].includes(typ);
+    };
+
+    const procedures = allEvents.filter(isTimelineProcedureEvent);
+    console.log("[timeline] raw procedures", procedures);
+    console.log("[timeline] procedure count", procedures?.length);
+
     console.log("[EVENTS] Total raw events collected:", allEvents.length, "for clinic:", req.clinicCode);
     const dedupedEvents = dedupeAdminTimelineEvents(allEvents);
     if (dedupedEvents.length !== allEvents.length) {
@@ -34937,6 +34966,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     }
     allEvents.length = 0;
     allEvents.push(...dedupedEvents);
+
+    const normalized = allEvents.filter(isTimelineProcedureEvent);
+    console.log("[timeline] normalized procedures", normalized);
 
     // If explicit date range is requested (calendar week view), return events in that range directly.
     if (hasRangeFilter) {
@@ -34951,6 +34983,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           return Number.isFinite(ts) && ts >= (rangeStartTs - marginMs) && ts <= (rangeEndTs + marginMs);
         })
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+      const filtered = rangeEvents.filter(isTimelineProcedureEvent);
+      console.log("[timeline] filtered procedures", filtered);
+      console.log("[timeline] statuses", filtered.map((x) => x.status));
+      console.log("[timeline] dates", filtered.map((x) => x.date || x.scheduledDate));
 
       return res.json({
         ok: true,
@@ -35040,6 +35077,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         return adminEventsTimelineTs(evt) > 0;
       })
       .sort((a, b) => adminEventsTimelineTs(a) - adminEventsTimelineTs(b));
+
+    const filtered = timeline.filter(isTimelineProcedureEvent);
+    console.log("[timeline] filtered procedures", filtered);
+    console.log("[timeline] statuses", filtered.map((x) => x.status));
+    console.log("[timeline] dates", filtered.map((x) => x.date || x.scheduledDate));
     
     res.json({
       ok: true,
