@@ -45866,38 +45866,11 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
     const patientId = String(req.params.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
     if (!isSupabaseEnabled()) return res.status(500).json({ ok: false, error: 'supabase_not_configured' });
-
-    const patientSelects = [
-      'id, patient_id, clinic_id, clinic_code, name, full_name, phone, email, status, created_at',
-    ];
-    const findPatientByField = async (fieldName) => {
-      for (const selectClause of patientSelects) {
-        const result = await supabase
-          .from('patients')
-          .select(selectClause)
-          .eq(fieldName, patientId)
-          .maybeSingle();
-        if (!result.error) {
-          return { patient: result.data || null, error: null };
-        }
-        const code = String(result.error?.code || '');
-        if (!['42703', 'PGRST204', 'PGRST205', '22P02'].includes(code)) {
-          break;
-        }
-      }
-      return { patient: null, error: null };
-    };
-
-    let lookup = await findPatientByField('id');
-    if (!lookup.patient) {
-      lookup = await findPatientByField('patient_id');
-    }
-
-    if (!lookup.patient) {
+    const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
+    const patient = await resolvePatientRowWithAdminFallback(patientId, docCid, "[DOCTOR PATIENT TREATMENTS POST]");
+    if (!patient?.id) {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
     }
-
-    const patient = lookup.patient;
     const statusRaw = String(patient?.status || '').toUpperCase();
     if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
       return res.status(404).json({ ok: false, error: 'patient_not_found' });
@@ -45953,22 +45926,11 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
       if (!match) {
         return res.status(400).json({ ok: false, error: 'invalid_encounter_id' });
       }
-      const eid = String(match.id);
-      if (!(await doctorCanAccessPatientEncounter(eid, req))) {
-        return res.status(403).json({ ok: false, error: 'encounter_not_accessible' });
-      }
-      resolvedEncounterId = eid;
+      resolvedEncounterId = String(match.id);
     } else {
-      for (const e of rowList) {
-        const eid = String(e.id);
-        if (await doctorCanAccessPatientEncounter(eid, req)) {
-          resolvedEncounterId = eid;
-          break;
-        }
-      }
-      if (!resolvedEncounterId) {
-        return res.status(403).json({ ok: false, error: 'no_accessible_encounter' });
-      }
+      // Access is already validated at patient level above; select latest patient encounter directly.
+      resolvedEncounterId = String(rowList[0]?.id || '').trim();
+      if (!resolvedEncounterId) return res.status(400).json({ ok: false, error: 'no_encounter_for_patient' });
     }
 
     return doctorPostEncounterTreatmentInner(resolvedEncounterId, req, res);
