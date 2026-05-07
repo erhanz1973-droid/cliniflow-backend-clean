@@ -33783,6 +33783,19 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
           if (p?.patient_id) clinicPatientIds.add(String(p.patient_id));
         });
       }
+      // Fallback for legacy patients without clinic columns but linked by clinic-scoped tables.
+      const thr = await supabase.from("patient_chat_threads").select("patient_id").eq("clinic_id", req.clinicId).limit(4000);
+      if (!thr.error) {
+        (thr.data || []).forEach((r) => {
+          if (r?.patient_id) clinicPatientIds.add(String(r.patient_id));
+        });
+      }
+      const enc = await supabase.from("patient_encounters").select("patient_id").eq("clinic_id", req.clinicId).limit(4000);
+      if (!enc.error) {
+        (enc.data || []).forEach((r) => {
+          if (r?.patient_id) clinicPatientIds.add(String(r.patient_id));
+        });
+      }
     } catch (e) {
       console.warn("[ADMIN APPOINTMENTS] clinic patient preload skipped:", e?.message || e);
     }
@@ -34471,6 +34484,64 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           list = [...accById.values()];
           break;
         }
+      }
+      // Fallback: some legacy rows miss patients.clinic_id/clinic_code, but are still linked to clinic
+      // through patient_chat_threads / patient_encounters. Pull those patient ids and hydrate rows.
+      try {
+        const fallbackPatientIds = new Set();
+        const ingestFallbackIds = (rows) => {
+          (rows || []).forEach((r) => {
+            const pid = String(r?.patient_id || "").trim();
+            if (pid) fallbackPatientIds.add(pid);
+          });
+        };
+        const thr = await supabase
+          .from("patient_chat_threads")
+          .select("patient_id")
+          .eq("clinic_id", req.clinicId)
+          .limit(4000);
+        if (!thr.error) ingestFallbackIds(thr.data);
+        const enc = await supabase
+          .from("patient_encounters")
+          .select("patient_id")
+          .eq("clinic_id", req.clinicId)
+          .limit(4000);
+        if (!enc.error) ingestFallbackIds(enc.data);
+
+        if (fallbackPatientIds.size > 0) {
+          const existingIds = new Set((list || []).map((p) => String(p?.id || "").trim()).filter(Boolean));
+          const idPool = [...fallbackPatientIds].filter((id) => !existingIds.has(id));
+          for (const selectClause of patientClausesToTry) {
+            let hadSchemaErr = false;
+            for (let i = 0; i < idPool.length; i += 80) {
+              const chunk = idPool.slice(i, i + 80);
+              const byId = await supabase.from("patients").select(selectClause).in("id", chunk);
+              if (!byId.error && Array.isArray(byId.data)) {
+                for (const row of byId.data) {
+                  const rid = String(row?.id || "").trim();
+                  if (!rid || existingIds.has(rid)) continue;
+                  existingIds.add(rid);
+                  list.push(row);
+                }
+                continue;
+              }
+              const ec = String(byId?.error?.code || "");
+              if (isMissingColumnError(byId?.error, "travel") ||
+                  isMissingColumnError(byId?.error, "treatments") ||
+                  isMissingColumnError(byId?.error, "treatment_events") ||
+                  ["42703", "PGRST204"].includes(ec)) {
+                hadSchemaErr = true;
+                break;
+              }
+            }
+            if (!hadSchemaErr) {
+              _eventsPatientSelectClause = selectClause;
+              break;
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        console.warn("[ADMIN EVENTS] patient fallback hydrate skipped:", fallbackErr?.message || fallbackErr);
       }
       const doctorNameById = new Map();
       const applyDoctorRowsToMap = (rows) => {
