@@ -16663,6 +16663,70 @@ function resolveDashboardCalendarTimeZone(clinicDbTzRaw, rawFromQuery, clinicCod
   return "UTC";
 }
 
+/**
+ * Canonical appointment datetime contract.
+ * - scheduledAtUtc: UTC ISO instant (or null)
+ * - clinicTimezone: resolved IANA zone
+ * - scheduledLocal: zone-aware local ISO with offset
+ * - scheduledLocalTime: HH:mm convenience field
+ */
+function normalizeAppointmentDateTime({
+  rawInstant,
+  clinicTimezone,
+  fallbackDate,
+  fallbackTime,
+}) {
+  const tz = validateIANATimeZoneId(clinicTimezone) || "UTC";
+  const raw = rawInstant == null ? "" : String(rawInstant).trim();
+
+  let d = null;
+  if (raw) {
+    const parsed = new Date(raw);
+    if (Number.isFinite(parsed.getTime())) d = parsed;
+  }
+
+  if (!d && fallbackDate) {
+    const hhmm = String(fallbackTime || "09:00").slice(0, 5);
+    const localNoTz = `${String(fallbackDate).slice(0, 10)}T${hhmm}:00`;
+    const utcIso = coerceScheduledAtInputToUtcIso(localNoTz, tz, "normalizeAppointmentDateTime.fallback");
+    if (utcIso) {
+      const parsed = new Date(utcIso);
+      if (Number.isFinite(parsed.getTime())) d = parsed;
+    }
+  }
+
+  if (!d) {
+    return {
+      scheduledAtUtc: null,
+      clinicTimezone: tz,
+      scheduledLocal: null,
+      scheduledLocalTime: null,
+      scheduledLocalDate: fallbackDate ? String(fallbackDate).slice(0, 10) : null,
+    };
+  }
+
+  const scheduledAtUtc = d.toISOString();
+  let datePart = null;
+  let timePart = null;
+  let offsetPart = null;
+  try {
+    datePart = formatInTimeZone(d, tz, "yyyy-MM-dd");
+    timePart = formatInTimeZone(d, tz, "HH:mm");
+    offsetPart = formatInTimeZone(d, tz, "XXX");
+  } catch (_) {}
+  const scheduledLocalDate = datePart || scheduledAtUtc.slice(0, 10);
+  const scheduledLocalTime = timePart || scheduledAtUtc.slice(11, 16);
+  const scheduledLocal = `${scheduledLocalDate}T${scheduledLocalTime}:00${offsetPart || "Z"}`;
+
+  return {
+    scheduledAtUtc,
+    clinicTimezone: tz,
+    scheduledLocal,
+    scheduledLocalTime,
+    scheduledLocalDate,
+  };
+}
+
 /** Civil calendar day ymd interpreted in IANA TZ → [start, nextDay) in ms — matches UTC-stored timestamps. */
 function getCalendarDayWindowBoundsMsForDashboard(ymd, ianaTz) {
   try {
@@ -43429,68 +43493,33 @@ async function handleDoctorInboxSummary(req, res) {
 
     const mapAppointment = (a, fallbackDay) => {
       const startInst = a.start_time || a.startTime || a.start_at;
-      let scheduledAt = null;
-      let displayTime = null;
-      if (startInst != null && String(startInst).trim() !== "") {
-        const sd = new Date(String(startInst));
-        if (Number.isFinite(sd.getTime())) {
-          scheduledAt = sd.toISOString();
-          try {
-            displayTime = formatInTimeZone(sd, dashboardCalendarTz, "yyyy-MM-dd HH:mm");
-          } catch (_) {
-            displayTime = null;
-          }
-        }
-      }
-      const dateVal =
-        displayTime?.slice(0, 10) ||
-        (startInst ? String(startInst).slice(0, 10) : null) ||
-        (a.date ? String(a.date).trim() : null) ||
-        fallbackDay;
-      let timeVal = a.time || a.appointment_time || "09:00";
-      if (scheduledAt && displayTime && displayTime.length >= 16) {
-        timeVal = displayTime.slice(-5);
-      } else if (startInst && !a.time && !a.appointment_time) {
-        const d = new Date(String(startInst));
-        if (Number.isFinite(d.getTime()))
-          try {
-            timeVal = formatInTimeZone(d, dashboardCalendarTz, "HH:mm");
-          } catch (_) {
-            timeVal = d.toISOString().slice(11, 16);
-          }
-      }
-      if (timeVal && String(timeVal).length > 5) timeVal = String(timeVal).slice(0, 5);
-      let localScheduledIsoNoTz =
-        dateVal && timeVal
-          ? `${String(dateVal).slice(0, 10)}T${String(timeVal).slice(0, 5)}:00`
+      const fallbackDate = (a.date ? String(a.date).trim() : null) || fallbackDay;
+      const fallbackTime = String(a.time || a.appointment_time || "09:00").slice(0, 5);
+      const dt = normalizeAppointmentDateTime({
+        rawInstant: startInst,
+        clinicTimezone: dashboardCalendarTz,
+        fallbackDate,
+        fallbackTime,
+      });
+      const dateVal = dt.scheduledLocalDate || fallbackDate;
+      const timeVal = dt.scheduledLocalTime || fallbackTime;
+      const displayTime =
+        dt.scheduledLocalDate && dt.scheduledLocalTime
+          ? `${dt.scheduledLocalDate} ${dt.scheduledLocalTime}`
           : null;
-      let localScheduledIsoWithOffset = localScheduledIsoNoTz;
-      if (startInst != null && String(startInst).trim() !== "") {
-        const sd2 = new Date(String(startInst));
-        if (Number.isFinite(sd2.getTime())) {
-          try {
-            const dPart = formatInTimeZone(sd2, dashboardCalendarTz, "yyyy-MM-dd");
-            const tPart = formatInTimeZone(sd2, dashboardCalendarTz, "HH:mm");
-            const zPart = formatInTimeZone(sd2, dashboardCalendarTz, "XXX");
-            localScheduledIsoNoTz = `${dPart}T${tPart}:00`;
-            localScheduledIsoWithOffset = `${dPart}T${tPart}:00${zPart}`;
-          } catch (_) {
-            /* keep fallback */
-          }
-        }
-      }
       const patient = patientMap.get(a.patient_id) || null;
       const st = String(a.status || "").toLowerCase();
       return {
         appointmentId: String(a.id || ""),
-        // Keep scheduledAt in clinic-local wall clock to prevent mobile-side UTC re-shift.
-        scheduledAt: localScheduledIsoWithOffset,
-        scheduledAtUtc: scheduledAt,
-        // Local wall-clock schedule for mobile UI mapping (avoid UTC re-shift in app).
-        scheduled_date: localScheduledIsoWithOffset,
-        scheduledDate: localScheduledIsoWithOffset,
+        scheduledAtUtc: dt.scheduledAtUtc,
+        scheduledAt: dt.scheduledLocal,
+        scheduled_date: dt.scheduledLocal,
+        scheduledDate: dt.scheduledLocal,
+        scheduledLocal: dt.scheduledLocal,
+        scheduledLocalTime: dt.scheduledLocalTime,
         displayTime,
-        timezone: dashboardCalendarTz,
+        timezone: dt.clinicTimezone,
+        clinicTimezone: dt.clinicTimezone,
         date: dateVal || fallbackDay,
         time: timeVal,
         chairNumber: String(a.chair_number != null ? a.chair_number : a.chair || ""),
@@ -51768,22 +51797,6 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       return u;
     };
 
-    // Normalize a DB timestamp to a no-timezone civil time string ("YYYY-MM-DDTHH:MM")
-    // so the device displays the same time as the dashboard (which slices time from the raw DB string).
-    // Without this, +00:00 timestamps get shifted by the device timezone offset on display.
-    const normalizeDueDateForDisplay = (raw) => {
-      if (!raw) return null;
-      const s = String(raw).trim();
-      const d = new Date(s);
-      if (Number.isFinite(d.getTime())) {
-        try {
-          return formatInTimeZone(d, doctorTaskTz, "yyyy-MM-dd'T'HH:mm:ssXXX");
-        } catch (_) {}
-      }
-      // Fallback for malformed/non-ISO values: keep civil time without offset.
-      return s.replace(/(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, '').slice(0, 16) || null;
-    };
-
     const tasksFromPlans = (treatmentItems || [])
       .map((item) => {
         const treatmentPlanId = String(item?.treatment_plan_id || '');
@@ -51799,7 +51812,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
         const patientId = planPid || encPid;
         const status = normalizePlanItemStatusForTasks(item?.status);
 
-        const dueDateLocal = normalizeDueDateForDisplay(
+        const rawDueCandidate =
           item?.due_date ||
           item?.scheduled_at ||
           item?.appointment_date ||
@@ -51807,8 +51820,12 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           item?.updated_at ||
           item?.created_at ||
           plan?.created_at ||
-          encounter?.created_at
-        );
+          encounter?.created_at;
+        const dt = normalizeAppointmentDateTime({
+          rawInstant: rawDueCandidate,
+          clinicTimezone: doctorTaskTz,
+        });
+        const dueDateLocal = dt.scheduledLocal;
         return {
           id: String(item?.id || ''),
           patient_id: patientId,
@@ -51822,15 +51839,13 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           procedure_name: String(item?.procedure_name || item?.procedure_code || 'Procedure'),
           procedure_category: String(item?.category || ''),
           due_date: dueDateLocal,
-          time: dueDateLocal ? String(dueDateLocal).slice(11, 16) : null,
-          timezone: doctorTaskTz,
-          scheduledAt: dueDateLocal,
-          scheduledAtUtc:
-            item?.due_date ||
-            item?.scheduled_at ||
-            item?.appointment_date ||
-            item?.date ||
-            null,
+          time: dt.scheduledLocalTime,
+          timezone: dt.clinicTimezone,
+          clinicTimezone: dt.clinicTimezone,
+          scheduledAt: dt.scheduledLocal,
+          scheduledAtUtc: dt.scheduledAtUtc,
+          scheduledLocal: dt.scheduledLocal,
+          scheduledLocalTime: dt.scheduledLocalTime,
           scheduled_date: dueDateLocal,
           scheduledDate: dueDateLocal,
           scheduled_by: 'DOCTOR',
@@ -51962,7 +51977,11 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           .replace(/_/g, ' ')
           .trim() || 'Procedure';
 
-        const dueDateLocal = normalizeDueDateForDisplay(et?.scheduled_at || et?.created_at);
+        const dt = normalizeAppointmentDateTime({
+          rawInstant: et?.scheduled_at || et?.created_at,
+          clinicTimezone: doctorTaskTz,
+        });
+        const dueDateLocal = dt.scheduledLocal;
         return {
           id: String(et?.id || ''),
           patient_id: patientId,
@@ -51977,10 +51996,13 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           procedure_name: procLabel,
           procedure_category: '',
           due_date: dueDateLocal,
-          time: dueDateLocal ? String(dueDateLocal).slice(11, 16) : null,
-          timezone: doctorTaskTz,
-          scheduledAt: dueDateLocal,
-          scheduledAtUtc: et?.scheduled_at || et?.created_at || null,
+          time: dt.scheduledLocalTime,
+          timezone: dt.clinicTimezone,
+          clinicTimezone: dt.clinicTimezone,
+          scheduledAt: dt.scheduledLocal,
+          scheduledAtUtc: dt.scheduledAtUtc,
+          scheduledLocal: dt.scheduledLocal,
+          scheduledLocalTime: dt.scheduledLocalTime,
           scheduled_date: dueDateLocal,
           scheduledDate: dueDateLocal,
           scheduled_by: 'DOCTOR',
