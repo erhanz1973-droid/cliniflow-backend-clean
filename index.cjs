@@ -34955,9 +34955,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       return ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB", "TREATMENT_EVENT"].includes(typ);
     };
 
-    const procedures = allEvents.filter(isTimelineProcedureEvent);
-    console.log("[timeline] raw procedures", procedures);
-    console.log("[timeline] procedure count", procedures?.length);
+    const timelineDbgRawProcedures = allEvents.filter(isTimelineProcedureEvent);
+    console.log("[timeline] raw procedures", timelineDbgRawProcedures);
+    console.log("[timeline] procedure count", timelineDbgRawProcedures?.length);
 
     console.log("[EVENTS] Total raw events collected:", allEvents.length, "for clinic:", req.clinicCode);
     const dedupedEvents = dedupeAdminTimelineEvents(allEvents);
@@ -34967,8 +34967,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     allEvents.length = 0;
     allEvents.push(...dedupedEvents);
 
-    const normalized = allEvents.filter(isTimelineProcedureEvent);
-    console.log("[timeline] normalized procedures", normalized);
+    const timelineDbgNormalizedProcedures = allEvents.filter(isTimelineProcedureEvent);
+    console.log("[timeline] normalized procedures", timelineDbgNormalizedProcedures);
 
     // If explicit date range is requested (calendar week view), return events in that range directly.
     if (hasRangeFilter) {
@@ -34984,10 +34984,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         })
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-      const filtered = rangeEvents.filter(isTimelineProcedureEvent);
-      console.log("[timeline] filtered procedures", filtered);
-      console.log("[timeline] statuses", filtered.map((x) => x.status));
-      console.log("[timeline] dates", filtered.map((x) => x.date || x.scheduledDate));
+      const timelineDbgFilteredProcedures = rangeEvents.filter(isTimelineProcedureEvent);
+      console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
+      console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
+      console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
 
       return res.json({
         ok: true,
@@ -35078,10 +35078,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       })
       .sort((a, b) => adminEventsTimelineTs(a) - adminEventsTimelineTs(b));
 
-    const filtered = timeline.filter(isTimelineProcedureEvent);
-    console.log("[timeline] filtered procedures", filtered);
-    console.log("[timeline] statuses", filtered.map((x) => x.status));
-    console.log("[timeline] dates", filtered.map((x) => x.date || x.scheduledDate));
+    const timelineDbgFilteredProcedures = timeline.filter(isTimelineProcedureEvent);
+    console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
+    console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
+    console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
     
     res.json({
       ok: true,
