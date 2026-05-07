@@ -1547,8 +1547,44 @@
         Array.isArray(data.timeline) && data.timeline.length > 0
           ? data.timeline
           : [...(data.overdue || []), ...(data.today || []), ...(data.upcoming || [])];
+      const isTimelineProcedureItem = (evt) => {
+        if (!evt || typeof evt !== "object") return false;
+        const src = String(evt.source || "");
+        const typ = String(evt.type || "").toUpperCase();
+        if (
+          src === "treatment" ||
+          src === "patient_treatments" ||
+          src === "encounter_treatment" ||
+          src === "encounter_treatments"
+        ) return true;
+        return ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB", "TREATMENT_EVENT"].includes(typ);
+      };
+      const toDebugKey = (evt) => [
+        String(evt?.id || evt?.procedureId || "").trim(),
+        String(evt?.patientId || "").trim(),
+        String(evt?.source || "").trim(),
+        String(evt?.type || evt?.eventType || "").trim(),
+        String(evt?.timelineAt || evt?.date || evt?.timestamp || "").trim(),
+      ].join("|");
+      const toDebugShape = (evt, reason) => ({
+        reason,
+        id: evt?.id || null,
+        procedureId: evt?.procedureId || null,
+        patientId: evt?.patientId || null,
+        source: evt?.source || null,
+        type: evt?.type || null,
+        eventType: evt?.eventType || null,
+        status: evt?.status || null,
+        date: evt?.date || null,
+        scheduledDate: evt?.scheduledDate || null,
+        timelineAt: evt?.timelineAt || null,
+        timestamp: evt?.timestamp || null,
+      });
+      const timelineRawProcedures = rawBuckets.filter(isTimelineProcedureItem);
+      console.log("[timeline] raw count", timelineRawProcedures.length);
       let timelineInvalid = 0;
       const allEvents = [];
+      const removedItems = [];
       for (let i = 0; i < rawBuckets.length; i++) {
         const item = rawBuckets[i];
         const raw = timelineItemStartRaw(item);
@@ -1556,12 +1592,28 @@
         if (!start) {
           timelineInvalid++;
           console.warn("INVALID EVENT DATE:", raw, item);
+          if (isTimelineProcedureItem(item)) {
+            removedItems.push(toDebugShape(item, "invalid_or_missing_date"));
+          }
           continue;
         }
         const iso = start.toISOString();
         const ts = start.getTime();
         allEvents.push(Object.assign({}, item, { timelineAt: iso, timestamp: ts }));
       }
+      const timelineNormalizedProcedures = allEvents.filter(isTimelineProcedureItem);
+      console.log("[timeline] after normalize", timelineNormalizedProcedures.length);
+      const timelineFilteredProcedures = timelineNormalizedProcedures;
+      console.log("[timeline] after filter", timelineFilteredProcedures.length);
+      const filteredKeySet = new Set(timelineFilteredProcedures.map(toDebugKey));
+      timelineRawProcedures.forEach((evt) => {
+        const k = toDebugKey(evt);
+        if (!k) return;
+        if (!filteredKeySet.has(k) && !removedItems.some((x) => toDebugKey(x) === k)) {
+          removedItems.push(toDebugShape(evt, "dropped_before_render"));
+        }
+      });
+      console.log("[timeline] removed procedures", removedItems);
 
       console.log("[dashboard timeline] RAW LENGTH:", rawBuckets.length);
       console.log("[dashboard timeline] EVENTS LENGTH:", allEvents.length);

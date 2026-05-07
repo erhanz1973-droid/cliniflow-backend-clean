@@ -34955,9 +34955,33 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       return ["TREATMENT", "CONSULT", "FOLLOWUP", "LAB", "TREATMENT_EVENT"].includes(typ);
     };
 
+    const timelineEventDebugKey = (evt) => {
+      if (!evt || typeof evt !== "object") return "";
+      const id = String(evt.id || evt.procedureId || "").trim();
+      const pid = String(evt.patientId || "").trim();
+      const src = String(evt.source || "").trim();
+      const typ = String(evt.eventType || evt.type || evt.treatment || "").trim();
+      const date = String(evt.date || evt.timelineAt || evt.timestamp || "").trim();
+      return [id, pid, src, typ, date].join("|");
+    };
+    const timelineDescribeEvent = (evt) => ({
+      id: evt?.id || null,
+      procedureId: evt?.procedureId || null,
+      patientId: evt?.patientId || null,
+      source: evt?.source || null,
+      type: evt?.type || null,
+      eventType: evt?.eventType || null,
+      status: evt?.status || null,
+      date: evt?.date || null,
+      scheduledDate: evt?.scheduledDate || null,
+      timelineAt: evt?.timelineAt || null,
+      timestamp: evt?.timestamp || null,
+      title: evt?.title || null,
+    });
+
     const timelineDbgRawProcedures = allEvents.filter(isTimelineProcedureEvent);
+    console.log("[timeline] raw count", timelineDbgRawProcedures.length);
     console.log("[timeline] raw procedures", timelineDbgRawProcedures);
-    console.log("[timeline] procedure count", timelineDbgRawProcedures?.length);
 
     console.log("[EVENTS] Total raw events collected:", allEvents.length, "for clinic:", req.clinicCode);
     const dedupedEvents = dedupeAdminTimelineEvents(allEvents);
@@ -34968,7 +34992,21 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     allEvents.push(...dedupedEvents);
 
     const timelineDbgNormalizedProcedures = allEvents.filter(isTimelineProcedureEvent);
+    console.log("[timeline] after normalize", timelineDbgNormalizedProcedures.length);
     console.log("[timeline] normalized procedures", timelineDbgNormalizedProcedures);
+    const timelineDbgNormalizedKeySet = new Set(
+      timelineDbgNormalizedProcedures.map(timelineEventDebugKey).filter(Boolean)
+    );
+    const timelineDbgRemovedInNormalize = timelineDbgRawProcedures
+      .filter((evt) => {
+        const k = timelineEventDebugKey(evt);
+        return k && !timelineDbgNormalizedKeySet.has(k);
+      })
+      .map((evt) => ({
+        stage: "normalize",
+        reason: "dedupe_or_normalization_drop",
+        ...timelineDescribeEvent(evt),
+      }));
 
     // If explicit date range is requested (calendar week view), return events in that range directly.
     if (hasRangeFilter) {
@@ -34988,6 +35026,34 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
       console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
       console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
+      console.log("[timeline] after filter", timelineDbgFilteredProcedures.length);
+      const timelineDbgFilteredKeySet = new Set(
+        timelineDbgFilteredProcedures.map(timelineEventDebugKey).filter(Boolean)
+      );
+      const timelineDbgRemovedAfterFilter = timelineDbgNormalizedProcedures
+        .filter((evt) => {
+          const k = timelineEventDebugKey(evt);
+          return k && !timelineDbgFilteredKeySet.has(k);
+        })
+        .map((evt) => {
+          const evtDateStr = String(evt?.date || "").trim();
+          const ts = evt?.timestamp || (evt?.timelineAt ? Date.parse(String(evt.timelineAt)) : 0) || 0;
+          let reason = "filtered_out";
+          if (/^\d{4}-\d{2}-\d{2}$/.test(evtDateStr)) {
+            if (evtDateStr < startDate || evtDateStr > endDate) reason = "out_of_range_date";
+          } else if (!Number.isFinite(ts)) {
+            reason = "invalid_timestamp";
+          } else if (ts < (rangeStartTs - marginMs) || ts > (rangeEndTs + marginMs)) {
+            reason = "out_of_range_timestamp";
+          }
+          return {
+            stage: "filter",
+            reason,
+            ...timelineDescribeEvent(evt),
+          };
+        });
+      const removedItems = [...timelineDbgRemovedInNormalize, ...timelineDbgRemovedAfterFilter];
+      console.log("[timeline] removed procedures", removedItems);
 
       return res.json({
         ok: true,
@@ -35082,6 +35148,29 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
     console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
     console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
+    console.log("[timeline] after filter", timelineDbgFilteredProcedures.length);
+    const timelineDbgFilteredKeySet = new Set(
+      timelineDbgFilteredProcedures.map(timelineEventDebugKey).filter(Boolean)
+    );
+    const timelineDbgRemovedAfterFilter = timelineDbgNormalizedProcedures
+      .filter((evt) => {
+        const k = timelineEventDebugKey(evt);
+        return k && !timelineDbgFilteredKeySet.has(k);
+      })
+      .map((evt) => {
+        const st = String(evt?.status || "").toUpperCase();
+        const ts = adminEventsTimelineTs(evt);
+        let reason = "filtered_out";
+        if (st === "CANCELLED" || st === "CANCELED") reason = "cancelled_status";
+        else if (!(ts > 0)) reason = "invalid_timeline_timestamp";
+        return {
+          stage: "filter",
+          reason,
+          ...timelineDescribeEvent(evt),
+        };
+      });
+    const removedItems = [...timelineDbgRemovedInNormalize, ...timelineDbgRemovedAfterFilter];
+    console.log("[timeline] removed procedures", removedItems);
     
     res.json({
       ok: true,
