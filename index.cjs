@@ -16727,6 +16727,35 @@ function normalizeAppointmentDateTime({
   };
 }
 
+function logEndpointDatetimeComparison({
+  endpoint,
+  probeId,
+  itemId,
+  rawDbScheduledAtUtc,
+  normalized,
+  finalPayload,
+}) {
+  if (!probeId) return;
+  const p = String(probeId).trim();
+  const id = String(itemId || "").trim();
+  if (!p || !id || p !== id) return;
+  console.log(
+    `[DT-COMPARE] ${endpoint}`,
+    JSON.stringify(
+      {
+        probeId: p,
+        rawDbScheduledAtUtc: rawDbScheduledAtUtc || null,
+        normalizeAppointmentDateTime: normalized || null,
+        finalPayload: finalPayload || null,
+        scheduledLocal: finalPayload?.scheduledLocal || finalPayload?.scheduled_date || null,
+        scheduledLocalTime: finalPayload?.scheduledLocalTime || finalPayload?.time || null,
+      },
+      null,
+      2
+    )
+  );
+}
+
 /** Civil calendar day ymd interpreted in IANA TZ → [start, nextDay) in ms — matches UTC-stored timestamps. */
 function getCalendarDayWindowBoundsMsForDashboard(ymd, ianaTz) {
   try {
@@ -33809,6 +33838,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
 // Filters on events route: overdue / today / upcoming (extended horizon)
 app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
   try {
+    const dtProbeId = String(req.query.dtProbeId || "").trim();
     const date = String(req.query.date || "").trim();
     const startDate = String(req.query.startDate || "").trim();
     const endDate = String(req.query.endDate || "").trim();
@@ -34128,12 +34158,23 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
           return "";
         })();
 
-        return {
+        const dtNorm = normalizeAppointmentDateTime({
+          rawInstant: startAt,
+          clinicTimezone: resolveDashboardCalendarTimeZone("", "", req.clinicCode),
+          fallbackDate: getField(row, ["date", "appointment_date"]),
+          fallbackTime: getField(row, ["time", "appointment_time"]),
+        });
+        const payload = {
+          id: String(getField(row, ["id"]) || ""),
           doctor: String(getField(row, ["doctor", "doctor_name", "doctorName"]) || doctorMap.get(doctorId) || doctorId || ""),
           patient: String(getField(row, ["patient", "patient_name", "patientName"]) || patientMap.get(patientId) || patientId || ""),
           chair: String(getField(row, ["chair", "chair_name", "chairName"]) || chairMap.get(chairId) || chairId || ""),
-          startAt: toIsoSafe(startAt),
+          startAt: dtNorm.scheduledLocal || toIsoSafe(startAt),
           endAt: toIsoSafe(endAt),
+          scheduledAtUtc: dtNorm.scheduledAtUtc,
+          clinicTimezone: dtNorm.clinicTimezone,
+          scheduledLocal: dtNorm.scheduledLocal,
+          scheduledLocalTime: dtNorm.scheduledLocalTime,
           status,
           treatment,
           ...(tooth_number ? { tooth_number } : {}),
@@ -34141,6 +34182,15 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
           break_minutes: breakMinutes,
           _appointmentDate: appointmentDate,
         };
+        logEndpointDatetimeComparison({
+          endpoint: "/api/admin/appointments",
+          probeId: dtProbeId,
+          itemId: payload.id,
+          rawDbScheduledAtUtc: toIsoSafe(startAt),
+          normalized: dtNorm,
+          finalPayload: payload,
+        });
+        return payload;
       })
       .filter((item) => {
         if (isSingleDate) return item._appointmentDate === rangeStartDate;
@@ -34197,6 +34247,7 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
 
 app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
   try {
+    const dtProbeId = String(req.query.dtProbeId || "").trim();
     const clinicCode = String(req.clinicCode || "").trim().toUpperCase();
     if (!clinicCode) {
       return res.status(401).json({ ok: false, error: "clinic_required" });
@@ -35941,6 +35992,25 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const removedItems = [...timelineDbgRemovedInNormalize, ...timelineDbgRemovedAfterFilter];
       console.log("[timeline] removed procedures", removedItems);
 
+      if (dtProbeId) {
+        const hit = (rangeEvents || []).find((e) => String(e?.id || "").trim() === dtProbeId);
+        if (hit) {
+          const dt = normalizeAppointmentDateTime({
+            rawInstant: hit?.timelineAt || hit?.timestamp || null,
+            clinicTimezone: ADMIN_EVENTS_CALENDAR_TZ,
+            fallbackDate: hit?.date || hit?.scheduledDate,
+            fallbackTime: hit?.time,
+          });
+          logEndpointDatetimeComparison({
+            endpoint: "/api/admin/events",
+            probeId: dtProbeId,
+            itemId: hit?.id,
+            rawDbScheduledAtUtc: hit?.timelineAt || hit?.timestamp || null,
+            normalized: dt,
+            finalPayload: hit,
+          });
+        }
+      }
       return res.json({
         ok: true,
         startDate,
@@ -36058,6 +36128,26 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     const removedItems = [...timelineDbgRemovedInNormalize, ...timelineDbgRemovedAfterFilter];
     console.log("[timeline] removed procedures", removedItems);
     
+    if (dtProbeId) {
+      const all = [...overdue, ...todayEvents, ...upcoming, ...timeline];
+      const hit = all.find((e) => String(e?.id || "").trim() === dtProbeId);
+      if (hit) {
+        const dt = normalizeAppointmentDateTime({
+          rawInstant: hit?.timelineAt || hit?.timestamp || null,
+          clinicTimezone: ADMIN_EVENTS_CALENDAR_TZ,
+          fallbackDate: hit?.date || hit?.scheduledDate,
+          fallbackTime: hit?.time,
+        });
+        logEndpointDatetimeComparison({
+          endpoint: "/api/admin/events",
+          probeId: dtProbeId,
+          itemId: hit?.id,
+          rawDbScheduledAtUtc: hit?.timelineAt || hit?.timestamp || null,
+          normalized: dt,
+          finalPayload: hit,
+        });
+      }
+    }
     res.json({
       ok: true,
       overdue,
@@ -42671,6 +42761,7 @@ function buildDashboardRiskFlagsFromHealth(healthRaw) {
 // GET /api/doctor/inbox-summary & /api/doctor/dashboard — same handler (mobile uses inbox-summary; /dashboard is alias)
 async function handleDoctorInboxSummary(req, res) {
   try {
+    const dtProbeId = String(req.query.dtProbeId || "").trim();
     console.log("🔥 DOCTOR INBOX-SUMMARY (timeline) ENDPOINT HIT");
     // Use doctor from middleware (already verified)
     const doctorRecord = req.doctor || {};
@@ -43509,7 +43600,7 @@ async function handleDoctorInboxSummary(req, res) {
           : null;
       const patient = patientMap.get(a.patient_id) || null;
       const st = String(a.status || "").toLowerCase();
-      return {
+      const payload = {
         appointmentId: String(a.id || ""),
         scheduledAtUtc: dt.scheduledAtUtc,
         scheduledAt: dt.scheduledLocal,
@@ -43535,6 +43626,15 @@ async function handleDoctorInboxSummary(req, res) {
               ? "in_progress"
               : "scheduled",
       };
+      logEndpointDatetimeComparison({
+        endpoint: "/api/doctor/dashboard",
+        probeId: dtProbeId,
+        itemId: payload.appointmentId,
+        rawDbScheduledAtUtc: dt.scheduledAtUtc,
+        normalized: dt,
+        finalPayload: payload,
+      });
+      return payload;
     };
 
     const dedupeDashboardAppointments = (rows) => {
@@ -51549,6 +51649,7 @@ app.post('/api/treatment/plans/:id/items', requireDoctorAuth, async (req, res) =
 
 app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
   try {
+    const dtProbeId = String(req.query.dtProbeId || "").trim();
     const doctorKeysRaw = [...new Set([
       String(req.doctorId || '').trim(),
       String(req?.doctor?.id || '').trim(),
@@ -51826,7 +51927,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           clinicTimezone: doctorTaskTz,
         });
         const dueDateLocal = dt.scheduledLocal;
-        return {
+        const payload = {
           id: String(item?.id || ''),
           patient_id: patientId,
           patient: {
@@ -51855,6 +51956,15 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           created_at: item?.created_at || null,
           source: 'treatment_plan_item',
         };
+        logEndpointDatetimeComparison({
+          endpoint: "/api/doctor/tasks",
+          probeId: dtProbeId,
+          itemId: payload.id,
+          rawDbScheduledAtUtc: rawDueCandidate,
+          normalized: dt,
+          finalPayload: payload,
+        });
+        return payload;
       })
       .filter((task) => !!task && !!task.id)
       .filter((task) => ['PLANNED', 'IN_PROGRESS'].includes(String(task.status || '').toUpperCase()));
@@ -51982,7 +52092,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           clinicTimezone: doctorTaskTz,
         });
         const dueDateLocal = dt.scheduledLocal;
-        return {
+        const payload = {
           id: String(et?.id || ''),
           patient_id: patientId,
           patient: {
@@ -52012,6 +52122,15 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           created_at: et?.created_at || null,
           source: 'encounter_treatment',
         };
+        logEndpointDatetimeComparison({
+          endpoint: "/api/doctor/tasks",
+          probeId: dtProbeId,
+          itemId: payload.id,
+          rawDbScheduledAtUtc: et?.scheduled_at || et?.created_at || null,
+          normalized: dt,
+          finalPayload: payload,
+        });
+        return payload;
       })
       .filter((task) => task && task.id);
 
