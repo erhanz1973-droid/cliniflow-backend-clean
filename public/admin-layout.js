@@ -167,10 +167,10 @@
       </div>
       <div class="al-topbar-right">
         <div class="al-lang" id="alLang">
-          <span id="lang-tr" onclick="if(window.onLanguageChange)window.onLanguageChange('tr')">TR</span>
-          <span id="lang-en" onclick="if(window.onLanguageChange)window.onLanguageChange('en')">EN</span>
-          <span id="lang-ru" onclick="if(window.onLanguageChange)window.onLanguageChange('ru')">RU</span>
-          <span id="lang-ka" onclick="if(window.onLanguageChange)window.onLanguageChange('ka')">KA</span>
+          <span id="lang-tr" class="lang-btn" data-lang="tr" onclick="if(window.onLanguageChange)window.onLanguageChange('tr')">TR</span>
+          <span id="lang-en" class="lang-btn" data-lang="en" onclick="if(window.onLanguageChange)window.onLanguageChange('en')">EN</span>
+          <span id="lang-ru" class="lang-btn" data-lang="ru" onclick="if(window.onLanguageChange)window.onLanguageChange('ru')">RU</span>
+          <span id="lang-ka" class="lang-btn" data-lang="ka" onclick="if(window.onLanguageChange)window.onLanguageChange('ka')">KA</span>
         </div>
       </div>
     `;
@@ -236,6 +236,22 @@
     };
     // admin-i18n emits this on init and every language switch
     document.addEventListener('i18n:ready', refreshLayoutI18n);
+    // Ensure topbar language chips always call the same setter path as i18n's own switcher.
+    document.querySelectorAll('#alLang .lang-btn[data-lang]').forEach(function (el) {
+      if (el.getAttribute('data-layout-lang-bound') === '1') return;
+      el.setAttribute('data-layout-lang-bound', '1');
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var lang = String(el.getAttribute('data-lang') || '').trim().toLowerCase();
+        if (!lang) return;
+        if (window.i18n && typeof window.i18n.setLanguage === 'function') {
+          window.i18n.setLanguage(lang);
+        } else if (typeof window.onLanguageChange === 'function') {
+          window.onLanguageChange(lang);
+        }
+      });
+    });
     // Initial pass (covers first paint before i18n emits)
     setTimeout(refreshLayoutI18n, 0);
   }
