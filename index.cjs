@@ -34380,6 +34380,90 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       allEvents.push(merged);
     };
 
+    // Admin timeline must also include appointment rows (appointments / appointment_requests),
+    // otherwise calendar can show slots that never appear in timeline.
+    if (isSupabaseEnabled() && req.clinicId) {
+      try {
+        const queryStartIso = hasRangeFilter
+          ? `${startDate}T00:00:00.000Z`
+          : new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const queryEndIso = hasRangeFilter
+          ? `${endDate}T23:59:59.999Z`
+          : new Date(upcomingInstantLimit).toISOString();
+
+        const mapAppointmentRowToTimelineEvent = (row, sourceLabel) => {
+          const startRaw =
+            row?.start_at ??
+            row?.startAt ??
+            row?.start_time ??
+            row?.startTime ??
+            row?.scheduled_at ??
+            row?.appointment_at ??
+            null;
+          const timelineAt =
+            toIso(startRaw) ||
+            dateTimeToIso(row?.date || row?.appointment_date, row?.time || "00:00");
+          if (!timelineAt) return null;
+          const evtStatus = procedures.normalizeStatus(row?.status || "PLANNED");
+          const patientId = String(row?.patient_id || row?.patientId || "").trim();
+          return {
+            id: String(row?.id || `${sourceLabel}_${patientId}_${timelineAt}`),
+            patientId,
+            type: "APPOINTMENT",
+            eventType: "APPOINTMENT",
+            title: String(
+              row?.title ||
+              row?.appointment_type ||
+              row?.procedure_name ||
+              row?.procedure_code ||
+              row?.type ||
+              "Appointment"
+            ).trim(),
+            description: String(row?.notes || row?.description || "").trim(),
+            date: String(timelineAt).slice(0, 10),
+            time: null,
+            status: evtStatus,
+            source: sourceLabel,
+            timelineAt,
+            toothId: row?.tooth_number != null ? String(row.tooth_number) : undefined,
+            chair: row?.chair || row?.chair_name || row?.chair_no || null,
+          };
+        };
+
+        const fetchAppointmentLikeRows = async (tableName) => {
+          const attempts = [
+            () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("start_time", queryStartIso).lte("start_time", queryEndIso),
+            () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("start_at", queryStartIso).lte("start_at", queryEndIso),
+            () => supabase.from(tableName).select("*").eq("clinic_id", req.clinicId).gte("scheduled_at", queryStartIso).lte("scheduled_at", queryEndIso),
+            () => req.clinicCode
+              ? supabase.from(tableName).select("*").eq("clinic_code", String(req.clinicCode || "").trim().toUpperCase()).gte("start_time", queryStartIso).lte("start_time", queryEndIso)
+              : Promise.resolve({ data: [], error: null }),
+            () => req.clinicCode
+              ? supabase.from(tableName).select("*").eq("clinic_code", String(req.clinicCode || "").trim().toUpperCase()).gte("start_at", queryStartIso).lte("start_at", queryEndIso)
+              : Promise.resolve({ data: [], error: null }),
+          ];
+          for (const run of attempts) {
+            const { data, error } = await run();
+            if (!error) return Array.isArray(data) ? data : [];
+            const code = String(error?.code || "");
+            if (["42P01", "42703", "PGRST204", "PGRST205"].includes(code)) continue;
+          }
+          return [];
+        };
+
+        const [apptRows, reqRows] = await Promise.all([
+          fetchAppointmentLikeRows("appointments"),
+          fetchAppointmentLikeRows("appointment_requests"),
+        ]);
+        [...(apptRows || []), ...(reqRows || [])].forEach((row) => {
+          const evt = mapAppointmentRowToTimelineEvent(row, "appointment");
+          if (evt) addEvent(evt);
+        });
+      } catch (appointmentsErr) {
+        console.warn("[ADMIN EVENTS] appointments merge skipped:", appointmentsErr?.message || appointmentsErr);
+      }
+    }
+
     // PRODUCTION: Supabase patients are source of truth
     if (isSupabaseEnabled() && req.clinicId) {
       const priceMap = await fetchTreatmentPricesMap(req.clinicId);
