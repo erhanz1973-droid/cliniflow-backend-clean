@@ -300,6 +300,9 @@ const {
   getAllClinics,
   getAdminByEmailAndClinicCode,
   expandPatientIdLookupKeys,
+  canonicalPatientIdForTimeline,
+  patientFkInClauseKeysFromPatientRow,
+  allPatientFkInClauseKeysForClinicTimeline,
   getPatientById,
   getPatientByPhone,
   getPatientByEmail,
@@ -13999,7 +14002,7 @@ function mapEncounterTreatmentStatusToPatientJsonStatus(stRaw) {
 function dedupeAdminTimelineEvents(events) {
   const list = Array.isArray(events) ? events : [];
   const keyOf = (e) => {
-    const pid = String(e?.patientId || "").trim();
+    const pid = canonicalPatientIdForTimeline(String(e?.patientId || "").trim());
     const tooth = String(e?.toothId ?? "").trim();
     const typ = String(e?.eventType || e?.treatment || "").toUpperCase();
     const ds = String(e?.date || "").trim();
@@ -34060,15 +34063,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       // We build a UUID→data map so the per-patient loop can access it cheaply.
       const patientTreatmentsMap = new Map(); // patientUUID → treatments_data
       try {
-        const allUuids = [...new Set(
-          list.flatMap((p) =>
-            [...expandPatientIdLookupKeys(String(p?.id || "")), ...expandPatientIdLookupKeys(String(p?.patient_id || ""))].filter(
-              (x) => x && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x)
-            )
-          )
-        )];
-        for (let i = 0; i < allUuids.length; i += 50) {
-          const chunk = allUuids.slice(i, i + 50);
+        const allFkIds = allPatientFkInClauseKeysForClinicTimeline(list);
+        for (let i = 0; i < allFkIds.length; i += 50) {
+          const chunk = allFkIds.slice(i, i + 50);
           const { data: ptRows, error: ptErr } = await supabase
             .from("patient_treatments")
             .select("patient_id, treatments_data, clinic_id")
@@ -34095,21 +34092,13 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       }
       // ────────────────────────────────────────────────────────────────────────
 
-      const UUID_RE_EVENTS = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
       // Pre-fetch all patient encounters in ONE parallel batch (avoids sequential N queries)
-      const allPatientUuids = [...new Set(
-        list.flatMap((p) =>
-          [...expandPatientIdLookupKeys(String(p?.id || "")), ...expandPatientIdLookupKeys(String(p?.patient_id || ""))].filter(
-            (id) => id && UUID_RE_EVENTS.test(id)
-          )
-        )
-      )];
-      const encountersByPatientId = new Map(); // patientUUID → encounter[]
-      if (allPatientUuids.length > 0) {
+      const allPatientFkIds = allPatientFkInClauseKeysForClinicTimeline(list);
+      const encountersByPatientId = new Map(); // literal patient_id key from row → encounter[]
+      if (allPatientFkIds.length > 0) {
         try {
-          for (let i = 0; i < allPatientUuids.length; i += 100) {
-            const chunk = allPatientUuids.slice(i, i + 100);
+          for (let i = 0; i < allPatientFkIds.length; i += 100) {
+            const chunk = allPatientFkIds.slice(i, i + 100);
             const { data: encRows, error: encQErr } = await supabase
               .from("patient_encounters")
               .select("id, patient_id, clinic_id")
@@ -34138,7 +34127,8 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       // ── Batch pre-fetch treatment_plans for ALL patients ────────────────────
       // Avoids N×2 sequential treatment_plans queries inside the patient loop.
       const allEncounterIds = [...new Set(
-        allPatientUuids.flatMap(uid => (encountersByPatientId.get(uid) || []).map(e => String(e.id || '')))
+        [...encountersByPatientId.values()]
+          .flatMap((encs) => (encs || []).map((e) => String(e?.id || "")))
           .filter(Boolean)
       )];
       // patientId → Set<planId>
@@ -34157,11 +34147,21 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             if (eventsSatelliteRowClinicOk(row, req.clinicId)) planRowsMerged.push(row);
           });
         };
+        const registerPlanUnderPatientAliases = (pidRaw, planId) => {
+          const pid = String(pidRaw || "").trim();
+          if (!pid || !planId) return;
+          for (const alias of expandPatientIdLookupKeys(pid)) {
+            const ak = String(alias || "").trim();
+            if (!ak) continue;
+            if (!planIdsByPatientId.has(ak)) planIdsByPatientId.set(ak, new Set());
+            planIdsByPatientId.get(ak).add(planId);
+          }
+        };
         for (let i = 0; i < allEncounterIds.length; i += 100) {
           await runTreatmentPlansIn("encounter_id", allEncounterIds.slice(i, i + 100));
         }
-        for (let i = 0; i < allPatientUuids.length; i += 100) {
-          await runTreatmentPlansIn("patient_id", allPatientUuids.slice(i, i + 100));
+        for (let i = 0; i < allPatientFkIds.length; i += 100) {
+          await runTreatmentPlansIn("patient_id", allPatientFkIds.slice(i, i + 100));
         }
 
         // Build encounter_id → patient_id reverse lookup from encountersByPatientId
@@ -34179,8 +34179,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             row?.patient_id || encIdToPatientId.get(String(row?.encounter_id || "")) || ""
           ).trim();
           if (!pid) continue;
-          if (!planIdsByPatientId.has(pid)) planIdsByPatientId.set(pid, new Set());
-          planIdsByPatientId.get(pid).add(planId);
+          registerPlanUnderPatientAliases(pid, planId);
         }
       } catch (planBatchErr) {
         console.error('[ADMIN EVENTS] treatment_plans batch fetch error:', planBatchErr.message);
@@ -34356,14 +34355,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         const patientName = String(p?.name || p?.full_name || patientId).trim();
         const patientDoctorId = String(p?.primary_doctor_id || p?.doctor_id || "").trim();
         const patientDoctorName = String(doctorNameById.get(patientDoctorId) || "").trim();
-        // UUIDs for FK columns (patient_encounters, treatment_plans, …); expand p_<uuid> slugs.
-        const patientLookupIds = [
-          ...new Set(
-            [...expandPatientIdLookupKeys(String(p?.id || "")), ...expandPatientIdLookupKeys(String(p?.patient_id || ""))].filter(
-              (id) => id && UUID_RE_EVENTS.test(id)
-            )
-          ),
-        ];
+        const patientLookupIds = patientFkInClauseKeysFromPatientRow(p?.id, p?.patient_id);
 
         // TRAVEL (null-safe)
         const travel = p?.travel || {};
@@ -34958,7 +34950,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     const timelineEventDebugKey = (evt) => {
       if (!evt || typeof evt !== "object") return "";
       const id = String(evt.id || evt.procedureId || "").trim();
-      const pid = String(evt.patientId || "").trim();
+      const pid = canonicalPatientIdForTimeline(String(evt.patientId || "").trim());
       const src = String(evt.source || "").trim();
       const typ = String(evt.eventType || evt.type || evt.treatment || "").trim();
       const date = String(evt.date || evt.timelineAt || evt.timestamp || "").trim();
