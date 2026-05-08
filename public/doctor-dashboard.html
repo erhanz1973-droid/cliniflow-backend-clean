@@ -387,13 +387,37 @@
       }
     }
 
-    async function pollDoctorUnreadMessages() {
+    const UNREAD_POLL_MIN_GAP_MS = 8000;
+    const UNREAD_POLL_BG_GAP_MS = 15000;
+    const UNREAD_CACHE_TTL_MS = 12000;
+    let unreadPollInFlight = null;
+    let unreadLastPollStartedAt = 0;
+    let unreadCached = { total: 0, at: 0 };
+    let unreadPollTimer = null;
+
+    async function pollDoctorUnreadMessages(force) {
       if (!localStorage.getItem("doctor_token")) return;
+      const nowTs = Date.now();
+      const minGap = document.hidden ? UNREAD_POLL_BG_GAP_MS : UNREAD_POLL_MIN_GAP_MS;
+      if (!force && unreadCached.at > 0 && nowTs - unreadCached.at < UNREAD_CACHE_TTL_MS) {
+        updateMsgBadge(unreadCached.total);
+        return;
+      }
+      if (!force && unreadPollInFlight) {
+        await unreadPollInFlight.catch(function () {});
+        return;
+      }
+      if (!force && unreadLastPollStartedAt > 0 && nowTs - unreadLastPollStartedAt < minGap) {
+        return;
+      }
+      unreadLastPollStartedAt = nowTs;
+      unreadPollInFlight = (async function () {
       try {
         const r = await apiFetch("/api/doctor/messages/unread-counts?totalOnly=1", { headers: { Accept: "application/json" } });
         const data = await r.json();
         if (!data || data.ok === false) return;
         const total = Number(data.totalUnread != null ? data.totalUnread : data.total || 0);
+        unreadCached = { total: total, at: Date.now() };
         if (total > 0) {
           updateMsgBadge(total);
           if (previousUnreadMsgCount !== null && total > previousUnreadMsgCount) {
@@ -405,6 +429,12 @@
         previousUnreadMsgCount = total;
       } catch (e) {
         console.warn("[pollDoctorUnreadMessages]", e);
+      }
+      })();
+      try {
+        await unreadPollInFlight;
+      } finally {
+        unreadPollInFlight = null;
       }
     }
 
@@ -421,8 +451,25 @@
           }
         });
       }
-      setTimeout(pollDoctorUnreadMessages, 800);
-      setInterval(pollDoctorUnreadMessages, 5000);
+      const scheduleUnreadPoll = function (delay) {
+        if (unreadPollTimer) clearTimeout(unreadPollTimer);
+        unreadPollTimer = setTimeout(async function () {
+          await pollDoctorUnreadMessages(false);
+          scheduleUnreadPoll(document.hidden ? UNREAD_POLL_BG_GAP_MS : UNREAD_POLL_MIN_GAP_MS);
+        }, Math.max(500, Number(delay) || UNREAD_POLL_MIN_GAP_MS));
+      };
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) {
+          pollDoctorUnreadMessages(true).catch(function () {});
+          scheduleUnreadPoll(UNREAD_POLL_MIN_GAP_MS);
+        } else {
+          scheduleUnreadPoll(UNREAD_POLL_BG_GAP_MS);
+        }
+      });
+      setTimeout(function () {
+        pollDoctorUnreadMessages(true).catch(function () {});
+      }, 800);
+      scheduleUnreadPoll(UNREAD_POLL_MIN_GAP_MS);
     })();
 
     loadDoctorInfo();
