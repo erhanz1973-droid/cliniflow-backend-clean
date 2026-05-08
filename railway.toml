@@ -1,6 +1,8 @@
 # Railway config-as-code: https://docs.railway.app/deploy/config-as-code
 # Service → Settings → Root Directory = this folder (package.json + index.cjs),
 # e.g. cliniflow-backend-clean — not the monorepo parent.
+# Security: keep secrets only in Railway Runtime Variables (do NOT pass via Docker ARG/ENV build args).
+# Hygiene: avoid custom NIXPACKS_PATH overrides unless explicitly needed.
 
 [build]
 builder = "nixpacks"

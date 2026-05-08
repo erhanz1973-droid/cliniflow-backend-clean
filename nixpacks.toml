@@ -1,8 +1,8 @@
 [phases.setup]
 nixPkgs = ["nodejs_20"]
 
-[phases.install]
-cmds = ["npm install"]
+# Let Nixpacks run its default Node install phase once (avoid duplicate npm install).
+# Do not inject secrets at build-time; keep secrets as runtime Railway variables.
 
 [start]
 cmd = "node index.cjs"
