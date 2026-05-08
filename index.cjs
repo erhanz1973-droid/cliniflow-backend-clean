@@ -34321,6 +34321,7 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
 app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
   try {
     const dtProbeId = String(req.query.dtProbeId || "").trim();
+    const traceProcIdRaw = String(req.query.traceProcedureId || req.query.traceProcId || "").trim();
     const clinicCode = String(req.clinicCode || "").trim().toUpperCase();
     if (!clinicCode) {
       return res.status(401).json({ ok: false, error: "clinic_required" });
