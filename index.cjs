@@ -36035,7 +36035,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     };
     const timelineDescribeEvent = (evt) => ({
       id: evt?.id || null,
-      procedureId: evt?.procedureId || null,
+      procedureId: evt?.procedureId || timelineDebugProcedureIdentity(evt) || null,
       patientId: evt?.patientId || null,
       source: evt?.source || null,
       type: evt?.type || null,
@@ -36049,8 +36049,14 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     });
 
     const timelineDbgRawProcedures = allEvents.filter(isTimelineProcedureEvent);
-    console.log("[timeline] raw count", timelineDbgRawProcedures.length);
-    console.log("[timeline] raw procedures", timelineDbgRawProcedures);
+    const timelineVerboseDebug =
+      adminTimelineProcDebug ||
+      adminTimelineProcRawDebug ||
+      Boolean(traceProcKey);
+    if (timelineVerboseDebug) {
+      console.log("[timeline] raw count", timelineDbgRawProcedures.length);
+      console.log("[timeline] raw procedures", timelineDbgRawProcedures);
+    }
 
     console.log("[EVENTS] Total raw events collected:", allEvents.length, "for clinic:", req.clinicCode);
     for (let ei = 0; ei < allEvents.length; ei++) {
@@ -36068,8 +36074,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     allEvents.push(...dedupedEvents);
 
     const timelineDbgNormalizedProcedures = allEvents.filter(isTimelineProcedureEvent);
-    console.log("[timeline] after normalize", timelineDbgNormalizedProcedures.length);
-    console.log("[timeline] normalized procedures", timelineDbgNormalizedProcedures);
+    if (timelineVerboseDebug) {
+      console.log("[timeline] after normalize", timelineDbgNormalizedProcedures.length);
+      console.log("[timeline] normalized procedures", timelineDbgNormalizedProcedures);
+    }
     const timelineDbgNormalizedKeySet = new Set(
       timelineDbgNormalizedProcedures.map(timelineEventDebugKey).filter(Boolean)
     );
@@ -36099,10 +36107,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
       const timelineDbgFilteredProcedures = rangeEvents.filter(isTimelineProcedureEvent);
-      console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
-      console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
-      console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
-      console.log("[timeline] after filter", timelineDbgFilteredProcedures.length);
+      if (timelineVerboseDebug) {
+        console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
+        console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
+        console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
+        console.log("[timeline] after filter", timelineDbgFilteredProcedures.length);
+      }
       const timelineDbgFilteredKeySet = new Set(
         timelineDbgFilteredProcedures.map(timelineEventDebugKey).filter(Boolean)
       );
@@ -36129,7 +36139,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           };
         });
       const removedItems = [...timelineDbgRemovedInNormalize, ...timelineDbgRemovedAfterFilter];
-      console.log("[timeline] removed procedures", removedItems);
+      if (timelineVerboseDebug) {
+        console.log("[timeline] removed procedures", removedItems);
+      }
 
       if (dtProbeId) {
         const evtIdPick = (e) =>
@@ -36242,10 +36254,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       .sort((a, b) => adminEventsTimelineTs(a) - adminEventsTimelineTs(b));
 
     const timelineDbgFilteredProcedures = timeline.filter(isTimelineProcedureEvent);
-    console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
-    console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
-    console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
-    console.log("[timeline] after filter", timelineDbgFilteredProcedures.length);
+    if (timelineVerboseDebug) {
+      console.log("[timeline] filtered procedures", timelineDbgFilteredProcedures);
+      console.log("[timeline] statuses", timelineDbgFilteredProcedures.map((x) => x.status));
+      console.log("[timeline] dates", timelineDbgFilteredProcedures.map((x) => x.date || x.scheduledDate));
+      console.log("[timeline] after filter", timelineDbgFilteredProcedures.length);
+    }
     const timelineDbgFilteredKeySet = new Set(
       timelineDbgFilteredProcedures.map(timelineEventDebugKey).filter(Boolean)
     );
@@ -36267,7 +36281,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         };
       });
     const removedItems = [...timelineDbgRemovedInNormalize, ...timelineDbgRemovedAfterFilter];
-    console.log("[timeline] removed procedures", removedItems);
+    if (timelineVerboseDebug) {
+      console.log("[timeline] removed procedures", removedItems);
+    }
     
     if (dtProbeId) {
       const evtIdPickDefault = (e) =>
