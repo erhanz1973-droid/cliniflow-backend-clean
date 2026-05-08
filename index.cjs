@@ -34562,7 +34562,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       if (hasRangeFilter) {
         const evtDateStr = String(evt?.date || "").trim();
         let rangeDrop = false;
-        if (/^\d{4}-\d{2}-\d{2}$/.test(evtDateStr)) {
+        // Authoritative for range: resolved timeline instant in clinic calendar TZ.
+        // `evt.date` can be stale/legacy and cause false drops after UTC/local migrations.
+        const dayKeyFromTs = Number.isFinite(ts) ? calendarDayKeyInTz(ts) : "";
+        if (dayKeyFromTs && /^\d{4}-\d{2}-\d{2}$/.test(dayKeyFromTs)) {
+          if (dayKeyFromTs < startDate || dayKeyFromTs > endDate) rangeDrop = true;
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(evtDateStr)) {
           if (evtDateStr < startDate || evtDateStr > endDate) rangeDrop = true;
         } else if (Number.isFinite(ts)) {
           const marginMs = 24 * 60 * 60 * 1000;
@@ -34578,6 +34583,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             rawId: evtRaw?.id,
             patientId: evtRaw?.patientId,
             evtDateStr,
+            dayKeyFromTs,
             ts,
             startDate,
             endDate,
@@ -34586,6 +34592,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         if (rangeDrop) {
           traceDrop("addEvent.drop_date_range", {
             evtDateStr,
+            dayKeyFromTs,
             ts,
             startDate,
             endDate,
@@ -36098,10 +36105,14 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const rangeEvents = allEvents
         .filter((evt) => {
           const evtDateStr = String(evt?.date || "").trim();
+          const ts = evt.timestamp || (evt.timelineAt ? Date.parse(evt.timelineAt) : 0) || 0;
+          const dayKeyFromTs = Number.isFinite(ts) ? calendarDayKeyInTz(ts) : "";
+          if (dayKeyFromTs && /^\d{4}-\d{2}-\d{2}$/.test(dayKeyFromTs)) {
+            return dayKeyFromTs >= startDate && dayKeyFromTs <= endDate;
+          }
           if (/^\d{4}-\d{2}-\d{2}$/.test(evtDateStr)) {
             return evtDateStr >= startDate && evtDateStr <= endDate;
           }
-          const ts = evt.timestamp || (evt.timelineAt ? Date.parse(evt.timelineAt) : 0) || 0;
           return Number.isFinite(ts) && ts >= (rangeStartTs - marginMs) && ts <= (rangeEndTs + marginMs);
         })
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
