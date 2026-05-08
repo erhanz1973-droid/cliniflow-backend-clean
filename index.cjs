@@ -52335,6 +52335,161 @@ async function patchDoctorTaskStatusHandler(req, res) {
   }
 }
 
+/** Tek görev/satır için DB ham zamanı → normalizeAppointmentDateTime çıktısı (logda [DT-COMPARE] aramadan). */
+app.get('/api/doctor/datetime-probe', requireDoctorAuth, async (req, res) => {
+  try {
+    const rawInput = String(req.query.id || req.query.probeId || '').trim();
+    const lookupId = String(rawInput).replace(/^(et|appt|evt)-/i, '').trim();
+    if (!lookupId) {
+      return res.status(400).json({ ok: false, error: 'id_or_probeId_required' });
+    }
+
+    const doctorKeysRaw = [...new Set([
+      String(req.doctorId || '').trim(),
+      String(req?.doctor?.id || '').trim(),
+      String(req?.doctor?.doctor_id || '').trim(),
+    ].filter(Boolean))];
+    const doctorKeysUuidFk = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
+
+    const clinicIdForTz = req?.doctor?.clinic_id || req?.clinicId || null;
+    const clinicCodeForTz = String(req?.clinicCode || req?.doctor?.clinic_code || req?.doctor?.clinicCode || '').trim();
+    const clinicTzRaw = await resolveClinicIanaTzForScheduledWrites(clinicIdForTz);
+    const doctorTaskTz = resolveDashboardCalendarTimeZone(clinicTzRaw, null, clinicCodeForTz);
+
+    const buildResponse = (source, row, rawInstant, normalized) =>
+      res.json({
+        ok: true,
+        inputId: rawInput || lookupId,
+        lookupId,
+        source,
+        timezoneUsed: doctorTaskTz,
+        row: row || null,
+        rawInstantPassedToNormalizer: rawInstant ?? null,
+        normalized: normalized || null,
+        canonicalFields: normalized
+          ? {
+              scheduledAtUtc: normalized.scheduledAtUtc,
+              clinicTimezone: normalized.clinicTimezone,
+              scheduledLocal: normalized.scheduledLocal,
+              scheduledLocalTime: normalized.scheduledLocalTime,
+              scheduledLocalDate: normalized.scheduledLocalDate ?? null,
+            }
+          : null,
+        tasksListProbeUrl:
+          `/api/doctor/tasks?dtProbeId=${encodeURIComponent(rawInput || lookupId)}`,
+      });
+
+    // 1) encounter_treatments (görev listesinin ana kaynaklarından)
+    const etSelectVariants = [
+      'id, encounter_id, tooth_number, procedure_type, status, scheduled_at, created_at, assigned_doctor_id, created_by_doctor_id',
+      'id, encounter_id, tooth_number, procedure_type, status, scheduled_at, created_at',
+    ];
+    for (const sel of etSelectVariants) {
+      const etRes = await supabase.from('encounter_treatments').select(sel).eq('id', lookupId).maybeSingle();
+      const code = String(etRes.error?.code || '');
+      if (etRes.error && ['42703', 'PGRST204', 'PGRST205'].includes(code)) {
+        continue;
+      }
+      if (!etRes.error && etRes.data?.id) {
+        const aid = String(etRes.data.assigned_doctor_id || '').trim();
+        const cid = String(etRes.data.created_by_doctor_id || '').trim();
+        const allowed =
+          doctorKeysUuidFk.length === 0
+            ? false
+            : doctorKeysUuidFk.some((k) => k && (k === aid || k === cid));
+        if (!allowed) {
+          return res.status(403).json({ ok: false, error: 'forbidden' });
+        }
+        const rawInstant = etRes.data.scheduled_at || etRes.data.created_at || null;
+        const dt = normalizeAppointmentDateTime({
+          rawInstant,
+          clinicTimezone: doctorTaskTz,
+        });
+        return buildResponse('encounter_treatment', etRes.data, rawInstant, dt);
+      }
+      break;
+    }
+
+    const tryPlanItemTable = async (tableName) => {
+      const itemSelects = [
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, type, category, status, due_date, scheduled_at, appointment_date, date, priority, high_priority, created_at, updated_at',
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, due_date, scheduled_at, appointment_date, date, created_at, updated_at',
+      ];
+      for (const sel of itemSelects) {
+        const itemRes = await supabase.from(tableName).select(sel).eq('id', lookupId).maybeSingle();
+        const icode = String(itemRes.error?.code || '');
+        if (itemRes.error && ['42703', 'PGRST204', 'PGRST205'].includes(icode)) {
+          continue;
+        }
+        if (itemRes.error || !itemRes.data?.id) {
+          return null;
+        }
+        const item = itemRes.data;
+        const planId = String(item.treatment_plan_id || '').trim();
+        if (!planId) {
+          return null;
+        }
+        const canEdit = await doctorRequestCanEditTreatmentPlan(planId, req);
+        if (!canEdit) {
+          return res.status(403).json({ ok: false, error: 'forbidden' });
+        }
+        let planCreated = null;
+        let encCreated = null;
+        const planLookup = await supabase
+          .from('treatment_plans')
+          .select('id, encounter_id, created_at')
+          .eq('id', planId)
+          .maybeSingle();
+        if (!planLookup.error && planLookup.data) {
+          planCreated = planLookup.data.created_at || null;
+          const encId = String(planLookup.data.encounter_id || '').trim();
+          if (encId) {
+            const encLookup = await supabase
+              .from('patient_encounters')
+              .select('id, created_at')
+              .eq('id', encId)
+              .maybeSingle();
+            if (!encLookup.error && encLookup.data) {
+              encCreated = encLookup.data.created_at || null;
+            }
+          }
+        }
+        const rawDueCandidate =
+          item.due_date ||
+          item.scheduled_at ||
+          item.appointment_date ||
+          item.date ||
+          item.updated_at ||
+          item.created_at ||
+          planCreated ||
+          encCreated;
+        const dt = normalizeAppointmentDateTime({
+          rawInstant: rawDueCandidate,
+          clinicTimezone: doctorTaskTz,
+        });
+        return buildResponse(
+          tableName === 'treatment_plan_items' ? 'treatment_plan_item' : 'treatment_item',
+          item,
+          rawDueCandidate,
+          dt
+        );
+      }
+      return null;
+    };
+
+    const fromTi = await tryPlanItemTable('treatment_items');
+    if (fromTi != null) return fromTi;
+
+    const fromTpi = await tryPlanItemTable('treatment_plan_items');
+    if (fromTpi != null) return fromTpi;
+
+    return res.status(404).json({ ok: false, error: 'task_not_found' });
+  } catch (error) {
+    console.error('[DOCTOR TASKS] datetime-probe exception:', error);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
 app.patch('/api/doctor/tasks/:id', requireDoctorAuth, patchDoctorTaskStatusHandler);
 app.put('/api/treatment/treatment-items/:id/status', requireDoctorAuth, patchDoctorTaskStatusHandler);
 app.patch('/api/treatment/treatment-items/:id/status', requireDoctorAuth, patchDoctorTaskStatusHandler);
