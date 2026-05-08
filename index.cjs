@@ -34502,9 +34502,26 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       const evt = normalizeAdminTimelineEventForIngest(evtRaw, {
         defaultClinicId: req.clinicId,
       });
+      const traceDrop = (stage, extra = {}) => {
+        try {
+          traceTimelineProc(stage, evtRaw || evt || {}, {
+            source: src0,
+            rawId: evtRaw?.id ?? evtRaw?.procedureId ?? evt?.id ?? evt?.procedureId ?? null,
+            patientId: evtRaw?.patientId ?? evt?.patientId ?? null,
+            ...extra,
+          });
+        } catch (_) {}
+      };
       const timelineAt = evt.timelineAt || evt.timeline_at || null;
       const iso = timelineAt || dateTimeToIso(evt.date, evt.time) || toIso(evt.timestamp);
       if (!iso) {
+        traceDrop("addEvent.drop_no_iso", {
+          date: evtRaw?.date ?? evt?.date ?? null,
+          time: evtRaw?.time ?? evt?.time ?? null,
+          timelineAtField: timelineAt,
+          timestamp: evtRaw?.timestamp ?? evt?.timestamp ?? null,
+          statusRaw: evtRaw?.status ?? evt?.status ?? null,
+        });
         if (adminTimelineProcRawDebug && timelineAddEventTraceSources.has(src0)) {
           console.log("[timeline] addEvent DROP no_iso", {
             source: src0,
@@ -34526,6 +34543,11 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         Number.isFinite(ts) &&
         ts < currentPatientMembershipStartMs
       ) {
+        traceDrop("addEvent.drop_before_membership", {
+          ts,
+          currentPatientMembershipStartMs,
+          timelineAtResolved: iso,
+        });
         if (adminTimelineProcRawDebug && timelineAddEventTraceSources.has(src0)) {
           console.log("[timeline] addEvent DROP before_membership", {
             source: src0,
@@ -34559,6 +34581,15 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
             ts,
             startDate,
             endDate,
+          });
+        }
+        if (rangeDrop) {
+          traceDrop("addEvent.drop_date_range", {
+            evtDateStr,
+            ts,
+            startDate,
+            endDate,
+            timelineAtResolved: iso,
           });
         }
         if (rangeDrop) return;
