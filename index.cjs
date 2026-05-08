@@ -43192,9 +43192,15 @@ async function handleDoctorInboxSummary(req, res) {
         const s = String(x).trim();
         return s ? s : null;
       };
-      // created_by_doctor_id is kept for filter fallback only; not merged into doctor_id
-      const doctor_id = norm(r.assigned_doctor_id) ?? norm(r._midDoctor) ?? null;
+      /** Single display/match identity: assigned → encounter_treatments.doctor_id (_midDoctor) → camel doctorId (legacy JSON) → created_by. */
+      const doctor_id =
+        norm(r.assigned_doctor_id) ??
+        norm(r._midDoctor) ??
+        norm(r.doctorId) ??
+        norm(r.created_by_doctor_id) ??
+        null;
       r.doctor_id = doctor_id;
+      r.doctorId = doctor_id;
       delete r._midDoctor;
       if (!doctor_id && !norm(r.created_by_doctor_id)) {
         console.error("[DOCTOR INBOX-SUMMARY] slot missing doctor_id and created_by_doctor_id", {
@@ -43303,15 +43309,96 @@ async function handleDoctorInboxSummary(req, res) {
       return out;
     }
 
+    /** One encounter index per dashboard request (today+tomorrow share it — avoids duplicate clinic/ET fan-out). */
+    let sharedDashboardEncContextPromise = null;
+    async function loadSharedDashboardEncContext() {
+      if (sharedDashboardEncContextPromise) return sharedDashboardEncContextPromise;
+      sharedDashboardEncContextPromise = (async () => {
+        const encById = new Map();
+        const addEnc = (rows) => {
+          for (const e of rows || []) {
+            const id = String(e?.id || "").trim();
+            if (!id) continue;
+            const prev = encById.get(id);
+            const next = {
+              id,
+              patient_id: e.patient_id,
+              created_by_doctor_id: e.created_by_doctor_id,
+            };
+            if (!prev) {
+              encById.set(id, next);
+            } else if (!prev.created_by_doctor_id && next.created_by_doctor_id) {
+              encById.set(id, { ...prev, created_by_doctor_id: next.created_by_doctor_id });
+            }
+          }
+        };
+        if (clinicId) {
+          const { data: byClinic } = await supabase
+            .from("patient_encounters")
+            .select("id, patient_id, created_by_doctor_id")
+            .eq("clinic_id", clinicId)
+            .limit(400);
+          addEnc(byClinic);
+        }
+        const allKeysForEnc = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
+        for (const key of allKeysForEnc) {
+          try {
+            const { data: byDoc } = await supabase
+              .from("patient_encounters")
+              .select("id, patient_id, created_by_doctor_id")
+              .eq("created_by_doctor_id", key)
+              .limit(200);
+            addEnc(byDoc);
+          } catch (_) {}
+        }
+        const allDoctorKeys = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(
+          (k) => k && DOCTOR_FK_UUID_RE.test(k)
+        );
+        if (allDoctorKeys.length > 0) {
+          try {
+            const keysCsv = allDoctorKeys.map((k) => `"${k}"`).join(",");
+            const { data: etEnc, error: etEncErr } = await supabase
+              .from("encounter_treatments")
+              .select("encounter_id")
+              .or(`assigned_doctor_id.in.(${keysCsv}),created_by_doctor_id.in.(${keysCsv})`)
+              .limit(800);
+            if (!etEncErr) {
+              const missingEncIds = [...new Set((etEnc || []).map((r) => String(r.encounter_id || "").trim()).filter(Boolean))]
+                .filter((id) => !encById.has(id));
+              if (missingEncIds.length > 0) {
+                for (let i = 0; i < missingEncIds.length; i += 80) {
+                  const chunk = missingEncIds.slice(i, i + 80);
+                  const { data: encRows } = await supabase
+                    .from("patient_encounters")
+                    .select("id, patient_id, created_by_doctor_id")
+                    .in("id", chunk);
+                  addEnc(encRows);
+                }
+              }
+            }
+          } catch (_) {}
+        }
+        const encRows = Array.from(encById.values()).slice(0, 1200);
+        const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
+        const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
+        const encToEncounterDoctor = new Map(
+          encRows.map((e) => [String(e.id), e.created_by_doctor_id != null ? String(e.created_by_doctor_id).trim() : ""])
+        );
+        return { encRows, encIds, encToPatient, encToEncounterDoctor };
+      })();
+      return sharedDashboardEncContextPromise;
+    }
+
     /** today/tomorrow: treatment_events (patients) + patient_encounters / encounter_treatments + plan items (admin-aligned). */
     async function fetchAppointmentsForDay(dayYmd) {
       const cid = clinicId ? String(clinicId).trim() : "";
+      const encCtx = await loadSharedDashboardEncContext();
       // Even without clinicId, fetchEncounterTreatmentSlots can find appointments
       // by assigned_doctor_id directly. Only skip the clinic-scoped sub-functions.
       const [teRows, etRows, tpiRows] = await Promise.all([
         cid ? collectDashboardTreatmentEventSlotsForDay(dayYmd) : Promise.resolve([]),
-        fetchEncounterTreatmentSlots(dayYmd),
-        cid ? fetchTreatmentPlanItemSlots(dayYmd) : Promise.resolve([]),
+        fetchEncounterTreatmentSlots(dayYmd, encCtx),
+        cid ? fetchTreatmentPlanItemSlots(dayYmd, encCtx) : Promise.resolve([]),
       ]);
       const preMergeBySource = { tev: teRows.length, encounter: etRows.length, tpi: tpiRows.length };
       const preMergeTotal = teRows.length + etRows.length + tpiRows.length;
@@ -43413,89 +43500,17 @@ async function handleDoctorInboxSummary(req, res) {
     console.log("🧪 TOMORROW RAW:", tomorrowRaw.length);
     console.log("🧪 SAMPLE TODAY:", todayRaw[0]);
 
-    /** encounter_treatments.scheduled_at + patient_encounters (clinic + created_by for doctor match) */
-    async function fetchEncounterTreatmentSlots(dayYmd) {
+    /** encounter_treatments.scheduled_at + patient_encounters (shared encCtx from loadSharedDashboardEncContext) */
+    async function fetchEncounterTreatmentSlots(dayYmd, encCtx) {
       try {
-        const encById = new Map();
-        const addEnc = (rows) => {
-          for (const e of rows || []) {
-            const id = String(e?.id || "").trim();
-            if (!id) continue;
-            const prev = encById.get(id);
-            const next = {
-              id,
-              patient_id: e.patient_id,
-              created_by_doctor_id: e.created_by_doctor_id,
-            };
-            if (!prev) {
-              encById.set(id, next);
-            } else if (!prev.created_by_doctor_id && next.created_by_doctor_id) {
-              encById.set(id, { ...prev, created_by_doctor_id: next.created_by_doctor_id });
-            }
-          }
-        };
-        if (clinicId) {
-          const { data: byClinic } = await supabase
-            .from("patient_encounters")
-            .select("id, patient_id, created_by_doctor_id")
-            .eq("clinic_id", clinicId)
-            .limit(400);
-          addEnc(byClinic);
-        }
-        // Use all keys (UUID + raw legacy) so doctors with non-UUID IDs are covered
-        const allKeysForEnc = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
-        for (const key of allKeysForEnc) {
-          try {
-            const { data: byDoc } = await supabase
-              .from("patient_encounters")
-              .select("id, patient_id, created_by_doctor_id")
-              .eq("created_by_doctor_id", key)
-              .limit(200);
-            addEnc(byDoc);
-          } catch (_) {}
-        }
-        // Fallback: find encounters via encounter_treatments.assigned_doctor_id or created_by_doctor_id
-        // MUST use UUID-only keys — assigned_doctor_id and created_by_doctor_id are uuid columns;
-        // passing legacy short codes (e.g. "SZ45") causes Postgres "invalid input syntax for type uuid" error
-        // which silently returns 0 results for the entire .or() query.
-        // NOTE: do NOT filter by scheduled_at here — we want all encounters where this doctor is assigned,
-        // even if some treatments have no scheduled_at (they'll be filtered in the main date-range loop below)
-        const allDoctorKeys = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(
-          (k) => k && DOCTOR_FK_UUID_RE.test(k)
-        );
-        if (allDoctorKeys.length > 0) {
-          try {
-            const keysCsv = allDoctorKeys.map((k) => `"${k}"`).join(",");
-            const { data: etEnc, error: etEncErr } = await supabase
-              .from("encounter_treatments")
-              .select("encounter_id")
-              .or(`assigned_doctor_id.in.(${keysCsv}),created_by_doctor_id.in.(${keysCsv})`)
-              .limit(400);
-            console.log("[DASHBOARD-ET-FALLBACK] dayYmd:", dayYmd, "doctorKeys:", allDoctorKeys, "etEnc count:", (etEnc || []).length, "error:", etEncErr?.message || null);
-            const missingEncIds = [...new Set((etEnc || []).map((r) => String(r.encounter_id || "").trim()).filter(Boolean))]
-              .filter((id) => !encById.has(id));
-            if (missingEncIds.length > 0) {
-              for (let i = 0; i < missingEncIds.length; i += 80) {
-                const chunk = missingEncIds.slice(i, i + 80);
-                const { data: encRows } = await supabase
-                  .from("patient_encounters")
-                  .select("id, patient_id, created_by_doctor_id")
-                  .in("id", chunk);
-                addEnc(encRows);
-              }
-            }
-          } catch (_) {}
-        }
-        const encRows = Array.from(encById.values()).slice(0, 500);
-        console.log("[DASHBOARD-ET] dayYmd:", dayYmd, "encRows found:", encRows.length, "clinicId:", clinicId, "doctorKeys:", [...doctorKeySet].slice(0, 3));
-        if (encRows.length === 0) return [];
-        const encIds = encRows.map((e) => String(e.id || "").trim()).filter(Boolean);
-        const encToPatient = new Map(encRows.map((e) => [String(e.id), String(e.patient_id || "").trim()]));
-        const encToEncounterDoctor = new Map(
-          encRows.map((e) => [String(e.id), e.created_by_doctor_id != null ? String(e.created_by_doctor_id).trim() : ""])
-        );
+        if (!encCtx || !encCtx.encIds?.length) return [];
+        const { encIds, encToPatient, encToEncounterDoctor } = encCtx;
         const { startMs, endMsExclusive } = dayBoundsMs(dayYmd);
+        const rangeStartIso = new Date(startMs).toISOString();
+        const rangeEndIso = new Date(endMsExclusive).toISOString();
         const out = [];
+        let skipOutOfRange = 0;
+        let skipNoStart = 0;
         for (let i = 0; i < encIds.length; i += 80) {
           const chunk = encIds.slice(i, i + 80);
           let etList = null;
@@ -43510,7 +43525,9 @@ async function handleDoctorInboxSummary(req, res) {
               .from("encounter_treatments")
               .select(sel)
               .in("encounter_id", chunk)
-              .not("scheduled_at", "is", null);
+              .not("scheduled_at", "is", null)
+              .gte("scheduled_at", rangeStartIso)
+              .lt("scheduled_at", rangeEndIso);
             const ec = String(etErr?.code || "");
             if (!etErr && Array.isArray(etRows)) {
               etList = etRows;
@@ -43524,9 +43541,15 @@ async function handleDoctorInboxSummary(req, res) {
             const createdMs = row.created_at ? Date.parse(String(row.created_at)) : NaN;
             const updatedMs = row.updated_at ? Date.parse(String(row.updated_at)) : NaN;
             const startIso = toDashboardStartIso(primaryMs, createdMs, updatedMs);
-            if (!startIso) { console.log("[DASHBOARD-ET] row skip: no startIso, id:", row.id, "scheduled_at:", row.scheduled_at); continue; }
+            if (!startIso) {
+              skipNoStart += 1;
+              continue;
+            }
             const t = Date.parse(startIso);
-            if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) { console.log("[DASHBOARD-ET] row skip: out of range, id:", row.id, "scheduled_at:", row.scheduled_at, "t:", new Date(t).toISOString(), "range:", new Date(startMs).toISOString(), "-", new Date(endMsExclusive).toISOString()); continue; }
+            if (!Number.isFinite(t) || t < startMs || t >= endMsExclusive) {
+              skipOutOfRange += 1;
+              continue;
+            }
             const st = String(row.status || "").toLowerCase();
             if (st === "cancelled" || st === "canceled") continue;
             const eid = String(row.encounter_id || "");
@@ -43549,7 +43572,6 @@ async function handleDoctorInboxSummary(req, res) {
               assigned_doctor_id: adoc,
               _midDoctor: midDoc,
               created_by_doctor_id: etCreatedByDoc || encDoc,
-              doctorId: row.doctorId,
               appointment_time: timeStr,
               status: row.status,
               chair_number: row.chair != null && String(row.chair).trim() !== "" ? String(row.chair) : "",
@@ -43561,6 +43583,9 @@ async function handleDoctorInboxSummary(req, res) {
             applyUnifiedSlotDoctor(slot);
             out.push(slot);
           }
+        }
+        if (skipOutOfRange > 0 || skipNoStart > 0) {
+          console.log("[DASHBOARD-ET] dayYmd:", dayYmd, "slots:", out.length, "skipRange:", skipOutOfRange, "skipNoStart:", skipNoStart);
         }
         out.sort((x, y) => String(x.appointment_time || "").localeCompare(String(y.appointment_time || "")));
         return out;
@@ -43574,8 +43599,9 @@ async function handleDoctorInboxSummary(req, res) {
      * Admin takvimi treatment_plan_items / treatment_items.scheduled_at kullanır; encounter_treatments
      * güncellenmemiş olsa bile doktor home aynı satırları görsün.
      */
-    async function fetchTreatmentPlanItemSlots(dayYmd) {
+    async function fetchTreatmentPlanItemSlots(dayYmd, encCtx) {
       try {
+        if (!encCtx || !encCtx.encIds?.length) return [];
         const encById = new Map();
         const addEnc = (rows) => {
           for (const e of rows || []) {
@@ -43594,52 +43620,9 @@ async function handleDoctorInboxSummary(req, res) {
             }
           }
         };
-        if (clinicId) {
-          const { data: byClinic } = await supabase
-            .from("patient_encounters")
-            .select("id, patient_id, created_by_doctor_id")
-            .eq("clinic_id", clinicId)
-            .limit(400);
-          addEnc(byClinic);
-        }
-        const allKeysForEncTpi = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(Boolean);
-        for (const key of allKeysForEncTpi) {
-          try {
-            const { data: byDoc } = await supabase
-              .from("patient_encounters")
-              .select("id, patient_id, created_by_doctor_id")
-              .eq("created_by_doctor_id", key)
-              .limit(200);
-            addEnc(byDoc);
-          } catch (_) {}
-        }
-        const allDoctorKeysTpi = [...new Set([...doctorKeysUuidFk, ...doctorKeysRaw])].filter(
-          (k) => k && DOCTOR_FK_UUID_RE.test(k)
-        );
-        if (allDoctorKeysTpi.length > 0) {
-          try {
-            const keysCsvTpi = allDoctorKeysTpi.map((k) => `"${k}"`).join(",");
-            const { data: etEncTpi, error: etEncTpiErr } = await supabase
-              .from("encounter_treatments")
-              .select("encounter_id")
-              .or(`assigned_doctor_id.in.(${keysCsvTpi}),created_by_doctor_id.in.(${keysCsvTpi})`)
-              .limit(800);
-            if (etEncTpiErr) {
-              console.log("[DASHBOARD-TPI-ET-FALLBACK] dayYmd:", dayYmd, "err:", etEncTpiErr?.message || etEncTpiErr);
-            } else {
-              const missTpi = [...new Set((etEncTpi || []).map((r) => String(r.encounter_id || "").trim()).filter(Boolean))].filter(
-                (id) => !encById.has(id)
-              );
-              for (let i = 0; i < missTpi.length; i += 80) {
-                const chunk = missTpi.slice(i, i + 80);
-                const { data: encPick } = await supabase
-                  .from("patient_encounters")
-                  .select("id, patient_id, created_by_doctor_id")
-                  .in("id", chunk);
-                addEnc(encPick);
-              }
-            }
-          } catch (_) {}
+        for (const e of encCtx.encRows || []) {
+          const id = String(e?.id || "").trim();
+          if (id) encById.set(id, { id, patient_id: e.patient_id, created_by_doctor_id: e.created_by_doctor_id });
         }
         if (doctorKeysUuidFk.length > 0) {
           try {
@@ -43702,15 +43685,16 @@ async function handleDoctorInboxSummary(req, res) {
 
         const planIds = [...planById.keys()];
         const { startMs, endMsExclusive } = dayBoundsMs(dayYmd);
+        const rangeStartIsoTpi = new Date(startMs).toISOString();
+        const rangeEndIsoTpi = new Date(endMsExclusive).toISOString();
         const out = [];
 
         const trySelects = [
-          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, tooth_fdi_code, status, scheduled_at, chair_no, chair, unit_price, total_price, currency, doctor_id, assigned_doctor_id, created_at, updated_at",
-          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair, doctor_id, assigned_doctor_id, created_at, updated_at",
-          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair, created_at, updated_at",
-          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair",
-          "id, treatment_plan_id, procedure_name, tooth_number, status, scheduled_at, created_at, updated_at",
           "id, treatment_plan_id, procedure_name, tooth_number, status, scheduled_at",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, status, scheduled_at, chair_no, chair, created_at, updated_at",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, tooth_fdi_code, status, scheduled_at, chair_no, chair, doctor_id, assigned_doctor_id, created_at, updated_at",
+          "id, treatment_plan_id, procedure_name, procedure_code, tooth_number, tooth_fdi_code, status, scheduled_at, chair_no, chair, unit_price, total_price, currency, doctor_id, assigned_doctor_id, created_at, updated_at",
         ];
 
         for (const table of ["treatment_plan_items", "treatment_items"]) {
@@ -43722,7 +43706,9 @@ async function handleDoctorInboxSummary(req, res) {
                 .from(table)
                 .select(sel)
                 .in("treatment_plan_id", chunk)
-                .not("scheduled_at", "is", null);
+                .not("scheduled_at", "is", null)
+                .gte("scheduled_at", rangeStartIsoTpi)
+                .lt("scheduled_at", rangeEndIsoTpi);
               const code = String(error?.code || "");
               if (!error && Array.isArray(data)) {
                 rows = data;
@@ -43774,8 +43760,6 @@ async function handleDoctorInboxSummary(req, res) {
                 assigned_doctor_id: adoc,
                 _midDoctor: midDoc,
                 created_by_doctor_id: edoc,
-                assignedDoctorId: row.assignedDoctorId,
-                doctorId: row.doctorId,
                 appointment_time: timeStr,
                 status: row.status || "scheduled",
                 chair_number:
@@ -51950,12 +51934,12 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
     const doctorTaskTz = resolveDashboardCalendarTimeZone(clinicTzRaw, null, clinicCodeForTz);
 
     const planSelectsBase = [
-      'id, encounter_id, patient_id, created_by_doctor_id, status, created_at',
       'id, encounter_id, patient_id, created_by_doctor_id, created_at',
       'id, encounter_id, patient_id, created_by_doctor_id',
-      'id, encounter_id, created_by_doctor_id, status, created_at',
+      'id, encounter_id, patient_id, created_by_doctor_id, status, created_at',
       'id, encounter_id, created_by_doctor_id, created_at',
       'id, encounter_id, created_by_doctor_id',
+      'id, encounter_id, created_by_doctor_id, status, created_at',
     ];
     const planSelects = _doctorTasksPlanSelectClause
       ? [_doctorTasksPlanSelectClause, ...planSelectsBase.filter((s) => s !== _doctorTasksPlanSelectClause)]
@@ -52050,10 +52034,10 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
     const readItemsFromTable = async (tableName) => {
       if (!planIds.length) return [];
       const itemSelectsBase = [
-        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, type, category, status, due_date, scheduled_at, appointment_date, date, priority, high_priority, created_at, updated_at',
-        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, due_date, scheduled_at, appointment_date, date, created_at, updated_at',
-        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, created_at, updated_at',
         'id, treatment_plan_id, status, created_at',
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, created_at, updated_at',
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, due_date, scheduled_at, appointment_date, date, created_at, updated_at',
+        'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, type, category, status, due_date, scheduled_at, appointment_date, date, priority, high_priority, created_at, updated_at',
       ];
       const cached = _doctorTasksItemSelectClauseByTable.get(tableName) || null;
       const itemSelects = cached
