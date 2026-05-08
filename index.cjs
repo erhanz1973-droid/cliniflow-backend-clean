@@ -4527,8 +4527,10 @@ const UNREAD_COUNTS_TTL_MS = 25000;
 const unreadCountsCache = new Map(); // key: `${clinicId}:${totalOnlyFlag}` → { body, expires }
 /** Doctor-scoped unread (assigned/visible patients only). */
 const unreadCountsDoctorCache = new Map(); // key: `doc:${doctorId}:${totalOnlyFlag}` → { body, expires }
+const unreadCountsDoctorInFlight = new Map(); // key: `doc:${doctorId}:${totalOnlyFlag}` -> Promise<void>
 const DOCTOR_VISIBLE_MSG_TTL_MS = 60000;
 const doctorVisiblePatientIdCache = new Map(); // key: doctorId → { set, expires }
+const doctorVisiblePatientIdInFlight = new Map(); // key: doctorId -> Promise<Set>
 /** Aggregated chat preview — avoids N× GET /api/patient/:id/messages on dashboard load. */
 const DOCTOR_MSG_THREAD_SUMMARY_TTL_MS = 12000;
 const doctorMessagesThreadSummaryCache = new Map(); // key: doc:${did}:… → { body, expires }
@@ -4541,7 +4543,9 @@ function bumpUnreadCountsCache(clinicId) {
     unreadCountsCache.clear();
   }
   unreadCountsDoctorCache.clear();
+  unreadCountsDoctorInFlight.clear();
   doctorVisiblePatientIdCache.clear();
+  doctorVisiblePatientIdInFlight.clear();
   doctorMessagesThreadSummaryCache.clear();
 }
 
@@ -42031,9 +42035,20 @@ async function getDoctorVisiblePatientIdSetCached(req) {
   if (!did) return new Set();
   const hit = doctorVisiblePatientIdCache.get(did);
   if (hit && hit.expires > Date.now()) return hit.set;
-  const set = await getDoctorVisiblePatientIdSet(req);
-  doctorVisiblePatientIdCache.set(did, { set, expires: Date.now() + DOCTOR_VISIBLE_MSG_TTL_MS });
-  return set;
+  const pending = doctorVisiblePatientIdInFlight.get(did);
+  if (pending) return pending;
+  const task = (async () => {
+    const set = await getDoctorVisiblePatientIdSet(req);
+    doctorVisiblePatientIdCache.set(did, { set, expires: Date.now() + DOCTOR_VISIBLE_MSG_TTL_MS });
+    return set;
+  })();
+  doctorVisiblePatientIdInFlight.set(did, task);
+  try {
+    return await task;
+  } finally {
+    const cur = doctorVisiblePatientIdInFlight.get(did);
+    if (cur === task) doctorVisiblePatientIdInFlight.delete(did);
+  }
 }
 
 /** Visible roster keys (UUID / p_… / legacy patient_id) → patients.id set used by messages FK. */
@@ -42251,6 +42266,9 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
 
 // GET /api/doctor/messages/unread-counts — same payload shape as admin; messages only for patients visible to this doctor.
 app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res) => {
+  let inFlightResolve = null;
+  let inFlightPromise = null;
+  let inFlightKey = "";
   try {
     res.setHeader("Cache-Control", "private, no-cache, must-revalidate");
     if (!isSupabaseEnabled()) {
@@ -42268,6 +42286,19 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
     if (cached && cached.expires > Date.now()) {
       return res.json(cached.body);
     }
+    const pending = unreadCountsDoctorInFlight.get(cacheKey);
+    if (pending) {
+      await pending.catch(() => {});
+      const afterWait = unreadCountsDoctorCache.get(cacheKey);
+      if (afterWait && afterWait.expires > Date.now()) {
+        return res.json(afterWait.body);
+      }
+    }
+    inFlightKey = cacheKey;
+    inFlightPromise = new Promise((resolve) => {
+      inFlightResolve = resolve;
+    });
+    unreadCountsDoctorInFlight.set(cacheKey, inFlightPromise);
 
     const visible = await getDoctorVisiblePatientIdSetCached(req);
     if (visible.size === 0) {
@@ -42333,6 +42364,11 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
   } catch (e) {
     console.error("[DOCTOR UNREAD COUNTS]", e?.message || e);
     return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
+  } finally {
+    if (inFlightKey && inFlightPromise && unreadCountsDoctorInFlight.get(inFlightKey) === inFlightPromise) {
+      unreadCountsDoctorInFlight.delete(inFlightKey);
+      if (typeof inFlightResolve === "function") inFlightResolve();
+    }
   }
 });
 
