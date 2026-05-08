@@ -16563,6 +16563,23 @@ function validateIANATimeZoneId(tzRaw) {
   }
 }
 
+/** Canonical clinic timezone source (stored in clinics.iana_timezone + settings.iana_timezone). */
+function normalizeClinicIanaTimezoneForWrite({
+  requestedTz,
+  existingClinicTz,
+  existingSettingsTz,
+  clinicCode,
+}) {
+  const requested = validateIANATimeZoneId(requestedTz);
+  if (requested) return requested;
+  const existingCol = validateIANATimeZoneId(existingClinicTz);
+  if (existingCol) return existingCol;
+  const existingSettings = validateIANATimeZoneId(existingSettingsTz);
+  if (existingSettings) return existingSettings;
+  const fromCode = resolveDashboardCalendarTimeZone("", "", clinicCode);
+  return validateIANATimeZoneId(fromCode) || "UTC";
+}
+
 /** True if string already specifies Zulu or a numeric UTC offset (store via Date.parse → toISOString). */
 function datetimeStringHasExplicitUtcOffset(str) {
   const s = String(str || "").trim();
@@ -31174,6 +31191,21 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       ...(body.settings && typeof body.settings === "object" ? body.settings : {}),
     };
     const inboundAutoAssignCfg = normalizeClinicInboundAutoAssignSettings(mergedInboundSettingsPayload);
+    const requestedClinicTz =
+      body.iana_timezone ??
+      body.ianaTimezone ??
+      body.timezone ??
+      body.timeZone ??
+      body.settings?.iana_timezone ??
+      body.settings?.timeZone ??
+      body.settings?.timezone;
+    const canonicalClinicCodeForTz = String(existing.clinic_code || existing.clinicCode || body.clinicCode || body.code || "").trim();
+    const clinicIanaTz = normalizeClinicIanaTimezoneForWrite({
+      requestedTz: requestedClinicTz,
+      existingClinicTz: existing.iana_timezone,
+      existingSettingsTz: existing.settings?.iana_timezone || existing.settings?.timeZone || existing.settings?.timezone,
+      clinicCode: canonicalClinicCodeForTz,
+    });
     
     // Handle password change
     let passwordHash = existing.password;
@@ -31247,6 +31279,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       googleMapsUrl: String(
         body.googleMapsUrl || bodyBranding.googleMapLink || existingMapsFallback || existing.googleMapsUrl || existingBranding.googleMapLink || ""
       ),
+      iana_timezone: clinicIanaTz,
       branding: updatedBranding,
       defaultInviterDiscountPercent: inviterPercent,
       defaultInvitedDiscountPercent: invitedPercent,
@@ -31265,6 +31298,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         googleReviews: Array.isArray(body.googleReviews) ? body.googleReviews : (existing.googleReviews || []),
         trustpilotReviews: Array.isArray(body.trustpilotReviews) ? body.trustpilotReviews : (existing.trustpilotReviews || []),
         showTreatmentPrices,
+        iana_timezone: clinicIanaTz,
         auto_assign_enabled: inboundAutoAssignCfg.auto_assign_enabled,
         default_doctor_id: inboundAutoAssignCfg.default_doctor_id,
         sticky_assignment_enabled: inboundAutoAssignCfg.sticky_assignment_enabled,
@@ -31315,6 +31349,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
           website: updated.website,
           google_maps_url: updated.googleMapsUrl ? String(updated.googleMapsUrl).trim() : null,
           logo_url: persistedLogo || null,
+          iana_timezone: updated.iana_timezone || null,
           settings: updated.settings,
         };
         
@@ -37465,6 +37500,14 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
 
     const cityTrim = city != null ? String(city).trim() : "";
     const countryStr = country != null ? String(country).trim().toUpperCase() : "";
+    const requestedClinicTz =
+      body.iana_timezone ??
+      body.ianaTimezone ??
+      body.timezone ??
+      body.timeZone ??
+      body.settings?.iana_timezone ??
+      body.settings?.timeZone ??
+      body.settings?.timezone;
 
     const catalog = await getMergedCityCatalogSet(supabase);
     let cityCol = null;
@@ -37511,6 +37554,20 @@ app.post("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
       plan: "FREE",
       max_patients: 3,
       status: "PENDING",
+      iana_timezone: normalizeClinicIanaTimezoneForWrite({
+        requestedTz: requestedClinicTz,
+        existingClinicTz: "",
+        existingSettingsTz: "",
+        clinicCode,
+      }),
+      settings: {
+        iana_timezone: normalizeClinicIanaTimezoneForWrite({
+          requestedTz: requestedClinicTz,
+          existingClinicTz: "",
+          existingSettingsTz: "",
+          clinicCode,
+        }),
+      },
     };
 
     const { data, error } = await supabase.from("clinics").insert([row]).select().single();
