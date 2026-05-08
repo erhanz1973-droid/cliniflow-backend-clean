@@ -16727,6 +16727,20 @@ function normalizeAppointmentDateTime({
   };
 }
 
+/** Strip synthetic prefixes (et-, appt-, etc.) for dtProbeId matching across endpoints. */
+function dtNormalizeProbeKey(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^(et|appt|evt)-/i, "")
+    .toLowerCase();
+}
+
+function dtProbeMatches(probeRaw, itemIdRaw) {
+  const p = dtNormalizeProbeKey(probeRaw);
+  const id = dtNormalizeProbeKey(itemIdRaw);
+  return !!(p && id && p === id);
+}
+
 function logEndpointDatetimeComparison({
   endpoint,
   probeId,
@@ -16736,14 +16750,12 @@ function logEndpointDatetimeComparison({
   finalPayload,
 }) {
   if (!probeId) return;
-  const p = String(probeId).trim();
-  const id = String(itemId || "").trim();
-  if (!p || !id || p !== id) return;
+  if (!dtProbeMatches(probeId, itemId)) return;
   console.log(
     `[DT-COMPARE] ${endpoint}`,
     JSON.stringify(
       {
-        probeId: p,
+        probeId: String(probeId).trim(),
         rawDbScheduledAtUtc: rawDbScheduledAtUtc || null,
         normalizeAppointmentDateTime: normalized || null,
         finalPayload: finalPayload || null,
@@ -35993,7 +36005,9 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       console.log("[timeline] removed procedures", removedItems);
 
       if (dtProbeId) {
-        const hit = (rangeEvents || []).find((e) => String(e?.id || "").trim() === dtProbeId);
+        const evtIdPick = (e) =>
+          String(e?.id || e?.sourceId || e?.appointmentId || e?.encounterTreatmentId || "").trim();
+        const hit = (rangeEvents || []).find((e) => dtProbeMatches(dtProbeId, evtIdPick(e)));
         if (hit) {
           const dt = normalizeAppointmentDateTime({
             rawInstant: hit?.timelineAt || hit?.timestamp || null,
@@ -36004,7 +36018,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
           logEndpointDatetimeComparison({
             endpoint: "/api/admin/events",
             probeId: dtProbeId,
-            itemId: hit?.id,
+            itemId: evtIdPick(hit),
             rawDbScheduledAtUtc: hit?.timelineAt || hit?.timestamp || null,
             normalized: dt,
             finalPayload: hit,
@@ -36129,8 +36143,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
     console.log("[timeline] removed procedures", removedItems);
     
     if (dtProbeId) {
+      const evtIdPickDefault = (e) =>
+        String(e?.id || e?.sourceId || e?.appointmentId || e?.encounterTreatmentId || "").trim();
       const all = [...overdue, ...todayEvents, ...upcoming, ...timeline];
-      const hit = all.find((e) => String(e?.id || "").trim() === dtProbeId);
+      const hit = all.find((e) => dtProbeMatches(dtProbeId, evtIdPickDefault(e)));
       if (hit) {
         const dt = normalizeAppointmentDateTime({
           rawInstant: hit?.timelineAt || hit?.timestamp || null,
@@ -36141,7 +36157,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
         logEndpointDatetimeComparison({
           endpoint: "/api/admin/events",
           probeId: dtProbeId,
-          itemId: hit?.id,
+          itemId: evtIdPickDefault(hit),
           rawDbScheduledAtUtc: hit?.timelineAt || hit?.timestamp || null,
           normalized: dt,
           finalPayload: hit,
