@@ -4529,6 +4529,10 @@ const unreadCountsCache = new Map(); // key: `${clinicId}:${totalOnlyFlag}` → 
 const unreadCountsDoctorCache = new Map(); // key: `doc:${doctorId}:${totalOnlyFlag}` → { body, expires }
 const DOCTOR_VISIBLE_MSG_TTL_MS = 60000;
 const doctorVisiblePatientIdCache = new Map(); // key: doctorId → { set, expires }
+/** Aggregated chat preview — avoids N× GET /api/patient/:id/messages on dashboard load. */
+const DOCTOR_MSG_THREAD_SUMMARY_TTL_MS = 12000;
+const doctorMessagesThreadSummaryCache = new Map(); // key: doc:${did}:… → { body, expires }
+
 function bumpUnreadCountsCache(clinicId) {
   if (clinicId) {
     unreadCountsCache.delete(`${clinicId}:1`);
@@ -4538,6 +4542,7 @@ function bumpUnreadCountsCache(clinicId) {
   }
   unreadCountsDoctorCache.clear();
   doctorVisiblePatientIdCache.clear();
+  doctorMessagesThreadSummaryCache.clear();
 }
 
 function readJson(file, fallback) {
@@ -42031,6 +42036,219 @@ async function getDoctorVisiblePatientIdSetCached(req) {
   return set;
 }
 
+/** Visible roster keys (UUID / p_… / legacy patient_id) → patients.id set used by messages FK. */
+async function expandVisiblePatientKeysToDbUuids(visibleRawSet) {
+  const out = new Set();
+  const legacy = new Set();
+  for (const key of visibleRawSet) {
+    const k = String(key || "").trim();
+    if (!k) continue;
+    const m = P_UUID_RE.exec(k);
+    const cand = m ? m[1] : k;
+    if (UUID_RE.test(cand)) {
+      out.add(String(cand).toLowerCase());
+      continue;
+    }
+    legacy.add(k);
+  }
+  const legArr = [...legacy];
+  for (let i = 0; i < legArr.length; i += 80) {
+    const chunk = legArr.slice(i, i + 80);
+    const { data, error } = await supabase.from("patients").select("id").in("patient_id", chunk);
+    if (!error) {
+      for (const row of data || []) {
+        const id = String(row?.id || "").trim().toLowerCase();
+        if (id) out.add(id);
+      }
+    }
+  }
+  return out;
+}
+
+function ingestLatestLegacyMessage(latestByPid, leg) {
+  if (!leg?.patientId) return;
+  const pid = String(leg.patientId || "").trim().toLowerCase();
+  if (!pid) return;
+  const prev = latestByPid.get(pid);
+  if (!prev || Number(leg.createdAt || 0) > Number(prev.createdAt || 0)) latestByPid.set(pid, leg);
+}
+
+async function fetchUnreadInboundCountsByPatientMessages(clinicId, clinicCode, visibleDbUuidSet) {
+  const unreadByPatient = new Map();
+  let data = [];
+  outerRows: for (const [field, value] of [["clinic_code", clinicCode], ["clinic_id", clinicId]]) {
+    if (!value) continue;
+    const r = await supabase
+      .from("messages")
+      .select("patient_id")
+      .eq("from_patient", true)
+      .is("read_at", null)
+      .eq(field, value);
+    if (!r.error) {
+      data = r.data || [];
+      break outerRows;
+    }
+    const rowEc = String(r.error?.code || "");
+    if (
+      ["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) ||
+      isSupabaseSchemaMissingColumnError(r.error) ||
+      !rowEc
+    ) {
+      continue;
+    }
+    break outerRows;
+  }
+  for (const row of Array.isArray(data) ? data : []) {
+    const p = String(row?.patient_id || "").trim().toLowerCase();
+    if (!p || !visibleDbUuidSet.has(p)) continue;
+    unreadByPatient.set(p, (unreadByPatient.get(p) || 0) + 1);
+  }
+  return unreadByPatient;
+}
+
+async function fetchRecentMessageRowsForPatientChunk(patientChunk, clinicId, clinicCode, limitRows) {
+  const sel =
+    "id, patient_id, from_patient, read_at, created_at, message, message_text, text, content, body, type, file_url, attachments";
+  let rows = [];
+  outerRows: for (const [field, value] of [["clinic_code", clinicCode], ["clinic_id", clinicId]]) {
+    if (!value) continue;
+    const r = await supabase
+      .from("messages")
+      .select(sel)
+      .in("patient_id", patientChunk)
+      .eq(field, value)
+      .order("created_at", { ascending: false })
+      .limit(limitRows);
+    if (!r.error) {
+      rows = r.data || [];
+      break outerRows;
+    }
+    const rowEc = String(r.error?.code || "");
+    if (["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) || isSupabaseSchemaMissingColumnError(r.error)) {
+      continue;
+    }
+    break outerRows;
+  }
+  if (!rows.length && patientChunk.length) {
+    const r2 = await supabase
+      .from("messages")
+      .select(sel)
+      .in("patient_id", patientChunk)
+      .order("created_at", { ascending: false })
+      .limit(limitRows);
+    if (!r2.error) rows = r2.data || [];
+  }
+  return rows;
+}
+
+async function fetchRecentPatientMessagesRowsForChunk(patientChunk, limitRows) {
+  const sel =
+    "id, message_id, patient_id, from_role, read_at, created_at, text, message, content, message_text, body, type, attachment";
+  const r = await supabase
+    .from("patient_messages")
+    .select(sel)
+    .in("patient_id", patientChunk)
+    .order("created_at", { ascending: false })
+    .limit(limitRows);
+  if (!r.error) return r.data || [];
+  const c = String(r.error?.code || "");
+  if (["42P01", "42703", "PGRST204", "PGRST205", "PGRST116"].includes(c)) return [];
+  return [];
+}
+
+async function buildDoctorMessagesThreadSummaryBody(req) {
+  const clinicId = req.doctor?.clinic_id || req.clinicId || null;
+  const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim().toUpperCase();
+  if (!clinicId && !clinicCode) {
+    return { ok: true, threads: [], visiblePatientCount: 0, resolvedPatientCount: 0, hint: "no_clinic_on_doctor" };
+  }
+  const visible = await getDoctorVisiblePatientIdSetCached(req);
+  if (visible.size === 0) {
+    return { ok: true, threads: [], visiblePatientCount: 0, resolvedPatientCount: 0 };
+  }
+  const visibleDbUuids = await expandVisiblePatientKeysToDbUuids(visible);
+  if (visibleDbUuids.size === 0) {
+    return { ok: true, threads: [], visiblePatientCount: visible.size, resolvedPatientCount: 0 };
+  }
+
+  const unreadByPatient = await fetchUnreadInboundCountsByPatientMessages(clinicId, clinicCode, visibleDbUuids);
+
+  const uuidList = [...visibleDbUuids];
+  const latestByPid = new Map();
+  const perChunkLimit = (n) => Math.min(3200, Math.max(400, n * 48));
+
+  for (let i = 0; i < uuidList.length; i += 72) {
+    const chunk = uuidList.slice(i, i + 72);
+    const lim = perChunkLimit(chunk.length);
+    const mgRows = await fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim);
+    for (const row of mgRows) {
+      const leg = mapDbMessageToLegacyMessage(row);
+      ingestLatestLegacyMessage(latestByPid, leg);
+    }
+    const pmRows = await fetchRecentPatientMessagesRowsForChunk(chunk, lim);
+    for (const row of pmRows) {
+      const leg = mapPatientMessagesRowToLegacy(row);
+      ingestLatestLegacyMessage(latestByPid, leg);
+    }
+  }
+
+  const patientMeta = new Map();
+  for (let i = 0; i < uuidList.length; i += 80) {
+    const chunk = uuidList.slice(i, i + 80);
+    let q = supabase.from("patients").select("id, name, full_name, patient_id").in("id", chunk);
+    if (clinicId) q = q.eq("clinic_id", clinicId);
+    const { data, error } = await q;
+    if (!error) {
+      for (const row of data || []) {
+        const id = String(row?.id || "").trim().toLowerCase();
+        if (id)
+          patientMeta.set(id, {
+            name: String(row?.full_name || row?.name || "").trim() || null,
+            patient_id: row?.patient_id != null ? String(row.patient_id).trim() : null,
+          });
+      }
+    }
+  }
+
+  const onlyActive = String(req.query.onlyActive || "").trim() === "1";
+  const threads = [];
+  for (const pid of uuidList) {
+    const unread = unreadByPatient.get(pid) || 0;
+    const last = latestByPid.get(pid) || null;
+    if (onlyActive && unread === 0 && !last) continue;
+    const meta = patientMeta.get(pid) || {};
+    const preview = last
+      ? {
+          id: last.id || "",
+          text: String(last.text || "").replace(/\s+/g, " ").trim().slice(0, 240),
+          from: last.from || "",
+          type: last.type || "text",
+          createdAt: last.createdAt || null,
+          ...(last.readAt != null ? { readAt: last.readAt } : {}),
+        }
+      : null;
+    threads.push({
+      patientDbId: pid,
+      patientPublicId: canonicalPatientPublicId(pid),
+      patientLegacyId: meta.patient_id || null,
+      patientName: meta.name || "Hasta",
+      unreadFromPatient: unread,
+      lastMessage: preview,
+      lastActivityAt: preview?.createdAt ?? null,
+    });
+  }
+  threads.sort((a, b) => (Number(b.lastActivityAt || 0) || 0) - (Number(a.lastActivityAt || 0) || 0));
+
+  return {
+    ok: true,
+    threads,
+    visiblePatientCount: visible.size,
+    resolvedPatientCount: visibleDbUuids.size,
+    hint:
+      "Prefer this endpoint over parallel GET /api/patient/:patientId/messages for inbox lists; open a single thread when the user taps a row.",
+  };
+}
+
 // GET /api/doctor/messages/unread-counts — same payload shape as admin; messages only for patients visible to this doctor.
 app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res) => {
   try {
@@ -42117,6 +42335,48 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
     return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
   }
 });
+
+/**
+ * GET /api/doctor/messages/thread-summary — one round-trip for inbox rows (replaces N parallel GET /api/patient/:id/messages).
+ * Query: onlyActive=1 (only threads with unread or a last message), refresh=1 (bypass short cache).
+ */
+const handleDoctorMessagesThreadSummary = async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "private, max-age=8");
+    if (!isSupabaseEnabled()) {
+      return res.json({
+        ok: true,
+        threads: [],
+        visiblePatientCount: 0,
+        resolvedPatientCount: 0,
+        offline: true,
+      });
+    }
+    const clinicId = req.doctor?.clinic_id || req.clinicId || "";
+    const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim().toUpperCase();
+    const did = String(req.doctorId || "").trim();
+    const onlyActive = String(req.query.onlyActive || "").trim() === "1" ? "1" : "0";
+    const refresh = String(req.query.refresh || "").trim() === "1";
+    const cacheKey = `doc:${did}:${String(clinicId)}:${clinicCode}:${onlyActive}`;
+    if (!refresh) {
+      const hit = doctorMessagesThreadSummaryCache.get(cacheKey);
+      if (hit && hit.expires > Date.now()) {
+        return res.json({ ...hit.body, cached: true, cacheTtlMs: DOCTOR_MSG_THREAD_SUMMARY_TTL_MS });
+      }
+    }
+    const body = await buildDoctorMessagesThreadSummaryBody(req);
+    doctorMessagesThreadSummaryCache.set(cacheKey, {
+      body,
+      expires: Date.now() + DOCTOR_MSG_THREAD_SUMMARY_TTL_MS,
+    });
+    return res.json({ ...body, cached: false, cacheTtlMs: DOCTOR_MSG_THREAD_SUMMARY_TTL_MS });
+  } catch (e) {
+    console.error("[DOCTOR THREAD SUMMARY]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+};
+app.get("/api/doctor/messages/thread-summary", requireDoctorAuth, handleDoctorMessagesThreadSummary);
+app.get("/api/doctor/inbox-chat-summary", requireDoctorAuth, handleDoctorMessagesThreadSummary);
 
 // Get doctor's assigned patients (multi-doctor model)
 app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
