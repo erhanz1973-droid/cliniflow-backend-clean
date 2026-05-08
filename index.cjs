@@ -4519,6 +4519,8 @@ if (!fs.existsSync(TREATMENT_ITEM_OVERRIDES_DIR)) fs.mkdirSync(TREATMENT_ITEM_OV
 let _eventsPatientSelectClause = null;   // cached working SELECT clause for patients table
 let _eventsItemsSelectClause   = null;   // cached working SELECT clause for treatment_items
 let _eventsItemsTableName      = null;   // cached working table name (treatment_items vs treatment_plan_items)
+let _doctorTasksPlanSelectClause = null; // cached working SELECT clause for treatment_plans
+const _doctorTasksItemSelectClauseByTable = new Map(); // tableName -> working item SELECT clause
 
 /** Short-lived cache for unread-counts (badge polling hits this every ~30s from multiple pages). */
 const UNREAD_COUNTS_TTL_MS = 25000;
@@ -51687,7 +51689,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
     const clinicTzRaw = await resolveClinicIanaTzForScheduledWrites(clinicIdForTz);
     const doctorTaskTz = resolveDashboardCalendarTimeZone(clinicTzRaw, null, clinicCodeForTz);
 
-    const planSelects = [
+    const planSelectsBase = [
       'id, encounter_id, patient_id, created_by_doctor_id, status, created_at',
       'id, encounter_id, patient_id, created_by_doctor_id, created_at',
       'id, encounter_id, patient_id, created_by_doctor_id',
@@ -51695,6 +51697,9 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       'id, encounter_id, created_by_doctor_id, created_at',
       'id, encounter_id, created_by_doctor_id',
     ];
+    const planSelects = _doctorTasksPlanSelectClause
+      ? [_doctorTasksPlanSelectClause, ...planSelectsBase.filter((s) => s !== _doctorTasksPlanSelectClause)]
+      : planSelectsBase;
 
     let plans = [];
     let plansLoaded = false;
@@ -51739,6 +51744,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       }
 
       if (!hadHardError) {
+        _doctorTasksPlanSelectClause = selectClause;
         try {
           const tdPlanIdSet = await collectTreatmentIdsFromTreatmentDoctorsTable(doctorKeysRaw);
           const tdPlanIds = [...tdPlanIdSet];
@@ -51783,12 +51789,16 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
 
     const readItemsFromTable = async (tableName) => {
       if (!planIds.length) return [];
-      const itemSelects = [
+      const itemSelectsBase = [
         'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, type, category, status, due_date, scheduled_at, appointment_date, date, priority, high_priority, created_at, updated_at',
         'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, due_date, scheduled_at, appointment_date, date, created_at, updated_at',
         'id, treatment_plan_id, tooth_number, tooth_fdi_code, procedure_name, procedure_code, status, created_at, updated_at',
         'id, treatment_plan_id, status, created_at',
       ];
+      const cached = _doctorTasksItemSelectClauseByTable.get(tableName) || null;
+      const itemSelects = cached
+        ? [cached, ...itemSelectsBase.filter((s) => s !== cached)]
+        : itemSelectsBase;
 
       for (const selectClause of itemSelects) {
         const result = await timedDbQuery(
@@ -51801,6 +51811,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
         );
 
         if (!result.error) {
+          _doctorTasksItemSelectClauseByTable.set(tableName, selectClause);
           return Array.isArray(result.data) ? result.data : [];
         }
 
@@ -51885,13 +51896,15 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       };
       for (let i = 0; i < ids.length; i += 80) {
         const chunk = ids.slice(i, i + 80);
-        const r1 = await timedDbQuery(`[DOCTOR TASKS] patients by id (${chunk.length})`, () =>
-          supabase.from('patients').select('id, patient_id, full_name, name').in('id', chunk)
-        );
+        const [r1, r2] = await Promise.all([
+          timedDbQuery(`[DOCTOR TASKS] patients by id (${chunk.length})`, () =>
+            supabase.from('patients').select('id, patient_id, full_name, name').in('id', chunk)
+          ),
+          timedDbQuery(`[DOCTOR TASKS] patients by patient_id (${chunk.length})`, () =>
+            supabase.from('patients').select('id, patient_id, full_name, name').in('patient_id', chunk)
+          ),
+        ]);
         if (!r1.error) addRows(r1.data);
-        const r2 = await timedDbQuery(`[DOCTOR TASKS] patients by patient_id (${chunk.length})`, () =>
-          supabase.from('patients').select('id, patient_id, full_name, name').in('patient_id', chunk)
-        );
         if (!r2.error) addRows(r2.data);
       }
     }
@@ -52075,13 +52088,15 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
       const ids = Array.from(etPatientIdsNeedingLabels).filter(Boolean);
       for (let i = 0; i < ids.length; i += 80) {
         const chunk = ids.slice(i, i + 80);
-        const r1 = await timedDbQuery(`[DOCTOR TASKS] patients (ET) by id (${chunk.length})`, () =>
-          supabase.from('patients').select('id, patient_id, full_name, name').in('id', chunk)
-        );
+        const [r1, r2] = await Promise.all([
+          timedDbQuery(`[DOCTOR TASKS] patients (ET) by id (${chunk.length})`, () =>
+            supabase.from('patients').select('id, patient_id, full_name, name').in('id', chunk)
+          ),
+          timedDbQuery(`[DOCTOR TASKS] patients (ET) by patient_id (${chunk.length})`, () =>
+            supabase.from('patients').select('id, patient_id, full_name, name').in('patient_id', chunk)
+          ),
+        ]);
         if (!r1.error) addRowsEt(r1.data);
-        const r2 = await timedDbQuery(`[DOCTOR TASKS] patients (ET) by patient_id (${chunk.length})`, () =>
-          supabase.from('patients').select('id, patient_id, full_name, name').in('patient_id', chunk)
-        );
         if (!r2.error) addRowsEt(r2.data);
       }
     }
