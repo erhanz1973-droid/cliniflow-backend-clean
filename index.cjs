@@ -35455,7 +35455,7 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               title: `${proc?.type || "Treatment"} - Tooth ${toothId}`,
               description: "",
               date: dt.toISOString().split("T")[0],
-              time: dt.toTimeString().slice(0, 5),
+              time: formatTimeHmInZone(dt.getTime(), EVENTS_CAL_TZ),
               status: procedures.normalizeStatus(proc?.status || "PLANNED"),
               source: "treatment",
               toothId,
@@ -43388,7 +43388,7 @@ async function handleDoctorInboxSummary(req, res) {
             doctorId: evt.doctorId,
             _midDoctor: evt.doctorId ?? evt.doctor_id,
             created_by_doctor_id: null,
-            appointment_time: new Date(tSlot).toTimeString().slice(0, 5),
+            appointment_time: formatTimeHmInZone(tSlot, dashboardCalendarTz),
             status: String(evt.status || "scheduled"),
             chair_number: String(evt.chair || evt.chairNo || evt.chair_no || "").trim(),
             notes: String(evt.title || evt.type || "TREATMENT"),
@@ -43651,7 +43651,7 @@ async function handleDoctorInboxSummary(req, res) {
             // Extract time from raw string when no-Z (local datetime) to avoid UTC offset shift in display
             const rawSched = String(row.scheduled_at || "");
             const isLocalStr = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawSched) && !rawSched.endsWith("Z") && !rawSched.includes("+");
-            const timeStr = isLocalStr ? rawSched.slice(11, 16) : new Date(t).toTimeString().slice(0, 5);
+            const timeStr = isLocalStr ? rawSched.slice(11, 16) : formatTimeHmInZone(t, dashboardCalendarTz);
             const proc = String(row.procedure_type || "TREATMENT").trim();
             const tooth = row.tooth_number != null ? ` · 🦷 ${row.tooth_number}` : "";
             const encDoc = encToEncounterDoctor.get(eid) || null;
@@ -43828,7 +43828,7 @@ async function handleDoctorInboxSummary(req, res) {
               if (!pid) continue;
               const rawSchedTpi = String(row.scheduled_at || "");
               const isLocalStrTpi = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawSchedTpi) && !rawSchedTpi.endsWith("Z") && !rawSchedTpi.includes("+");
-              const timeStr = isLocalStrTpi ? rawSchedTpi.slice(11, 16) : new Date(t).toTimeString().slice(0, 5);
+              const timeStr = isLocalStrTpi ? rawSchedTpi.slice(11, 16) : formatTimeHmInZone(t, dashboardCalendarTz);
               const proc = String(row.procedure_name || row.procedure_code || "TREATMENT").trim();
               const toothRaw = row.tooth_number != null ? row.tooth_number : row.tooth_fdi_code;
               const tooth =
