@@ -16709,8 +16709,22 @@ function normalizeAppointmentDateTime({
 
   let d = null;
   if (raw) {
-    const parsed = new Date(raw);
-    if (Number.isFinite(parsed.getTime())) d = parsed;
+    // Naive datetime strings (without Z/offset) must be interpreted in clinic TZ, not server local TZ.
+    if (!datetimeStringHasExplicitUtcOffset(raw) && /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)?$/.test(raw)) {
+      try {
+        const utcIso = coerceScheduledAtInputToUtcIso(raw.replace(/^(\d{4}-\d{2}-\d{2})\s+/, "$1T"), tz, "normalizeAppointmentDateTime.raw");
+        if (utcIso) {
+          const parsed = new Date(utcIso);
+          if (Number.isFinite(parsed.getTime())) d = parsed;
+        }
+      } catch (_) {
+        // fallback below
+      }
+    }
+    if (!d) {
+      const parsed = new Date(raw);
+      if (Number.isFinite(parsed.getTime())) d = parsed;
+    }
   }
 
   if (!d && fallbackDate) {
@@ -33897,6 +33911,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
 app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
   try {
     const dtProbeId = String(req.query.dtProbeId || "").trim();
+    const traceProcIdRaw = String(req.query.traceProcedureId || req.query.traceProcId || "").trim();
     const date = String(req.query.date || "").trim();
     const startDate = String(req.query.startDate || "").trim();
     const endDate = String(req.query.endDate || "").trim();
@@ -34369,6 +34384,20 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
       String(proc?.id || proc?.procedureId || "")
         .trim()
         .startsWith("encounter-treatment-");
+    const traceProcKey = traceProcIdRaw ? normalizeTimelineProcedureId(traceProcIdRaw) : "";
+    const traceTimelineProc = (stage, proc, extra = {}) => {
+      if (!traceProcKey) return;
+      const rawId = String(proc?.id || proc?.procedureId || proc?.sourceId || "").trim();
+      const normId = normalizeTimelineProcedureId(rawId);
+      if (!normId || normId !== traceProcKey) return;
+      console.log("[ADMIN EVENTS TRACE]", {
+        stage,
+        traceProcId: traceProcIdRaw,
+        matchedId: rawId,
+        normalizedId: normId,
+        ...extra,
+      });
+    };
 
     const timelineProcedureSafeJson = (proc) => {
       try {
@@ -35408,6 +35437,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               timelineAtResolved: timelineAt || null,
             });
             if (!timelineAt) {
+              traceTimelineProc("patients.treatments_teeth.skip_no_timelineAt", proc, {
+                patientId,
+                toothId,
+              });
               logTimelineProcedureDoctorFields("patients.treatments_teeth_skip_no_time", proc, {
                 patientId,
                 clinicId: p?.clinic_id,
@@ -35461,6 +35494,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               toothId,
               timelineAt,
             }], priceMap)[0];
+            traceTimelineProc("patients.treatments_teeth.add_event", proc, {
+              patientId,
+              toothId,
+              timelineAt,
+              status: enriched?.status || null,
+            });
             addEvent(enriched);
           });
         });
@@ -35513,6 +35552,10 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               timelineAtResolved: timelineAt || null,
             });
             if (!timelineAt) {
+              traceTimelineProc("patient_treatments_table.skip_no_timelineAt", proc, {
+                patientId,
+                toothId,
+              });
               logTimelineProcedureDoctorFields("patient_treatments_table_skip_no_time", proc, {
                 patientId,
                 clinicId: p?.clinic_id,
@@ -35558,6 +35601,12 @@ app.get("/api/admin/events", requireAdminAuth, async (req, res) => {
               toothId: toothId ? String(toothId) : undefined,
               timelineAt,
             }], priceMap)[0];
+            traceTimelineProc("patient_treatments_table.add_event", proc, {
+              patientId,
+              toothId,
+              timelineAt,
+              status: enriched?.status || null,
+            });
             addEvent(enriched);
           });
         });
@@ -52279,9 +52328,11 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
         const patientId = planPid || encPid;
         const status = normalizePlanItemStatusForTasks(item?.status);
 
+        // Match dashboard treatment-plan slots: wall-clock time comes from scheduled_at when present.
+        // due_date alone is often date-only or a different semantic; preferring it caused Tasks vs Dashboard drift.
         const rawDueCandidate =
-          item?.due_date ||
           item?.scheduled_at ||
+          item?.due_date ||
           item?.appointment_date ||
           item?.date ||
           item?.updated_at ||
@@ -52313,6 +52364,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           scheduledAtUtc: dt.scheduledAtUtc,
           scheduledLocal: dt.scheduledLocal,
           scheduledLocalTime: dt.scheduledLocalTime,
+          scheduledLocalDate: dt.scheduledLocalDate || null,
           scheduled_date: dueDateLocal,
           scheduledDate: dueDateLocal,
           scheduled_by: 'DOCTOR',
@@ -52481,6 +52533,7 @@ app.get('/api/doctor/tasks', requireDoctorAuth, async (req, res) => {
           scheduledAtUtc: dt.scheduledAtUtc,
           scheduledLocal: dt.scheduledLocal,
           scheduledLocalTime: dt.scheduledLocalTime,
+          scheduledLocalDate: dt.scheduledLocalDate || null,
           scheduled_date: dueDateLocal,
           scheduledDate: dueDateLocal,
           scheduled_by: 'DOCTOR',
@@ -52807,8 +52860,8 @@ app.get('/api/doctor/datetime-probe', requireDoctorAuth, async (req, res) => {
           }
         }
         const rawDueCandidate =
-          item.due_date ||
           item.scheduled_at ||
+          item.due_date ||
           item.appointment_date ||
           item.date ||
           item.updated_at ||
