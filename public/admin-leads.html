@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605098"></script>
-  <script src="/admin-i18n.js?v=30"></script>
+  <script src="/admin-i18n.js?v=32"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title data-i18n="leads.documentTitle">Messages / Leads / Unassigned — Clinifly Admin</title>
+  <title data-i18n="leads.documentTitle">Lead management — Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css"/>
   <script>
     (function() {
@@ -28,43 +28,50 @@
   <style>
     :root {
       --bg:#111827; --card:#1f2937; --b:#374151; --muted:#9ca3af; --accent:#2563eb;
+      --g:#22c55e; --amber:#fbbf24;
     }
     body { font-family: system-ui, sans-serif; margin:0; background:var(--bg); color:#e5e7eb; }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 24px; }
     h1 { font-size: 1.35rem; margin: 0 0 8px; }
-    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 20px; }
-    label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
-    select, button { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--b); background: var(--card); color: #e5e7eb; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; max-width: 720px; line-height: 1.45; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 16px; }
+    label.chk { display:flex;align-items:center;gap:8px;color:#cbd5e1;font-size:0.9rem;cursor:pointer; }
+    select, button { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--b); background: var(--card); color: #e5e7eb; font-size: 0.85rem; }
     button.primary { background: var(--accent); border-color: #1d4ed8; cursor: pointer; }
+    button.danger { background: #7f1d1d; border-color: #991b1b; cursor: pointer; color: #fecaca; }
+    button.ghost { background: transparent; border-color: var(--b); cursor: pointer; color: #93c5fd; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .table-scroll { overflow-x: auto; border: 1px solid var(--b); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 920px; }
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--b); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; }
-    .preview { max-width: 320px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
+    th { color: var(--muted); font-weight: 600; background: rgba(31,41,55,0.9); }
+    tr:last-child td { border-bottom: none; }
+    .preview { max-width: 260px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
     .err { color: #f87171; margin-top: 12px; }
     .ok { color: #4ade80; margin-top: 12px; }
-    a.nav { color: #93c5fd; }
-    .lead-assigned-badge {
-      display: inline-block;
-      padding: 6px 10px;
-      border-radius: 8px;
-      background: rgba(34, 197, 94, 0.15);
-      border: 1px solid rgba(34, 197, 94, 0.45);
-      color: #86efac;
-      font-size: 0.82rem;
-      font-weight: 600;
+    .badge-unassigned {
+      display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 6px;
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.45); color: var(--amber);
     }
+    .badge-assigned {
+      display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 6px;
+      font-size: 0.72rem; font-weight: 700;
+      background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); color: #86efac;
+    }
+    .primary-name { font-weight: 600; color: #e5e7eb; }
+    .actions-stack { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+    .actions-stack select { max-width: 220px; }
+    .mono { font-size: 0.72rem; color: #6b7280; word-break: break-all; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <p><a class="nav" href="/admin.html" data-i18n="leads.backDashboard">← Dashboard</a></p>
-    <h1 data-i18n="leads.pageTitle">Messages / Leads / Unassigned requests</h1>
-    <p class="sub" data-i18n="leads.subtitle">Assign each lead to exactly one doctor. Only that doctor will see the conversation in the doctor app.</p>
+    <h1 data-i18n="leads.pageTitle">Lead inbox</h1>
+    <p class="sub" data-i18n="leads.subtitle">Primary responder per thread; clinic team can still view threads in Messages.</p>
 
     <div class="row">
-      <label style="display:flex;align-items:center;gap:8px;color:#cbd5e1;font-size:0.9rem;cursor:pointer;">
+      <label class="chk">
         <input type="checkbox" id="showAssigned" />
         <span data-i18n="leads.showAssignedToggle">Show assigned threads</span>
       </label>
@@ -74,38 +81,34 @@
     <div id="error" class="err"></div>
     <div id="success" class="ok"></div>
 
-    <table>
-      <thead>
-        <tr>
-          <th data-i18n="leads.thPatient">Patient</th>
-          <th data-i18n="leads.thContact">Contact</th>
-          <th data-i18n="leads.thPreview">Preview</th>
-          <th data-i18n="leads.thAssign">Assign doctor</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="leads.thPatient">Patient</th>
+            <th data-i18n="leads.thContact">Contact</th>
+            <th data-i18n="leads.thPreview">Last message</th>
+            <th data-i18n="leads.thPrimary">Primary doctor</th>
+            <th data-i18n="leads.thLastActivity">Last activity</th>
+            <th data-i18n="leads.thStatus">Status</th>
+            <th data-i18n="leads.thActions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
     function t(key, params) {
       return (window.i18n && window.i18n.t) ? window.i18n.t(key, params || {}) : key;
     }
-    window.rerenderLeads = function() {
-      refresh();
-    };
+    window.rerenderLeads = function() { refresh(); };
 
-    function apiBase() {
-      if (typeof window.CLINIFLOW_API_BASE_URL === "string" && window.CLINIFLOW_API_BASE_URL.trim()) {
-        const ob = window.CLINIFLOW_API_BASE_URL.replace(/\/+$/, "");
-        if (/^https?:\/\//i.test(ob)) return ob;
-      }
-      if (typeof cliniflowAdminApiOrigin === "function") {
-        const b = cliniflowAdminApiOrigin();
-        if (b && /^https?:\/\//i.test(String(b))) return String(b).replace(/\/+$/, "");
-      }
-      return "https://cliniflow-backend-clean-production.up.railway.app";
-    }
+    const API_BASE = (typeof cliniflowAdminApiOrigin === "function"
+      ? cliniflowAdminApiOrigin()
+      : "https://cliniflow-backend-clean-production.up.railway.app");
+
     function authHeaders() {
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
       return {
@@ -117,98 +120,21 @@
     let doctors = [];
 
     async function loadDoctors() {
-      const res = await fetch(apiBase() + "/api/admin/doctors", { headers: authHeaders() });
+      const res = await fetch(API_BASE + "/api/admin/doctors", { headers: authHeaders() });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) throw new Error(j.error || t("leads.errLoad"));
       doctors = j.doctors || j.data || j.items || [];
     }
 
-    async function loadUnassigned() {
+    async function loadThreads() {
       const includeAssigned = document.getElementById("showAssigned")?.checked ? "1" : "0";
       const res = await fetch(
-        apiBase() + "/api/admin/unassigned-messages?includeAssigned=" + encodeURIComponent(includeAssigned),
+        API_BASE + "/api/admin/unassigned-messages?includeAssigned=" + encodeURIComponent(includeAssigned),
         { headers: authHeaders() }
       );
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) throw new Error(j.error || t("leads.errLoad"));
       return j.messages || [];
-    }
-
-    function render(messages) {
-      const tbody = document.getElementById("tbody");
-      tbody.innerHTML = "";
-      if (!messages.length) {
-        const tr = document.createElement("tr");
-        const td = document.createElement("td");
-        td.colSpan = 4;
-        td.textContent = t("leads.empty");
-        td.style.color = "#9ca3af";
-        tr.appendChild(td);
-        tbody.appendChild(tr);
-        return;
-      }
-      for (const m of messages) {
-        const tr = document.createElement("tr");
-        const name = (m.patientName || "—") + (m.patientIdPublic ? " (" + m.patientIdPublic + ")" : "");
-        const contact = [m.email || "", m.phone || ""].filter(Boolean).join(" · ") || "—";
-        const preview = m.previewText || "—";
-        const pid = m.patientId;
-        const msgId = m.previewMessageId || pid;
-
-        const isAssigned = !!m.assignedDoctorId;
-        const doctorLabel =
-          (m.assignedDoctor && m.assignedDoctor.name && String(m.assignedDoctor.name).trim()) ||
-          (isAssigned ? "—" : "");
-
-        tr.innerHTML = `
-          <td>${escapeHtml(name)}<br/><span style="font-size:0.75rem;color:#6b7280">${escapeHtml(pid)}</span></td>
-          <td>${escapeHtml(contact)}</td>
-          <td class="preview">${escapeHtml(preview)}</td>
-          <td></td>
-        `;
-        const tdAssign = tr.querySelector("td:last-child");
-        if (isAssigned) {
-          const safeDoc = escapeHtml(doctorLabel);
-          tdAssign.innerHTML = `<span class="lead-assigned-badge">${escapeHtml(t("leads.assignedOk"))} ${escapeHtml(t("leads.assignedBadgePrefix"))} ${safeDoc}</span>`;
-        } else {
-        const sel = document.createElement("select");
-        sel.innerHTML = '<option value="">' + escapeHtml(t("leads.selectDoctor")) + "</option>" +
-          doctors.map((d) => '<option value="' + escapeAttr(d.id) + '">' + escapeHtml(d.name || d.email || d.id) + "</option>").join("");
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "primary";
-        btn.textContent = t("leads.assign");
-        btn.addEventListener("click", async () => {
-          document.getElementById("error").textContent = "";
-          document.getElementById("success").textContent = "";
-          const doctorId = sel.value;
-          if (!doctorId) {
-            document.getElementById("error").textContent = t("leads.errChooseDoctor");
-            return;
-          }
-          btn.disabled = true;
-          try {
-            const res = await fetch(apiBase() + "/api/admin/assign-doctor", {
-              method: "POST",
-              headers: authHeaders(),
-              body: JSON.stringify({ messageId: msgId, doctorId: doctorId }),
-            });
-            const j = await res.json().catch(() => ({}));
-            if (!res.ok || !j.ok) throw new Error(j.error || j.message || t("leads.errLoad"));
-            document.getElementById("success").textContent = t("leads.successAssigned");
-            await refresh();
-          } catch (e) {
-            document.getElementById("error").textContent = String(e.message || e);
-          } finally {
-            btn.disabled = false;
-          }
-        });
-        tdAssign.appendChild(sel);
-        tdAssign.appendChild(document.createElement("br"));
-        tdAssign.appendChild(btn);
-        }
-        tbody.appendChild(tr);
-      }
     }
 
     function escapeHtml(s) {
@@ -220,13 +146,183 @@
       return String(s || "").replace(/"/g, "&quot;");
     }
 
+    function fmtWhen(iso) {
+      if (!iso) return "—";
+      try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return "—";
+        return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+      } catch (_) {
+        return "—";
+      }
+    }
+
+    function primaryLabel(m) {
+      const isAssigned = !!m.assignedDoctorId;
+      const nm = (m.assignedDoctor && String(m.assignedDoctor.name || "").trim()) || "";
+      if (isAssigned && nm) return nm;
+      if (isAssigned) return "—";
+      return "";
+    }
+
+    function render(messages) {
+      const tbody = document.getElementById("tbody");
+      tbody.innerHTML = "";
+      if (!messages.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 7;
+        td.textContent = t("leads.empty");
+        td.style.color = "#9ca3af";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      for (const m of messages) {
+        const tr = document.createElement("tr");
+        const name = (m.patientName || "—") + (m.patientIdPublic ? " (" + m.patientIdPublic + ")" : "");
+        const contact = [m.email || "", m.phone || ""].filter(Boolean).join(" · ") || "—";
+        const preview = m.previewText || "—";
+        const pid = m.patientId;
+        const msgId = m.previewMessageId || pid;
+        const isAssigned = !!m.assignedDoctorId;
+        const lastAct = m.updatedAt || m.assignedAt || m.createdAt || null;
+        const st = String(m.status || "—");
+
+        const patientCell = document.createElement("td");
+        patientCell.innerHTML =
+          escapeHtml(name) +
+          '<div class="mono">' + escapeHtml(pid) + "</div>" +
+          (!isAssigned
+            ? '<span class="badge-unassigned">' + escapeHtml(t("leads.badgeUnassigned")) + "</span>"
+            : '<span class="badge-assigned">' + escapeHtml(t("leads.badgePrimarySet")) + "</span>");
+
+        const contactCell = document.createElement("td");
+        contactCell.textContent = contact;
+
+        const previewCell = document.createElement("td");
+        previewCell.className = "preview";
+        previewCell.textContent = preview;
+
+        const primaryCell = document.createElement("td");
+        const pl = primaryLabel(m);
+        primaryCell.innerHTML = pl
+          ? '<span class="primary-name">' + escapeHtml(pl) + "</span>"
+          : '<span style="color:#6b7280">' + escapeHtml(t("leads.primaryNone")) + "</span>";
+
+        const actCell = document.createElement("td");
+        actCell.textContent = fmtWhen(lastAct);
+
+        const stCell = document.createElement("td");
+        stCell.textContent = st;
+
+        const actionsCell = document.createElement("td");
+        const stack = document.createElement("div");
+        stack.className = "actions-stack";
+
+        const openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.className = "ghost";
+        openBtn.textContent = t("leads.openChat");
+        openBtn.addEventListener("click", () => {
+          window.location.href = "/admin-chat.html?patientId=" + encodeURIComponent(pid);
+        });
+        stack.appendChild(openBtn);
+
+        const sel = document.createElement("select");
+        sel.innerHTML =
+          '<option value="">' + escapeHtml(t("leads.selectDoctor")) + "</option>" +
+          doctors.map((d) =>
+            '<option value="' + escapeAttr(d.id) + '">' + escapeHtml(d.name || d.email || d.id) + "</option>"
+          ).join("");
+        if (isAssigned && m.assignedDoctorId) {
+          sel.value = String(m.assignedDoctorId);
+        }
+
+        const assignBtn = document.createElement("button");
+        assignBtn.type = "button";
+        assignBtn.className = "primary";
+        assignBtn.textContent = isAssigned ? t("leads.reassign") : t("leads.assign");
+
+        assignBtn.addEventListener("click", async () => {
+          document.getElementById("error").textContent = "";
+          document.getElementById("success").textContent = "";
+          const doctorId = sel.value;
+          if (!doctorId) {
+            document.getElementById("error").textContent = t("leads.errChooseDoctor");
+            return;
+          }
+          assignBtn.disabled = true;
+          try {
+            const res = await fetch(API_BASE + "/api/admin/assign-doctor", {
+              method: "POST",
+              headers: authHeaders(),
+              body: JSON.stringify({ messageId: msgId, doctorId: doctorId }),
+            });
+            const j = await res.json().catch(() => ({}));
+            if (!res.ok || !j.ok) throw new Error(j.error || j.message || t("leads.errLoad"));
+            document.getElementById("success").textContent = t("leads.successAssigned");
+            await refresh();
+          } catch (e) {
+            document.getElementById("error").textContent = String(e.message || e);
+          } finally {
+            assignBtn.disabled = false;
+          }
+        });
+
+        stack.appendChild(sel);
+        stack.appendChild(assignBtn);
+
+        if (isAssigned) {
+          const unBtn = document.createElement("button");
+          unBtn.type = "button";
+          unBtn.className = "danger";
+          unBtn.textContent = t("leads.unassign");
+          unBtn.addEventListener("click", async () => {
+            if (!confirm(t("leads.confirmUnassign"))) return;
+            document.getElementById("error").textContent = "";
+            document.getElementById("success").textContent = "";
+            unBtn.disabled = true;
+            try {
+              const res = await fetch(API_BASE + "/api/admin/unassign-lead", {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({ patientId: pid }),
+              });
+              const j = await res.json().catch(() => ({}));
+              if (!res.ok || !j.ok) throw new Error(j.error || j.message || t("leads.errLoad"));
+              document.getElementById("success").textContent = t("leads.successUnassigned");
+              await refresh();
+            } catch (e) {
+              document.getElementById("error").textContent = String(e.message || e);
+            } finally {
+              unBtn.disabled = false;
+            }
+          });
+          stack.appendChild(unBtn);
+        }
+
+        actionsCell.appendChild(stack);
+
+        tr.appendChild(patientCell);
+        tr.appendChild(contactCell);
+        tr.appendChild(previewCell);
+        tr.appendChild(primaryCell);
+        tr.appendChild(actCell);
+        tr.appendChild(stCell);
+        tr.appendChild(actionsCell);
+        tbody.appendChild(tr);
+      }
+    }
+
     async function refresh() {
       const el = document.getElementById("status");
       el.textContent = t("leads.statusLoading");
       document.getElementById("error").textContent = "";
       try {
         await loadDoctors();
-        const messages = await loadUnassigned();
+        const messages = await loadThreads();
         render(messages);
         el.textContent = t("leads.statusUnassigned", { count: String(messages.length) });
       } catch (e) {
@@ -239,6 +335,6 @@
     document.getElementById("showAssigned").addEventListener("change", refresh);
     refresh();
   </script>
-<script src="/admin-layout.js?v=202605021"></script>
+  <script src="/admin-layout.js?v=202605082"></script>
 </body>
 </html>

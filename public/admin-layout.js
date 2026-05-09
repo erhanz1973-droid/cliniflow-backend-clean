@@ -52,6 +52,7 @@
   ];
   const NAV2 = [
     { href: '/admin-doctor-applications-v2.html', icon: iconDoctor(), key: 'doctors', badge: 'sbDoctors' },
+    { href: '/admin-leads.html',    icon: iconInbox(),    key: 'leads',   badge: 'sbLeads' },
     { href: '/admin-chat.html',     icon: iconChat(),     key: 'chat',    badge: 'sbChat' },
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
     { href: '/admin-referrals.html', icon: iconReferrals(), key: 'referrals', badge: 'sbReferrals' },
@@ -66,7 +67,8 @@
       'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.travel': 'Travel',
-      'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.chat': 'Messages',
+      'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Leads',
+      'dashboard.nav.chat': 'Messages',
       'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.settings': 'Settings',
       'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
       'dashboard.sidebar.logout': 'Logout', 'dashboard.sidebar.clinic': 'Clinic',
@@ -86,6 +88,10 @@
     return svg('<path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>');
   }
   function iconDoctor()   { return svg('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'); }
+  /** Lead inbox / primary responder queue */
+  function iconInbox() {
+    return svg('<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>');
+  }
   function iconChat()     { return svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'); }
   function iconSettings() { return svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'); }
   function iconFiles()    { return svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'); }

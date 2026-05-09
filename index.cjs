@@ -12704,11 +12704,11 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
     if (docIds.length) {
       const { data: drows } = await supabase
         .from("doctors")
-        .select("id, full_name, name")
+        .select("id, full_name, name, email, doctor_id")
         .in("id", docIds.slice(0, 300));
       for (const d of drows || []) {
         const id = String(d.id || "").trim();
-        if (id) doctorNameById[id] = String(d.full_name || d.name || "").trim() || null;
+        if (id) doctorNameById[id] = normalizeDoctorRowDisplayName(d) || null;
       }
     }
 
@@ -12970,6 +12970,65 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
     });
   } catch (e) {
     console.error("[ADMIN assign-doctor]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+/** Clear primary responder on lead thread (patient_chat_threads); does not delete messages. */
+app.post("/api/admin/unassign-lead", requireAdminAuth, async (req, res) => {
+  try {
+    const clinicId = String(req.clinicId || "").trim();
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.status(400).json({ ok: false, error: "clinic_missing" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const body = req.body || {};
+    const messageIdRaw = body.messageId ?? body.message_id ?? body.patientId ?? body.patient_id;
+    if (!messageIdRaw) {
+      return res.status(400).json({ ok: false, error: "patient_or_message_required" });
+    }
+    const patientId = await resolvePatientIdFromMessageIdentifier(messageIdRaw);
+    if (!patientId) {
+      return res.status(404).json({ ok: false, error: "message_or_patient_not_found" });
+    }
+    const nowIso = new Date().toISOString();
+    const { data: updated, error: upErr } = await supabase
+      .from("patient_chat_threads")
+      .update({
+        assigned_doctor_id: null,
+        status: "unassigned",
+        updated_at: nowIso,
+      })
+      .eq("patient_id", patientId)
+      .eq("clinic_id", clinicId)
+      .eq("is_lead", true)
+      .select("id, patient_id, assigned_doctor_id, status")
+      .maybeSingle();
+
+    if (upErr) {
+      console.warn("[ADMIN unassign-lead] update:", upErr.message);
+      if (isPatientChatThreadsTableUnavailable(upErr)) {
+        return res.status(503).json({
+          ok: false,
+          error: "patient_chat_threads_required",
+          message: "patient_chat_threads table unavailable.",
+        });
+      }
+      return res.status(500).json({ ok: false, error: "update_failed" });
+    }
+    if (!updated?.id) {
+      return res.status(404).json({ ok: false, error: "lead_thread_not_found" });
+    }
+    return res.json({
+      ok: true,
+      threadId: updated.id,
+      patientId: updated.patient_id,
+      status: updated.status || "unassigned",
+    });
+  } catch (e) {
+    console.error("[ADMIN unassign-lead]", e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
