@@ -11373,99 +11373,102 @@ app.get("/api/admin/billing/plans", requireAdminAuth, (req, res) => {
   }
 });
 
-// GET /api/clinic/usage — dashboard plan row (clinic-column limits + live counts)
-app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
-  /** Populated progressively for crash diagnostics (no procedures[] in this endpoint). */
-  let usageDiag = { step: "start", cid: null, activeCount: null, uploadsVal: null, referralCount: null };
-  try {
-    const clinicId = req.clinicId || req.clinic?.id;
-    if (!clinicId || String(clinicId).trim() === "") {
-      return res.status(401).json({ error: "unauthorized" });
+/** Flat /api/clinic/usage body: SaaS snapshot + patient roster (separate cap from active-treatments). */
+async function buildClinicUsagePayload(req, snapshot, { countPatients } = {}) {
+  const lim = snapshot.limits;
+  const use = snapshot.usage;
+  const dim = snapshot.dimensions;
+  const plan = snapshot.plan;
+  const patientCap = resolvePatientRosterCap(req.clinic, plan);
+  let patientCount = 0;
+  if (countPatients) {
+    const cid =
+      req.clinicId != null && String(req.clinicId).trim() !== ""
+        ? String(req.clinicId).trim()
+        : req.clinic?.id != null
+          ? String(req.clinic.id).trim()
+          : "";
+    if (cid) {
+      try {
+        patientCount = await countPatientsByClinic(cid, { includeLeads: false });
+      } catch (_e) {
+        patientCount = 0;
+      }
     }
-    const cid = String(clinicId).trim();
-    usageDiag.cid = cid;
-    if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
-      return res.status(503).json({ error: "database_unavailable" });
-    }
+  }
+  return {
+    plan,
+    limits: {
+      active_treatments: lim.activeTreatments,
+      monthly_uploads: lim.monthlyUploads,
+      referrals: lim.referralInvites,
+      patients: patientCap,
+    },
+    usage: {
+      active_treatments: use.activeTreatments,
+      monthly_uploads: use.monthlyUploads,
+      referrals: use.referralInvites,
+      patients: patientCount,
+    },
+    unlimited: {
+      active_treatments: dim.active_treatments.unlimited,
+      monthly_uploads: dim.monthly_uploads.unlimited,
+      referrals: dim.referral_invites.unlimited,
+      patients: patientCap == null,
+    },
+    period: snapshot.period,
+    limitsEnabled: saasEnforcement.limitsEnabled(),
+    /** When this JSON was assembled (UTC). Distinct from billing cache TTL inside getBillingSnapshot. */
+    last_updated_at: new Date().toISOString(),
+    note:
+      "usage.patients = roster count (non-lead). limits.patients = roster cap from clinic/plan (distinct from active-treatments SaaS caps). uploads/referrals/active_treatments are for UTC month in period.",
+  };
+}
 
-    let { data: clinic, error: cErr } = await supabase
-      .from("clinics")
-      .select("id, plan, patient_limit, max_patients, upload_limit, referral_limit")
-      .eq("id", cid)
-      .maybeSingle();
-    if (cErr && /column|schema/i.test(String(cErr.message || ""))) {
-      const r2 = await supabase
-        .from("clinics")
-        .select("id, plan, max_patients")
-        .eq("id", cid)
-        .maybeSingle();
-      clinic = r2.data;
-      cErr = r2.error;
-    }
-    if (!clinic) {
+// GET /api/clinic/usage — dashboard / settings (same counts + limits as /api/admin/billing/usage)
+app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
+  let usageDiag = { step: "start", cid: null };
+  try {
+    if (!req.clinic) {
       return res.status(404).json({ error: "clinic_not_found" });
     }
-    usageDiag.step = "after_clinic_row";
+    const clinicIdFromJwt =
+      req.clinicId != null && String(req.clinicId).trim() !== ""
+        ? String(req.clinicId).trim()
+        : req.user && req.user.clinicId != null
+          ? String(req.user.clinicId).trim()
+          : null;
+    usageDiag.cid = clinicIdFromJwt || req.clinic?.id || req.clinic?._fileId;
 
-    const { getActiveTreatmentsCount, countMonthlyUploadsForClinic } = require("./lib/saasUsage.cjs");
-    const activeCount = await getActiveTreatmentsCount(cid, {
-      clinicCode: req.clinicCode,
-    });
-    usageDiag.step = "after_active_treatments";
-    usageDiag.activeCount = activeCount;
-
-    const uploadsR = await countMonthlyUploadsForClinic(supabase, cid, {
-      clinicCode: req.clinicCode,
-    });
-    usageDiag.step = "after_uploads";
-    usageDiag.uploadsVal = uploadsR?.value;
-
-    let referralCount = 0;
-    const { count: refCount, error: refErr } = await supabase
-      .from("referrals")
-      .select("*", { count: "exact", head: true })
-      .eq("clinic_id", cid);
-    if (!refErr && refCount != null) {
-      referralCount = refCount;
+    if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+      const snap = saasEnforcement.getBillingSnapshotWithZeroUsage(req.clinic);
+      const body = await buildClinicUsagePayload(req, snap, { countPatients: false });
+      return res.json(body);
     }
-    usageDiag.step = "before_response";
-    usageDiag.referralCount = referralCount;
-    usageDiag.counts = {
-      active_treatments: activeCount,
-      monthly_uploads: uploadsR?.value,
-      referrals: referralCount,
-    };
 
-    const limits = {
-      active_treatments: clinic.patient_limit ?? clinic.max_patients ?? 999999,
-      monthly_uploads: clinic.upload_limit ?? 999999,
-      referrals: clinic.referral_limit ?? 999999,
-    };
+    const snapshot = await saasEnforcement.getBillingSnapshot(
+      supabase,
+      req.clinic,
+      req.clinicCode,
+      clinicIdFromJwt,
+      { force: String(req.query.force || "") === "true" }
+    );
+    usageDiag.step = "snapshot_ok";
 
-    return res.json({
-      plan: clinic.plan,
-      limits,
-      usage: {
-        active_treatments: activeCount,
-        monthly_uploads: uploadsR?.value ?? 0,
-        referrals: referralCount,
-      },
-    });
+    const body = await buildClinicUsagePayload(req, snapshot, { countPatients: true });
+    return res.json(body);
   } catch (e) {
     console.error("[clinic usage] fatal", e);
     if (e?.stack) console.error("[clinic usage] stack", e.stack);
-    console.error("[clinic usage] diag", {
-      clinicId: usageDiag.cid,
-      step: usageDiag.step,
-      counts: usageDiag.counts,
-      activeCount: usageDiag.activeCount,
-      uploadsVal: usageDiag.uploadsVal,
-      referralCount: usageDiag.referralCount,
-      proceduresLen: null,
-      normalizedLen: null,
-      note: "usage endpoint uses DB counts only; no procedures[] / normalization array",
-    });
+    console.error("[clinic usage] diag", usageDiag);
     console.error("[GET /api/clinic/usage]", e);
+    try {
+      if (req.clinic) {
+        const snap = saasEnforcement.getBillingSnapshotWithZeroUsage(req.clinic);
+        const body = await buildClinicUsagePayload(req, snap, { countPatients: false });
+        return res.json({ ...body, degraded: true });
+      }
+    } catch (_) {}
     return res.status(500).json({ error: e?.message || "internal_error" });
   }
 });
@@ -31192,6 +31195,20 @@ function planToMaxPatients(plan) {
   if (p === "BASIC") return 15;
   if (p === "PRO") return 999999;
   return 3;
+}
+
+/** API-facing cap: finite number or null when unlimited (PRO / sentinel). Separate from active-treatment SaaS caps. */
+function resolvePatientRosterCap(clinicRow, planKey) {
+  const planNorm = normalizeClinicPlan(planKey || clinicRow?.plan || clinicRow?.subscriptionPlan || "FREE");
+  const raw = clinicRow?.max_patients ?? clinicRow?.patient_limit ?? null;
+  const n = raw != null ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n > 0) {
+    if (n >= 999999) return null;
+    return n;
+  }
+  const fromPlan = planToMaxPatients(planNorm);
+  if (!Number.isFinite(fromPlan) || fromPlan >= 999999) return null;
+  return fromPlan;
 }
 
 // PUT /api/admin/clinic (Admin günceller) - token-based (multi-clinic)

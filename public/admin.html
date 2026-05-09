@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605098"></script>
-  <script src="/admin-i18n.js?v=27"></script>
+  <script src="/admin-i18n.js?v=30"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
@@ -742,6 +742,7 @@
       { key: "activeTreatments", label: t("dashboard.activeTreatments"), used: usage.activeTreatments, limit: tierLimits.activeTreatments },
       { key: "uploads", label: t("dashboard.monthlyUploads"), used: usage.uploads, limit: tierLimits.uploads },
       { key: "referrals", label: t("dashboard.referralInvites"), used: usage.referrals, limit: tierLimits.referrals },
+      { key: "patients", label: t("dashboard.patientRoster"), used: usage.patients, limit: tierLimits.patients },
     ];
 
     let worst = "ok";
@@ -781,7 +782,9 @@
                 ? "uploads"
                 : r.key === "referrals"
                   ? "referrals"
-                  : "";
+                  : r.key === "patients"
+                    ? "patientRoster"
+                    : "";
           return (
             '<div class="plan-row">' +
             '<span class="plan-row-label">' +
@@ -797,6 +800,8 @@
         })
         .join("") +
       "</div>" +
+      '<p class="plan-period-note" id="planUsagePeriodNote" style="margin:10px 0 0;font-size:12px;color:var(--muted,#94a3b8);font-weight:500;">—</p>' +
+      '<p class="plan-freshness-note" id="planUsageFreshness" style="margin:4px 0 0;font-size:11px;color:var(--muted,#94a3b8);"></p>' +
       '<button type="button" class="plan-upgrade" id="upgradeButton">' +
       t("dashboard.upgrade") +
       "</button>" +
@@ -810,15 +815,17 @@
     }
   }
 
-  function formatLimit(value) {
-    if (!value || value >= 999999) return "Sınırsız";
-    return value;
+  function formatLimit(value, unlimitedFlag) {
+    if (unlimitedFlag === true || value == null || value === -1) return planUsageT("dashboard.unlimited");
+    var n = Number(value);
+    if (!Number.isFinite(n) || n >= 999999) return planUsageT("dashboard.unlimited");
+    return String(n);
   }
 
-  function formatUsage(u, l) {
+  function formatUsage(u, l, unlimitedFlag) {
     var nu = Number(u);
     var n = Number.isFinite(nu) ? nu : 0;
-    return `${n} / ${formatLimit(l)}`;
+    return n + " / " + formatLimit(l, unlimitedFlag);
   }
 
   function showUpgradeBanner() {
@@ -832,26 +839,84 @@
 
   function updateDashboardUI(data) {
     if (!data) return;
+    var uu = data.unlimited || {};
     var planEl = document.getElementById("planName");
     if (planEl && data.plan != null) {
       planEl.textContent = String(data.plan).toUpperCase();
     }
     var elAT = document.getElementById("activeTreatments");
     if (elAT)
-      elAT.textContent = formatUsage(data.usage && data.usage.active_treatments, data.limits && data.limits.active_treatments);
+      elAT.textContent = formatUsage(
+        data.usage && data.usage.active_treatments,
+        data.limits && data.limits.active_treatments,
+        uu.active_treatments === true
+      );
     var elU = document.getElementById("uploads");
     if (elU)
-      elU.textContent = formatUsage(data.usage && data.usage.monthly_uploads, data.limits && data.limits.monthly_uploads);
+      elU.textContent = formatUsage(
+        data.usage && data.usage.monthly_uploads,
+        data.limits && data.limits.monthly_uploads,
+        uu.monthly_uploads === true
+      );
     var elR = document.getElementById("referrals");
     if (elR)
-      elR.textContent = formatUsage(data.usage && data.usage.referrals, data.limits && data.limits.referrals);
+      elR.textContent = formatUsage(
+        data.usage && data.usage.referrals,
+        data.limits && data.limits.referrals,
+        uu.referrals === true
+      );
+    var elPR = document.getElementById("patientRoster");
+    if (elPR)
+      elPR.textContent = formatUsage(
+        data.usage && data.usage.patients,
+        data.limits && data.limits.patients,
+        uu.patients === true
+      );
+    var elPer = document.getElementById("planUsagePeriodNote");
+    if (elPer && data.period && data.period.label) {
+      elPer.textContent = planUsageT("dashboard.usagePeriodNote").replace("{period}", String(data.period.label));
+    } else if (elPer) {
+      elPer.textContent = "—";
+    }
+    var elFr = document.getElementById("planUsageFreshness");
+    if (elFr) {
+      if (data.last_updated_at) {
+        try {
+          var ts = String(data.last_updated_at);
+          var d = new Date(ts);
+          var timeStr = isNaN(d.getTime()) ? ts : d.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
+          elFr.textContent = planUsageT("dashboard.usageFreshness").replace("{time}", timeStr);
+        } catch (_e) {
+          elFr.textContent = "";
+        }
+      } else {
+        elFr.textContent = "";
+      }
+    }
 
     var limAt = data.limits && data.limits.active_treatments;
     var useAt = data.usage && data.usage.active_treatments;
+    var limCap = Number(limAt);
     if (
-      limAt > 0 &&
-      limAt < 999999 &&
-      useAt >= limAt * 0.8
+      uu.active_treatments !== true &&
+      limAt != null &&
+      Number.isFinite(limCap) &&
+      limCap > 0 &&
+      limCap < 999999 &&
+      Number(useAt) >= limCap * 0.8
+    ) {
+      showUpgradeBanner();
+    }
+    var limPt = data.limits && data.limits.patients;
+    var usePt = data.usage && data.usage.patients;
+    var limPtN = Number(limPt);
+    if (
+      uu.patients !== true &&
+      limPt != null &&
+      Number.isFinite(limPtN) &&
+      limPtN > 0 &&
+      limPtN < 999999 &&
+      Number(usePt) >= limPtN * 0.8
     ) {
       showUpgradeBanner();
     }
