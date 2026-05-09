@@ -694,6 +694,21 @@
     return limit == null || limit === -1;
   }
 
+  /** Finite positive cap for ratio / upgrade prompts; null => unlimited or invalid cap. */
+  function planUsageFiniteCap(limit, unlimitedFlag) {
+    if (unlimitedFlag === true) return null;
+    if (limit == null || limit === "" || limit === -1) return null;
+    var n = Number(limit);
+    if (!Number.isFinite(n) || n <= 0 || n >= 999999) return null;
+    return n;
+  }
+
+  function setPlanUpgradeVisible(visible) {
+    var btn = document.getElementById("upgradeButton");
+    if (!btn) return;
+    btn.style.display = visible ? "" : "none";
+  }
+
   function planUsageT(key) {
     if (window.i18n && window.i18n.t) {
       const v = window.i18n.t(key);
@@ -739,7 +754,6 @@
     const tierLimits = limits[plan] || limits.free || PLAN_USAGE_DEFAULT_LIMITS.free;
 
     const rows = [
-      { key: "activeTreatments", label: t("dashboard.activeTreatments"), used: usage.activeTreatments, limit: tierLimits.activeTreatments },
       { key: "uploads", label: t("dashboard.monthlyUploads"), used: usage.uploads, limit: tierLimits.uploads },
       { key: "referrals", label: t("dashboard.referralInvites"), used: usage.referrals, limit: tierLimits.referrals },
       { key: "patients", label: t("dashboard.patientRoster"), used: usage.patients, limit: tierLimits.patients },
@@ -776,15 +790,13 @@
       rows
         .map(function (r) {
           var vid =
-            r.key === "activeTreatments"
-              ? "activeTreatments"
-              : r.key === "uploads"
-                ? "uploads"
-                : r.key === "referrals"
-                  ? "referrals"
-                  : r.key === "patients"
-                    ? "patientRoster"
-                    : "";
+            r.key === "uploads"
+              ? "uploads"
+              : r.key === "referrals"
+                ? "referrals"
+                : r.key === "patients"
+                  ? "patientRoster"
+                  : "";
           return (
             '<div class="plan-row">' +
             '<span class="plan-row-label">' +
@@ -802,7 +814,7 @@
       "</div>" +
       '<p class="plan-period-note" id="planUsagePeriodNote" style="margin:10px 0 0;font-size:12px;color:var(--muted,#94a3b8);font-weight:500;">—</p>' +
       '<p class="plan-freshness-note" id="planUsageFreshness" style="margin:4px 0 0;font-size:11px;color:var(--muted,#94a3b8);"></p>' +
-      '<button type="button" class="plan-upgrade" id="upgradeButton">' +
+      '<button type="button" class="plan-upgrade" id="upgradeButton" style="display:none">' +
       t("dashboard.upgrade") +
       "</button>" +
       "</section>";
@@ -830,7 +842,7 @@
 
   function showUpgradeBanner() {
     var btn = document.getElementById("upgradeButton");
-    if (!btn) return;
+    if (!btn || btn.style.display === "none") return;
     try {
       btn.focus();
       btn.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -840,17 +852,17 @@
   function updateDashboardUI(data) {
     if (!data) return;
     var uu = data.unlimited || {};
+    var planKey = String(data.plan || "").trim().toUpperCase();
+    var saasAllUncapped =
+      uu.active_treatments === true &&
+      uu.monthly_uploads === true &&
+      uu.referrals === true;
+    var hideUpgradeCta = planKey === "PRO" || saasAllUncapped;
+    setPlanUpgradeVisible(!hideUpgradeCta);
     var planEl = document.getElementById("planName");
     if (planEl && data.plan != null) {
       planEl.textContent = String(data.plan).toUpperCase();
     }
-    var elAT = document.getElementById("activeTreatments");
-    if (elAT)
-      elAT.textContent = formatUsage(
-        data.usage && data.usage.active_treatments,
-        data.limits && data.limits.active_treatments,
-        uu.active_treatments === true
-      );
     var elU = document.getElementById("uploads");
     if (elU)
       elU.textContent = formatUsage(
@@ -894,31 +906,25 @@
       }
     }
 
-    var limAt = data.limits && data.limits.active_treatments;
-    var useAt = data.usage && data.usage.active_treatments;
-    var limCap = Number(limAt);
-    if (
-      uu.active_treatments !== true &&
-      limAt != null &&
-      Number.isFinite(limCap) &&
-      limCap > 0 &&
-      limCap < 999999 &&
-      Number(useAt) >= limCap * 0.8
-    ) {
-      showUpgradeBanner();
-    }
-    var limPt = data.limits && data.limits.patients;
-    var usePt = data.usage && data.usage.patients;
-    var limPtN = Number(limPt);
-    if (
-      uu.patients !== true &&
-      limPt != null &&
-      Number.isFinite(limPtN) &&
-      limPtN > 0 &&
-      limPtN < 999999 &&
-      Number(usePt) >= limPtN * 0.8
-    ) {
-      showUpgradeBanner();
+    if (!hideUpgradeCta) {
+      var capPt = planUsageFiniteCap(data.limits && data.limits.patients, uu.patients === true);
+      var usePt = data.usage && data.usage.patients;
+      if (capPt != null && Number(usePt) >= capPt * 0.8) {
+        showUpgradeBanner();
+      }
+      var capUp = planUsageFiniteCap(
+        data.limits && data.limits.monthly_uploads,
+        uu.monthly_uploads === true
+      );
+      var useUp = data.usage && data.usage.monthly_uploads;
+      if (capUp != null && Number(useUp) >= capUp * 0.8) {
+        showUpgradeBanner();
+      }
+      var capRf = planUsageFiniteCap(data.limits && data.limits.referrals, uu.referrals === true);
+      var useRf = data.usage && data.usage.referrals;
+      if (capRf != null && Number(useRf) >= capRf * 0.8) {
+        showUpgradeBanner();
+      }
     }
   }
 

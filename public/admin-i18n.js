@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v30');
+  console.log('I18N FILE VERSION:', 'v27');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;

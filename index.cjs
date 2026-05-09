@@ -1,13 +1,5 @@
 console.log("🚀 STRIPE VERSION DEPLOYED");
 
-/** True when this process should use production security and behavior.
- *  Railway often omits NODE_ENV; it sets RAILWAY_ENVIRONMENT=production instead. */
-function cliniflowProductionRuntime() {
-  const node = String(process.env.NODE_ENV || "").toLowerCase();
-  const rail = String(process.env.RAILWAY_ENVIRONMENT || "").toLowerCase();
-  return node === "production" || rail === "production";
-}
-
 process.on("unhandledRejection", (reason) => {
   const msg =
     reason && typeof reason === "object" && reason.stack
@@ -19,7 +11,7 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (err) => {
   console.error("[PROCESS] uncaughtException", err && err.stack ? err.stack : err);
-  if (cliniflowProductionRuntime()) {
+  if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
     process.exit(1);
   }
 });
@@ -395,14 +387,12 @@ function resolveListenPort() {
 const PORT = resolveListenPort();
 console.log("[STARTUP] effective PORT =", PORT, "from env =", process.env.PORT != null ? String(process.env.PORT) : "(unset)");
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
-const IS_PROD = cliniflowProductionRuntime();
+const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
   if (IS_PROD) {
-    throw new Error(
-      "JWT_SECRET (min 8 characters) is required in production (NODE_ENV=production and/or RAILWAY_ENVIRONMENT=production)"
-    );
+    throw new Error("JWT_SECRET (min 8 characters) is required when NODE_ENV=production");
   }
   console.warn("[SECURITY] JWT_SECRET missing or too short — set in .env for non-dev use");
   return "dev-only-jwt-secret-min-8-chars";
@@ -3650,7 +3640,7 @@ const SUPER_ADMIN_JWT_SECRET = (() => {
   if (s.length >= 8) return s;
   if (IS_PROD) {
     throw new Error(
-      "SUPER_ADMIN_JWT_SECRET or SUPERADMIN_JWT_SECRET (min 8 chars) is required in production (NODE_ENV and/or RAILWAY_ENVIRONMENT)",
+      "SUPER_ADMIN_JWT_SECRET or SUPERADMIN_JWT_SECRET (min 8 chars) is required when NODE_ENV=production",
     );
   }
   return "dev-super-admin-jwt-min-8-chars";
@@ -11406,7 +11396,7 @@ async function buildClinicUsagePayload(req, snapshot, { countPatients } = {}) {
       }
     }
   }
-  return {
+  const body = {
     plan,
     limits: {
       active_treatments: lim.activeTreatments,
@@ -11431,8 +11421,10 @@ async function buildClinicUsagePayload(req, snapshot, { countPatients } = {}) {
     /** When this JSON was assembled (UTC). Distinct from billing cache TTL inside getBillingSnapshot. */
     last_updated_at: new Date().toISOString(),
     note:
-      "usage.patients = roster count (non-lead). limits.patients = roster cap from clinic/plan (distinct from active-treatments SaaS caps). uploads/referrals/active_treatments are for UTC month in period.",
+      "usage.patients = roster count (non-lead); limits.patients = roster cap from clinic/plan. monthly_uploads and referrals are counted for the UTC calendar month in period. usage.active_treatments is a relational aggregate (treatments / encounter_treatments / patient_treatments fallback) and does not reflect patients.treatments JSON chart state; it is omitted from the admin dashboard until a single treatment lifecycle source exists.",
   };
+  if (snapshot.usage_debug != null) body.usage_debug = snapshot.usage_debug;
+  return body;
 }
 
 // GET /api/clinic/usage — dashboard / settings (same counts + limits as /api/admin/billing/usage)
@@ -11449,6 +11441,7 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
           ? String(req.user.clinicId).trim()
           : null;
     usageDiag.cid = clinicIdFromJwt || req.clinic?.id || req.clinic?._fileId;
+    const usageDebugQuery = String(req.query.debugUsage || "") === "1";
 
     if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
       const snap = saasEnforcement.getBillingSnapshotWithZeroUsage(req.clinic);
@@ -11461,7 +11454,10 @@ app.get("/api/clinic/usage", requireAdminAuth, async (req, res) => {
       req.clinic,
       req.clinicCode,
       clinicIdFromJwt,
-      { force: String(req.query.force || "") === "true" }
+      {
+        force: String(req.query.force || "") === "true",
+        debugUsage: usageDebugQuery,
+      }
     );
     usageDiag.step = "snapshot_ok";
 
@@ -11521,7 +11517,10 @@ app.get("/api/admin/billing/usage", requireAdminAuth, async (req, res) => {
       req.clinic,
       req.clinicCode,
       clinicIdFromJwt,
-      { force: String(req.query.force || "") === "true" }
+      {
+        force: String(req.query.force || "") === "true",
+        debugUsage: String(req.query.debugUsage || "") === "1",
+      }
     );
     return res.json({
       ok: true,
@@ -30124,7 +30123,7 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     logAI('error', 'analyze_exception', {
       patientId: req.patientUuid || req.body?.patientId,
       message:   err?.message,
-      stack:     !IS_PROD ? err?.stack : undefined,
+      stack:     process.env.NODE_ENV !== 'production' ? err?.stack : undefined,
       elapsedMs: Date.now() - _t0,
     });
     return res.status(500).json({ ok: false, error: err?.message || 'ai_analyze_exception', message: err?.message || 'Server error' });
@@ -53708,9 +53707,7 @@ console.log("[STARTUP] http.Server.listen", {
   pid: process.pid,
   node: process.version,
   cwd: process.cwd(),
-  NODE_ENV: process.env.NODE_ENV || "(unset)",
-  RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT || "(unset)",
-  IS_PROD,
+  env: process.env.NODE_ENV || "(unset)",
 });
 
 server.listen(PORT, "0.0.0.0", () => {

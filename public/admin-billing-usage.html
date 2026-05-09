@@ -80,7 +80,8 @@
         html += `</div>`;
         if (snap && snap.dimensions) {
           const m = snap.dimensions;
-          html += renderDim("t", "Active treatments", m.active_treatments);
+          html += `<div class="card"><div class="label">Active treatments (quota)</div>
+            <div class="meta">Omitted from the main admin UI: this dimension aggregates relational tables only and does not reflect <code>patients.treatments</code> chart JSON. Enforcement still applies when limits are enabled.</div></div>`;
           html += renderDim("u", "Monthly uploads (patient_files)", m.monthly_uploads);
           html += renderDim("r", "Referral invites (this month)", m.referral_invites);
           html += `<div class="card"><div class="label">Branding</div>

@@ -214,7 +214,6 @@
       <form id="clinicForm">
         <label data-i18n="settings.subscriptionPlan">Abonelik Paketi</label>
         <div id="currentPlanReadonly">Mevcut Plan: —</div>
-        <div id="usageActiveTreatments" class="muted"></div>
         <div id="usageMonthlyUploads" class="muted"></div>
         <div id="usageReferrals" class="muted"></div>
         <div id="usagePatients" class="muted"></div>
@@ -505,14 +504,12 @@
     return n + " / " + formatLimitSettings(l, unlimitedFlag);
   }
   async function loadSubscriptionUsage(token) {
-    const elA = $("usageActiveTreatments");
     const elU = $("usageMonthlyUploads");
     const elR = $("usageReferrals");
     const elPat = $("usagePatients");
     const elPeriod = $("usagePeriodNote");
     const elFresh = $("usageFreshnessNote");
     const loading = ti("settings.usageLoading", "…");
-    if (elA) elA.textContent = ti("settings.usageActiveTreatments", "Active treatments") + ": " + loading;
     if (elU) elU.textContent = ti("settings.usageMonthlyUploads", "Monthly uploads") + ": " + loading;
     if (elR) elR.textContent = ti("settings.usageReferrals", "Referral invites (this UTC month)") + ": " + loading;
     if (elPat) elPat.textContent = ti("settings.usagePatients", "Patients on roster") + ": " + loading;
@@ -527,7 +524,6 @@
       });
       if (!res.ok) {
         if (handle401(res.status)) return;
-        if (elA) elA.textContent = ti("settings.usageLoadFailed", "Usage unavailable");
         if (elU) elU.textContent = "";
         if (elR) elR.textContent = "";
         if (elPat) elPat.textContent = "";
@@ -535,16 +531,6 @@
       }
       const data = await res.json();
       const uu = data.unlimited || {};
-      if (elA) {
-        elA.textContent =
-          ti("settings.usageActiveTreatments", "Active treatments") +
-          ": " +
-          formatUsageLineSettings(
-            data.usage && data.usage.active_treatments,
-            data.limits && data.limits.active_treatments,
-            uu.active_treatments === true
-          );
-      }
       if (elU) {
         elU.textContent =
           ti("settings.usageMonthlyUploads", "Monthly uploads") +
