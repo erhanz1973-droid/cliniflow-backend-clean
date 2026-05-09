@@ -1,5 +1,13 @@
 console.log("🚀 STRIPE VERSION DEPLOYED");
 
+/** True when this process should use production security and behavior.
+ *  Railway often omits NODE_ENV; it sets RAILWAY_ENVIRONMENT=production instead. */
+function cliniflowProductionRuntime() {
+  const node = String(process.env.NODE_ENV || "").toLowerCase();
+  const rail = String(process.env.RAILWAY_ENVIRONMENT || "").toLowerCase();
+  return node === "production" || rail === "production";
+}
+
 process.on("unhandledRejection", (reason) => {
   const msg =
     reason && typeof reason === "object" && reason.stack
@@ -11,7 +19,7 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (err) => {
   console.error("[PROCESS] uncaughtException", err && err.stack ? err.stack : err);
-  if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+  if (cliniflowProductionRuntime()) {
     process.exit(1);
   }
 });
@@ -387,12 +395,14 @@ function resolveListenPort() {
 const PORT = resolveListenPort();
 console.log("[STARTUP] effective PORT =", PORT, "from env =", process.env.PORT != null ? String(process.env.PORT) : "(unset)");
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
-const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+const IS_PROD = cliniflowProductionRuntime();
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
   if (IS_PROD) {
-    throw new Error("JWT_SECRET (min 8 characters) is required when NODE_ENV=production");
+    throw new Error(
+      "JWT_SECRET (min 8 characters) is required in production (NODE_ENV=production and/or RAILWAY_ENVIRONMENT=production)"
+    );
   }
   console.warn("[SECURITY] JWT_SECRET missing or too short — set in .env for non-dev use");
   return "dev-only-jwt-secret-min-8-chars";
@@ -3640,7 +3650,7 @@ const SUPER_ADMIN_JWT_SECRET = (() => {
   if (s.length >= 8) return s;
   if (IS_PROD) {
     throw new Error(
-      "SUPER_ADMIN_JWT_SECRET or SUPERADMIN_JWT_SECRET (min 8 chars) is required when NODE_ENV=production",
+      "SUPER_ADMIN_JWT_SECRET or SUPERADMIN_JWT_SECRET (min 8 chars) is required in production (NODE_ENV and/or RAILWAY_ENVIRONMENT)",
     );
   }
   return "dev-super-admin-jwt-min-8-chars";
@@ -30114,7 +30124,7 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     logAI('error', 'analyze_exception', {
       patientId: req.patientUuid || req.body?.patientId,
       message:   err?.message,
-      stack:     process.env.NODE_ENV !== 'production' ? err?.stack : undefined,
+      stack:     !IS_PROD ? err?.stack : undefined,
       elapsedMs: Date.now() - _t0,
     });
     return res.status(500).json({ ok: false, error: err?.message || 'ai_analyze_exception', message: err?.message || 'Server error' });
@@ -53698,7 +53708,9 @@ console.log("[STARTUP] http.Server.listen", {
   pid: process.pid,
   node: process.version,
   cwd: process.cwd(),
-  env: process.env.NODE_ENV || "(unset)",
+  NODE_ENV: process.env.NODE_ENV || "(unset)",
+  RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT || "(unset)",
+  IS_PROD,
 });
 
 server.listen(PORT, "0.0.0.0", () => {
