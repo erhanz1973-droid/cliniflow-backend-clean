@@ -214,7 +214,6 @@
       <form id="clinicForm">
         <label data-i18n="settings.subscriptionPlan">Abonelik Paketi</label>
         <div id="currentPlanReadonly">Mevcut Plan: —</div>
-        <div id="usageMonthlyUploads" class="muted"></div>
         <div id="usageReferrals" class="muted"></div>
         <div id="usagePatients" class="muted"></div>
         <div id="usagePeriodNote" class="muted" style="margin-top:6px;display:none;"></div>
@@ -504,13 +503,11 @@
     return n + " / " + formatLimitSettings(l, unlimitedFlag);
   }
   async function loadSubscriptionUsage(token) {
-    const elU = $("usageMonthlyUploads");
     const elR = $("usageReferrals");
     const elPat = $("usagePatients");
     const elPeriod = $("usagePeriodNote");
     const elFresh = $("usageFreshnessNote");
     const loading = ti("settings.usageLoading", "…");
-    if (elU) elU.textContent = ti("settings.usageMonthlyUploads", "Monthly uploads") + ": " + loading;
     if (elR) elR.textContent = ti("settings.usageReferrals", "Referral invites (this UTC month)") + ": " + loading;
     if (elPat) elPat.textContent = ti("settings.usagePatients", "Patients on roster") + ": " + loading;
     if (elPeriod) {
@@ -524,23 +521,12 @@
       });
       if (!res.ok) {
         if (handle401(res.status)) return;
-        if (elU) elU.textContent = "";
         if (elR) elR.textContent = "";
         if (elPat) elPat.textContent = "";
         return;
       }
       const data = await res.json();
       const uu = data.unlimited || {};
-      if (elU) {
-        elU.textContent =
-          ti("settings.usageMonthlyUploads", "Monthly uploads") +
-          ": " +
-          formatUsageLineSettings(
-            data.usage && data.usage.monthly_uploads,
-            data.limits && data.limits.monthly_uploads,
-            uu.monthly_uploads === true
-          );
-      }
       if (elR) {
         elR.textContent =
           ti("settings.usageReferrals", "Referral invites (this UTC month)") +
@@ -573,10 +559,8 @@
       }
     } catch (e) {
       console.warn("[subscription usage]", e);
-      if (elA) elA.textContent = ti("settings.usageLoadFailed", "Usage unavailable");
-      if (elU) elU.textContent = "";
-      if (elR) elR.textContent = "";
-      if (elPat) elPat.textContent = "";
+      if (elR) elR.textContent = ti("settings.usageLoadFailed", "Usage unavailable");
+      if (elPat) elPat.textContent = ti("settings.usageLoadFailed", "Usage unavailable");
     }
   }
   /** Matches backend lib/cityCodes.normalizeCity — lowercase ASCII slug for city_code. */

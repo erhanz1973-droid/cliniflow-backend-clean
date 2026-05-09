@@ -754,7 +754,6 @@
     const tierLimits = limits[plan] || limits.free || PLAN_USAGE_DEFAULT_LIMITS.free;
 
     const rows = [
-      { key: "uploads", label: t("dashboard.monthlyUploads"), used: usage.uploads, limit: tierLimits.uploads },
       { key: "referrals", label: t("dashboard.referralInvites"), used: usage.referrals, limit: tierLimits.referrals },
       { key: "patients", label: t("dashboard.patientRoster"), used: usage.patients, limit: tierLimits.patients },
     ];
@@ -790,13 +789,11 @@
       rows
         .map(function (r) {
           var vid =
-            r.key === "uploads"
-              ? "uploads"
-              : r.key === "referrals"
-                ? "referrals"
-                : r.key === "patients"
-                  ? "patientRoster"
-                  : "";
+            r.key === "referrals"
+              ? "referrals"
+              : r.key === "patients"
+                ? "patientRoster"
+                : "";
           return (
             '<div class="plan-row">' +
             '<span class="plan-row-label">' +
@@ -853,23 +850,13 @@
     if (!data) return;
     var uu = data.unlimited || {};
     var planKey = String(data.plan || "").trim().toUpperCase();
-    var saasAllUncapped =
-      uu.active_treatments === true &&
-      uu.monthly_uploads === true &&
-      uu.referrals === true;
+    var saasAllUncapped = uu.referrals === true && uu.patients === true;
     var hideUpgradeCta = planKey === "PRO" || saasAllUncapped;
     setPlanUpgradeVisible(!hideUpgradeCta);
     var planEl = document.getElementById("planName");
     if (planEl && data.plan != null) {
       planEl.textContent = String(data.plan).toUpperCase();
     }
-    var elU = document.getElementById("uploads");
-    if (elU)
-      elU.textContent = formatUsage(
-        data.usage && data.usage.monthly_uploads,
-        data.limits && data.limits.monthly_uploads,
-        uu.monthly_uploads === true
-      );
     var elR = document.getElementById("referrals");
     if (elR)
       elR.textContent = formatUsage(
@@ -910,14 +897,6 @@
       var capPt = planUsageFiniteCap(data.limits && data.limits.patients, uu.patients === true);
       var usePt = data.usage && data.usage.patients;
       if (capPt != null && Number(usePt) >= capPt * 0.8) {
-        showUpgradeBanner();
-      }
-      var capUp = planUsageFiniteCap(
-        data.limits && data.limits.monthly_uploads,
-        uu.monthly_uploads === true
-      );
-      var useUp = data.usage && data.usage.monthly_uploads;
-      if (capUp != null && Number(useUp) >= capUp * 0.8) {
         showUpgradeBanner();
       }
       var capRf = planUsageFiniteCap(data.limits && data.limits.referrals, uu.referrals === true);

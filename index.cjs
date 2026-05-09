@@ -327,6 +327,7 @@ const {
   deleteAdminToken: deleteAdminTokenFromDB,
   createReferral: createReferralInDB,
   getReferralsByClinic: getReferralsByClinicFromDB,
+  fetchReferralsRawForAdminClinic,
   enrichReferralRowsWithPatientNames,
   savePushSubscription,
   getPushSubscriptionsByPatient,
@@ -11421,7 +11422,7 @@ async function buildClinicUsagePayload(req, snapshot, { countPatients } = {}) {
     /** When this JSON was assembled (UTC). Distinct from billing cache TTL inside getBillingSnapshot. */
     last_updated_at: new Date().toISOString(),
     note:
-      "usage.patients = roster count (non-lead); limits.patients = roster cap from clinic/plan. monthly_uploads and referrals are counted for the UTC calendar month in period. usage.active_treatments is a relational aggregate (treatments / encounter_treatments / patient_treatments fallback) and does not reflect patients.treatments JSON chart state; it is omitted from the admin dashboard until a single treatment lifecycle source exists.",
+      "usage.patients = roster count (non-lead); limits.patients = roster cap from clinic/plan. usage.monthly_uploads / limits.monthly_uploads remain populated for compatibility and server-side enforcement but are not shown as admin dashboard KPIs until upload semantics are canonical (multiple pipelines). usage.referrals = non-deleted referral rows with created_at in the current UTC month, same scope as GET /api/admin/referrals (fetchReferralsRawForAdminClinic); invite rows created in that window, not accepted-only counts. usage.active_treatments is omitted from the admin dashboard until a single treatment lifecycle exists.",
   };
   if (snapshot.usage_debug != null) body.usage_debug = snapshot.usage_debug;
   return body;
@@ -32132,117 +32133,15 @@ app.get("/api/admin/referrals", requireAdminAuth, async (req, res) => {
       return res.json({ ok: true, items, source: "file" });
     };
 
-    // SUPABASE: Primary source of truth
+    // SUPABASE: Primary source of truth (same row set as SaaS referral invites metric)
     if (isSupabaseEnabled()) {
       try {
-        let items = (await getReferralsByClinicFromDB(clinicId, clinicCode)) || [];
+        let items = (await fetchReferralsRawForAdminClinic(clinicId, clinicCode)) || [];
 
-        if (items.length === 0) {
-          let clinicPatients = [];
-          if (clinicId) {
-            clinicPatients = await getPatientsByClinic(clinicId, { includeLeads: true });
-          }
-          if ((!clinicPatients || clinicPatients.length === 0) && clinicCode) {
-            try {
-              const { data, error } = await supabase
-                .from("patients")
-                .select("id, patient_id, clinic_id, clinic_code")
-                .eq("clinic_code", String(clinicCode).toUpperCase());
-              if (error) {
-                if (!isMissingColumnError(error, "clinic_code")) {
-                  console.error("[REFERRALS] Supabase patient clinic_code lookup failed", {
-                    message: error.message,
-                    code: error.code,
-                    details: error.details,
-                  });
-                }
-              } else if (Array.isArray(data)) {
-                clinicPatients = data;
-              }
-            } catch (e) {
+        const saasUsageReferrals = require("./lib/saasUsage.cjs");
+        const usagePeriod = saasUsageReferrals.currentUtcMonthRange();
+        const referralInvitesThisUtcMonth = saasUsageReferrals.countReferralInviteRowsInUtcMonth(items, usagePeriod);
 
-            }
-          }
-
-          const patientIds = (clinicPatients || [])
-            .map((p) => p.patient_id || p.id)
-            .filter(Boolean);
-          if (patientIds.length > 0) {
-            const idsClause = patientIds.join(",");
-            const { data: altData, error: altError } = await supabase
-              .from("referrals")
-              .select("*")
-              .or(`inviter_patient_id.in.(${idsClause}),invited_patient_id.in.(${idsClause})`)
-              .order("created_at", { ascending: false });
-            if (!altError) {
-              items = altData || [];
-            }
-          }
-        }
-
-        if (items.length === 0) {
-          // Last-resort fallback: fetch referrals without clinic filter and
-          // filter by patient clinic_id (covers referrals missing clinic_id).
-          let q = supabase.from("referrals").select("*");
-          if (status) {
-            const raw = String(status || "").toUpperCase();
-            const rawStatuses =
-              raw === "PENDING"
-                ? ["invited", "registered", "pending"]
-                : raw === "APPROVED"
-                  ? ["approved", "completed"]
-                  : raw === "REJECTED"
-                    ? ["rejected", "cancelled"]
-                    : raw === "USED"
-                      ? ["used"]
-                      : [];
-            if (rawStatuses.length > 0) {
-              q = q.in("status", rawStatuses);
-            }
-          }
-          const { data: allReferrals, error: allErr } = await q.order("created_at", { ascending: false });
-          if (!allErr && Array.isArray(allReferrals) && allReferrals.length > 0) {
-            const ids = new Set();
-            allReferrals.forEach((r) => {
-              const inviter = r.inviter_patient_id || r.referrer_patient_id;
-              const invited = r.invited_patient_id || r.referred_patient_id;
-              if (inviter) ids.add(inviter);
-              if (invited) ids.add(invited);
-            });
-            const idList = Array.from(ids);
-            let patientClinicMap = new Map();
-            if (idList.length > 0) {
-              const idsClause = idList.join(",");
-              const { data: patientRows, error: patientErr } = await supabase
-                .from("patients")
-                .select("id, patient_id, clinic_id")
-                .or(`id.in.(${idsClause}),patient_id.in.(${idsClause})`);
-              if (!patientErr && Array.isArray(patientRows)) {
-                patientRows.forEach((p) => {
-                  if (p?.id) patientClinicMap.set(String(p.id), p.clinic_id || null);
-                  if (p?.patient_id) patientClinicMap.set(String(p.patient_id), p.clinic_id || null);
-                });
-              } else if (patientErr && !isMissingColumnError(patientErr, "patient_id")) {
-                console.error("[REFERRALS] Supabase patient lookup failed (fallback)", {
-                  message: patientErr.message,
-                  code: patientErr.code,
-                  details: patientErr.details,
-                });
-              }
-            }
-
-            items = allReferrals.filter((r) => {
-              if (!r) return false;
-              if (clinicId && r.clinic_id && r.clinic_id === clinicId) return true;
-              const inviter = r.inviter_patient_id || r.referrer_patient_id;
-              const invited = r.invited_patient_id || r.referred_patient_id;
-              const inviterClinic = inviter ? patientClinicMap.get(String(inviter)) : null;
-              const invitedClinic = invited ? patientClinicMap.get(String(invited)) : null;
-              return Boolean(clinicId && (inviterClinic === clinicId || invitedClinic === clinicId));
-            });
-          }
-        }
-        
         // Normalize to legacy shape for frontend
         items = items.map(mapReferralRowToLegacyItem).filter(Boolean);
 
@@ -32254,14 +32153,20 @@ app.get("/api/admin/referrals", requireAdminAuth, async (req, res) => {
         // Exclude soft-deleted referrals
         items = items.filter((r) => !r.deleted_at);
         
-        // Sort by created date (newest first)
-        items.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        // Sort by created date (newest first) — legacy items expose createdAt (ms)
+        items.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
         
 
         if (items.length === 0) {
           return respondFromFile();
         }
-        return res.json({ ok: true, items, source: "supabase" });
+        return res.json({
+          ok: true,
+          items,
+          source: "supabase",
+          usagePeriod,
+          referralInvitesThisUtcMonth,
+        });
       } catch (supabaseError) {
 
         // Fall through to file-based

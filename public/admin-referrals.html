@@ -85,7 +85,11 @@
     <!-- Stats -->
     <div class="stats-row" id="statsRow">
       <div class="stat-card"><div class="stat-label">Total Referrers</div><div class="stat-value" id="statReferrers">—</div></div>
-      <div class="stat-card"><div class="stat-label">Total Invited</div><div class="stat-value" id="statInvited">—</div></div>
+      <div class="stat-card" title="Same count as Plan &amp; usage → Referral invites (billing / SaaS)">
+        <div class="stat-label">Invited this UTC month</div>
+        <div class="stat-value" id="statInvitedUtcMonth">—</div>
+      </div>
+      <div class="stat-card"><div class="stat-label">Total Invited (all time)</div><div class="stat-value" id="statInvited">—</div></div>
       <div class="stat-card"><div class="stat-label">Registered</div><div class="stat-value" id="statRegistered">—</div></div>
       <div class="stat-card"><div class="stat-label">Treated</div><div class="stat-value" id="statTreated">—</div></div>
       <div class="stat-card"><div class="stat-label">Bekleyen onay</div><div class="stat-value" id="statPending">—</div></div>
@@ -289,6 +293,8 @@
         tbody.innerHTML = '<tr class="loading-row"><td colspan="5" style="color:#f87171;">Session expired. Please log in again.</td></tr>';
         renderPendingRows([], pendingBody, true);
         document.getElementById("statPending").textContent = "—";
+        var elUtc2 = document.getElementById("statInvitedUtcMonth");
+        if (elUtc2) elUtc2.textContent = "—";
         return;
       }
       const json = await r.json();
@@ -297,6 +303,8 @@
       tbody.innerHTML = `<tr class="loading-row"><td colspan="5" style="color:#f87171;">Error: ${e.message}</td></tr>`;
       pendingBody.innerHTML = `<tr class="loading-row"><td colspan="6" style="color:#f87171;">Hata: ${escHtml(e.message)}</td></tr>`;
       document.getElementById("statPending").textContent = "—";
+      var elUtcErr = document.getElementById("statInvitedUtcMonth");
+      if (elUtcErr) elUtcErr.textContent = "—";
       return;
     }
 
