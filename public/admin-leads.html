@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605098"></script>
-  <script src="/admin-i18n.js?v=32"></script>
+  <script src="/admin-i18n.js?v=33"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title data-i18n="leads.documentTitle">Lead management — Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css"/>
@@ -41,6 +41,9 @@
     button.danger { background: #7f1d1d; border-color: #991b1b; cursor: pointer; color: #fecaca; }
     button.ghost { background: transparent; border-color: var(--b); cursor: pointer; color: #93c5fd; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .toolbar-auto { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+    .toolbar-auto button.secondary { background: #374151; border-color: #4b5563; color: #e5e7eb; }
+    #autoProgress { color: #93c5fd; font-size: 0.85rem; min-height: 1.2em; }
     .table-scroll { overflow-x: auto; border: 1px solid var(--b); border-radius: 12px; }
     table { width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 920px; }
     th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--b); vertical-align: top; }
@@ -70,6 +73,11 @@
     <h1 data-i18n="leads.pageTitle">Lead inbox</h1>
     <p class="sub" data-i18n="leads.subtitle">Primary responder per thread; clinic team can still view threads in Messages.</p>
 
+    <div class="toolbar-auto">
+      <button type="button" class="primary" id="btnAutoAssignAll" data-i18n="leads.autoAssignAll">Auto-assign all unassigned</button>
+      <button type="button" class="secondary" id="btnAutoAssignSelected" data-i18n="leads.autoAssignSelected">Auto-assign selected</button>
+    </div>
+    <div id="autoProgress" aria-live="polite"></div>
     <div class="row">
       <label class="chk">
         <input type="checkbox" id="showAssigned" />
@@ -85,6 +93,7 @@
       <table>
         <thead>
           <tr>
+            <th style="width:36px;"><input type="checkbox" id="selectAllLeads" /></th>
             <th data-i18n="leads.thPatient">Patient</th>
             <th data-i18n="leads.thContact">Contact</th>
             <th data-i18n="leads.thPreview">Last message</th>
@@ -165,13 +174,83 @@
       return "";
     }
 
+    function doctorDisplayForDistribution(doctorId) {
+      const id = String(doctorId || "").trim();
+      const row = doctors.find((d) => String(d.id || "") === id);
+      return (row && String(row.name || row.email || "").trim()) || id.slice(0, 8) + "…";
+    }
+
+    function setAutoAssignBusy(busy) {
+      ["btnAutoAssignAll", "btnAutoAssignSelected", "refresh"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !!busy;
+      });
+      const sa = document.getElementById("selectAllLeads");
+      if (sa) sa.disabled = !!busy;
+      document.querySelectorAll("input.lead-select").forEach((cb) => {
+        cb.disabled = !!busy;
+      });
+      document.querySelectorAll("#tbody button").forEach((b) => {
+        b.disabled = !!busy;
+      });
+      document.querySelectorAll("#tbody select").forEach((s) => {
+        s.disabled = !!busy;
+      });
+    }
+
+    async function runAutoAssign(body) {
+      document.getElementById("error").textContent = "";
+      document.getElementById("success").textContent = "";
+      document.getElementById("autoProgress").textContent = t("leads.autoAssignRunning");
+      setAutoAssignBusy(true);
+      try {
+        const res = await fetch(API_BASE + "/api/admin/auto-assign-leads", {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify(body),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) {
+          throw new Error(j.message || j.error || t("leads.errLoad"));
+        }
+        let okMsg =
+          t("leads.autoAssignDone", {
+            assigned: String(j.assigned != null ? j.assigned : 0),
+            skipped: String(j.skipped != null ? j.skipped : 0),
+            failed: String(j.failed != null ? j.failed : 0),
+          }) || "";
+        if (Array.isArray(j.distribution) && j.distribution.length) {
+          const distStr = j.distribution
+            .map((d) => doctorDisplayForDistribution(d.doctorId) + ": " + String(d.count))
+            .join(", ");
+          okMsg += " " + t("leads.autoAssignDistributionPrefix") + " " + distStr;
+        }
+        document.getElementById("success").textContent = okMsg.trim();
+        const failedN = Number(j.failed) || 0;
+        if (failedN > 0 && Array.isArray(j.failedDetails) && j.failedDetails.length) {
+          const snippet = j.failedDetails
+            .slice(0, 6)
+            .map((x) => String(x.patientId || "").slice(0, 8) + "…: " + String(x.error || ""))
+            .join("; ");
+          document.getElementById("error").textContent =
+            t("leads.autoAssignPartialFail") + " " + snippet;
+        }
+        await refresh();
+      } catch (e) {
+        document.getElementById("error").textContent = String(e.message || e);
+      } finally {
+        document.getElementById("autoProgress").textContent = "";
+        setAutoAssignBusy(false);
+      }
+    }
+
     function render(messages) {
       const tbody = document.getElementById("tbody");
       tbody.innerHTML = "";
       if (!messages.length) {
         const tr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = 7;
+        td.colSpan = 8;
         td.textContent = t("leads.empty");
         td.style.color = "#9ca3af";
         tr.appendChild(td);
@@ -189,6 +268,15 @@
         const isAssigned = !!m.assignedDoctorId;
         const lastAct = m.updatedAt || m.assignedAt || m.createdAt || null;
         const st = String(m.status || "—");
+
+        const checkCell = document.createElement("td");
+        if (!isAssigned) {
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.className = "lead-select";
+          cb.setAttribute("data-patient-id", pid);
+          checkCell.appendChild(cb);
+        }
 
         const patientCell = document.createElement("td");
         patientCell.innerHTML =
@@ -305,6 +393,7 @@
 
         actionsCell.appendChild(stack);
 
+        tr.appendChild(checkCell);
         tr.appendChild(patientCell);
         tr.appendChild(contactCell);
         tr.appendChild(previewCell);
@@ -325,6 +414,16 @@
         const messages = await loadThreads();
         render(messages);
         el.textContent = t("leads.statusUnassigned", { count: String(messages.length) });
+        const selAll = document.getElementById("selectAllLeads");
+        if (selAll) {
+          selAll.checked = false;
+          selAll.title = t("leads.selectAllUnassignedTitle");
+          selAll.onclick = () => {
+            document.querySelectorAll("input.lead-select").forEach((cb) => {
+              cb.checked = selAll.checked;
+            });
+          };
+        }
       } catch (e) {
         el.textContent = "";
         document.getElementById("error").textContent = String(e.message || e);
@@ -333,6 +432,22 @@
 
     document.getElementById("refresh").addEventListener("click", refresh);
     document.getElementById("showAssigned").addEventListener("change", refresh);
+
+    document.getElementById("btnAutoAssignAll").addEventListener("click", async () => {
+      if (!confirm(t("leads.autoAssignAllConfirm"))) return;
+      await runAutoAssign({ assignAllUnassigned: true });
+    });
+    document.getElementById("btnAutoAssignSelected").addEventListener("click", async () => {
+      const ids = [...document.querySelectorAll("input.lead-select:checked")].map((cb) =>
+        String(cb.getAttribute("data-patient-id") || "").trim()
+      ).filter(Boolean);
+      if (!ids.length) {
+        document.getElementById("error").textContent = t("leads.autoAssignNoneSelected");
+        return;
+      }
+      await runAutoAssign({ patientIds: ids });
+    });
+
     refresh();
   </script>
   <script src="/admin-layout.js?v=202605082"></script>

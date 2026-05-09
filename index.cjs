@@ -13033,6 +13033,241 @@ app.post("/api/admin/unassign-lead", requireAdminAuth, async (req, res) => {
   }
 });
 
+/**
+ * Single lead thread: status unassigned + is_lead + no assigned_doctor_id → assign doctor (admin bulk).
+ */
+async function adminTryAssignUnassignedLeadThread(clinicId, patientId, doctorUuid) {
+  const pid = String(patientId || "").trim();
+  const cid = String(clinicId || "").trim();
+  const doc = String(doctorUuid || "").trim();
+  if (!UUID_RE.test(pid) || !UUID_RE.test(cid) || !DOCTOR_FK_UUID_RE.test(doc)) {
+    return { ok: false, error: "invalid_ids" };
+  }
+  const assignedAtIso = new Date().toISOString();
+  const upd = {
+    status: "assigned",
+    assigned_doctor_id: doc,
+    assigned_at: assignedAtIso,
+    updated_at: assignedAtIso,
+  };
+  let { data: updated, error: upErr } = await supabase
+    .from("patient_chat_threads")
+    .update(upd)
+    .eq("patient_id", pid)
+    .eq("clinic_id", cid)
+    .eq("is_lead", true)
+    .eq("status", "unassigned")
+    .is("assigned_doctor_id", null)
+    .select("id, patient_id, assigned_doctor_id, status, assigned_at")
+    .maybeSingle();
+
+  if (upErr) {
+    if (isPatientChatThreadsTableUnavailable(upErr)) {
+      const fb = await assignDoctorToLeadPatientRowFallback(pid, cid, doc, assignedAtIso);
+      if (fb.ok) {
+        await patchPatientAssignmentPointersSticky(pid, doc);
+        return { ok: true, threadId: null, mode: "patients_fallback" };
+      }
+      return { ok: false, error: "patient_chat_threads_unavailable" };
+    }
+    return { ok: false, error: String(upErr.message || "update_failed") };
+  }
+  if (!updated?.id) {
+    return { ok: false, error: "no_unassigned_thread" };
+  }
+  await patchPatientAssignmentPointersSticky(pid, doc);
+  return { ok: true, threadId: updated.id };
+}
+
+/** Deterministic pick: min lead count, then oldest last assignment (lower ms), then doctor id. */
+function pickDoctorForBalancedLeadAssign(eligibleSortedIds, leadCount, lastAssignMs) {
+  let best = null;
+  let bestKey = null;
+  for (const id of eligibleSortedIds) {
+    const c = leadCount.get(id) || 0;
+    const t = lastAssignMs.has(id) ? lastAssignMs.get(id) : 0;
+    const key = [c, t, id];
+    if (
+      !bestKey ||
+      key[0] < bestKey[0] ||
+      (key[0] === bestKey[0] && key[1] < bestKey[1]) ||
+      (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] < bestKey[2])
+    ) {
+      best = id;
+      bestKey = key;
+    }
+  }
+  return best;
+}
+
+/**
+ * POST /api/admin/auto-assign-leads — balance unassigned lead threads across eligible clinic doctors (deterministic).
+ * Body: { assignAllUnassigned?: true, patientIds?: string[] } — clinicId from JWT only (optional body.clinicId must match).
+ */
+app.post("/api/admin/auto-assign-leads", requireAdminAuth, async (req, res) => {
+  try {
+    const clinicId = String(req.clinicId || "").trim();
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.status(400).json({ ok: false, error: "clinic_missing" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const body = req.body || {};
+    const bodyClinic = body.clinicId != null ? String(body.clinicId).trim() : "";
+    if (bodyClinic && bodyClinic !== clinicId) {
+      return res.status(403).json({ ok: false, error: "clinic_mismatch" });
+    }
+    const assignAll = body.assignAllUnassigned === true || body.assignAllUnassigned === "true" || body.assignAll === true;
+    const rawPatientIds = Array.isArray(body.patientIds) ? body.patientIds : [];
+    const patientIdSet = new Set(
+      rawPatientIds.map((x) => String(x || "").trim()).filter((id) => UUID_RE.test(id))
+    );
+
+    if (!assignAll && patientIdSet.size === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "patientIds_or_assignAllUnassigned_required",
+      });
+    }
+
+    const skippedList = [];
+    const failedList = [];
+
+    const eligibleRows = await listEligibleDoctorsForInboundAssignment(clinicId);
+    const eligibleSortedIds = [...new Set(eligibleRows.map((r) => String(r?.id || "").trim()).filter((id) => DOCTOR_FK_UUID_RE.test(id)))].sort((a, b) => a.localeCompare(b));
+
+    if (!eligibleSortedIds.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "no_eligible_doctors",
+        message:
+          "No APPROVED/ACTIVE doctors in this clinic with messaging access (same rules as manual assign).",
+        assigned: 0,
+        skipped: 0,
+        failed: 0,
+        distribution: [],
+      });
+    }
+
+    let queuePatientIds = [];
+    if (assignAll) {
+      const { data: rows, error: qErr } = await supabase
+        .from("patient_chat_threads")
+        .select("patient_id, created_at, updated_at")
+        .eq("clinic_id", clinicId)
+        .eq("is_lead", true)
+        .eq("status", "unassigned")
+        .is("assigned_doctor_id", null)
+        .order("created_at", { ascending: true })
+        .limit(800);
+      if (qErr) {
+        console.warn("[ADMIN auto-assign-leads] queue:", qErr.message || qErr);
+        return res.status(500).json({ ok: false, error: "fetch_queue_failed" });
+      }
+      queuePatientIds = (rows || [])
+        .map((r) => String(r?.patient_id || "").trim())
+        .filter((id) => UUID_RE.test(id));
+    } else {
+      const { data: rows, error: qErr } = await supabase
+        .from("patient_chat_threads")
+        .select("patient_id, created_at")
+        .eq("clinic_id", clinicId)
+        .eq("is_lead", true)
+        .eq("status", "unassigned")
+        .is("assigned_doctor_id", null)
+        .in("patient_id", [...patientIdSet])
+        .order("created_at", { ascending: true })
+        .limit(800);
+      if (qErr) {
+        console.warn("[ADMIN auto-assign-leads] queue selected:", qErr.message || qErr);
+        return res.status(500).json({ ok: false, error: "fetch_queue_failed" });
+      }
+      queuePatientIds = (rows || [])
+        .map((r) => String(r?.patient_id || "").trim())
+        .filter((id) => UUID_RE.test(id));
+      const queuedSet = new Set(queuePatientIds);
+      for (const id of patientIdSet) {
+        if (!queuedSet.has(id)) {
+          skippedList.push({ patientId: id, reason: "not_eligible_unassigned_in_clinic" });
+        }
+      }
+    }
+
+    const leadCount = new Map();
+    const lastAssignMs = new Map();
+    for (const id of eligibleSortedIds) {
+      leadCount.set(id, 0);
+    }
+
+    const { data: existing, error: exErr } = await supabase
+      .from("patient_chat_threads")
+      .select("assigned_doctor_id, assigned_at")
+      .eq("clinic_id", clinicId)
+      .eq("is_lead", true)
+      .not("assigned_doctor_id", "is", null)
+      .limit(8000);
+
+    const eligibleSet = new Set(eligibleSortedIds);
+    if (!exErr && Array.isArray(existing)) {
+      for (const row of existing) {
+        const dr = row?.assigned_doctor_id != null ? String(row.assigned_doctor_id).trim() : "";
+        if (!dr || !eligibleSet.has(dr)) continue;
+        leadCount.set(dr, (leadCount.get(dr) || 0) + 1);
+        const ms = row?.assigned_at ? new Date(row.assigned_at).getTime() : 0;
+        const prev = lastAssignMs.get(dr);
+        if (prev == null || ms > prev) lastAssignMs.set(dr, ms);
+      }
+    }
+
+    const distribution = new Map();
+    let assigned = 0;
+    let failed = 0;
+
+    for (const pid of queuePatientIds) {
+      const chosen = pickDoctorForBalancedLeadAssign(eligibleSortedIds, leadCount, lastAssignMs);
+      if (!chosen) {
+        failed++;
+        failedList.push({ patientId: pid, error: "no_doctor_chosen" });
+        continue;
+      }
+      const r = await adminTryAssignUnassignedLeadThread(clinicId, pid, chosen);
+      if (r.ok) {
+        assigned++;
+        distribution.set(chosen, (distribution.get(chosen) || 0) + 1);
+        leadCount.set(chosen, (leadCount.get(chosen) || 0) + 1);
+        const nowMs = Date.now();
+        lastAssignMs.set(chosen, nowMs);
+      } else if (r.error === "no_unassigned_thread") {
+        skippedList.push({ patientId: pid, reason: "not_unassigned_lead_or_missing_thread" });
+      } else {
+        failed++;
+        failedList.push({ patientId: pid, error: r.error || "assign_failed" });
+      }
+    }
+
+    const skipped = skippedList.length;
+    const distributionArr = [...distribution.entries()]
+      .map(([doctorId, count]) => ({ doctorId, count }))
+      .sort((a, b) => b.count - a.count || a.doctorId.localeCompare(b.doctorId));
+
+    return res.json({
+      ok: true,
+      assigned,
+      skipped,
+      failed,
+      distribution: distributionArr,
+      skippedDetails: skippedList.slice(0, 80),
+      failedDetails: failedList.slice(0, 80),
+      eligibleDoctorCount: eligibleSortedIds.length,
+      processed: queuePatientIds.length,
+    });
+  } catch (e) {
+    console.error("[ADMIN auto-assign-leads]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 // ⚠️ Admin architecture uses UUID id only.
 // patient_id (string) is legacy and not used in admin logic.
 

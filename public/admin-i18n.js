@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v32');
+  console.log('I18N FILE VERSION:', 'v33');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -953,6 +953,15 @@
         assignedBadgePrefix: "Dr.",
         assignedOk: "Atandı:",
         assignDisabledHint: "Bu lead zaten bir doktora atanmış.",
+        autoAssignAll: "Tüm atanmamışları otomatik ata",
+        autoAssignSelected: "Seçilenleri otomatik ata",
+        autoAssignRunning: "Otomatik atama çalışıyor…",
+        autoAssignDone: "Atanan: {assigned}, atlanan: {skipped}, başarısız: {failed}.",
+        autoAssignDistributionPrefix: "Dağılım:",
+        autoAssignPartialFail: "Bazı atamalar başarısız:",
+        autoAssignAllConfirm: "Bu klinikteki tüm atanmamış lead'leri dengeli dağıtımla otomatik atamak istiyor musunuz?",
+        autoAssignNoneSelected: "En az bir atanmamış lead satırı seçin.",
+        selectAllUnassignedTitle: "Bu sayfadaki atanmamış satırların tümünü seç",
       }
     },
 
@@ -1791,6 +1800,15 @@
         assignedBadgePrefix: "Dr.",
         assignedOk: "Assigned:",
         assignDisabledHint: "This lead already has a primary doctor.",
+        autoAssignAll: "Auto-assign all unassigned",
+        autoAssignSelected: "Auto-assign selected",
+        autoAssignRunning: "Running auto-assign…",
+        autoAssignDone: "Assigned: {assigned}, skipped: {skipped}, failed: {failed}.",
+        autoAssignDistributionPrefix: "Distribution:",
+        autoAssignPartialFail: "Some assignments failed:",
+        autoAssignAllConfirm: "Assign all unassigned leads in this clinic using balanced distribution?",
+        autoAssignNoneSelected: "Select at least one unassigned lead row.",
+        selectAllUnassignedTitle: "Select all unassigned rows on this page",
       },
     },
 
@@ -2389,7 +2407,16 @@
         showAssignedToggle: "Показать назначенные",
         assignedBadgePrefix: "Dr.",
         assignedOk: "Назначено:",
-        assignDisabledHint: "Лид уже назначен."
+        assignDisabledHint: "Лид уже назначен.",
+        autoAssignAll: "Назначить всех без ответственного",
+        autoAssignSelected: "Назначить выбранных",
+        autoAssignRunning: "Автоназначение…",
+        autoAssignDone: "Назначено: {assigned}, пропущено: {skipped}, ошибок: {failed}.",
+        autoAssignDistributionPrefix: "Распределение:",
+        autoAssignPartialFail: "Часть назначений не выполнена:",
+        autoAssignAllConfirm: "Назначить все неназначенные лиды этой клиники с равномерным распределением?",
+        autoAssignNoneSelected: "Выберите хотя бы один неназначенный лид.",
+        selectAllUnassignedTitle: "Выбрать все неназначенные строки на странице",
       }
     },
 
@@ -2988,7 +3015,16 @@
         showAssignedToggle: "დანიშნულების ჩვენება",
         assignedBadgePrefix: "Dr.",
         assignedOk: "დანიშნული:",
-        assignDisabledHint: "ლიდი უკვე დანიშნულია."
+        assignDisabledHint: "ლიდი უკვე დანიშნულია.",
+        autoAssignAll: "ყველა დაუნიშნავის ავტომიბმა",
+        autoAssignSelected: "არჩეულების ავტომიბმა",
+        autoAssignRunning: "ავტომიბმა მიმდინარეობს…",
+        autoAssignDone: "დანიშნული: {assigned}, გამოტოვებული: {skipped}, შეცდომა: {failed}.",
+        autoAssignDistributionPrefix: "განაწილება:",
+        autoAssignPartialFail: "ზოგიერთი მიბმა ვერ მოხერხდა:",
+        autoAssignAllConfirm: "ამ კლინიკის ყველა დაუნიშნავი ლიდი გადანაწილდეს დაბალანსებული წესით?",
+        autoAssignNoneSelected: "აირჩიეთ მინიმუმ ერთი დაუნიშნავი ლიდის სტრიქონი.",
+        selectAllUnassignedTitle: "ამ გვერდის ყველა დაუნიშნავი სტრიქონის არჩევა",
       }
     }
   };
