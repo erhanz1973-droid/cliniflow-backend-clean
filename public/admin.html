@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605098"></script>
-  <script src="/admin-i18n.js?v=30"></script>
+  <script src="/admin-i18n.js?v=31"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
@@ -754,13 +754,20 @@
     const tierLimits = limits[plan] || limits.free || PLAN_USAGE_DEFAULT_LIMITS.free;
 
     const rows = [
-      { key: "referrals", label: t("dashboard.referralInvites"), used: usage.referrals, limit: tierLimits.referrals },
+      {
+        key: "totalReferrers",
+        label: t("dashboard.totalReferrers"),
+        used: usage.totalReferrers,
+        limit: null,
+        countOnly: true,
+      },
       { key: "patients", label: t("dashboard.patientRoster"), used: usage.patients, limit: tierLimits.patients },
     ];
 
     let worst = "ok";
     if (hasUsage) {
       rows.forEach((r) => {
+        if (r.countOnly) return;
         const lv = planUsageRowLevel(r.used, r.limit);
         if (lv === "crit") worst = "crit";
         else if (lv === "warn" && worst !== "crit") worst = "warn";
@@ -789,7 +796,7 @@
       rows
         .map(function (r) {
           var vid =
-            r.key === "referrals"
+            r.key === "totalReferrers"
               ? "referrals"
               : r.key === "patients"
                 ? "patientRoster"
@@ -858,12 +865,11 @@
       planEl.textContent = String(data.plan).toUpperCase();
     }
     var elR = document.getElementById("referrals");
-    if (elR)
-      elR.textContent = formatUsage(
-        data.usage && data.usage.referrals,
-        data.limits && data.limits.referrals,
-        uu.referrals === true
-      );
+    if (elR) {
+      var tr =
+        data.usage && data.usage.total_referrers != null ? Number(data.usage.total_referrers) : NaN;
+      elR.textContent = Number.isFinite(tr) ? String(tr) : "—";
+    }
     var elPR = document.getElementById("patientRoster");
     if (elPR)
       elPR.textContent = formatUsage(

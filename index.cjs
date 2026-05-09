@@ -11409,6 +11409,7 @@ async function buildClinicUsagePayload(req, snapshot, { countPatients } = {}) {
       active_treatments: use.activeTreatments,
       monthly_uploads: use.monthlyUploads,
       referrals: use.referralInvites,
+      total_referrers: use.totalReferrers != null ? use.totalReferrers : 0,
       patients: patientCount,
     },
     unlimited: {
@@ -11422,7 +11423,7 @@ async function buildClinicUsagePayload(req, snapshot, { countPatients } = {}) {
     /** When this JSON was assembled (UTC). Distinct from billing cache TTL inside getBillingSnapshot. */
     last_updated_at: new Date().toISOString(),
     note:
-      "usage.patients = roster count (non-lead); limits.patients = roster cap from clinic/plan. usage.monthly_uploads / limits.monthly_uploads remain populated for compatibility and server-side enforcement but are not shown as admin dashboard KPIs until upload semantics are canonical (multiple pipelines). usage.referrals = non-deleted referral rows with created_at in the current UTC month, same scope as GET /api/admin/referrals (fetchReferralsRawForAdminClinic); invite rows created in that window, not accepted-only counts. usage.active_treatments is omitted from the admin dashboard until a single treatment lifecycle exists.",
+      "usage.patients = roster count (non-lead); limits.patients = roster cap from clinic/plan. usage.monthly_uploads / limits.monthly_uploads remain populated for compatibility and server-side enforcement but are not shown as admin dashboard KPIs until upload semantics are canonical (multiple pipelines). usage.referrals = SaaS quota: non-deleted referral rows created in the current UTC month (same scope as GET /api/admin/referrals). usage.total_referrers = distinct inviter ids on that canonical list (all-time, non-deleted); admin dashboard Plan & usage shows total_referrers (matches referrals page Total Referrers). Near-cap/upgrade still uses monthly usage.referrals vs limits.referrals. usage.active_treatments is omitted from the admin dashboard until a single treatment lifecycle exists.",
   };
   if (snapshot.usage_debug != null) body.usage_debug = snapshot.usage_debug;
   return body;

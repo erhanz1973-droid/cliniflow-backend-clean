@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v27');
+  console.log('I18N FILE VERSION:', 'v31');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -283,6 +283,7 @@
         activeTreatments: "Aktif tedaviler",
         monthlyUploads: "Aylık yüklemeler",
         referralInvites: "Referans davetleri",
+        totalReferrers: "Toplam referans veren",
         patientRoster: "Hasta kaydı (limit)",
         usagePeriodNote: "Aylık kullanım dönemi (UTC): {period}",
         usageFreshness: "Verilerin güncellenme zamanı: {time}",
@@ -1863,6 +1864,7 @@
         activeTreatments: "Активные процедуры",
         monthlyUploads: "Ежемесячные загрузки",
         referralInvites: "Реферальные приглашения",
+        totalReferrers: "Всего рефереров",
         patientRoster: "Пациенты (лимит списка)",
         usagePeriodNote: "Месячное окно использования (UTC): {period}",
         usageFreshness: "Данные на момент: {time}",
@@ -2444,6 +2446,7 @@
         activeTreatments: "აქტიური მკურნალობები",
         monthlyUploads: "თვიური ატვირთვები",
         referralInvites: "რეფერალური მოწვევები",
+        totalReferrers: "რეფერერების სულ",
         patientRoster: "პაციენტები (სიის ლიმიტი)",
         usagePeriodNote: "ყოველთვიური გამოყენების პერიოდი (UTC): {period}",
         usageFreshness: "მონაცემები აქტუალურია: {time}",
