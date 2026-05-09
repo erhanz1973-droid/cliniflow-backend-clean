@@ -2136,6 +2136,46 @@ async function listEligibleDoctorsForInboundAssignment(clinicId) {
   return rows.filter((row) => doctorRowEligibleForInboundAssignment(row, clinicId));
 }
 
+const LEAD_ROUTING_MODES = new Set(["manual_only", "fixed_doctor", "round_robin", "balanced"]);
+
+function normalizeLeadRoutingMode(raw) {
+  const m = String(raw || "").trim().toLowerCase();
+  return LEAD_ROUTING_MODES.has(m) ? m : "manual_only";
+}
+
+async function fetchClinicLeadRoutingSettingsRow(clinicId) {
+  const cid = String(clinicId || "").trim();
+  if (!UUID_RE.test(cid)) return { row: null, unavailable: false };
+  try {
+    const { data, error } = await supabase
+      .from("clinic_lead_routing_settings")
+      .select(
+        "clinic_id, auto_routing_enabled, routing_mode, fixed_doctor_id, round_robin_last_doctor_id, updated_by, updated_at"
+      )
+      .eq("clinic_id", cid)
+      .maybeSingle();
+    if (error) {
+      const msg = String(error.message || "").toLowerCase();
+      const code = String(error.code || "");
+      if (
+        code === "42P01" ||
+        code === "PGRST205" ||
+        (msg.includes("does not exist") && msg.includes("relation")) ||
+        msg.includes("schema cache")
+      ) {
+        return { row: null, unavailable: true };
+      }
+      console.warn("[LEAD ROUTING] fetch settings:", error.message || error);
+      return { row: null, unavailable: false };
+    }
+    return { row: data || null, unavailable: false };
+  } catch (e) {
+    const msg = String(e?.message || e || "").toLowerCase();
+    if (msg.includes("does not exist")) return { row: null, unavailable: true };
+    return { row: null, unavailable: false };
+  }
+}
+
 /**
  * Fair fallback: least-recently-assigned (by latest thread assigned_at per doctor) or random among eligible.
  */
@@ -2251,9 +2291,10 @@ async function patchPatientAssignmentPointersSticky(resolvedPatientId, doctorUui
 }
 
 /**
- * When clinic enables auto-assign: inbound lead routing (sticky → default → weighted fallback).
+ * When a new inbound lead thread is unassigned: optional auto primary responder.
+ * 1) clinic_lead_routing_settings (if a row exists) is authoritative — legacy clinics.settings skipped.
+ * 2) Else legacy clinics.settings (sticky → default → fallback).
  * Claim uses RPC when deployed, else conditional UPDATE assigned_doctor_id IS NULL for race safety.
- * Does nothing if thread already assigned or clinic has auto-assign off (default false).
  */
 async function maybeAutoAssignInboundLeadThread(resolvedPatientId, inboundClinicId, threadId) {
   if (!isSupabaseEnabled() || !resolvedPatientId || !inboundClinicId || !threadId) return;
@@ -2277,6 +2318,9 @@ async function maybeAutoAssignInboundLeadThread(resolvedPatientId, inboundClinic
   if (String(trow.patient_id) !== String(resolvedPatientId)) return;
   if (String(trow.clinic_id || "").trim() !== String(inboundClinicId).trim()) return;
   if (trow.assigned_doctor_id) return;
+
+  const intake = await tryApplyClinicLeadRoutingTableIntake(resolvedPatientId, inboundClinicId, tid);
+  if (!intake.legacy) return;
 
   const { data: crow } = await supabase.from("clinics").select("settings").eq("id", inboundClinicId).maybeSingle();
   const cfg = normalizeClinicInboundAutoAssignSettings(crow?.settings);
@@ -2314,48 +2358,7 @@ async function maybeAutoAssignInboundLeadThread(resolvedPatientId, inboundClinic
 
   if (!chosen) return;
 
-  const assignedAtIso = new Date().toISOString();
-  const updPayload = {
-    status: "assigned",
-    assigned_doctor_id: chosen,
-    assigned_at: assignedAtIso,
-    updated_at: assignedAtIso,
-  };
-
-  const claim = await tryClaimInboundThreadAssignmentAtomic(tid, chosen, assignedAtIso);
-  let claimed = claim.result === "claimed";
-
-  if (claim.result === "skipped_already_assigned") return;
-
-  if (
-    !claimed &&
-    (claim.result === "rpc_unavailable" || claim.result === "rpc_failed")
-  ) {
-    const { data: urows, error: upErr } = await supabase
-      .from("patient_chat_threads")
-      .update(updPayload)
-      .eq("id", tid)
-      .is("assigned_doctor_id", null)
-      .select("id, assigned_doctor_id");
-
-    if (upErr) {
-      console.warn("[MESSAGES] auto_assign thread update:", upErr.message || upErr);
-      return;
-    }
-    claimed = Array.isArray(urows) && Boolean(urows[0]?.id);
-  }
-
-  if (!claimed) return;
-
-  await patchPatientAssignmentPointersSticky(resolvedPatientId, chosen);
-
-  console.log("inbound_auto_assigned_doctor", {
-    thread_id: tid,
-    patient_id: resolvedPatientId,
-    clinic_id: inboundClinicId,
-    assigned_doctor_id: chosen,
-    via,
-  });
+  await finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, chosen, via, inboundClinicId);
 }
 
 /**
@@ -3598,10 +3601,18 @@ async function createLeadFromPublicContact({ clinicCode, name, email, phone, tex
     assigned_doctor_id: null,
     is_lead: true,
   };
-  const { error: tErr } = await insertIntoTableWithColumnPruning("patient_chat_threads", threadPayload, "id");
+  const { data: insThread, error: tErr } = await insertIntoTableWithColumnPruning(
+    "patient_chat_threads",
+    threadPayload,
+    "id"
+  );
   if (tErr) {
     console.warn("[LEAD CONTACT] thread insert failed:", tErr?.message || tErr);
     return { ok: false, status: 500, error: "thread_create_failed" };
+  }
+  const newThreadId = insThread?.id != null ? String(insThread.id).trim() : "";
+  if (newThreadId && UUID_RE.test(newThreadId)) {
+    await maybeAutoAssignInboundLeadThread(internalPatientId, clinicId, newThreadId);
   }
 
   const msgInsert = await insertMessageToSupabase({
@@ -13100,6 +13111,149 @@ function pickDoctorForBalancedLeadAssign(eligibleSortedIds, leadCount, lastAssig
   return best;
 }
 
+async function pickDoctorForLeadRoutingIntake(clinicId, settingsRow, eligibleSortedIds, eligibleSet) {
+  const mode = normalizeLeadRoutingMode(settingsRow?.routing_mode);
+  if (mode === "manual_only") return { doctorId: null, via: null };
+
+  if (mode === "fixed_doctor") {
+    const fixed = settingsRow.fixed_doctor_id != null ? String(settingsRow.fixed_doctor_id).trim() : "";
+    if (!fixed || !DOCTOR_FK_UUID_RE.test(fixed)) return { doctorId: null, via: null };
+    const v = await getEligibleDoctorIdForInboundAssignment(fixed, clinicId);
+    return v ? { doctorId: v, via: "intake_fixed_doctor" } : { doctorId: null, via: null };
+  }
+
+  if (mode === "round_robin") {
+    const list = eligibleSortedIds;
+    if (!list.length) return { doctorId: null, via: null };
+    const last =
+      settingsRow.round_robin_last_doctor_id != null
+        ? String(settingsRow.round_robin_last_doctor_id).trim()
+        : "";
+    let idx = -1;
+    if (last && eligibleSet.has(last)) idx = list.indexOf(last);
+    const nextIdx = (idx + 1) % list.length;
+    return { doctorId: list[nextIdx], via: "intake_round_robin" };
+  }
+
+  if (mode === "balanced") {
+    const leadCount = new Map();
+    const lastAssignMs = new Map();
+    for (const id of eligibleSortedIds) {
+      leadCount.set(id, 0);
+    }
+    const { data: existing, error: exErr } = await supabase
+      .from("patient_chat_threads")
+      .select("assigned_doctor_id, assigned_at")
+      .eq("clinic_id", clinicId)
+      .eq("is_lead", true)
+      .not("assigned_doctor_id", "is", null)
+      .limit(8000);
+    if (!exErr && Array.isArray(existing)) {
+      for (const row of existing) {
+        const dr = row?.assigned_doctor_id != null ? String(row.assigned_doctor_id).trim() : "";
+        if (!dr || !eligibleSet.has(dr)) continue;
+        leadCount.set(dr, (leadCount.get(dr) || 0) + 1);
+        const ms = row?.assigned_at ? new Date(row.assigned_at).getTime() : 0;
+        const prev = lastAssignMs.get(dr);
+        if (prev == null || ms > prev) lastAssignMs.set(dr, ms);
+      }
+    }
+    const chosen = pickDoctorForBalancedLeadAssign(eligibleSortedIds, leadCount, lastAssignMs);
+    return chosen ? { doctorId: chosen, via: "intake_balanced" } : { doctorId: null, via: null };
+  }
+
+  return { doctorId: null, via: null };
+}
+
+/** Atomic claim + patient sticky pointers; returns ok | skipped | failed */
+async function finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, chosen, via, clinicIdForLog = null) {
+  const assignedAtIso = new Date().toISOString();
+  const updPayload = {
+    status: "assigned",
+    assigned_doctor_id: chosen,
+    assigned_at: assignedAtIso,
+    updated_at: assignedAtIso,
+  };
+
+  const claim = await tryClaimInboundThreadAssignmentAtomic(tid, chosen, assignedAtIso);
+  let claimed = claim.result === "claimed";
+
+  if (claim.result === "skipped_already_assigned") return "skipped";
+
+  if (!claimed && (claim.result === "rpc_unavailable" || claim.result === "rpc_failed")) {
+    const { data: urows, error: upErr } = await supabase
+      .from("patient_chat_threads")
+      .update(updPayload)
+      .eq("id", tid)
+      .is("assigned_doctor_id", null)
+      .select("id, assigned_doctor_id");
+
+    if (upErr) {
+      console.warn("[MESSAGES] auto_assign thread update:", upErr.message || upErr);
+      return "failed";
+    }
+    claimed = Array.isArray(urows) && Boolean(urows[0]?.id);
+  }
+
+  if (!claimed) return "failed";
+
+  await patchPatientAssignmentPointersSticky(resolvedPatientId, chosen);
+
+  console.log("inbound_auto_assigned_doctor", {
+    thread_id: tid,
+    patient_id: resolvedPatientId,
+    clinic_id: clinicIdForLog || null,
+    assigned_doctor_id: chosen,
+    via,
+  });
+  return "ok";
+}
+
+/**
+ * clinic_lead_routing_settings row (if present) overrides legacy clinics.settings intake routing.
+ * legacy: true → run normalizeClinicInboundAutoAssignSettings path.
+ */
+async function tryApplyClinicLeadRoutingTableIntake(resolvedPatientId, inboundClinicId, tid) {
+  const { row, unavailable } = await fetchClinicLeadRoutingSettingsRow(inboundClinicId);
+  if (unavailable || !row) return { legacy: true };
+
+  const enabled =
+    row.auto_routing_enabled === true || String(row.auto_routing_enabled || "").toLowerCase() === "true";
+  const mode = normalizeLeadRoutingMode(row.routing_mode);
+  if (!enabled || mode === "manual_only") return { legacy: false };
+
+  const eligibleRows = await listEligibleDoctorsForInboundAssignment(inboundClinicId);
+  const eligibleSortedIds = [
+    ...new Set(
+      eligibleRows.map((r) => String(r?.id || "").trim()).filter((id) => DOCTOR_FK_UUID_RE.test(id))
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+  const eligibleSet = new Set(eligibleSortedIds);
+
+  const pick = await pickDoctorForLeadRoutingIntake(inboundClinicId, row, eligibleSortedIds, eligibleSet);
+  if (!pick.doctorId) return { legacy: false };
+
+  const fin = await finalizeInboundThreadDoctorAssignment(
+    tid,
+    resolvedPatientId,
+    pick.doctorId,
+    pick.via,
+    inboundClinicId
+  );
+  if (fin === "ok" && mode === "round_robin") {
+    const at = new Date().toISOString();
+    const { error: curErr } = await supabase
+      .from("clinic_lead_routing_settings")
+      .update({
+        round_robin_last_doctor_id: pick.doctorId,
+        updated_at: at,
+      })
+      .eq("clinic_id", inboundClinicId);
+    if (curErr) console.warn("[LEAD ROUTING] round_robin cursor update:", curErr.message || curErr);
+  }
+  return { legacy: false };
+}
+
 /**
  * POST /api/admin/auto-assign-leads — balance unassigned lead threads across eligible clinic doctors (deterministic).
  * Body: { assignAllUnassigned?: true, patientIds?: string[] } — clinicId from JWT only (optional body.clinicId must match).
@@ -13264,6 +13418,160 @@ app.post("/api/admin/auto-assign-leads", requireAdminAuth, async (req, res) => {
     });
   } catch (e) {
     console.error("[ADMIN auto-assign-leads]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+app.get("/api/admin/clinic-lead-routing-settings", requireAdminAuth, async (req, res) => {
+  try {
+    const clinicId = String(req.clinicId || "").trim();
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.status(400).json({ ok: false, error: "clinic_missing" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const { row, unavailable } = await fetchClinicLeadRoutingSettingsRow(clinicId);
+    if (unavailable) {
+      return res.status(503).json({
+        ok: false,
+        error: "lead_routing_table_unavailable",
+        message: "clinic_lead_routing_settings migration not applied.",
+      });
+    }
+    if (!row) {
+      return res.json({
+        ok: true,
+        settings: {
+          clinicId,
+          autoRoutingEnabled: false,
+          routingMode: "manual_only",
+          fixedDoctorId: null,
+          roundRobinLastDoctorId: null,
+          updatedBy: null,
+          updatedAt: null,
+        },
+      });
+    }
+    return res.json({
+      ok: true,
+      settings: {
+        clinicId,
+        autoRoutingEnabled: !!row.auto_routing_enabled,
+        routingMode: normalizeLeadRoutingMode(row.routing_mode),
+        fixedDoctorId: row.fixed_doctor_id || null,
+        roundRobinLastDoctorId: row.round_robin_last_doctor_id || null,
+        updatedBy: row.updated_by || null,
+        updatedAt: row.updated_at || null,
+      },
+    });
+  } catch (e) {
+    console.error("[ADMIN clinic-lead-routing-settings GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+app.put("/api/admin/clinic-lead-routing-settings", requireAdminAuth, async (req, res) => {
+  try {
+    const clinicId = String(req.clinicId || "").trim();
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.status(400).json({ ok: false, error: "clinic_missing" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const body = req.body || {};
+    const bodyClinic = body.clinicId != null ? String(body.clinicId).trim() : "";
+    if (bodyClinic && bodyClinic !== clinicId) {
+      return res.status(403).json({ ok: false, error: "clinic_mismatch" });
+    }
+
+    const { unavailable } = await fetchClinicLeadRoutingSettingsRow(clinicId);
+    if (unavailable) {
+      return res.status(503).json({
+        ok: false,
+        error: "lead_routing_table_unavailable",
+        message: "clinic_lead_routing_settings migration not applied.",
+      });
+    }
+
+    const autoRoutingEnabled =
+      body.autoRoutingEnabled === true ||
+      body.autoRoutingEnabled === "true" ||
+      String(body.autoRoutingEnabled || "").toLowerCase() === "true";
+    const routingMode = normalizeLeadRoutingMode(body.routingMode ?? body.routing_mode);
+    let fixedDoctorId =
+      body.fixedDoctorId != null
+        ? String(body.fixedDoctorId).trim()
+        : body.fixed_doctor_id != null
+          ? String(body.fixed_doctor_id).trim()
+          : "";
+    if (!fixedDoctorId || !DOCTOR_FK_UUID_RE.test(fixedDoctorId)) fixedDoctorId = null;
+
+    if (autoRoutingEnabled && routingMode === "fixed_doctor") {
+      if (!fixedDoctorId) {
+        return res.status(400).json({
+          ok: false,
+          error: "fixed_doctor_required",
+          message: "fixedDoctorId is required when routingMode is fixed_doctor.",
+        });
+      }
+      const elig = await getEligibleDoctorIdForInboundAssignment(fixedDoctorId, clinicId);
+      if (!elig) {
+        return res.status(400).json({
+          ok: false,
+          error: "fixed_doctor_not_eligible",
+          message: "Doctor must be APPROVED/ACTIVE in this clinic.",
+        });
+      }
+      fixedDoctorId = elig;
+    } else if (routingMode !== "fixed_doctor") {
+      fixedDoctorId = null;
+    }
+
+    const updatedBy =
+      req.admin && (req.admin.email || req.admin.userId || req.admin.adminId) != null
+        ? String(req.admin.email || req.admin.userId || req.admin.adminId)
+        : null;
+    const updatedAt = new Date().toISOString();
+
+    const upsertRow = {
+      clinic_id: clinicId,
+      auto_routing_enabled: autoRoutingEnabled,
+      routing_mode: routingMode,
+      fixed_doctor_id: fixedDoctorId,
+      updated_by: updatedBy,
+      updated_at: updatedAt,
+    };
+
+    const { data: saved, error: upErr } = await supabase
+      .from("clinic_lead_routing_settings")
+      .upsert(upsertRow, { onConflict: "clinic_id" })
+      .select(
+        "clinic_id, auto_routing_enabled, routing_mode, fixed_doctor_id, round_robin_last_doctor_id, updated_by, updated_at"
+      )
+      .maybeSingle();
+
+    if (upErr) {
+      console.warn("[ADMIN clinic-lead-routing-settings PUT]", upErr.message || upErr);
+      return res.status(500).json({ ok: false, error: "save_failed", detail: String(upErr.message || "") });
+    }
+
+    const r = saved || upsertRow;
+    return res.json({
+      ok: true,
+      settings: {
+        clinicId,
+        autoRoutingEnabled: !!r.auto_routing_enabled,
+        routingMode: normalizeLeadRoutingMode(r.routing_mode),
+        fixedDoctorId: r.fixed_doctor_id || null,
+        roundRobinLastDoctorId: r.round_robin_last_doctor_id || null,
+        updatedBy: r.updated_by || null,
+        updatedAt: r.updated_at || updatedAt,
+      },
+    });
+  } catch (e) {
+    console.error("[ADMIN clinic-lead-routing-settings PUT]", e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });

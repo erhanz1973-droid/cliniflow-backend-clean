@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v33');
+  console.log('I18N FILE VERSION:', 'v34');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -962,6 +962,20 @@
         autoAssignAllConfirm: "Bu klinikteki tüm atanmamış lead'leri dengeli dağıtımla otomatik atamak istiyor musunuz?",
         autoAssignNoneSelected: "En az bir atanmamış lead satırı seçin.",
         selectAllUnassignedTitle: "Bu sayfadaki atanmamış satırların tümünü seç",
+        leadRoutingSectionTitle: "Yeni lead yönlendirme",
+        leadRoutingHelp:
+          "Yalnızca yeni oluşturulan lead iş parçacıkları için geçerlidir. Mevcut iş parçacıklarını veya el ile atamayı değiştirmez.",
+        leadRoutingEnable: "Yeni leadler için otomatik birincil atama açık",
+        leadRoutingMode: "Yönlendirme modu",
+        leadRoutingModeManual: "Yalnızca el ile — atanmadan kalsın",
+        leadRoutingModeFixed: "Sabit doktor",
+        leadRoutingModeRoundRobin: "Round robin (uygun doktorlar)",
+        leadRoutingModeBalanced: "Dengeli (en az atanmış lead)",
+        leadRoutingFixedDoctor: "Sabit doktor",
+        leadRoutingSave: "Yönlendirme ayarlarını kaydet",
+        leadRoutingSaved: "Yönlendirme ayarları kaydedildi.",
+        leadRoutingLoadError: "Yönlendirme ayarları yüklenemedi.",
+        leadRoutingTableMissing: "Veritabanında clinic_lead_routing_settings tablosu yok; migration uygulayın.",
       }
     },
 
@@ -1809,6 +1823,20 @@
         autoAssignAllConfirm: "Assign all unassigned leads in this clinic using balanced distribution?",
         autoAssignNoneSelected: "Select at least one unassigned lead row.",
         selectAllUnassignedTitle: "Select all unassigned rows on this page",
+        leadRoutingSectionTitle: "New lead routing",
+        leadRoutingHelp:
+          "Applies when a new lead thread is created. Does not change existing threads or manual assignment.",
+        leadRoutingEnable: "Enable automatic primary assignment for new leads",
+        leadRoutingMode: "Routing mode",
+        leadRoutingModeManual: "Manual only — stay unassigned",
+        leadRoutingModeFixed: "Fixed doctor",
+        leadRoutingModeRoundRobin: "Round robin (eligible doctors)",
+        leadRoutingModeBalanced: "Balanced (least assigned leads)",
+        leadRoutingFixedDoctor: "Fixed doctor",
+        leadRoutingSave: "Save routing settings",
+        leadRoutingSaved: "Routing settings saved.",
+        leadRoutingLoadError: "Could not load routing settings.",
+        leadRoutingTableMissing: "Table clinic_lead_routing_settings is missing; apply the database migration.",
       },
     },
 
@@ -2417,6 +2445,20 @@
         autoAssignAllConfirm: "Назначить все неназначенные лиды этой клиники с равномерным распределением?",
         autoAssignNoneSelected: "Выберите хотя бы один неназначенный лид.",
         selectAllUnassignedTitle: "Выбрать все неназначенные строки на странице",
+        leadRoutingSectionTitle: "Маршрутизация новых лидов",
+        leadRoutingHelp:
+          "Только для новых потоков лидов. Не меняет существующие потоки и ручное назначение.",
+        leadRoutingEnable: "Автоназначение ответственного для новых лидов",
+        leadRoutingMode: "Режим",
+        leadRoutingModeManual: "Только вручную — без назначения",
+        leadRoutingModeFixed: "Фиксированный врач",
+        leadRoutingModeRoundRobin: "По кругу (доступные врачи)",
+        leadRoutingModeBalanced: "Баланс (меньше всего назначенных лидов)",
+        leadRoutingFixedDoctor: "Фиксированный врач",
+        leadRoutingSave: "Сохранить настройки",
+        leadRoutingSaved: "Настройки сохранены.",
+        leadRoutingLoadError: "Не удалось загрузить настройки.",
+        leadRoutingTableMissing: "Нет таблицы clinic_lead_routing_settings — выполните миграцию.",
       }
     },
 
@@ -3025,6 +3067,20 @@
         autoAssignAllConfirm: "ამ კლინიკის ყველა დაუნიშნავი ლიდი გადანაწილდეს დაბალანსებული წესით?",
         autoAssignNoneSelected: "აირჩიეთ მინიმუმ ერთი დაუნიშნავი ლიდის სტრიქონი.",
         selectAllUnassignedTitle: "ამ გვერდის ყველა დაუნიშნავი სტრიქონის არჩევა",
+        leadRoutingSectionTitle: "ახალი ლიდის მარშრუტიზაცია",
+        leadRoutingHelp:
+          "ხელმოცარებულია ახალი ლიდის ნაკადის შექმნისას. არსებულ ნაკადებს და ხელით მიბმას არ ცვლის.",
+        leadRoutingEnable: "ახალი ლიდების ავტომატური პასუხისმგებლის მიბმა",
+        leadRoutingMode: "რეჟიმი",
+        leadRoutingModeManual: "მხოლოდ ხელით — დაუნიშნავად",
+        leadRoutingModeFixed: "ფიქსირებული ექიმი",
+        leadRoutingModeRoundRobin: "რაუნდ-რობინი (უფლებამოსილი ექიმები)",
+        leadRoutingModeBalanced: "დაბალანსებული (ყველაზე ნაკლები მიბმა)",
+        leadRoutingFixedDoctor: "ფიქსირებული ექიმი",
+        leadRoutingSave: "პარამეტრების შენახვა",
+        leadRoutingSaved: "პარამეტრები შენახულია.",
+        leadRoutingLoadError: "პარამეტრების ჩატვირთვა ვერ მოხერხდა.",
+        leadRoutingTableMissing: "ცხრილი clinic_lead_routing_settings არ არის — გაუშვით migration.",
       }
     }
   };

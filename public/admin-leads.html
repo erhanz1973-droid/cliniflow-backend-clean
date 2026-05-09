@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605098"></script>
-  <script src="/admin-i18n.js?v=33"></script>
+  <script src="/admin-i18n.js?v=34"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title data-i18n="leads.documentTitle">Lead management — Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css"/>
@@ -66,12 +66,50 @@
     .actions-stack { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
     .actions-stack select { max-width: 220px; }
     .mono { font-size: 0.72rem; color: #6b7280; word-break: break-all; }
+    .routing-card {
+      border: 1px solid var(--b); border-radius: 12px; padding: 16px 18px; margin-bottom: 20px;
+      background: rgba(31,41,55,0.55); max-width: 640px;
+    }
+    .routing-card h2 { font-size: 1rem; margin: 0 0 12px; font-weight: 600; color: #e5e7eb; }
+    .routing-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
+    .routing-row:last-child { margin-bottom: 0; }
+    .routing-row label { color: #cbd5e1; font-size: 0.88rem; min-width: 140px; }
+    .routing-row select { min-width: 220px; flex: 1; max-width: 320px; }
+    #routingStatus { font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1 data-i18n="leads.pageTitle">Lead inbox</h1>
     <p class="sub" data-i18n="leads.subtitle">Primary responder per thread; clinic team can still view threads in Messages.</p>
+
+    <div class="routing-card" id="leadRoutingCard">
+      <h2 data-i18n="leads.leadRoutingSectionTitle">New lead routing</h2>
+      <p class="sub" style="margin-top:-4px;margin-bottom:12px;font-size:0.82rem;" data-i18n="leads.leadRoutingHelp">
+        Applies when a new lead thread is created. Does not change existing threads or manual assignment.
+      </p>
+      <label class="chk" style="margin-bottom:12px;">
+        <input type="checkbox" id="leadRoutingEnabled" />
+        <span data-i18n="leads.leadRoutingEnable">Enable automatic primary assignment for new leads</span>
+      </label>
+      <div class="routing-row">
+        <label for="leadRoutingMode" data-i18n="leads.leadRoutingMode">Routing mode</label>
+        <select id="leadRoutingMode">
+          <option value="manual_only" data-i18n="leads.leadRoutingModeManual">Manual only — stay unassigned</option>
+          <option value="fixed_doctor" data-i18n="leads.leadRoutingModeFixed">Fixed doctor</option>
+          <option value="round_robin" data-i18n="leads.leadRoutingModeRoundRobin">Round robin (eligible doctors)</option>
+          <option value="balanced" data-i18n="leads.leadRoutingModeBalanced">Balanced (least assigned leads)</option>
+        </select>
+      </div>
+      <div class="routing-row" id="leadRoutingFixedRow" style="display:none;">
+        <label for="leadRoutingFixedDoctor" data-i18n="leads.leadRoutingFixedDoctor">Fixed doctor</label>
+        <select id="leadRoutingFixedDoctor"></select>
+      </div>
+      <div class="routing-row">
+        <button type="button" class="primary" id="btnSaveLeadRouting" data-i18n="leads.leadRoutingSave">Save routing settings</button>
+      </div>
+      <div id="routingStatus" aria-live="polite"></div>
+    </div>
 
     <div class="toolbar-auto">
       <button type="button" class="primary" id="btnAutoAssignAll" data-i18n="leads.autoAssignAll">Auto-assign all unassigned</button>
@@ -144,6 +182,97 @@
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) throw new Error(j.error || t("leads.errLoad"));
       return j.messages || [];
+    }
+
+    function fillRoutingFixedDoctorOptions(selectedId) {
+      const sel = document.getElementById("leadRoutingFixedDoctor");
+      if (!sel) return;
+      const cur = selectedId != null ? String(selectedId) : sel.value;
+      sel.innerHTML =
+        '<option value="">' + escapeHtml(t("leads.selectDoctor")) + "</option>" +
+        doctors.map((d) =>
+          '<option value="' + escapeAttr(d.id) + '">' + escapeHtml(d.name || d.email || d.id) + "</option>"
+        ).join("");
+      if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+    }
+
+    function syncLeadRoutingFixedRow() {
+      const mode = document.getElementById("leadRoutingMode")?.value || "manual_only";
+      const row = document.getElementById("leadRoutingFixedRow");
+      if (row) row.style.display = mode === "fixed_doctor" ? "flex" : "none";
+    }
+
+    async function loadLeadRoutingSettingsUi() {
+      const statusEl = document.getElementById("routingStatus");
+      if (!statusEl) return;
+      statusEl.textContent = "";
+      const routingIds = ["leadRoutingEnabled", "leadRoutingMode", "leadRoutingFixedDoctor", "btnSaveLeadRouting"];
+      try {
+        const res = await fetch(API_BASE + "/api/admin/clinic-lead-routing-settings", { headers: authHeaders() });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) {
+          const msg =
+            j.error === "lead_routing_table_unavailable"
+              ? t("leads.leadRoutingTableMissing")
+              : j.message || j.error || t("leads.leadRoutingLoadError");
+          statusEl.textContent = msg;
+          routingIds.forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = true;
+          });
+          return;
+        }
+        routingIds.forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.disabled = false;
+        });
+        const s = j.settings || {};
+        const en = document.getElementById("leadRoutingEnabled");
+        const modeEl = document.getElementById("leadRoutingMode");
+        if (en) en.checked = !!s.autoRoutingEnabled;
+        if (modeEl) {
+          const m = s.routingMode;
+          modeEl.value =
+            m && ["manual_only", "fixed_doctor", "round_robin", "balanced"].includes(m) ? m : "manual_only";
+        }
+        fillRoutingFixedDoctorOptions(s.fixedDoctorId || "");
+        syncLeadRoutingFixedRow();
+      } catch (e) {
+        statusEl.textContent = String(e.message || e || t("leads.leadRoutingLoadError"));
+      }
+    }
+
+    async function saveLeadRoutingSettings() {
+      const statusEl = document.getElementById("routingStatus");
+      document.getElementById("error").textContent = "";
+      document.getElementById("success").textContent = "";
+      const enabled = !!document.getElementById("leadRoutingEnabled")?.checked;
+      const routingMode = document.getElementById("leadRoutingMode")?.value || "manual_only";
+      const fixedDoctorId = document.getElementById("leadRoutingFixedDoctor")?.value || "";
+      const btn = document.getElementById("btnSaveLeadRouting");
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(API_BASE + "/api/admin/clinic-lead-routing-settings", {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            autoRoutingEnabled: enabled,
+            routingMode,
+            fixedDoctorId: fixedDoctorId || null,
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) throw new Error(j.message || j.error || t("leads.errLoad"));
+        document.getElementById("success").textContent = t("leads.leadRoutingSaved");
+        if (statusEl && j.settings && j.settings.updatedAt) {
+          statusEl.textContent = fmtWhen(j.settings.updatedAt);
+        }
+        await loadLeadRoutingSettingsUi();
+      } catch (e) {
+        document.getElementById("error").textContent = String(e.message || e);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
 
     function escapeHtml(s) {
@@ -411,6 +540,7 @@
       document.getElementById("error").textContent = "";
       try {
         await loadDoctors();
+        await loadLeadRoutingSettingsUi();
         const messages = await loadThreads();
         render(messages);
         el.textContent = t("leads.statusUnassigned", { count: String(messages.length) });
@@ -432,6 +562,8 @@
 
     document.getElementById("refresh").addEventListener("click", refresh);
     document.getElementById("showAssigned").addEventListener("change", refresh);
+    document.getElementById("leadRoutingMode").addEventListener("change", syncLeadRoutingFixedRow);
+    document.getElementById("btnSaveLeadRouting").addEventListener("click", saveLeadRoutingSettings);
 
     document.getElementById("btnAutoAssignAll").addEventListener("click", async () => {
       if (!confirm(t("leads.autoAssignAllConfirm"))) return;
