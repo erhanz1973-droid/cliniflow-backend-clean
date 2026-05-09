@@ -207,6 +207,22 @@
     let allDoctors = [];
     let filteredDoctors = [];
 
+    function trimDocStr(v) {
+      if (v == null) return "";
+      const s = typeof v === "string" ? v : String(v);
+      return s.trim();
+    }
+    function resolveDoctorDisplayName(d) {
+      if (!d) return "";
+      return (
+        trimDocStr(d.name) ||
+        trimDocStr(d.full_name) ||
+        trimDocStr(d.display_name) ||
+        trimDocStr(d.email) ||
+        (d.doctor_id != null ? "Dr. " + trimDocStr(String(d.doctor_id)) : "")
+      );
+    }
+
     async function loadApplications() {
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
       const loadingContainer = document.getElementById("loading-container");
@@ -277,7 +293,7 @@
       container.innerHTML = filteredDoctors.map(doctor => `
         <div class="doctor-card">
           <div class="doctor-info">
-            <div class="doctor-name">${doctor.name}</div>
+            <div class="doctor-name">${resolveDoctorDisplayName(doctor) || "—"}</div>
             <div class="doctor-details">
               <span>📱 ${doctor.phone}</span>
               ${doctor.email ? `<span>📧 ${doctor.email}</span>` : ""}
@@ -345,7 +361,7 @@
       const doctor = allDoctors.find(d => d.doctor_id === doctorId);
       if (!doctor) return;
 
-      alert(`👨‍⚕️ Doktor Detayları\n\nAd: ${doctor.name}\nTelefon: ${doctor.phone}\nEmail: ${doctor.email || "-"}\nKlinik: ${doctor.clinic_code}\nDurum: ${getStatusText(doctor.status)}\nKayıt: ${new Date(doctor.created_at).toLocaleString("tr-TR")}`);
+      alert(`👨‍⚕️ Doktor Detayları\n\nAd: ${resolveDoctorDisplayName(doctor) || "—"}\nTelefon: ${doctor.phone}\nEmail: ${doctor.email || "-"}\nKlinik: ${doctor.clinic_code}\nDurum: ${getStatusText(doctor.status)}\nKayıt: ${new Date(doctor.created_at).toLocaleString("tr-TR")}`);
     }
 
     function filterDoctors() {
@@ -353,10 +369,20 @@
       const statusFilter = document.getElementById("status-filter").value;
 
       filteredDoctors = allDoctors.filter(doctor => {
-        const matchesSearch = !searchTerm || 
-          doctor.name.toLowerCase().includes(searchTerm) ||
-          (doctor.email && doctor.email.toLowerCase().includes(searchTerm)) ||
-          doctor.phone.includes(searchTerm);
+        const blob = [
+          resolveDoctorDisplayName(doctor),
+          doctor.name,
+          doctor.full_name,
+          doctor.email,
+          doctor.phone,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchesSearch =
+          !searchTerm ||
+          blob.indexOf(searchTerm) !== -1 ||
+          (doctor.phone && String(doctor.phone).includes(searchTerm));
 
         const matchesStatus = !statusFilter || doctor.status === statusFilter;
 

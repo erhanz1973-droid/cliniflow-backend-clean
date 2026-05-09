@@ -311,16 +311,38 @@
     let allDoctors = [];
     let filteredDoctors = [];
 
+    function trimStr(v) {
+      if (v == null) return '';
+      var s = typeof v === 'string' ? v : String(v);
+      return s.replace(/^\s+|\s+$/g, '');
+    }
+
+    /** Match backend normalizeDoctorRowDisplayName — UI must not depend on `name` alone. */
+    function resolveDoctorDisplayName(d) {
+      if (!d) return '';
+      var n = trimStr(d.name);
+      var fn = trimStr(d.full_name);
+      var dn = trimStr(d.display_name);
+      var first = trimStr(d.first_name);
+      var last = trimStr(d.last_name);
+      var composed = [first, last].filter(Boolean).join(' ').replace(/^\s+|\s+$/g, '');
+      var email = trimStr(d.email);
+      var sid = d.doctor_id != null ? trimStr(String(d.doctor_id)) : '';
+      return n || fn || dn || composed || email || (sid ? ('Dr. ' + sid) : '');
+    }
+
     function getInitials(name) {
       if (!name) return '?';
       return name.trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
     }
 
     function avatarHtml(doctor) {
+      var dn = resolveDoctorDisplayName(doctor);
+      var ini = getInitials(dn).replace(/'/g, "\\'");
       if (doctor.profile_photo_url) {
-        return `<img class="doctor-avatar" src="${doctor.profile_photo_url}" alt="${doctor.name || ''}" onerror="this.outerHTML=fallbackAvatar('${getInitials(doctor.name)}')">`;
+        return '<img class="doctor-avatar" src="' + doctor.profile_photo_url + '" alt="' + (dn || '').replace(/"/g, '&quot;') + '" onerror="this.outerHTML=fallbackAvatar(\'' + ini + '\')">';
       }
-      return `<div class="doctor-avatar-placeholder">${getInitials(doctor.name)}</div>`;
+      return '<div class="doctor-avatar-placeholder">' + ini + '</div>';
     }
 
     function fallbackAvatar(initials) {
@@ -398,12 +420,14 @@
           ? arr.map(tag => `<span class="tag">${tag}</span>`).join('')
           : `<span class="tag-empty">${t("doctorListV2.notSpecified")}</span>`;
 
+        const docTitle = resolveDoctorDisplayName(d) || dash;
+
         return `
         <div class="doctor-card">
           <div class="doctor-header">
             ${avatarHtml(d)}
             <div class="doctor-info">
-              <h3>${d.name || dash}</h3>
+              <h3>${docTitle}</h3>
               <div class="doctor-title-dept">${[d.role || d.title, d.department].filter(Boolean).join(' · ') || ''}</div>
               <span class="doctor-status status-${d.status}">${statusLabel}</span>
             </div>
@@ -490,7 +514,7 @@
       );
       if (!d) return;
       alert([
-        `👨‍⚕️ ${d.name || '—'}`,
+        `👨‍⚕️ ${resolveDoctorDisplayName(d) || '—'}`,
         `Email: ${d.email || '—'}`,
         `Telefon: ${d.phone || '—'}`,
         `Klinik: ${d.clinic_code || '—'}`,
@@ -512,10 +536,20 @@
       const term = document.getElementById('search-input').value.toLowerCase();
       const status = document.getElementById('status-filter').value;
       filteredDoctors = allDoctors.filter(d => {
-        const matchSearch = !term ||
-          (d.name  && d.name.toLowerCase().includes(term)) ||
-          (d.email && d.email.toLowerCase().includes(term)) ||
-          (d.phone && d.phone.includes(term));
+        const blob = [
+          resolveDoctorDisplayName(d),
+          d.full_name,
+          d.name,
+          d.email,
+          d.phone,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchSearch =
+          !term ||
+          blob.indexOf(term) !== -1 ||
+          (d.phone && String(d.phone).includes(term));
         const matchStatus = !status || d.status === status;
         return matchSearch && matchStatus;
       });

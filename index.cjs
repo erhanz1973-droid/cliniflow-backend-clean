@@ -12357,6 +12357,33 @@ app.post("/api/admin/reject-doctor", requireAdminAuth, async (req, res) => {
   }
 });
 
+/** Admin doctor cards: single display string from heterogeneous `doctors` row shapes. */
+function normalizeDoctorRowDisplayName(d) {
+  if (!d || typeof d !== "object") return "";
+  const trim = (v) => {
+    if (v == null) return "";
+    const s = typeof v === "string" ? v : String(v);
+    return s.trim();
+  };
+  const n = trim(d.name);
+  const fn = trim(d.full_name);
+  const dn = trim(d.display_name);
+  const first = trim(d.first_name);
+  const last = trim(d.last_name);
+  const composed = [first, last].filter(Boolean).join(" ").trim();
+  const email = trim(d.email);
+  const shortId = d.doctor_id != null ? trim(String(d.doctor_id)) : "";
+  return (
+    n ||
+    fn ||
+    dn ||
+    composed ||
+    email ||
+    (shortId ? `Dr. ${shortId}` : "") ||
+    ""
+  );
+}
+
 // GET /api/admin/doctors - List doctors for admin
 app.get("/api/admin/doctors", requireAdminAuth, async (req, res) => {
   try {
@@ -12410,13 +12437,7 @@ app.get("/api/admin/doctors", requireAdminAuth, async (req, res) => {
     }
 
     const normalized = (data || []).map((d) => {
-      const shortId = d.doctor_id ? String(d.doctor_id).trim() : "";
-      // Prefer `name` column; fall back to `full_name`, then email, then id
-      const display =
-        String(d.name || d.full_name || "").trim() ||
-        String(d.email || "").trim() ||
-        (shortId ? `Dr. ${shortId}` : "") ||
-        "Doctor";
+      const display = normalizeDoctorRowDisplayName(d) || "Doctor";
       return {
         id: d.id,
         doctor_id: d.doctor_id || d.id || null,
@@ -40027,8 +40048,9 @@ function patientRowRequiresAssignedDoctorMessagingOnly(prow) {
 }
 
 /**
- * Lead threads (is_lead): only the assigned doctor may read/reply.
- * Other patients: existing treatment-team visibility.
+ * Lead threads (`is_lead`): primary responsibility is `assigned_doctor_id`; clinic staff still share visibility.
+ * Send rules: enrolled (non-lead) patient + different assignee → 403 assigned_doctor_only when `forSend`.
+ * Until enrollment, treatment-team members may participate per `doctorHasTreatmentTeamAccessToPatientId`.
  * opts.forSend: true on POST replies; enrolled patient + thread assignee mismatch → 403 assigned_doctor_only.
  */
 async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
@@ -40289,6 +40311,37 @@ async function collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw) {
     }
   } catch (e) {
     if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[lead_thread_patients]:", e?.message || e);
+  }
+  return out;
+}
+
+/**
+ * All `patient_chat_threads` rows for this clinic with `is_lead` — every clinic doctor can see these
+ * conversations in inbox (primary responder remains `assigned_doctor_id`; not exclusive visibility).
+ */
+async function collectPatientIdsFromClinicLeadThreads(clinicId) {
+  const out = new Set();
+  const cid = String(clinicId || "").trim();
+  if (!UUID_RE.test(cid) || !isSupabaseEnabled()) return out;
+  try {
+    const { data, error } = await supabase
+      .from("patient_chat_threads")
+      .select("patient_id")
+      .eq("clinic_id", cid)
+      .eq("is_lead", true)
+      .limit(2500);
+    if (error) {
+      const c = String(error.code || "");
+      if (!["42P01", "42703", "PGRST204", "PGRST205"].includes(c))
+        console.warn("[clinic_lead_thread_patients] fetch:", error.message || error);
+      return out;
+    }
+    for (const r of data || []) {
+      const pid = String(r?.patient_id || "").trim();
+      if (pid) out.add(pid);
+    }
+  } catch (e) {
+    if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[clinic_lead_thread_patients]:", e?.message || e);
   }
   return out;
 }
@@ -41746,7 +41799,8 @@ app.get("/admin/doctor-list", requireAdminAuth, async (req, res) => {
       let public_profile = null;
       if (raw === true || raw === "true" || raw === "t" || raw === 1) public_profile = true;
       else if (raw === false || raw === "false" || raw === "f" || raw === 0) public_profile = false;
-      return { ...d, public_profile };
+      const displayName = normalizeDoctorRowDisplayName(d);
+      return { ...d, public_profile, name: displayName || d.name || null };
     });
 
     console.log("[DOCTOR LIST] Loaded doctors:", doctors.length);
@@ -42124,6 +42178,10 @@ async function getDoctorVisiblePatientIdSet(req) {
   for (const pid of fromLeadThreads) visiblePatientIds.add(pid);
   for (const pid of fromProcessAssign) visiblePatientIds.add(pid);
   for (const pid of fromCalendar) visiblePatientIds.add(pid);
+  if (clinicId && UUID_RE.test(String(clinicId).trim())) {
+    const clinicLeadPatients = await collectPatientIdsFromClinicLeadThreads(clinicId);
+    for (const pid of clinicLeadPatients) visiblePatientIds.add(pid);
+  }
   await expandPatientIdSetForDoctorMatching(visiblePatientIds);
   return visiblePatientIds;
 }
@@ -42385,6 +42443,39 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
     }
   }
 
+  const leadThreadByPatient = new Map();
+  const leadResponderDoctorNames = Object.create(null);
+  if (clinicId && UUID_RE.test(String(clinicId).trim()) && uuidList.length) {
+    const cidNorm = String(clinicId).trim();
+    const assignIds = new Set();
+    for (let i = 0; i < uuidList.length; i += 90) {
+      const chunk = uuidList.slice(i, i + 90);
+      const { data: trows, error: terr } = await supabase
+        .from("patient_chat_threads")
+        .select("patient_id, assigned_doctor_id, is_lead")
+        .eq("clinic_id", cidNorm)
+        .eq("is_lead", true)
+        .in("patient_id", chunk);
+      if (terr || !Array.isArray(trows)) continue;
+      for (const tr of trows) {
+        const pkey = String(tr?.patient_id || "").trim().toLowerCase();
+        if (!pkey) continue;
+        leadThreadByPatient.set(pkey, tr);
+        const aid = tr?.assigned_doctor_id != null ? String(tr.assigned_doctor_id).trim() : "";
+        if (aid && UUID_RE.test(aid)) assignIds.add(aid);
+      }
+    }
+    const idList = [...assignIds];
+    for (let i = 0; i < idList.length; i += 80) {
+      const chunk = idList.slice(i, i + 80);
+      const { data: drows } = await supabase.from("doctors").select("id, full_name, name").in("id", chunk);
+      for (const d of drows || []) {
+        const id = String(d?.id || "").trim();
+        if (id) leadResponderDoctorNames[id] = String(d.full_name || d.name || "").trim() || null;
+      }
+    }
+  }
+
   const onlyActive = String(req.query.onlyActive || "").trim() === "1";
   const threads = [];
   for (const pid of uuidList) {
@@ -42402,6 +42493,17 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
           ...(last.readAt != null ? { readAt: last.readAt } : {}),
         }
       : null;
+    const pidKey = String(pid || "").trim().toLowerCase();
+    const lt = leadThreadByPatient.get(pidKey) || null;
+    const aid = lt?.assigned_doctor_id != null ? String(lt.assigned_doctor_id).trim() : "";
+    const leadPrimaryResponder =
+      lt && lt.is_lead === true
+        ? {
+            doctorId: aid && UUID_RE.test(aid) ? aid : null,
+            displayName: aid && UUID_RE.test(aid) ? leadResponderDoctorNames[aid] || null : null,
+            unassigned: !(aid && UUID_RE.test(aid)),
+          }
+        : null;
     threads.push({
       patientDbId: pid,
       patientPublicId: canonicalPatientPublicId(pid),
@@ -42410,6 +42512,7 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       unreadFromPatient: unread,
       lastMessage: preview,
       lastActivityAt: preview?.createdAt ?? null,
+      leadPrimaryResponder,
     });
   }
   threads.sort((a, b) => (Number(b.lastActivityAt || 0) || 0) - (Number(a.lastActivityAt || 0) || 0));
@@ -49934,7 +50037,7 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
 });
 
 // ── Doctor marketplace (mobile: doctor/index.tsx, doctor/requests.tsx) — inbox-summary = handleDoctorInboxSummary (index.cjs)
-// GET /api/doctor/inbox — threads assigned to this doctor (not limited to is_lead; patients may graduate)
+// GET /api/doctor/inbox — clinic-wide lead threads + threads assigned to this doctor (graduated patients).
 app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
@@ -49953,16 +50056,24 @@ app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
 
     console.log("[DOCTOR inbox] DOCTOR_ID", rawDoctor, "resolvedKeys", doctorKeys, "clinic_id", clinicId);
 
-    let threadsQuery = supabase
+    const sel = "id, patient_id, status, assigned_doctor_id, assigned_at, updated_at, created_at, is_lead";
+    const byId = new Map();
+    const { data: leadRows, error: errLeads } = await supabase
       .from("patient_chat_threads")
-      .select("id, patient_id, status, assigned_doctor_id, assigned_at, updated_at, created_at, is_lead")
+      .select(sel)
+      .eq("clinic_id", clinicId)
+      .eq("is_lead", true)
+      .order("updated_at", { ascending: false })
+      .limit(220);
+    const { data: mineRows, error: errMine } = await supabase
+      .from("patient_chat_threads")
+      .select(sel)
       .eq("clinic_id", clinicId)
       .in("assigned_doctor_id", doctorKeys)
       .order("updated_at", { ascending: false })
-      .limit(200);
+      .limit(220);
 
-    const { data: threads, error } = await threadsQuery;
-
+    const error = errLeads || errMine;
     if (error) {
       const code = String(error.code || "");
       const msg = String(error.message || "").toLowerCase();
@@ -49973,7 +50084,17 @@ app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
       return res.status(500).json({ ok: false, error: "fetch_failed" });
     }
 
-    const rows = Array.isArray(threads) ? threads : [];
+    for (const r of leadRows || []) {
+      if (r?.id) byId.set(String(r.id), r);
+    }
+    for (const r of mineRows || []) {
+      if (r?.id) byId.set(String(r.id), r);
+    }
+    const rows = [...byId.values()].sort(
+      (a, b) =>
+        new Date(b.updated_at || b.created_at || 0).getTime() -
+        new Date(a.updated_at || a.created_at || 0).getTime()
+    ).slice(0, 200);
     console.log("[DOCTOR inbox] THREADS FOUND", rows.length);
     const pids = [...new Set(rows.map((r) => String(r.patient_id || "").trim()).filter((id) => UUID_RE.test(id)))];
     const patientById = {};

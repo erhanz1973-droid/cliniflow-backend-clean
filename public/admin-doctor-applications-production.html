@@ -275,6 +275,20 @@
     let allDoctors = [];
     let filteredDoctors = [];
 
+    function trimDocStr(v) {
+      if (v == null) return "";
+      var s = typeof v === "string" ? v : String(v);
+      return s.replace(/^\s+|\s+$/g, "");
+    }
+    function resolveDoctorDisplayName(d) {
+      if (!d) return "";
+      var n = trimDocStr(d.name);
+      var fn = trimDocStr(d.full_name);
+      var email = trimDocStr(d.email);
+      var sid = d.doctor_id != null ? trimDocStr(String(d.doctor_id)) : "";
+      return n || fn || email || (sid ? "Dr. " + sid : "");
+    }
+
     async function loadDoctors() {
       const loadingContainer = document.getElementById("loading-container");
       const errorContainer = document.getElementById("error-container");
@@ -295,6 +309,7 @@
             id,
             doctor_id,
             name,
+            full_name,
             email,
             phone,
             status,
@@ -355,7 +370,7 @@
         <div class="doctor-card">
           <div class="doctor-header">
             <div class="doctor-info">
-              <h3>${doctor.name || '-'}</h3>
+              <h3>${resolveDoctorDisplayName(doctor) || '—'}</h3>
               <div class="doctor-meta">
                 <div>📧 ${doctor.email || '-'}</div>
                 <div>📱 ${doctor.phone || '-'}</div>
@@ -473,7 +488,7 @@
       const details = `
 👨‍⚕️ DOKTOR DETAYLARI
 
-Ad: ${doctor.name || '-'}
+Ad: ${resolveDoctorDisplayName(doctor) || '-'}
 Email: ${doctor.email || '-'}
 Telefon: ${doctor.phone || '-'}
 Klinik: ${doctor.clinic_code}
@@ -504,10 +519,20 @@ Doctor ID: ${doctor.doctor_id}
       const statusFilter = document.getElementById('status-filter').value;
 
       filteredDoctors = allDoctors.filter(doctor => {
-        const matchesSearch = !searchTerm || 
-          (doctor.name && doctor.name.toLowerCase().includes(searchTerm)) ||
-          (doctor.email && doctor.email.toLowerCase().includes(searchTerm)) ||
-          (doctor.phone && doctor.phone.includes(searchTerm));
+        const blob = [
+          resolveDoctorDisplayName(doctor),
+          doctor.name,
+          doctor.full_name,
+          doctor.email,
+          doctor.phone,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchesSearch =
+          !searchTerm ||
+          blob.indexOf(searchTerm) !== -1 ||
+          (doctor.phone && String(doctor.phone).includes(searchTerm));
         
         const matchesStatus = !statusFilter || doctor.status === statusFilter;
         

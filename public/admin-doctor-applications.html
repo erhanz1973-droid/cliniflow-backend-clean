@@ -20,6 +20,24 @@
     let allDoctors = [];
     let filteredDoctors = [];
 
+    function trimDocStr(v) {
+      if (v == null) return "";
+      const s = typeof v === "string" ? v : String(v);
+      return s.trim();
+    }
+    function resolveDoctorDisplayName(d) {
+      if (!d) return "";
+      const n = trimDocStr(d.name);
+      const fn = trimDocStr(d.full_name);
+      const dn = trimDocStr(d.display_name);
+      const first = trimDocStr(d.first_name);
+      const last = trimDocStr(d.last_name);
+      const composed = [first, last].filter(Boolean).join(" ").trim();
+      const email = trimDocStr(d.email);
+      const sid = d.doctor_id != null ? trimDocStr(String(d.doctor_id)) : "";
+      return n || fn || dn || composed || email || (sid ? "Dr. " + sid : "");
+    }
+
     async function loadDoctors() {
       const loadingContainer = document.getElementById("loading-container");
       const errorContainer = document.getElementById("error-container");
@@ -102,15 +120,16 @@
           `;
         }
 
+        const docTitle = resolveDoctorDisplayName(doctor) || "—";
         return `
         <div class="doctor-card ${doctor.status.toLowerCase()}" data-doctor-id="${doctor.id}">
           <div class="doctor-header">
-            <h3 class="doctor-name">${doctor.name}</h3>
+            <h3 class="doctor-name">${docTitle}</h3>
             <span class="status ${doctor.status}">${doctor.status}</span>
           </div>
           <div class="doctor-details">
-            <div>📧 ${doctor.phone || '-'}</div>
-            <div>📧 ${doctor.email || '-'}</div>
+            <div>📱 ${doctor.phone || '-'}</div>
+            <div>✉️ ${doctor.email || '-'}</div>
             <div>🏥 ${doctor.department || '-'}</div>
             <div>📋 ${doctor.specialties || '-'}</div>
             <div>📅 ${formatDate(doctor.created_at)}</div>
@@ -209,8 +228,20 @@
       const statusFilter = document.getElementById("status-filter")?.value || '';
       
       filteredDoctors = allDoctors.filter(doctor => {
-        const matchesSearch = !searchTerm || doctor.name.toLowerCase().includes(searchTerm) || 
-                              doctor.phone.includes(searchTerm);
+        const blob = [
+          resolveDoctorDisplayName(doctor),
+          doctor.name,
+          doctor.full_name,
+          doctor.email,
+          doctor.phone,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchesSearch =
+          !searchTerm ||
+          blob.indexOf(searchTerm) !== -1 ||
+          (doctor.phone && String(doctor.phone).toLowerCase().includes(searchTerm));
         const matchesStatus = !statusFilter || doctor.status === statusFilter;
 
         return matchesSearch && matchesStatus;
