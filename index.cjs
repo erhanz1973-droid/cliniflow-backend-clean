@@ -1,15 +1,18 @@
 console.log("🚀 STRIPE VERSION DEPLOYED");
 
-process.on("uncaughtException", (err) => {
-  console.error("🔥 UNCAUGHT EXCEPTION:", err);
-  if (err && err.stack) console.error(err.stack);
-});
 process.on("unhandledRejection", (reason) => {
-  console.error("🔥 UNHANDLED REJECTION:", reason);
-  if (reason && typeof reason === "object" && reason.stack) {
-    console.error(reason.stack);
-  } else if (reason instanceof Error) {
-    console.error(reason.stack);
+  const msg =
+    reason && typeof reason === "object" && reason.stack
+      ? reason.stack
+      : reason instanceof Error && reason.stack
+        ? reason.stack
+        : String(reason ?? "");
+  console.error("[PROCESS] unhandledRejection", msg);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[PROCESS] uncaughtException", err && err.stack ? err.stack : err);
+  if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+    process.exit(1);
   }
 });
 
@@ -343,6 +346,14 @@ const {
 } = require("./lib/phoneIdentity.cjs");
 
 const app = express();
+/** Process boot time for /api/health uptime (ms since epoch). */
+const SERVER_BOOT_MS = Date.now();
+let CLINIFLOW_PKG_VERSION = "1.0.0";
+try {
+  CLINIFLOW_PKG_VERSION = require("./package.json").version || CLINIFLOW_PKG_VERSION;
+} catch (_) {
+  /* ignore */
+}
 app.disable("x-powered-by");
 console.log("🔥 BACKEND CLEAN NEW VERSION DEPLOYED");
 console.log("🚀 build:", new Date().toISOString());
@@ -355,20 +366,6 @@ console.log("SERVER ENTRY:", __filename);
 // Liveness: register first, no async/DB — Railway healthchecks must get 200 even if later init fails
 app.get("/health", (_req, res) => {
   res.status(200).set("Cache-Control", "no-store").json({ ok: true, status: "ok" });
-});
-
-process.on("unhandledRejection", (reason) => {
-  const msg =
-    reason && typeof reason === "object" && reason.stack
-      ? reason.stack
-      : String(reason ?? "");
-  console.error("[PROCESS] unhandledRejection", msg);
-});
-process.on("uncaughtException", (err) => {
-  console.error("[PROCESS] uncaughtException", err && err.stack ? err.stack : err);
-  if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
-    process.exit(1);
-  }
 });
 
 const server = http.createServer(app);
@@ -400,7 +397,7 @@ const JWT_SECRET = (() => {
   console.warn("[SECURITY] JWT_SECRET missing or too short — set in .env for non-dev use");
   return "dev-only-jwt-secret-min-8-chars";
 })();
-const JWT_EXPIRES_IN = "30d";
+const JWT_EXPIRES_IN = String(process.env.JWT_EXPIRES_IN || "30d").trim() || "30d";
 const PERF_LOGS_ENABLED = !IS_PROD || String(process.env.PERF_LOGS || "").trim() === "1";
 /** Set OTP_DEBUG=1 to log OTP digits in register/send paths (never enable in prod unless short tests). */
 const OTP_DEBUG_LOG = String(process.env.OTP_DEBUG || "").trim() === "1" || !IS_PROD;
@@ -3650,19 +3647,31 @@ const SUPER_ADMIN_JWT_SECRET = (() => {
 })();
 
 // ================== MIDDLEWARE ==================
-app.use(
-  cors({
-    origin: true,
+/** Comma- or whitespace-separated origins. Empty → reflect Origin (mobile often sends none; browsers get mirrored). */
+const corsOptions = (() => {
+  const raw = String(process.env.CORS_ORIGINS || "").trim();
+  const origins = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  if (origins.length === 0) {
+    if (IS_PROD) {
+      console.warn(
+        "[CORS] CORS_ORIGINS unset — allowing any Origin mirror + no-Origin (React Native). Set CORS_ORIGINS for a strict browser allowlist.",
+      );
+    }
+    return { origin: true, credentials: true };
+  }
+  const allow = new Set(origins);
+  return {
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (allow.has(origin)) return cb(null, true);
+      console.warn("[CORS] blocked Origin:", origin);
+      return cb(null, false);
+    },
     credentials: true,
-  })
-);
-app.options(
-  "*",
-  cors({
-    origin: true,
-    credentials: true,
-  })
-);
+  };
+})();
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -4304,14 +4313,21 @@ app.use((err, req, res, next) => {
   next(err);
 });
 app.use((req, res, next) => {
-  // Structured request logger — always active for /api/ paths
+  // Structured request logger — /api/* ; skips noisy 200s from chat polling unless PERF_LOGS=1
   if (String(req.path || "").startsWith("/api/")) {
     const t0 = Date.now();
     res.on("finish", () => {
       const ms = Date.now() - t0;
+      const pathStr = String(req.path || "");
+      const meth = String(req.method || "GET");
+      const quietPollOk =
+        !PERF_LOGS_ENABLED &&
+        res.statusCode < 400 &&
+        (pathStr.includes("/messages/unread-count") ||
+          (meth === "GET" && /\/messages$/i.test(pathStr)));
+      if (quietPollOk) return;
       const lvl = res.statusCode >= 500 ? "[API][ERROR]" : res.statusCode >= 400 ? "[API][WARN]" : "[API]";
-      console.log("RESPONSE TYPE:", req.path);
-      console.log(`${lvl} ${req.method} ${req.path} → ${res.statusCode} (${ms}ms)`);
+      console.log(`${lvl} ${meth} ${pathStr} → ${res.statusCode} (${ms}ms)`);
     });
   }
   if (!PERF_LOGS_ENABLED || !String(req.path || "").startsWith("/api/")) {
@@ -5884,28 +5900,74 @@ app.get('/api/_entry-check', (req, res) => {
   res.json({ entry: 'index.cjs', status: 'ok' });
 });
 
-// Detailed health (optional - for debugging)
+// Detailed health (non-production only — avoids exposing infra flags)
 app.get("/health/detail", (req, res) => {
-  res.json({ 
-    ok: true, 
-    server: "index.cjs", 
+  if (IS_PROD) return res.status(404).json({ ok: false, error: "not_found" });
+  res.json({
+    ok: true,
+    server: "index.cjs",
     time: now(),
     supabase: isSupabaseEnabled(),
-    smtp: !!emailTransporter
+    smtp: !!emailTransporter,
   });
 });
 
-// ── /api/health (Railway / load balancer) ──────────────────────────────────
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
+// ── /api/health (Railway healthcheckPath — keep fast; no DB unless ?deep=1) ───
+app.get("/api/health", async (req, res) => {
+  try {
+    const deep = String(req.query.deep || "") === "1";
+    const payload = {
+      ok: true,
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor((Date.now() - SERVER_BOOT_MS) / 1000),
+      environment: IS_PROD ? "production" : String(process.env.NODE_ENV || "development"),
+      version: CLINIFLOW_PKG_VERSION,
+      commit:
+        String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT || "").trim() ||
+        undefined,
+    };
+    if (deep) {
+      if (typeof isSupabaseEnabled === "function" && isSupabaseEnabled() && supabase && typeof supabase.from === "function") {
+        const t0 = Date.now();
+        try {
+          const { error } = await supabase.from("patients").select("id").limit(1);
+          payload.database = {
+            ok: !error,
+            latencyMs: Date.now() - t0,
+            ...(error ? { error: error.message } : {}),
+          };
+        } catch (e) {
+          payload.database = {
+            ok: false,
+            latencyMs: Date.now() - t0,
+            error: String(e && e.message ? e.message : e),
+          };
+        }
+      } else {
+        payload.database = {
+          ok: null,
+          skipped: typeof isSupabaseEnabled === "function" && !isSupabaseEnabled() ? "supabase_disabled" : "not_ready",
+        };
+      }
+    }
+    res.status(200).set("Cache-Control", "no-store").json(payload);
+  } catch (e) {
+    res.status(500).set("Cache-Control", "no-store").json({
+      ok: false,
+      status: "error",
+      message: String(e && e.message ? e.message : e),
+    });
+  }
 });
 
 // ── Fast ping ─────────────────────────────────────────────────────────────────
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ================== DEBUG: SMTP TEST ENDPOINT ==================
-// TEMPORARY - Remove after testing
+// Disabled in production (avoid leaking SMTP config shape).
 app.get("/debug/smtp-status", (req, res) => {
+  if (IS_PROD) return res.status(404).json({ ok: false, error: "not_found" });
   res.json({
     configured: !!emailTransporter,
     env: {
@@ -5919,6 +5981,7 @@ app.get("/debug/smtp-status", (req, res) => {
 });
 
 app.get("/debug/test-email", async (req, res) => {
+  if (IS_PROD) return res.status(404).json({ ok: false, error: "not_found" });
   const testEmail = req.query.to || "test@example.com";
   
   if (!emailTransporter) {

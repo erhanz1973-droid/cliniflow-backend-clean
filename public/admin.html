@@ -2,8 +2,8 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202603301"></script>
-  <script src="/admin-i18n.js?v=24"></script>
+  <script src="/api-base.js?v=202605098"></script>
+  <script src="/admin-i18n.js?v=27"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
@@ -679,7 +679,7 @@
     redirectToAdminLogin();
   }
 
-  const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+  const API = (typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app');
 
   // ── Plan & usage ─────────────────────────────────────────────────────────────
   // Keep cards stable: never show mock/optimistic numbers before real API data.
@@ -923,7 +923,7 @@
   };
 
   function loadProcedureLabelCache() {
-    const APIx = typeof cliniflowApiBase === "function" ? cliniflowApiBase() : "";
+    const APIx = (typeof cliniflowAdminApiOrigin === "function" ? cliniflowAdminApiOrigin() : "https://cliniflow-backend-clean-production.up.railway.app");
     if (!APIx) return;
     const lang = (window.i18n && window.i18n.getLang) ? window.i18n.getLang() : "en";
     fetch(`${APIx}/api/procedures?lang=${encodeURIComponent(lang)}`, { headers: { Accept: "application/json" } })

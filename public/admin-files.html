@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
-  <script src="/api-base.js?v=202603301"></script>
+  <script src="/api-base.js?v=202605098"></script>
   <title data-i18n="files.pageTitle">Admin – Hasta Dosyaları</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script>
@@ -11,7 +11,7 @@
       if (!token) window.location.href = "/admin-login.html";
     })();
   </script>
-  <script src="/admin-i18n.js?v=21"></script>
+  <script src="/admin-i18n.js?v=27"></script>
   <link rel="stylesheet" href="/admin-layout.css" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -219,7 +219,7 @@
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
     // Relative path — prepend current origin
     if (url.startsWith('/')) {
-      const b = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+      const b = (typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app');
       return (b || window.location.origin) + url;
     }
     return url;

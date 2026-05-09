@@ -15,12 +15,25 @@
  *   <script>window.CLINIFLOW_API_BASE_URL="https://your-api.example.com"</script> before this file
  *   or <meta name="cliniflow-api-base" content="https://your-api.example.com" />
  *
+ * Architectural contract (do not blur these layers):
+ *   1. Raw / untrusted — window.cliniflowApiBase() — first-pass cache from host/meta/env; may be '' or non-http(s); never build fetch URLs from this alone.
+ *   2. Operational / trusted — window.cliniflowAdminApiOrigin() — normalized absolute http(s) origin for static HTML fetches; never ''; falls back to DEFAULT_BACKEND_API.
+ *   3. Validation — window.assertValidApiOrigin(origin) — shared check: returns stripped origin or '' if missing/invalid; warns when non-empty but not http(s): (silent mode for internal retries).
+ *   4. Hard fallback — HTML/script may substitute the production Railway URL when this file never runs (missing global).
+ *
+ * Globals:
+ *   window.cliniflowAdminApiOrigin() — non-empty absolute http(s) URL for admin / patient static pages (meta + DEFAULT_BACKEND_API fallback).
+ *   window.assertValidApiOrigin(origin) — validate a candidate API origin (prefer before concatenating paths).
+ *   window.API_BASE_URL, window.API_BASE — same as cliniflowAdminApiOrigin() at load time (prefer calling cliniflowAdminApiOrigin() if meta loads late).
+ *   window.cliniflowApiBase() — raw cached resolve (may be '' on unknown hosts; prefer cliniflowAdminApiOrigin for fetches).
+ *   window.getApiBase — alias of cliniflowApiBase
+ *
  * Production API is on Railway; admin UI may still be on Render:
  *   <script>window.__CLINIFLOW_RAILWAY_BACKEND__="https://YOUR-APP.up.railway.app"</script> before this file
  *   or <meta name="cliniflow-api-base" content="https://YOUR-APP.up.railway.app" />
  *
  * Defaults:
- *   localhost / 127.0.0.1 → same origin as the page (e.g. :3000 when the app is served on port 3000)
+ *   localhost / 127.0.0.1 / ::1 → DEFAULT_BACKEND_API (static HTML on any port has no /api; do not use location.host)
  *   cliniflow-admin.onrender.com → DEFAULT_BACKEND_API (Railway production API)
  *   cliniflow-backend-*.onrender.com → https://cliniflow-admin.onrender.com (static HTML on legacy Render backend → admin API on admin service)
  *   *.netlify.app → DEFAULT_BACKEND_API (admin UI on Netlify → API on Railway)
@@ -37,6 +50,29 @@
   function stripTrailingSlash(s) {
     return String(s || '').replace(/\/+$/, '');
   }
+
+  /**
+   * Shared validation for any candidate API origin (same semantics everywhere).
+   * @param {*} origin
+   * @param {boolean} [silent] — if true, no console.warn on invalid non-empty values (internal/cache probes).
+   * @returns {string} stripped http(s) origin, or '' if missing or not absolute http(s)
+   */
+  function assertValidApiOrigin(origin, silent) {
+    var raw = String(origin == null ? '' : origin).trim();
+    if (!raw) return '';
+    var s = stripTrailingSlash(raw);
+    if (/^https?:\/\//i.test(s)) return s;
+    if (!silent) {
+      try {
+        console.warn('[api-base] assertValidApiOrigin: expected http(s) absolute URL, got:', origin);
+      } catch (_e) {}
+    }
+    return '';
+  }
+
+  w.assertValidApiOrigin = function (origin) {
+    return assertValidApiOrigin(origin, false);
+  };
 
   /** Admin UI is served from backend static; Node routes like /api/admin/messages/* live on cliniflow-admin service. */
   function isBackendStaticUiHost(hostname) {
@@ -63,11 +99,8 @@
       return stripTrailingSlash(w.__CLINIFLOW_RAILWAY_BACKEND__);
     }
     var h = typeof w.location !== 'undefined' ? w.location.hostname : '';
-    if (h === 'localhost' || h === '127.0.0.1') {
-      if (typeof w.location !== 'undefined' && w.location.host) {
-        return stripTrailingSlash(w.location.protocol + '//' + w.location.host);
-      }
-      return stripTrailingSlash('http://' + h + ':10000');
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') {
+      return stripTrailingSlash(DEFAULT_BACKEND_API);
     }
     if (isBackendStaticUiHost(h)) {
       return stripTrailingSlash(DEFAULT_ADMIN_API_RENDER);
@@ -83,8 +116,23 @@
 
   var cached = resolveOnce();
 
+  /** Static admin from python/http-server on loopback: never treat the static origin as the API (returns HTML, not JSON). */
+  (function coerceLoopbackStaticAdmin() {
+    var pageHost = typeof w.location !== 'undefined' ? String(w.location.hostname || '') : '';
+    if (pageHost !== 'localhost' && pageHost !== '127.0.0.1' && pageHost !== '::1') return;
+    if (!cached) return;
+    try {
+      var u = new URL(cached);
+      if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+        cached = stripTrailingSlash(DEFAULT_BACKEND_API);
+      }
+    } catch (_e) {
+      /* ignore */
+    }
+  })();
+
   try {
-    console.log('🌐 API BASE:', cached || '(empty — use same-origin relative URLs)');
+    console.log('🌐 API BASE (raw cache):', cached || '(empty)');
   } catch (_e) {
     /* ignore */
   }
@@ -93,10 +141,49 @@
     return cached;
   };
 
+  var _adminApiFallbackWarned = false;
+
+  /**
+   * Use for all admin/register/login/patient static HTML fetches.
+   * Never returns '' — falls back to meta cliniflow-api-base then DEFAULT_BACKEND_API.
+   */
+  function cliniflowAdminApiOriginImpl() {
+    var b = assertValidApiOrigin(cached, true);
+    if (b) return b;
+    try {
+      var meta = typeof document !== 'undefined' ? document.querySelector('meta[name="cliniflow-api-base"]') : null;
+      var fm = meta && meta.getAttribute('content');
+      if (fm && String(fm).trim()) {
+        var m = assertValidApiOrigin(fm, true);
+        if (m) return m;
+      }
+    } catch (_e) {}
+    if (!_adminApiFallbackWarned) {
+      _adminApiFallbackWarned = true;
+      try {
+        console.warn('[api-base] cliniflowAdminApiOrigin: invalid/empty cache — using DEFAULT_BACKEND_API');
+      } catch (_e2) {}
+    }
+    return stripTrailingSlash(DEFAULT_BACKEND_API);
+  }
+
+  w.cliniflowAdminApiOrigin = cliniflowAdminApiOriginImpl;
+
+  w.getApiBase = w.cliniflowApiBase;
+  w.API_BASE_URL = cliniflowAdminApiOriginImpl();
+  w.API_BASE = w.API_BASE_URL;
+
+  try {
+    console.log('🌐 API BASE (admin resolve):', w.API_BASE_URL);
+  } catch (_e) {
+    /* ignore */
+  }
+
   w.apiUrl = function (path) {
     var p = String(path || '');
     if (!p.startsWith('/')) p = '/' + p;
-    return cached ? cached + p : p;
+    var base = cliniflowAdminApiOriginImpl();
+    return base ? base + p : p;
   };
 
   /** Same origin as DEFAULT_ADMIN_API_RENDER — use in HTML fallbacks if this script is cached old. */
@@ -171,7 +258,7 @@
     var fd = new FormData();
     fd.append("file", file, fileName || "photo.jpg");
     fd.append("language", userLanguage);
-    var base = typeof w.cliniflowApiBase === 'function' ? w.cliniflowApiBase() : '';
+    var base = typeof w.cliniflowAdminApiOrigin === 'function' ? w.cliniflowAdminApiOrigin() : '';
     var path = '/api/chat/ai-upload';
     var url = base ? String(base).replace(/\/+$/, '') + path : path;
     return fetch(url, {
@@ -196,7 +283,7 @@
     console.log("🌍 FRONTEND LANG:", userLanguage);
     w.cliniflowLogAnalyzeLanguage(userLanguage);
     b.language = userLanguage;
-    var base = typeof w.cliniflowApiBase === 'function' ? w.cliniflowApiBase() : '';
+    var base = typeof w.cliniflowAdminApiOrigin === 'function' ? w.cliniflowAdminApiOrigin() : '';
     var path = '/api/chat/ai-analyze';
     var url = base ? String(base).replace(/\/+$/, '') + path : path;
     return fetch(url, {
@@ -242,7 +329,7 @@
       console.warn('🌍 No patient token — localStorage only');
       return { ok: false, skipped: true, local: true };
     }
-    var base = typeof w.cliniflowApiBase === 'function' ? w.cliniflowApiBase() : '';
+    var base = typeof w.cliniflowAdminApiOrigin === 'function' ? w.cliniflowAdminApiOrigin() : '';
     var path = '/api/patient/language';
     var url = base ? String(base).replace(/\/+$/, '') + path : path;
     var res = await fetch(url, {

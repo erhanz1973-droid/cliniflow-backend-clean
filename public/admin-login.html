@@ -2,13 +2,15 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202603301"></script>
+  <!-- Local static server (e.g. :8080): API is not same-origin — pin production API before api-base.js -->
+  <meta name="cliniflow-api-base" content="https://cliniflow-backend-clean-production.up.railway.app" />
+  <script src="/api-base.js?v=202605098"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
   <title id="pageTitle">Clinifly Admin – Login</title>
-  <script src="/admin-i18n.js?v=21"></script>
+  <script src="/admin-i18n.js?v=27"></script>
   <style>
     :root { 
       --bg:#0f172a; 
@@ -247,18 +249,39 @@
 
 <script>
   const API = (function resolveLoginApiOrigin() {
-    if (typeof cliniflowApiBase === 'function') {
-      const b = cliniflowApiBase();
-      if (b) return b;
+    /** Must match DEFAULT_BACKEND_API in api-base.js when using cliniflow-backend-clean static files locally */
+    const PRODUCTION_API = 'https://cliniflow-backend-clean-production.up.railway.app';
+    function metaApiBase() {
+      try {
+        const m = document.querySelector('meta[name="cliniflow-api-base"]');
+        const c = m && m.getAttribute('content');
+        return c && String(c).trim() ? String(c).trim().replace(/\/+$/, '') : '';
+      } catch (_) {
+        return '';
+      }
     }
+    if (typeof cliniflowAdminApiOrigin === 'function') {
+      const b = cliniflowAdminApiOrigin();
+      if (b && /^https?:\/\//i.test(String(b))) return String(b).replace(/\/+$/, '');
+    }
+    const fromMeta = metaApiBase();
+    if (fromMeta) return fromMeta;
     const h = typeof location !== 'undefined' ? String(location.hostname || '') : '';
     if (/^cliniflow-backend[a-z0-9-]*\.onrender\.com$/i.test(h)) {
       return (typeof window.CLINIFLOW_ADMIN_API_ORIGIN === 'string' && window.CLINIFLOW_ADMIN_API_ORIGIN.trim())
         ? window.CLINIFLOW_ADMIN_API_ORIGIN.replace(/\/+$/, '')
         : 'https://cliniflow-admin.onrender.com';
     }
-    return '';
+    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') {
+      return PRODUCTION_API;
+    }
+    /** file://, unknown host, or api-base.js failed to load — never leave API empty (avoids broken fetch URL). */
+    return PRODUCTION_API;
   })();
+
+  try {
+    console.log("[LOGIN] API origin:", API || "(empty — login will fail)");
+  } catch (_) {}
 
   function showAlert(message, type = "error") {
     const container = document.getElementById("alert-container");
@@ -327,13 +350,24 @@
       const clinicCode = document.getElementById("clinicCode").value.trim().toUpperCase();
       const password = document.getElementById("password").value;
 
-      const res = await fetch(`${API}/api/admin/login`, {
+      const loginUrl = `${API.replace(/\/+$/, '')}/api/admin/login`;
+      console.log("[LOGIN] POST", loginUrl);
+
+      const res = await fetch(loginUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, clinicCode, password }),
       });
 
-      const json = await res.json();
+      const raw = await res.text();
+      let json;
+      try {
+        json = JSON.parse(raw);
+      } catch (_) {
+        console.error("[LOGIN] Expected JSON from", API + "/api/admin/login", "got:", raw.slice(0, 280));
+        showAlert("API JSON döndürmedi (HTML/hata sayfası). Muhtemelen yanlış API kökü: " + API, "error");
+        return;
+      }
 
       if (!res.ok || !json.ok) {
         const detail =
@@ -374,6 +408,13 @@
       }
 
       showAlert("Login successful", "success");
+
+      // ✅ REDIRECT — persist selected UI language before navigation (handoff to admin.html)
+      if (window.AdminI18n && typeof window.AdminI18n.persistFromUi === "function") {
+        window.AdminI18n.persistFromUi();
+      } else if (typeof window.persistAdminUiLanguage === "function") {
+        window.persistAdminUiLanguage();
+      }
 
       // ✅ REDIRECT
       setTimeout(() => {
@@ -510,7 +551,18 @@
             }),
           });
           
-          const json = await res.json();
+          const rawOtp = await res.text();
+          let json;
+          try {
+            json = JSON.parse(rawOtp);
+          } catch (_) {
+            console.error("[LOGIN] OTP non-JSON from", API + "/api/admin/verify-otp", rawOtp.slice(0, 280));
+            setOTPMsg("Sunucu JSON döndürmedi (yanlış API?). " + API, "err");
+            submitBtn.disabled = false;
+            submitBtn.textContent = i18n.t("login.verifyOTP");
+            isSubmittingOTP = false;
+            return;
+          }
           
           if (!res.ok) {
             let errorMsg = i18n.t("login.errors.otpFailed");
@@ -555,7 +607,13 @@
             }
             
             setOTPMsg(i18n.t("login.success", { name: json.clinicName || clinicCode }), "ok");
-            
+
+            if (window.AdminI18n && typeof window.AdminI18n.persistFromUi === "function") {
+              window.AdminI18n.persistFromUi();
+            } else if (typeof window.persistAdminUiLanguage === "function") {
+              window.persistAdminUiLanguage();
+            }
+
             // Redirect to dashboard
             setTimeout(() => {
               goToAdminDashboard();

@@ -259,13 +259,13 @@ function loadNearby() {
 
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
-      const baseRaw =
-        typeof window.cliniflowApiBase === "function"
-          ? window.cliniflowApiBase()
-          : typeof window.cliniflowApiBase === "string"
-            ? window.cliniflowApiBase
-            : "";
-      const base = String(baseRaw || "").replace(/\/+$/, "");
+      const PRODUCTION_API = "https://cliniflow-backend-clean-production.up.railway.app";
+      let baseRaw =
+        typeof window.cliniflowAdminApiOrigin === "function"
+          ? window.cliniflowAdminApiOrigin()
+          : "";
+      if (!baseRaw || !/^https?:\/\//i.test(String(baseRaw))) baseRaw = PRODUCTION_API;
+      const base = String(baseRaw).replace(/\/+$/, "");
       const url = `${base}/api/clinics/nearby?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&limit=20`;
 
       try {

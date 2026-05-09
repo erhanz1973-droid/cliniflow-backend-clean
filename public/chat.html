@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <script src="/api-base.js?v=202604275"></script>
+  <script src="/api-base.js?v=202605098"></script>
   <script src="/i18n.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Chat - Clinifly</title>
@@ -220,7 +220,7 @@
     
     // Get token from localStorage or URL
     const token = localStorage.getItem('patient_token') || urlParams.get('token') || '';
-    const API_BASE = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+    const API_BASE = (typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app');
 
     (function syncLang() {
       try {

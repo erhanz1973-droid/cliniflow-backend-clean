@@ -34,9 +34,9 @@
       }
       return u;
     }
-    if (typeof cliniflowApiBase === 'function') {
-      var b = cliniflowApiBase();
-      if (b) return String(b).replace(/\/+$/, '') + p;
+    if (typeof cliniflowAdminApiOrigin === 'function') {
+      var b = cliniflowAdminApiOrigin();
+      if (b && /^https?:\/\//i.test(String(b))) return String(b).replace(/\/+$/, '') + p;
     }
     if (isBackendUiHost()) return String(RENDER_ADMIN_API_FALLBACK).replace(/\/+$/, '') + p;
     return p;
@@ -246,7 +246,9 @@
         e.stopPropagation();
         var lang = String((e.currentTarget && e.currentTarget.getAttribute('data-lang')) || '').trim().toLowerCase();
         if (!allowedLangs.has(lang)) return;
-        if (window.i18n && typeof window.i18n.setLanguage === 'function') {
+        if (window.AdminI18n && typeof window.AdminI18n.setLanguage === 'function') {
+          window.AdminI18n.setLanguage(lang);
+        } else if (window.i18n && typeof window.i18n.setLanguage === 'function') {
           window.i18n.setLanguage(lang);
         } else if (typeof window.onLanguageChange === 'function') {
           window.onLanguageChange(lang);
@@ -255,6 +257,14 @@
     });
     // Initial pass (covers first paint before i18n emits)
     setTimeout(refreshLayoutI18n, 0);
+    try {
+      if (typeof window.rebindAdminLangButtons === 'function') window.rebindAdminLangButtons();
+      if (window.AdminI18n && typeof window.AdminI18n.syncFromStorage === 'function') {
+        window.AdminI18n.syncFromStorage();
+      } else if (typeof window.syncAdminLanguageFromStorage === 'function') {
+        window.syncAdminLanguageFromStorage();
+      }
+    } catch (_) {}
   }
 
   /* ── Load clinic name ────────────────────────────────────── */

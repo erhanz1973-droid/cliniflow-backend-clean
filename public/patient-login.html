@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hasta Girişi - Cliniflow</title>
-  <script src="/api-base.js?v=202604275"></script>
+  <script src="/api-base.js?v=202605098"></script>
   <script src="/i18n.js"></script>
   <script src="/auth-field-labels.js?v=4"></script>
   <style>
@@ -425,11 +425,13 @@
   </div>
 
   <script>
+    const PRODUCTION_API = "https://cliniflow-backend-clean-production.up.railway.app";
+    const _patientLoginApi =
+      typeof cliniflowAdminApiOrigin === "function" ? cliniflowAdminApiOrigin() : "https://cliniflow-backend-clean-production.up.railway.app";
     const API =
-      (typeof cliniflowApiBase === "function" && cliniflowApiBase()) ||
-      (window.location.hostname === "localhost"
-        ? "http://localhost:10000"
-        : "https://cliniflow-backend-dg8a.onrender.com");
+      _patientLoginApi && /^https?:\/\//i.test(String(_patientLoginApi))
+        ? String(_patientLoginApi).replace(/\/+$/, "")
+        : PRODUCTION_API;
     
     /** API → existing localStorage → navigator; never default to Turkish in code. */
     function resolveLangAfterAuth(json) {

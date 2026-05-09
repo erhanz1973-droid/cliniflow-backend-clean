@@ -8,8 +8,8 @@
   <meta name="cliniflow-stripe-price-basic" content="" />
   <meta name="cliniflow-stripe-price-pro" content="" />
   <meta name="DEBUG" content="WORKING" />
-  <script src="/admin-i18n.js?v=21"></script>
-  <script src="/api-base.js?v=1"></script>
+  <script src="/admin-i18n.js?v=27"></script>
+  <script src="/api-base.js?v=202605098"></script>
   <style>
     :root {
       --bg: #111827;
@@ -579,11 +579,11 @@
     }
 
     function checkoutApiOrigin() {
-      if (typeof cliniflowApiBase === "function") {
-        var b = cliniflowApiBase();
-        if (b) return b.replace(/\/+$/, "");
+      if (typeof cliniflowAdminApiOrigin === "function") {
+        var b = cliniflowAdminApiOrigin();
+        if (b && /^https?:\/\//i.test(String(b))) return String(b).replace(/\/+$/, "");
       }
-      return "";
+      return "https://cliniflow-backend-clean-production.up.railway.app";
     }
 
     async function upgradePlan(priceId, tier) {

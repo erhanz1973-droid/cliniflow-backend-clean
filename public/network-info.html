@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202603301"></script>
+  <script src="/api-base.js?v=202605098"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Network Info - Clinifly</title>
   <style>
@@ -181,7 +181,12 @@
       testResult.style.background = '#fef3c7';
       testResult.style.color = '#92400e';
 
-      const baseUrl = typeof cliniflowApiBase === 'function' && cliniflowApiBase() ? cliniflowApiBase() : window.location.origin;
+      const PRODUCTION_API = 'https://cliniflow-backend-clean-production.up.railway.app';
+      const _nw = typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app';
+      const baseUrl =
+        _nw && /^https?:\/\//i.test(String(_nw))
+          ? String(_nw).replace(/\/+$/, '')
+          : PRODUCTION_API;
       try {
         const response = await fetch(`${baseUrl}/health`);
         const data = await response.json();

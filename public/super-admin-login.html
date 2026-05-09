@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202603301"></script>
+  <script src="/api-base.js?v=202605098"></script>
   <script src="/i18n.js"></script>
   <script src="/auth-field-labels.js?v=2"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -191,7 +191,18 @@
   </div>
 
 <script>
-  const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
+  const PRODUCTION_API = 'https://cliniflow-backend-clean-production.up.railway.app';
+  const _superLoginApi =
+    typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app';
+  const API =
+    _superLoginApi && /^https?:\/\//i.test(String(_superLoginApi))
+      ? String(_superLoginApi).replace(/\/+$/, '')
+      : PRODUCTION_API;
+  if (!_superLoginApi || !/^https?:\/\//i.test(String(_superLoginApi))) {
+    try {
+      console.error('[SUPER-ADMIN LOGIN] API origin missing or invalid — using production:', API);
+    } catch (_) {}
+  }
 
   function L(key) {
     return typeof cliniflowAuthLabel === "function"

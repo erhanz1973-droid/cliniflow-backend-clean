@@ -1,5 +1,11 @@
 // API helpers for Admin Treatment (load /api-base.js before this file)
-const API_BASE = typeof window.cliniflowApiBase === 'function' ? window.cliniflowApiBase() : '';
+const PRODUCTION_API = 'https://cliniflow-backend-clean-production.up.railway.app';
+const _adminJsApi =
+  typeof window.cliniflowAdminApiOrigin === 'function' ? window.cliniflowAdminApiOrigin() : '';
+const API_BASE =
+  _adminJsApi && /^https?:\/\//i.test(String(_adminJsApi))
+    ? String(_adminJsApi).replace(/\/+$/, '')
+    : PRODUCTION_API;
 const STATUS_ORDER = ["PLANNED", "ACTIVE", "COMPLETED", "CANCELLED"];
 let PROCEDURE_DEFS = [];
 let TYPE_TO_CATEGORY = {};

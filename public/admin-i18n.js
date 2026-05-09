@@ -1,4 +1,4 @@
-// Admin Panel i18n System
+// Admin Panel i18n — use window.AdminI18n.* only for admin_lang. Dev: ?adminI18nDev=1 blocks rogue localStorage writes; ?adminI18nValidate=1 logs EN vs TR/RU/KA section parity.
 (function() {
   'use strict';
 
@@ -8,10 +8,76 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v22');
+  console.log('I18N FILE VERSION:', 'v27');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
+
+  var ADMIN_LANG_ALLOWED = new Set(['tr', 'en', 'ru', 'ka']);
+  var ADMIN_LANG_STORAGE_KEY = 'admin_lang';
+
+  /** Normalize tags like en-US, EN, ru_RU → tr|en|ru|ka (never browser navigator — admin UI is explicit). */
+  function normalizeAdminLang(raw) {
+    var s = String(raw == null ? '' : raw).trim().toLowerCase().replace(/_/g, '-');
+    if (!s) return 'en';
+    var base = s.split('-')[0];
+    return ADMIN_LANG_ALLOWED.has(base) ? base : 'en';
+  }
+
+  /** Single read path for persisted admin UI language (normalized). */
+  function readAdminLangStorage() {
+    try {
+      return normalizeAdminLang(localStorage.getItem(ADMIN_LANG_STORAGE_KEY) || 'en');
+    } catch (e) {
+      return 'en';
+    }
+  }
+
+  /** Only writeAdminLangStorage may set localStorage admin_lang (dev guard enforces this on localhost). */
+  var _allowAdminLangWrite = false;
+
+  /** Single write path for localStorage — use only from i18n.setLanguage / init canonicalization. */
+  function writeAdminLangStorage(raw) {
+    var norm = normalizeAdminLang(raw);
+    try {
+      _allowAdminLangWrite = true;
+      localStorage.setItem(ADMIN_LANG_STORAGE_KEY, norm);
+    } catch (e) {
+      /* quota / private mode */
+    } finally {
+      _allowAdminLangWrite = false;
+    }
+    return norm;
+  }
+
+  /** localhost / ?adminI18nDev=1 — warn and ignore rogue writes to admin_lang */
+  function installAdminLangStorageGuard() {
+    try {
+      var h = typeof location !== 'undefined' ? String(location.hostname || '') : '';
+      var dev =
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        h === '::1' ||
+        (typeof location !== 'undefined' && /[?&]adminI18nDev=1(?:&|$)/.test(location.search || ''));
+      if (!dev || typeof localStorage === 'undefined') return;
+      var orig = localStorage.setItem.bind(localStorage);
+      localStorage.setItem = function (key, val) {
+        if (key === ADMIN_LANG_STORAGE_KEY && !_allowAdminLangWrite) {
+          console.warn(
+            '[AdminI18n] Ignored direct localStorage.setItem("' +
+              ADMIN_LANG_STORAGE_KEY +
+              '"). Use AdminI18n.setLanguage() or window.i18n.setLanguage().',
+          );
+          return;
+        }
+        return orig(key, val);
+      };
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  installAdminLangStorageGuard();
 
   const DASHBOARD_SIDEBAR_I18N = {
     mainMenu: { en: 'Main Menu', tr: 'Ana Menü', ru: 'Главное меню', ka: 'მთავარი მენიუ' },
@@ -1677,6 +1743,9 @@
         assignedOk: "Assigned:",
         assignDisabledHint: "This lead is already assigned to a doctor.",
       },
+    },
+
+    ru: {
       common: {
         loading: "Загрузка...", save: "Сохранить", cancel: "Отмена", delete: "Удалить",
         edit: "Редактировать", search: "Поиск", filter: "Фильтр", close: "Закрыть",
@@ -2817,9 +2886,60 @@
     }
   };
 
+  /** localhost or ?adminI18nValidate=1 — compare top-level section keys across tr/en/ru/ka */
+  function runOptionalTranslationParityCheck() {
+    try {
+      var h = typeof location !== 'undefined' ? String(location.hostname || '') : '';
+      var validate =
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        h === '::1' ||
+        (typeof location !== 'undefined' && /[?&]adminI18nValidate=1(?:&|$)/.test(location.search || ''));
+      if (!validate || !translations || !translations.en || typeof translations.en !== 'object') return;
+      var enKeys = Object.keys(translations.en).sort().join(',');
+      ['tr', 'ru', 'ka'].forEach(function (L) {
+        var o = translations[L];
+        if (!o || typeof o !== 'object') {
+          console.warn('[AdminI18n parity] missing language root:', L);
+          return;
+        }
+        var keys = Object.keys(o).sort().join(',');
+        if (keys !== enKeys) {
+          var enList = Object.keys(translations.en);
+          var missing = enList.filter(function (k) {
+            return !Object.prototype.hasOwnProperty.call(o, k);
+          });
+          var extra = Object.keys(o).filter(function (k) {
+            return !Object.prototype.hasOwnProperty.call(translations.en, k);
+          });
+          if (missing.length) {
+            console.warn('[AdminI18n parity] ' + L + ' missing top-level sections vs en (' + missing.length + '):', missing.slice(0, 40));
+          }
+          if (extra.length) {
+            console.warn('[AdminI18n parity] ' + L + ' extra top-level sections vs en (' + extra.length + '):', extra.slice(0, 40));
+          }
+        }
+      });
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  runOptionalTranslationParityCheck();
+
   function emitI18nReady() {
     if (typeof document !== 'undefined' && document.dispatchEvent) {
       document.dispatchEvent(new Event("i18n:ready"));
+    }
+  }
+
+  function emitAdminLanguageChanged(lang, meta) {
+    if (typeof document === 'undefined' || !document.dispatchEvent) return;
+    try {
+      var detail = Object.assign({ lang: lang }, meta && typeof meta === 'object' ? meta : {});
+      document.dispatchEvent(new CustomEvent('admin-language-changed', { detail: detail }));
+    } catch (e) {
+      /* ignore */
     }
   }
 
@@ -2895,10 +3015,14 @@
           e.preventDefault();
           e.stopPropagation();
         }
-        const lang = String((e && e.currentTarget && e.currentTarget.getAttribute('data-lang')) || btn.getAttribute('data-lang') || '').trim().toLowerCase();
+        const lang = normalizeAdminLang(
+          (e && e.currentTarget && e.currentTarget.getAttribute('data-lang')) || btn.getAttribute('data-lang') || ''
+        );
         if (!allowed.has(lang)) return;
         console.log('LANG CLICKED:', lang);
-        if (window.i18n && typeof window.i18n.setLang === 'function') {
+        if (window.AdminI18n && typeof window.AdminI18n.setLanguage === 'function') {
+          window.AdminI18n.setLanguage(lang);
+        } else if (window.i18n && typeof window.i18n.setLang === 'function') {
           window.i18n.setLang(lang);
         } else if (typeof window.onLanguageChange === 'function') {
           window.onLanguageChange(lang);
@@ -2931,13 +3055,14 @@
         return;
       }
       this._i18nInitOnce = true;
-      const saved = localStorage.getItem('admin_lang') || 'en';
+      const saved = readAdminLangStorage();
       const lang0 = translations[saved] ? saved : 'en';
       this.currentLang = lang0;
-      localStorage.setItem('admin_lang', lang0);
+      writeAdminLangStorage(lang0);
       if (typeof document !== 'undefined' && document.documentElement) {
         document.documentElement.lang = lang0;
       }
+      emitAdminLanguageChanged(lang0, { phase: 'init' });
       this.createLangSwitcher();
       setTimeout(function () {
         clearStaleNavTextNodes();
@@ -2950,13 +3075,15 @@
     },
     
     setLanguage(lang) {
+      lang = normalizeAdminLang(lang);
       if (!translations[lang]) lang = 'en';
       this.currentLang = lang;
-      localStorage.setItem('admin_lang', lang);
+      writeAdminLangStorage(lang);
       if (typeof document !== 'undefined' && document.documentElement) {
         document.documentElement.lang = lang;
       }
       clearStaleNavTextNodes();
+      emitAdminLanguageChanged(lang, { phase: 'user' });
       emitI18nReady();
       setTimeout(function () {
         rerenderAll();
@@ -3143,11 +3270,79 @@
 
   window.onLanguageChange = function (lang) {
     try {
-      if (window.i18n && typeof window.i18n.setLanguage === 'function') {
+      if (window.AdminI18n && typeof window.AdminI18n.setLanguage === 'function') {
+        window.AdminI18n.setLanguage(lang);
+      } else if (window.i18n && typeof window.i18n.setLanguage === 'function') {
         window.i18n.setLanguage(lang);
       }
     } catch (e) {
       console.error("[i18n] window.onLanguageChange failed:", e);
+    }
+  };
+
+  /**
+   * Canonical admin UI language API — all persistence goes through i18n.setLanguage / writeAdminLangStorage.
+   * Do not call localStorage.setItem('admin_lang', ...) elsewhere.
+   */
+  var adminI18nApi = Object.freeze({
+    STORAGE_KEY: ADMIN_LANG_STORAGE_KEY,
+    /** Dispatched on document after language changes: detail = { lang, phase: 'init'|'user' } */
+    LANGUAGE_CHANGED_EVENT: 'admin-language-changed',
+    normalizeLanguage: normalizeAdminLang,
+    readStored: readAdminLangStorage,
+    getLanguage: function () {
+      return i18n.getLang();
+    },
+    setLanguage: function (lang) {
+      return i18n.setLanguage(lang);
+    },
+    /** Before redirect (login → dashboard): align storage + runtime + document.lang. */
+    persistFromUi: function () {
+      try {
+        var norm = normalizeAdminLang(
+          (typeof i18n.getLang === 'function' ? i18n.getLang() : '') || readAdminLangStorage() || 'en'
+        );
+        i18n.setLanguage(norm);
+      } catch (e) {
+        /* ignore */
+      }
+    },
+    /** After layout inject: apply stored language or refresh data-i18n. */
+    syncFromStorage: function () {
+      try {
+        var stored = readAdminLangStorage();
+        if (typeof i18n.getLang === 'function' && i18n.getLang() !== stored) {
+          i18n.setLanguage(stored);
+        } else if (typeof i18n.updatePage === 'function') {
+          i18n.updatePage();
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    },
+  });
+  try {
+    Object.defineProperty(window, 'AdminI18n', {
+      value: adminI18nApi,
+      configurable: false,
+      writable: false,
+      enumerable: true,
+    });
+  } catch (e) {
+    window.AdminI18n = adminI18nApi;
+  }
+
+  /** @deprecated Use AdminI18n.persistFromUi */
+  window.persistAdminUiLanguage = function () {
+    if (window.AdminI18n && typeof window.AdminI18n.persistFromUi === 'function') {
+      window.AdminI18n.persistFromUi();
+    }
+  };
+
+  /** @deprecated Use AdminI18n.syncFromStorage */
+  window.syncAdminLanguageFromStorage = function () {
+    if (window.AdminI18n && typeof window.AdminI18n.syncFromStorage === 'function') {
+      window.AdminI18n.syncFromStorage();
     }
   };
 

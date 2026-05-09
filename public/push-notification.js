@@ -3,11 +3,12 @@
 // Load /api-base.js before this script when the API is on another origin.
 
 function pushNotificationApiBase() {
-  if (typeof window !== 'undefined' && typeof window.cliniflowApiBase === 'function') {
-    var b = window.cliniflowApiBase();
-    if (b) return b;
+  var PRODUCTION = 'https://cliniflow-backend-clean-production.up.railway.app';
+  if (typeof window !== 'undefined' && typeof window.cliniflowAdminApiOrigin === 'function') {
+    var b = window.cliniflowAdminApiOrigin();
+    if (b && /^https?:\/\//i.test(String(b))) return String(b).replace(/\/+$/, '');
   }
-  return typeof window !== 'undefined' && window.location ? window.location.origin : '';
+  return PRODUCTION;
 }
 
 /**
