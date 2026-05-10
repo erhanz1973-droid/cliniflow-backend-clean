@@ -51204,16 +51204,32 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       ),
     ];
     const nameById = {};
+    /** Lowercased patient_id → { clinic_id, is_lead } — source of truth when thread row lags after PATCH /api/patient/clinic. */
+    const patientMetaById = {};
     if (pids.length > 0) {
-      const { data: prow, error: pErr } = await supabase
-        .from("patients")
-        .select("id, name, full_name")
-        .in("id", pids.slice(0, 500));
-      if (!pErr && Array.isArray(prow)) {
-        for (const p of prow) {
-          const nid = String(p.id || "").trim();
-          nameById[nid] = String(p.name || p.full_name || "Patient");
+      const chunk = pids.slice(0, 500);
+      const patientSelVariants = [
+        "id, name, full_name, clinic_id, is_lead",
+        "id, name, full_name, clinic_id",
+        "id, name, full_name",
+      ];
+      let prow = [];
+      for (const sel of patientSelVariants) {
+        const { data, error } = await supabase.from("patients").select(sel).in("id", chunk);
+        if (!error && Array.isArray(data)) {
+          prow = data;
+          break;
         }
+      }
+      for (const p of prow) {
+        const nid = String(p.id || "").trim();
+        if (!nid) continue;
+        nameById[nid] = String(p.name || p.full_name || "Patient");
+        const low = nid.toLowerCase();
+        patientMetaById[low] = {
+          clinic_id: p.clinic_id != null && String(p.clinic_id).trim() ? String(p.clinic_id).trim() : null,
+          is_lead: p.is_lead === true ? true : p.is_lead === false ? false : null,
+        };
       }
     }
 
@@ -51331,12 +51347,22 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const myOid = mine?.id ? String(mine.id) : null;
       const pidKey = pid ? pid.toLowerCase() : "";
       const thrMerged = pidKey ? leadThreadByPatientTr.get(pidKey) : null;
+      const pmeta = pidKey ? patientMetaById[pidKey] : null;
+      const patientMemberThisClinic =
+        UUID_RE.test(clinicId) &&
+        pmeta &&
+        pmeta.clinic_id &&
+        String(pmeta.clinic_id).toLowerCase() === String(clinicId).toLowerCase() &&
+        pmeta.is_lead === false;
       let lead_thread_is_lead = null;
-      if (thrMerged && thrMerged.is_lead != null) {
+      if (patientMemberThisClinic) {
+        lead_thread_is_lead = false;
+      } else if (thrMerged && thrMerged.is_lead != null) {
         lead_thread_is_lead = thrMerged.is_lead === true;
       }
       /** After enrollment (`is_lead === false`), offer-thread unread is not surfaced — canonical chat is under Patients. */
-      const enrolledSharedCare = Boolean(thrMerged && thrMerged.is_lead === false);
+      const enrolledSharedCare =
+        patientMemberThisClinic || Boolean(thrMerged && thrMerged.is_lead === false);
       const rawUnread = myOid ? unreadByOffer[myOid] || 0 : 0;
       const unread_count = enrolledSharedCare ? 0 : rawUnread;
       return {
@@ -51344,6 +51370,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         patient_name: patientName,
         ...(UUID_RE.test(pid) ? { patient_id: pid } : {}),
         lead_thread_is_lead,
+        threadIsLead: lead_thread_is_lead,
         description: r.description != null ? String(r.description) : "",
         budget: r.budget != null ? String(r.budget) : null,
         preferred_treatment: r.preferred_treatment != null ? String(r.preferred_treatment) : null,
