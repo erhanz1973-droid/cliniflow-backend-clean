@@ -48290,10 +48290,9 @@ app.post('/api/doctor/encounters/:id/diagnoses', requireDoctorAuth, async (req, 
       .select('id, patient_id')
       .eq('id', encounterId)
       .maybeSingle();
-    console.log('[ENCOUNTER DIAGNOSES POST] ENCOUNTER EXISTS (maybeSingle):', encPeekErr ? { error: encPeekErr.message } : encPeek);
-
-    const encSingle = await supabase.from('patient_encounters').select('id').eq('id', encounterId).single();
-    console.log('[ENCOUNTER DIAGNOSES POST] ENCOUNTER EXISTS (single):', encSingle.data, 'error:', encSingle.error);
+    if (IS_PROD !== true && encPeek) {
+      console.log('[ENCOUNTER DIAGNOSES POST] encounter row:', encPeek.id);
+    }
 
     if (encPeekErr) {
       console.error('[ENCOUNTER DIAGNOSES POST] patient_encounters lookup', encPeekErr);
@@ -48332,10 +48331,30 @@ app.post('/api/doctor/encounters/:id/diagnoses', requireDoctorAuth, async (req, 
         p_doctor_id: docUuid,
         p_diagnoses: diagnoses,
       };
-      console.log('[ENCOUNTER DIAGNOSES POST] RPC PAYLOAD:', JSON.stringify(rpcPayload, null, 0));
-      const rpcResult = await supabase.rpc('save_diagnoses_atomic', rpcPayload);
-      console.log('[ENCOUNTER DIAGNOSES POST] RPC RESULT:', rpcResult.data);
-      console.log('[ENCOUNTER DIAGNOSES POST] RPC ERROR:', rpcResult.error);
+      /** Hangs here caused Railway 502 (proxy timeout) when RPC locks or misconfigured — fall back to INSERT after timeout. */
+      const SAVE_DIAGNOSES_RPC_MS = Math.min(
+        25000,
+        Math.max(8000, parseInt(String(process.env.SAVE_DIAGNOSES_RPC_TIMEOUT_MS || ""), 10) || 12000)
+      );
+      if (IS_PROD !== true) {
+        console.log('[ENCOUNTER DIAGNOSES POST] RPC attempt save_diagnoses_atomic, n=', diagnoses.length);
+      }
+      const rpcResult = await Promise.race([
+        supabase.rpc('save_diagnoses_atomic', rpcPayload),
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                data: null,
+                error: { message: 'save_diagnoses_atomic_timeout', code: 'RPC_TIMEOUT' },
+              }),
+            SAVE_DIAGNOSES_RPC_MS
+          )
+        ),
+      ]);
+      if (rpcResult?.error?.code === 'RPC_TIMEOUT') {
+        console.warn('[ENCOUNTER DIAGNOSES POST] save_diagnoses_atomic timed out after', SAVE_DIAGNOSES_RPC_MS, 'ms — using direct insert');
+      }
       if (!rpcResult.error) {
         const rpcOut = rpcResult.data?.diagnoses ?? rpcResult.data;
         if (Array.isArray(rpcOut) && rpcOut.length > 0) {
