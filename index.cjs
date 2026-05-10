@@ -4641,7 +4641,7 @@ let _doctorTasksPlanSelectClause = null; // cached working SELECT clause for tre
 const _doctorTasksItemSelectClauseByTable = new Map(); // tableName -> working item SELECT clause
 
 /** Short-lived cache for unread-counts (badge polling hits this every ~30s from multiple pages). */
-const UNREAD_COUNTS_TTL_MS = 25000;
+const UNREAD_COUNTS_TTL_MS = 45000;
 const unreadCountsCache = new Map(); // key: `${clinicId}:${totalOnlyFlag}` → { body, expires }
 /** Doctor-scoped unread (assigned/visible patients only). */
 const unreadCountsDoctorCache = new Map(); // key: `doc:${doctorId}:${totalOnlyFlag}` → { body, expires }
@@ -43107,41 +43107,9 @@ async function computeDoctorUnreadInboundForPush(doctorUuid, clinicIdParam, clin
     const visible = await getDoctorVisiblePatientIdSet(stubReq);
     if (!visible.size) return 0;
 
-    let data = [];
-    let fetchError = null;
-    outerRows: for (const [field, value] of [[`clinic_code`, clinicCode], [`clinic_id`, clinicId]]) {
-      if (!value) continue;
-      for (const unreadOnly of [true, false]) {
-        let q = supabase
-          .from("messages")
-          .select("patient_id")
-          .eq("from_patient", true)
-          .eq(field, value);
-        if (unreadOnly) q = q.is("read_at", null);
-        const r = await q;
-        if (!r.error) {
-          data = r.data || [];
-          break outerRows;
-        }
-        fetchError = r.error;
-        if (unreadOnly && isSupabaseSchemaMissingColumnError(r.error)) continue;
-        const rowEc = String(r.error?.code || "");
-        if (["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) || isSupabaseSchemaMissingColumnError(r.error) || !rowEc) {
-          continue;
-        }
-        if (!["42P01", "42703", "PGRST204"].includes(rowEc)) break outerRows;
-      }
-    }
-
-    if (fetchError && !["42P01", "42703", "PGRST204"].includes(String(fetchError.code || ""))) {
-      return 0;
-    }
-
-    const rows = (Array.isArray(data) ? data : []).filter((r) => {
-      const p = String(r.patient_id || "");
-      return p && visible.has(p);
-    });
-    return rows.length;
+    const visibleDbUuids = await expandVisiblePatientKeysToDbUuids(visible);
+    const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuids);
+    return Array.isArray(rows) ? rows.length : 0;
   } catch (e) {
     console.warn("[expo-push] doctor badge count:", e?.message || e);
     return 0;
@@ -43206,32 +43174,70 @@ function ingestLatestLegacyMessage(latestByPid, leg) {
   if (!prev || Number(leg.createdAt || 0) > Number(prev.createdAt || 0)) latestByPid.set(pid, leg);
 }
 
+const UNREAD_MSG_PATIENT_CHUNK = 80;
+
+/**
+ * Unread inbound rows from `messages`, restricted to known patient UUIDs (chunked `.in`).
+ * Avoids transferring every unread row for the whole clinic when computing doctor-scoped counts.
+ */
+async function fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, patientUuidIterable) {
+  const list = [
+    ...new Set(
+      [...(patientUuidIterable || [])]
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter((x) => PATIENT_ROW_UUID_RE.test(x))
+    ),
+  ];
+  if (!list.length) return [];
+
+  const cc = String(clinicCode || "").trim().toUpperCase();
+  const cid = clinicId ? String(clinicId).trim() : "";
+
+  async function runChunks(field, value, useReadAtNull) {
+    const acc = [];
+    for (let i = 0; i < list.length; i += UNREAD_MSG_PATIENT_CHUNK) {
+      const chunk = list.slice(i, i + UNREAD_MSG_PATIENT_CHUNK);
+      let q = supabase
+        .from("messages")
+        .select("patient_id")
+        .eq("from_patient", true)
+        .eq(field, value)
+        .in("patient_id", chunk);
+      if (useReadAtNull) q = q.is("read_at", null);
+      const r = await q;
+      if (r.error) return { error: r.error, rows: [] };
+      acc.push(...(r.data || []));
+    }
+    return { error: null, rows: acc };
+  }
+
+  outerRows: for (const [field, value] of [
+    ["clinic_code", cc],
+    ["clinic_id", cid],
+  ]) {
+    if (!value) continue;
+    for (const unreadOnly of [true, false]) {
+      const { error, rows } = await runChunks(field, value, unreadOnly);
+      if (!error) return rows;
+      if (unreadOnly && isSupabaseSchemaMissingColumnError(error)) continue;
+      const rowEc = String(error?.code || "");
+      if (
+        ["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) ||
+        isSupabaseSchemaMissingColumnError(error) ||
+        !rowEc
+      ) {
+        continue;
+      }
+      if (!["42P01", "42703", "PGRST204"].includes(rowEc)) break outerRows;
+    }
+  }
+  return [];
+}
+
 async function fetchUnreadInboundCountsByPatientMessages(clinicId, clinicCode, visibleDbUuidSet) {
   const unreadByPatient = new Map();
-  let data = [];
-  outerRows: for (const [field, value] of [["clinic_code", clinicCode], ["clinic_id", clinicId]]) {
-    if (!value) continue;
-    const r = await supabase
-      .from("messages")
-      .select("patient_id")
-      .eq("from_patient", true)
-      .is("read_at", null)
-      .eq(field, value);
-    if (!r.error) {
-      data = r.data || [];
-      break outerRows;
-    }
-    const rowEc = String(r.error?.code || "");
-    if (
-      ["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) ||
-      isSupabaseSchemaMissingColumnError(r.error) ||
-      !rowEc
-    ) {
-      continue;
-    }
-    break outerRows;
-  }
-  for (const row of Array.isArray(data) ? data : []) {
+  const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuidSet);
+  for (const row of Array.isArray(rows) ? rows : []) {
     const p = String(row?.patient_id || "").trim().toLowerCase();
     if (!p || !visibleDbUuidSet.has(p)) continue;
     unreadByPatient.set(p, (unreadByPatient.get(p) || 0) + 1);
@@ -43479,40 +43485,8 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
       return res.json(body);
     }
 
-    let data = [];
-    let fetchError = null;
-    outerRows: for (const [field, value] of [[`clinic_code`, clinicCode], [`clinic_id`, clinicId]]) {
-      if (!value) continue;
-      for (const unreadOnly of [true, false]) {
-        let q = supabase
-          .from("messages")
-          .select("patient_id")
-          .eq("from_patient", true)
-          .eq(field, value);
-        if (unreadOnly) q = q.is("read_at", null);
-        const r = await q;
-        if (!r.error) {
-          data = r.data || [];
-          break outerRows;
-        }
-        fetchError = r.error;
-        if (unreadOnly && isSupabaseSchemaMissingColumnError(r.error)) continue;
-        const rowEc = String(r.error?.code || "");
-        if (["42P01", "42703", "PGRST204", "PGRST205"].includes(rowEc) || isSupabaseSchemaMissingColumnError(r.error) || !rowEc) {
-          continue;
-        }
-        if (!["42P01", "42703", "PGRST204"].includes(rowEc)) break outerRows;
-      }
-    }
-
-    if (fetchError && !["42P01", "42703", "PGRST204"].includes(String(fetchError.code || ""))) {
-      return res.json({ ok: true, total: 0, totalUnread: 0, counts: {}, byPatient: [] });
-    }
-
-    const rows = (Array.isArray(data) ? data : []).filter((r) => {
-      const p = String(r.patient_id || "");
-      return p && visible.has(p);
-    });
+    const visibleDbUuids = await expandVisiblePatientKeysToDbUuids(visible);
+    const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuids);
 
     if (totalOnly) {
       const t = rows.length;
@@ -44248,13 +44222,9 @@ function buildDashboardRiskFlagsFromHealth(healthRaw) {
 async function handleDoctorInboxSummary(req, res) {
   try {
     const dtProbeId = String(req.query.dtProbeId || "").trim();
-    console.log("🔥 DOCTOR INBOX-SUMMARY (timeline) ENDPOINT HIT");
-    // Use doctor from middleware (already verified)
     const doctorRecord = req.doctor || {};
     const doctorId = req.doctorId || doctorRecord.id || doctorRecord.doctor_id;
     const clinicId = req.clinicId || doctorRecord.clinic_id;
-
-    console.log("[DASHBOARD] doctorId:", doctorId, "clinicId:", clinicId, "doctor.id:", doctorRecord.id, "doctor.doctor_id:", doctorRecord.doctor_id);
 
     if (!doctorId) return res.status(401).json({ ok: false, error: 'doctor_not_found' });
 
@@ -44368,7 +44338,6 @@ async function handleDoctorInboxSummary(req, res) {
     };
     const queryTzHint = String(req.query?.localTz ?? req.query?.timeZone ?? req.query?.tz ?? "").trim();
     const dashboardCalendarTz = resolveDashboardCalendarTimeZone(clinicIanaFromRow, queryTzHint, clinicCodeStr);
-    console.log("[DASHBOARD] bucketCalendarTz:", dashboardCalendarTz, "clinicIanaDb:", clinicIanaFromRow || null);
 
     /** Today / tomorrow labels = clinic calendar (not device). Optional query override only when no clinic. */
     let todayStr;
@@ -44385,7 +44354,6 @@ async function handleDoctorInboxSummary(req, res) {
     tomorrowD.setDate(tomorrowD.getDate() + 1);
       tomorrowStr = ymdRe.test(clientTomorrow) ? clientTomorrow : localYmd(tomorrowD);
     }
-    console.log("[DASHBOARD] todayStr:", todayStr, "tomorrowStr:", tomorrowStr);
 
     function dayBoundsMs(dayYmd) {
       return getCalendarDayWindowBoundsMsForDashboard(dayYmd, dashboardCalendarTz);

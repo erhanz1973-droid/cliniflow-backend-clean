@@ -290,6 +290,8 @@
     let selectedPatientName = null;
     let clinicName = null;
     let refreshInterval = null;
+    /** Last seen tip of thread — skip redundant render + POST /messages/read when unchanged. */
+    let messagesReadFingerprint = "";
 
     function t(key, params) {
       return (window.i18n && window.i18n.t) ? window.i18n.t(key, params || {}) : key;
@@ -365,84 +367,54 @@
         }
 
         const patients = Array.isArray(json.list) ? json.list : (Array.isArray(json.patients) ? json.patients : []);
-        
-        // Load unread counts and last message times for each patient
-        const patientsWithUnread = await Promise.all(patients.map(async (patient) => {
-          const patientId = patient.patientId || patient.id;
-          let unreadCount = 0;
-          let lastMessageTime = 0;
-          let lastMessagePreview = '';
-          let messages = [];
-          
-          if (patientId) {
-            try {
-              const messagesRes = await fetch(`${API_BASE}/api/patient/${encodeURIComponent(patientId)}/messages`, {
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Accept': 'application/json'
-                }
-              });
 
-              if (messagesRes.ok) {
-                const messagesData = await messagesRes.json();
-                if (messagesData.ok && Array.isArray(messagesData.messages)) {
-                  messages = messagesData.messages;
-
-                  // Count unread patient messages (server-side read_at tracking)
-                  unreadCount = messages.filter((m) => m.from === "PATIENT" && !m.readAt).length;
-                  
-                  // Find last message time (most recent message timestamp)
-                  if (messages.length > 0) {
-                    messages.forEach(m => {
-                      if (m.createdAt) {
-                        const msgTimestamp = new Date(m.createdAt).getTime();
-                        if (msgTimestamp > lastMessageTime) {
-                          lastMessageTime = msgTimestamp;
-                        }
-                      }
-                    });
-                    
-                    // Get last message preview
-                    const lastMsg = messages[messages.length - 1];
-                    const lastBody = String(
-                      lastMsg.text || lastMsg.message || lastMsg.content || ''
-                    ).trim();
-                    if (lastBody) {
-                      lastMessagePreview = lastBody.substring(0, 50);
-                      if (lastBody.length > 50) lastMessagePreview += '...';
-                    } else if (lastMsg.attachment) {
-                      if (lastMsg.attachment.fileType === 'image') {
-                        lastMessagePreview = t('chat.photoFile');
-                      } else {
-                        lastMessagePreview = t('chat.fileAttach');
-                      }
-                    }
-                  }
-                }
+        /** One aggregate call — avoids N× GET /api/patient/:id/messages (was hammering prod). */
+        let unreadMap = {};
+        try {
+          const ucRes = await fetch(`${API_BASE}/api/admin/messages/unread-counts`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/json'
+            }
+          });
+          if (ucRes.ok) {
+            const ucJson = await ucRes.json();
+            if (ucJson && ucJson.ok) {
+              if (ucJson.counts && typeof ucJson.counts === 'object') {
+                unreadMap = ucJson.counts;
+              } else if (Array.isArray(ucJson.byPatient)) {
+                unreadMap = {};
+                ucJson.byPatient.forEach((row) => {
+                  const pid = String(row.patientId || row.patient_id || "").trim();
+                  if (pid) unreadMap[pid] = Number(row.count) || 0;
+                });
               }
-            } catch (e) {
-              console.warn(`Failed to load messages for patient ${patientId}:`, e);
             }
           }
-          
+        } catch (e) {
+          console.warn("admin unread-counts:", e);
+        }
+
+        const patientsWithUnread = patients.map((patient) => {
+          const patientId = String(patient.patientId || patient.id || "").trim();
+          const unreadCount = Math.max(0, Number(unreadMap[patientId] || 0));
           return {
             ...patient,
             unreadCount,
-            lastMessageTime,
-            lastMessagePreview
+            lastMessageTime: 0,
+            lastMessagePreview: ""
           };
-        }));
-        
-        // Sort by last message time (most recent first), then by unread count
-        patientsWithUnread.sort((a, b) => {
-          // First sort by last message time (most recent first)
-          if (b.lastMessageTime !== a.lastMessageTime) {
-            return b.lastMessageTime - a.lastMessageTime;
-          }
-          // Then by unread count (more unread first)
-          return b.unreadCount - a.unreadCount;
         });
-        
+
+        patientsWithUnread.sort((a, b) => {
+          const ua = Number(a.unreadCount) || 0;
+          const ub = Number(b.unreadCount) || 0;
+          if (ub !== ua) return ub - ua;
+          const na = String(a.name || a.fullName || "").toLowerCase();
+          const nb = String(b.name || b.fullName || "").toLowerCase();
+          return na.localeCompare(nb);
+        });
+
         renderPatients(patientsWithUnread);
         
         // After rendering, restore active state if a patient is selected
@@ -521,6 +493,7 @@
     function selectPatient(patientId, name, phone) {
       selectedPatientId = patientId;
       selectedPatientName = name;
+      messagesReadFingerprint = "";
       document.getElementById('selectedPatientName').textContent = name;
       document.getElementById('selectedPatientPhone').textContent = phone;
       document.getElementById('selectedPatientInfo').style.display = 'block';
@@ -593,8 +566,16 @@
         }
 
         const messages = Array.isArray(json.messages) ? json.messages : [];
+        const last = messages.length ? messages[messages.length - 1] : null;
+        const unreadPatient = messages.filter((m) => m.from === "PATIENT" && !m.readAt).length;
+        const fp = last
+          ? `${String(last.id || "")}|${String(last.createdAt || "")}|${messages.length}|${unreadPatient}`
+          : `empty|${messages.length}|${unreadPatient}`;
+        if (fp === messagesReadFingerprint && !forceScroll) {
+          return;
+        }
+        messagesReadFingerprint = fp;
         renderMessages(messages, forceScroll);
-        // Mark patient messages as read (server-side)
         markMessagesRead(selectedPatientId);
       } catch (error) {
         console.error('Load messages error:', error);
@@ -1008,11 +989,18 @@
         clearInterval(refreshInterval);
       }
       refreshInterval = setInterval(() => {
+        if (document.visibilityState !== "visible") return;
         if (selectedPatientId) {
           loadMessages();
         }
-      }, 3000); // Refresh every 3 seconds
+      }, 15000);
     }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && selectedPatientId) {
+        loadMessages(false);
+      }
+    });
 
     // Enter key to send message
     document.getElementById('messageInput')?.addEventListener('keypress', (e) => {
