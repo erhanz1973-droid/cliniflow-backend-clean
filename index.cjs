@@ -760,13 +760,23 @@ function mapPatientMessagesRowToLegacy(row) {
       if (!Number.isNaN(p)) readAt = p;
     } else if (readRaw instanceof Date) readAt = readRaw.getTime();
   }
-  const bodyText =
+  let bodyText =
     row.text ??
     row.message ??
     row.content ??
     row.message_text ??
     row.body ??
     "";
+  if (!String(bodyText || "").trim() && row.payload != null) {
+    try {
+      const p = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
+      if (p && typeof p === "object") {
+        bodyText = p.text ?? p.message ?? p.body ?? p.content ?? bodyText;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
   const inboundKind =
     role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
   const senderNameTrim = String(
@@ -1057,7 +1067,11 @@ async function fetchMessagesFromSupabase(patientId) {
 
   const legacyPm = pmRows.map(mapPatientMessagesRowToLegacy).filter(Boolean);
   const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
-  const merged = [...legacyPm, ...legacyMg].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const mergedSortKey = (m) => {
+    const t = Number(m?.createdAt);
+    return Number.isFinite(t) ? t : 0;
+  };
+  const merged = [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(a) - mergedSortKey(b));
 
   if (merged.length > 0) {
     return { data: merged, error: null, preMapped: true };
@@ -3388,8 +3402,24 @@ function threadChatRoomId(threadId) {
 async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableHint) {
   try {
     if (!chatSocketIo || !insertedRow) return;
-    const legacy = legacyMessageFromInsertedRow(insertedRow, insertedTableHint);
-    if (!legacy || !legacy.id) return;
+    let legacy = legacyMessageFromInsertedRow(insertedRow, insertedTableHint);
+    if (!legacy) return;
+    const optText = String(opts?.message || "").trim();
+    if (optText && !String(legacy.text || "").trim()) {
+      legacy = { ...legacy, text: optText };
+    }
+    const idTrim = String(legacy.id || "").trim();
+    if (!idTrim) {
+      const fallbackId = String(
+        insertedRow?.message_id ?? insertedRow?.messageId ?? insertedRow?.id ?? "",
+      ).trim();
+      legacy = {
+        ...legacy,
+        id:
+          fallbackId ||
+          `evt_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+      };
+    }
     const raw = insertedRow.thread_id ?? insertedRow.threadId;
     let tid = raw != null && UUID_RE.test(String(raw).trim()) ? String(raw).trim() : null;
 
@@ -43233,11 +43263,13 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
     const mgRows = await fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim);
     for (const row of mgRows) {
       const leg = mapDbMessageToLegacyMessage(row);
+      if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
       ingestLatestLegacyMessage(latestByPid, leg);
     }
     const pmRows = await fetchRecentPatientMessagesRowsForChunk(chunk, lim);
     for (const row of pmRows) {
       const leg = mapPatientMessagesRowToLegacy(row);
+      if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
       ingestLatestLegacyMessage(latestByPid, leg);
     }
   }
