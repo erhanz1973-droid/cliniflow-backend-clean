@@ -43412,15 +43412,29 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       const chunk = uuidList.slice(i, i + 90);
       const { data: trows, error: terr } = await supabase
         .from("patient_chat_threads")
-        .select("patient_id, assigned_doctor_id, is_lead")
+        .select("patient_id, assigned_doctor_id, is_lead, updated_at")
         .eq("clinic_id", cidNorm)
         .in("patient_id", chunk);
       if (terr || !Array.isArray(trows)) continue;
+      const tsMs = (row) => {
+        const u = row?.updated_at != null ? Date.parse(String(row.updated_at)) : NaN;
+        return Number.isFinite(u) ? u : 0;
+      };
+      /** Prefer graduated row (is_lead false); else newest updated_at — avoids Map overwrite hiding enrollment. */
+      const pickBetterThread = (prev, next) => {
+        if (!prev) return next;
+        const pLead = prev.is_lead === true;
+        const nLead = next.is_lead === true;
+        if (pLead && !nLead) return next;
+        if (!pLead && nLead) return prev;
+        return tsMs(next) >= tsMs(prev) ? next : prev;
+      };
       for (const tr of trows) {
         const pkey = String(tr?.patient_id || "").trim().toLowerCase();
         if (!pkey) continue;
-        leadThreadByPatient.set(pkey, tr);
-        const aid = tr?.assigned_doctor_id != null ? String(tr.assigned_doctor_id).trim() : "";
+        const merged = pickBetterThread(leadThreadByPatient.get(pkey), tr);
+        leadThreadByPatient.set(pkey, merged);
+        const aid = merged?.assigned_doctor_id != null ? String(merged.assigned_doctor_id).trim() : "";
         if (aid && UUID_RE.test(aid)) assignIds.add(aid);
       }
     }
@@ -43468,7 +43482,13 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
           if (lt.is_lead === true) {
             return { doctorId: null, displayName: null, unassigned: true, threadIsLead: true };
           }
-          return null;
+          /** Enrolled / shared-care (is_lead false) — must still emit threadIsLead:false or mobile inbox cannot show continuity UI. */
+          return {
+            doctorId: null,
+            displayName: null,
+            unassigned: true,
+            threadIsLead: false,
+          };
         })()
       : null;
     threads.push({
