@@ -21867,9 +21867,17 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
       (async () => {
         try {
           const resolvedDbId = await resolveMessagesPatientDbId(patientId);
+          const wantFull = String(req.query?.full ?? "").trim() === "1";
           const limRaw = req.query?.limit ?? req.query?.tail;
-          const limN = limRaw != null && String(limRaw).trim() !== "" ? parseInt(String(limRaw), 10) : NaN;
-          const msgOpts = Number.isFinite(limN) && limN > 0 ? { limit: limN } : {};
+          const limN =
+            limRaw != null && String(limRaw).trim() !== ""
+              ? parseInt(String(limRaw), 10)
+              : NaN;
+          const msgOpts = wantFull
+            ? {}
+            : Number.isFinite(limN) && limN > 0
+              ? { limit: limN }
+              : { limit: 180 };
           const [pack, leadAssignment] = await Promise.all([
             fetchMessagesFromSupabase(patientId, msgOpts),
             fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
@@ -22108,9 +22116,18 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
       (async () => {
         try {
           const resolvedDbId = await resolveMessagesPatientDbId(patientId);
+          /** Match GET /api/doctor/patient/:id/messages: bounded tail by default (admin chat list hydration used to omit limit → full-table scans). */
+          const wantFull = String(req.query?.full ?? "").trim() === "1";
           const limRaw = req.query?.limit ?? req.query?.tail;
-          const limN = limRaw != null && String(limRaw).trim() !== "" ? parseInt(String(limRaw), 10) : NaN;
-          const msgOpts = Number.isFinite(limN) && limN > 0 ? { limit: limN } : {};
+          const limN =
+            limRaw != null && String(limRaw).trim() !== ""
+              ? parseInt(String(limRaw), 10)
+              : NaN;
+          const msgOpts = wantFull
+            ? {}
+            : Number.isFinite(limN) && limN > 0
+              ? { limit: limN }
+              : { limit: 180 };
           const [pack, leadAssignment] = await Promise.all([
             fetchMessagesFromSupabase(patientId, msgOpts),
             fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
