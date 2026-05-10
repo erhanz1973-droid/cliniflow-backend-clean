@@ -292,6 +292,12 @@
     let refreshInterval = null;
     /** Last seen tip of thread — skip redundant render + POST /messages/read when unchanged. */
     let messagesReadFingerprint = "";
+    /** Coalesce overlapping GET /api/admin/patients (badge timer + mark-read + send used to stack). */
+    let loadPatientsInFlight = null;
+    let loadPatientsQueuedBare = false;
+    let debouncedPatientsTimer = null;
+    let markReadDebounceTimer = null;
+    let pendingMarkReadPatientId = null;
 
     function t(key, params) {
       return (window.i18n && window.i18n.t) ? window.i18n.t(key, params || {}) : key;
@@ -336,7 +342,24 @@
       setTimeout(() => { el.style.display = 'none'; }, 5000);
     }
 
-    async function loadPatients() {
+    function scheduleDebouncedLoadPatients(delayMs) {
+      const d = Math.max(400, Number(delayMs) || 1500);
+      clearTimeout(debouncedPatientsTimer);
+      debouncedPatientsTimer = setTimeout(() => {
+        debouncedPatientsTimer = null;
+        loadPatients({ bare: true }).catch(() => {});
+      }, d);
+    }
+
+    /**
+     * @param {{ bare?: boolean }} [opts] bare=true: no full-list loading spinner, no nested selectPatient (sidebar only).
+     */
+    async function loadPatients(opts) {
+      const bare = opts && opts.bare === true;
+      if (loadPatientsInFlight) {
+        loadPatientsQueuedBare = loadPatientsQueuedBare || bare;
+        return loadPatientsInFlight;
+      }
       const token = getAdminToken();
       if (!token) {
         showError(t('chat.errNoToken'));
@@ -344,8 +367,11 @@
         return;
       }
 
+      const run = (async () => {
       try {
-        document.getElementById('patientList').innerHTML = '<div class="loading">' + escapeHtml(t('chat.loading')) + '</div>';
+        if (!bare) {
+          document.getElementById('patientList').innerHTML = '<div class="loading">' + escapeHtml(t('chat.loading')) + '</div>';
+        }
         const res = await fetch(`${API_BASE}/api/admin/patients`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -416,34 +442,46 @@
         });
 
         renderPatients(patientsWithUnread);
-        
-        // After rendering, restore active state if a patient is selected
+
+        // Restore highlight + header only — do NOT call selectPatient (that re-fires loadMessages + timers).
         if (selectedPatientId) {
-          // Find the patient from the list and select it
-          const patient = patients.find(p => {
-            const pid = p.patientId || p.patient_id || '';
+          const patient = patientsWithUnread.find((p) => {
+            const pid = p.patientId || p.patient_id || "";
             return pid === selectedPatientId;
           });
-          
           if (patient) {
-            const name = patient.name || patient.fullName || t('chat.unnamed');
-            const phone = patient.phone || '-';
-            selectPatient(selectedPatientId, name, phone);
-          } else {
-            // Just restore active state visually
-            const items = document.querySelectorAll('.patient-item');
-            items.forEach(item => {
-              if (item.getAttribute('data-patient-id') === selectedPatientId) {
-                item.classList.add('active');
-              }
-            });
+            const name = patient.name || patient.fullName || t("chat.unnamed");
+            const phone = patient.phone || "-";
+            selectedPatientName = name;
+            const hn = document.getElementById("selectedPatientName");
+            const hp = document.getElementById("selectedPatientPhone");
+            if (hn) hn.textContent = name;
+            if (hp) hp.textContent = phone;
           }
+          const items = document.querySelectorAll(".patient-item");
+          items.forEach((item) => {
+            item.classList.remove("active");
+            if (item.getAttribute("data-patient-id") === selectedPatientId) {
+              item.classList.add("active");
+            }
+          });
         }
       } catch (error) {
         console.error('Load patients error:', error);
-        showError(t('chat.errLoadList', { message: error.message }));
-        document.getElementById('patientList').innerHTML = '<div class="empty">' + escapeHtml(error.message) + '</div>';
+        if (!bare) {
+          showError(t('chat.errLoadList', { message: error.message }));
+          document.getElementById('patientList').innerHTML = '<div class="empty">' + escapeHtml(error.message) + '</div>';
+        }
       }
+      })();
+      loadPatientsInFlight = run.finally(() => {
+        loadPatientsInFlight = null;
+        if (loadPatientsQueuedBare) {
+          loadPatientsQueuedBare = false;
+          loadPatients({ bare: true }).catch(() => {});
+        }
+      });
+      return loadPatientsInFlight;
     }
 
     function renderPatients(patients) {
@@ -494,6 +532,9 @@
       selectedPatientId = patientId;
       selectedPatientName = name;
       messagesReadFingerprint = "";
+      clearTimeout(markReadDebounceTimer);
+      markReadDebounceTimer = null;
+      pendingMarkReadPatientId = null;
       document.getElementById('selectedPatientName').textContent = name;
       document.getElementById('selectedPatientPhone').textContent = phone;
       document.getElementById('selectedPatientInfo').style.display = 'block';
@@ -576,7 +617,7 @@
         }
         messagesReadFingerprint = fp;
         renderMessages(messages, forceScroll);
-        if (unreadPatient > 0) markMessagesRead(selectedPatientId);
+        if (unreadPatient > 0) scheduleMarkMessagesRead(selectedPatientId);
       } catch (error) {
         console.error('Load messages error:', error);
         showError(t('chat.errLoadMessagesFull', { message: error.message }));
@@ -584,7 +625,20 @@
       }
     }
 
-    async function markMessagesRead(patientId) {
+    /** Trailing debounce — rapid loadMessages cycles collapse to one POST /messages/read. */
+    function scheduleMarkMessagesRead(patientId) {
+      if (!patientId) return;
+      pendingMarkReadPatientId = patientId;
+      clearTimeout(markReadDebounceTimer);
+      markReadDebounceTimer = setTimeout(() => {
+        markReadDebounceTimer = null;
+        const pid = pendingMarkReadPatientId;
+        pendingMarkReadPatientId = null;
+        if (pid) void markMessagesReadNow(pid);
+      }, 1400);
+    }
+
+    async function markMessagesReadNow(patientId) {
       if (!patientId) return;
       const token = getAdminToken();
       if (!token) return;
@@ -594,9 +648,8 @@
           headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
         });
         const json = await res.json().catch(() => ({}));
-        if (json.ok && json.updated > 0) {
-          // Unread mesajlar sıfırlandı → sol listeyi güncelle (badge düşsün)
-          setTimeout(() => loadPatients().catch(() => {}), 200);
+        if (json.ok && Number(json.updated || 0) > 0) {
+          scheduleDebouncedLoadPatients(1600);
         }
       } catch (e) { /* silent fail */ }
     }
@@ -771,8 +824,7 @@
         input.value = '';
         // After sending a message, always scroll to bottom to show the sent message
         loadMessages(true); // forceScroll = true
-        // Reload patients list to update sorting (most recent first)
-        setTimeout(() => loadPatients().catch(e => console.warn('Failed to reload patients:', e)), 500);
+        scheduleDebouncedLoadPatients(900);
       } catch (error) {
         console.error('Send message error:', error);
         showError(t('chat.errSendFull', { message: error.message }));
@@ -944,8 +996,7 @@
           }, 2000);
         }
         loadMessages(true); // forceScroll after file upload
-        // Reload patients list to update sorting (most recent first)
-        setTimeout(() => loadPatients().catch(e => console.warn('Failed to reload patients:', e)), 500);
+        scheduleDebouncedLoadPatients(900);
       } catch (error) {
         console.error('[ADMIN CHAT] Upload file error:', error);
         const errorMsg = error.message || error.toString() || t('chat.errUnknown');
@@ -1096,9 +1147,7 @@
             badgeEl.style.display = "none";
           }
         }
-        if (window.location.pathname.includes('chat')) {
-          loadPatients().catch(e => console.warn('Failed to reload patients:', e));
-        }
+        /* Do not pull full patient list on every unread poll — that duplicated GET /api/admin/patients with loadPendingPatientsCount. */
       } catch (error) {
         console.error("Load unread count error:", error);
       }
@@ -1108,7 +1157,7 @@
       const token = getAdminToken();
       if (!token) return;
       try {
-        const res = await fetch(`${API}/api/admin/patients`, {
+        const res = await fetch(`${API}/api/admin/patients?limit=100&page=1`, {
           headers: adminHeaders({ Accept: "application/json" }),
         });
         if (!res.ok) return;
@@ -1214,11 +1263,13 @@
     }
     
     loadClinicName();
-    loadPatients();
-    loadAllBadges();
+    // Chain so cold start does not fire two parallel GET /api/admin/patients (list + pending badge).
+    loadPatients()
+      .then(() => loadAllBadges())
+      .catch(() => loadAllBadges());
 
-    // Auto-refresh badges every 30 seconds
-    setInterval(loadAllBadges, 30000);
+    // Badges only — was 30s + accidentally full patient list refresh on chat page; keep light.
+    setInterval(loadAllBadges, 120000);
 
     // Cleanup on page unload
     window.addEventListener('beforeunload', () => {
