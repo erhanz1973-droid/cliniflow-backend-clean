@@ -1085,9 +1085,65 @@ async function resolveClinicUuidFromClinicCode(clinicCodeRaw) {
   return null;
 }
 
-async function fetchMessagesFromSupabase(patientId) {
+async function fetchMessagesFromSupabase(patientId, opts = {}) {
   const resolvedId = await resolveMessagesPatientDbId(patientId);
   if (!resolvedId) {
+    return { data: [], error: null, preMapped: true };
+  }
+
+  const rawLim = opts?.limit != null ? Number(opts.limit) : NaN;
+  const tailCap =
+    Number.isFinite(rawLim) && rawLim > 0 ? Math.min(500, Math.max(30, Math.floor(rawLim))) : null;
+
+  const mergedSortKey = (m) => {
+    const t = Number(m?.createdAt);
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  if (tailCap) {
+    /** Last N messages only — two bounded DESC queries + merge (list/open-chat UI; avoids full chronology scan). */
+    const perTable = Math.min(400, tailCap + 50);
+    const [pmRes, mgRes] = await Promise.all([
+      supabase
+        .from("patient_messages")
+        .select("*")
+        .eq("patient_id", resolvedId)
+        .order("created_at", { ascending: false })
+        .limit(perTable),
+      supabase
+        .from("messages")
+        .select("*")
+        .eq("patient_id", resolvedId)
+        .order("created_at", { ascending: false })
+        .limit(perTable),
+    ]);
+
+    const pmRows = !pmRes.error && Array.isArray(pmRes.data) ? pmRes.data : [];
+    const mgRows = !mgRes.error && Array.isArray(mgRes.data) ? mgRes.data : [];
+
+    const legacyPm = pmRows.map(mapPatientMessagesRowToLegacy).filter(Boolean);
+    const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
+    const mergedDesc = [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(b) - mergedSortKey(a));
+    const sliced = mergedDesc.slice(0, tailCap);
+    const merged = sliced.sort((a, b) => mergedSortKey(a) - mergedSortKey(b));
+
+    if (merged.length > 0) {
+      return { data: merged, error: null, preMapped: true };
+    }
+
+    const ignorableFetchErr = (e) => {
+      if (!e) return true;
+      const c = String(e.code || "");
+      if (["42P01", "PGRST205", "PGRST116"].includes(c)) return true;
+      return isMissingTableError(e, "messages") || isMissingTableError(e, "patient_messages");
+    };
+
+    if (!ignorableFetchErr(pmRes.error) && !ignorableFetchErr(mgRes.error)) {
+      return { data: [], error: pmRes.error || mgRes.error, preMapped: true };
+    }
+    if (!ignorableFetchErr(mgRes.error)) {
+      return { data: [], error: mgRes.error, preMapped: true };
+    }
     return { data: [], error: null, preMapped: true };
   }
 
@@ -1101,10 +1157,6 @@ async function fetchMessagesFromSupabase(patientId) {
 
   const legacyPm = pmRows.map(mapPatientMessagesRowToLegacy).filter(Boolean);
   const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
-  const mergedSortKey = (m) => {
-    const t = Number(m?.createdAt);
-    return Number.isFinite(t) ? t : 0;
-  };
   const merged = [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(a) - mergedSortKey(b));
 
   if (merged.length > 0) {
@@ -1306,17 +1358,49 @@ async function syncPatientLeadThreadAssignedDoctor(resolvedPatientId, clinicUuid
 
 /**
  * Unread inbound messages from clinic/staff (patient-side badge polling).
- * Uses the same merge + legacy mapping as GET /api/patient/:id/messages; counts CLINIC rows with no readAt
- * newer than optional `since` (ms epoch, query param mirrors client badge polling).
+ * Lightweight HEAD counts on `messages` + `patient_messages` — avoids full merge like GET /api/patient/:id/messages.
+ * Falls back to merged tally only if both counts error (schema drift).
  */
 async function countUnreadClinicMessagesForPatient(resolvedPatientId, sinceMs) {
   const id = String(resolvedPatientId || "").trim();
-  if (!id) return 0;
+  if (!id || !isSupabaseEnabled()) return 0;
 
   const sinceTs = Number(sinceMs);
   const sinceBoundary = Number.isFinite(sinceTs) && sinceTs > 0 ? sinceTs : null;
+  const sinceIso = sinceBoundary != null ? new Date(sinceBoundary).toISOString() : null;
+
+  const addSince = (q) => {
+    if (!sinceIso) return q;
+    return q.gt("created_at", sinceIso);
+  };
 
   try {
+    let mg = supabase
+      .from("messages")
+      .select("id", { count: "exact", head: true })
+      .eq("patient_id", id)
+      .eq("from_patient", false)
+      .is("read_at", null);
+    mg = addSince(mg);
+    const mgRes = await mg;
+
+    let pm = supabase
+      .from("patient_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("patient_id", id)
+      .is("read_at", null)
+      .or("from_role.is.null,from_role.not.in.(patient,PATIENT)");
+    pm = addSince(pm);
+    const pmRes = await pm;
+
+    const mgOk = !mgRes.error && mgRes.count != null;
+    const pmOk = !pmRes.error && pmRes.count != null;
+    if (mgOk || pmOk) {
+      const a = mgOk ? Number(mgRes.count) || 0 : 0;
+      const b = pmOk ? Number(pmRes.count) || 0 : 0;
+      return a + b;
+    }
+
     const merged = await fetchMessagesFromSupabase(id);
     if (merged?.error || !Array.isArray(merged.data)) return 0;
     let c = 0;
@@ -1329,7 +1413,7 @@ async function countUnreadClinicMessagesForPatient(resolvedPatientId, sinceMs) {
     }
     return c;
   } catch (e) {
-    console.warn("[unread-count] merged tally failed:", e?.message || e);
+    console.warn("[unread-count] clinic inbound tally failed:", e?.message || e);
     return 0;
   }
 }
@@ -21783,8 +21867,11 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
       (async () => {
         try {
           const resolvedDbId = await resolveMessagesPatientDbId(patientId);
+          const limRaw = req.query?.limit ?? req.query?.tail;
+          const limN = limRaw != null && String(limRaw).trim() !== "" ? parseInt(String(limRaw), 10) : NaN;
+          const msgOpts = Number.isFinite(limN) && limN > 0 ? { limit: limN } : {};
           const [pack, leadAssignment] = await Promise.all([
-            fetchMessagesFromSupabase(patientId),
+            fetchMessagesFromSupabase(patientId, msgOpts),
             fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
           ]);
           const { data, error, preMapped } = pack;
@@ -22021,8 +22108,11 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
       (async () => {
         try {
           const resolvedDbId = await resolveMessagesPatientDbId(patientId);
+          const limRaw = req.query?.limit ?? req.query?.tail;
+          const limN = limRaw != null && String(limRaw).trim() !== "" ? parseInt(String(limRaw), 10) : NaN;
+          const msgOpts = Number.isFinite(limN) && limN > 0 ? { limit: limN } : {};
           const [pack, leadAssignment] = await Promise.all([
-            fetchMessagesFromSupabase(patientId),
+            fetchMessagesFromSupabase(patientId, msgOpts),
             fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
           ]);
           const { data, error, preMapped } = pack;
@@ -43995,7 +44085,16 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       const messages = Array.isArray(existing.messages) ? existing.messages : [];
       return res.json({ ok: true, messages });
     }
-    const { data, error, preMapped } = await fetchMessagesFromSupabase(pid);
+    const wantFull = String(req.query?.full || "").trim() === "1";
+    const limRaw = req.query?.limit ?? req.query?.tail;
+    const limN = limRaw != null && String(limRaw).trim() !== "" ? parseInt(String(limRaw), 10) : NaN;
+    /** Default tail load — UI shows ~50 rows; avoids loading entire history per open (use ?full=1 for rare full exports). */
+    const msgOpts = wantFull
+      ? {}
+      : Number.isFinite(limN) && limN > 0
+        ? { limit: limN }
+        : { limit: 150 };
+    const { data, error, preMapped } = await fetchMessagesFromSupabase(pid, msgOpts);
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
       return res.status(500).json({ ok: false, error: "messages_fetch_failed", supabase: supabasePublic });
@@ -51118,6 +51217,37 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       }
     }
 
+    /** Same precedence as doctor thread-summary: prefer graduated row (is_lead false), else newest updated_at. */
+    const leadThreadByPatientTr = new Map();
+    if (clinicId && UUID_RE.test(clinicId) && pids.length > 0) {
+      const tsMsTr = (row) => {
+        const u = row?.updated_at != null ? Date.parse(String(row.updated_at)) : NaN;
+        return Number.isFinite(u) ? u : 0;
+      };
+      const pickBetterTr = (prev, next) => {
+        if (!prev) return next;
+        const pLead = prev.is_lead === true;
+        const nLead = next.is_lead === true;
+        if (pLead && !nLead) return next;
+        if (!pLead && nLead) return prev;
+        return tsMsTr(next) >= tsMsTr(prev) ? next : prev;
+      };
+      for (let ti = 0; ti < pids.length; ti += 90) {
+        const chunk = pids.slice(ti, ti + 90);
+        const { data: trows, error: terr } = await supabase
+          .from("patient_chat_threads")
+          .select("patient_id, is_lead, updated_at")
+          .eq("clinic_id", clinicId)
+          .in("patient_id", chunk);
+        if (terr || !Array.isArray(trows)) continue;
+        for (const tr of trows) {
+          const pkey = String(tr?.patient_id || "").trim().toLowerCase();
+          if (!pkey) continue;
+          leadThreadByPatientTr.set(pkey, pickBetterTr(leadThreadByPatientTr.get(pkey), tr));
+        }
+      }
+    }
+
     const requestIds = list.map((r) => r.id).filter(Boolean);
     if (!requestIds.length) {
       return res.json({ ok: true, requests: [] });
@@ -51199,10 +51329,21 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
             }
           : null;
       const myOid = mine?.id ? String(mine.id) : null;
-      const unread_count = myOid ? unreadByOffer[myOid] || 0 : 0;
+      const pidKey = pid ? pid.toLowerCase() : "";
+      const thrMerged = pidKey ? leadThreadByPatientTr.get(pidKey) : null;
+      let lead_thread_is_lead = null;
+      if (thrMerged && thrMerged.is_lead != null) {
+        lead_thread_is_lead = thrMerged.is_lead === true;
+      }
+      /** After enrollment (`is_lead === false`), offer-thread unread is not surfaced — canonical chat is under Patients. */
+      const enrolledSharedCare = Boolean(thrMerged && thrMerged.is_lead === false);
+      const rawUnread = myOid ? unreadByOffer[myOid] || 0 : 0;
+      const unread_count = enrolledSharedCare ? 0 : rawUnread;
       return {
         id: String(r.id),
         patient_name: patientName,
+        ...(UUID_RE.test(pid) ? { patient_id: pid } : {}),
+        lead_thread_is_lead,
         description: r.description != null ? String(r.description) : "",
         budget: r.budget != null ? String(r.budget) : null,
         preferred_treatment: r.preferred_treatment != null ? String(r.preferred_treatment) : null,

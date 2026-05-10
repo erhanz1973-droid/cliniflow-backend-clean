@@ -2333,7 +2333,7 @@ function updateActivePatientsUI(data) {
     return badgeEl;
   }
 
-  // Load unread message count for badge
+  // Load unread message count for badge (single aggregate — avoids N× GET /api/patient/:id/messages).
   async function loadUnreadMessageCount() {
     const token = getAdminToken();
     if (!token) {
@@ -2341,53 +2341,23 @@ function updateActivePatientsUI(data) {
       return;
     }
 
-    console.log("[DASHBOARD] Loading unread message count...");
+    console.log("[DASHBOARD] Loading unread message count (GET /api/admin/messages/unread-counts?totalOnly=1)...");
     try {
-      // Get last seen timestamp from localStorage
-      let lastSeenTimestamp = 0;
-      const saved = localStorage.getItem("adminLastSeenTimestamp");
-      if (saved) lastSeenTimestamp = parseInt(saved, 10) || 0;
+      const res = await safariFetch(`${API}/api/admin/messages/unread-counts?totalOnly=1`, {
+        headers: adminHeaders({ Accept: "application/json" }),
+      });
+      if (!res.ok) {
+        console.warn("[DASHBOARD] unread-counts failed:", res.status);
+        return;
+      }
+      const data = await res.json();
+      const totalUnread = Number(data?.totalUnread ?? data?.total ?? 0) || 0;
 
-      const patients = await getPatientsForBadges();
-      console.log("[DASHBOARD] Found", patients.length, "patients to check for unread messages");
-      const patientIds = patients
-        .map((patient) => patient.patientId || patient.id)
-        .filter(Boolean);
-
-      const unreadResults = await Promise.allSettled(
-        patientIds.map(async (patientId) => {
-          const messagesRes = await safariFetch(`${API}/api/patient/${encodeURIComponent(patientId)}/messages`, {
-            headers: adminHeaders({ Accept: "application/json" }),
-          });
-          if (!messagesRes.ok) return 0;
-
-          const messagesData = await messagesRes.json();
-          if (!messagesData.ok) return 0;
-
-          const messages = Array.isArray(messagesData.messages) ? messagesData.messages : [];
-          return messages.filter((m) => {
-            if (!m || m.from !== "PATIENT") return false;
-            if (m.createdAt) {
-              const msgTimestamp = new Date(m.createdAt).getTime();
-              if (isNaN(msgTimestamp)) return true;
-              return msgTimestamp > lastSeenTimestamp;
-            }
-            return true;
-          }).length;
-        })
-      );
-
-      const totalUnread = unreadResults.reduce((sum, result) => {
-        return sum + (result.status === 'fulfilled' ? Number(result.value || 0) : 0);
-      }, 0);
-
-      // Check if new messages arrived (count increased)
       if (totalUnread > previousUnreadCount && previousUnreadCount > 0) {
         playNotificationSound();
       }
       previousUnreadCount = totalUnread;
 
-      // Update badge (ensure it exists even after i18n DOM updates)
       const badgeEl = ensureNavBadge("chatNavLink", "chatBadge");
       if (badgeEl) {
         if (totalUnread > 0) {
