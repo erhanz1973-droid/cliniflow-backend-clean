@@ -643,6 +643,62 @@ async function resolveClinicCodeForPatient(patientId) {
   }
 }
 
+/** Message body across `messages` / `patient_messages` schema variants (avoids empty admin bubbles). */
+function extractMessageTextFromDbRow(row) {
+  if (!row || typeof row !== "object") return "";
+  const keyOrder = [
+    "text",
+    "message",
+    "content",
+    "message_text",
+    "body",
+    "msg",
+    "note",
+    "notes",
+    "caption",
+    "plain_text",
+    "message_body",
+    "description",
+  ];
+  for (let i = 0; i < keyOrder.length; i++) {
+    const k = keyOrder[i];
+    if (!Object.prototype.hasOwnProperty.call(row, k)) continue;
+    const v = row[k];
+    if (v == null) continue;
+    const s = typeof v === "string" ? v.trim() : String(v).trim();
+    if (s !== "") return s;
+  }
+  if (row.payload != null) {
+    try {
+      const p = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
+      if (p && typeof p === "object") {
+        const nested = ["text", "message", "body", "content"];
+        for (let j = 0; j < nested.length; j++) {
+          const v = p[nested[j]];
+          if (v != null && String(v).trim() !== "") return String(v).trim();
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (row.data != null) {
+    try {
+      const d = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+      if (d && typeof d === "object") {
+        const nested = ["text", "message", "body", "content"];
+        for (let j = 0; j < nested.length; j++) {
+          const v = d[nested[j]];
+          if (v != null && String(v).trim() !== "") return String(v).trim();
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return "";
+}
+
 function mapDbMessageToLegacyMessage(row) {
   if (!row) return null;
   const senderRaw =
@@ -664,13 +720,7 @@ function mapDbMessageToLegacyMessage(row) {
   const senderNameTrim = String(
     row.sender_name || row.senderName || row.sender_display_name || row.doctor_name || "",
   ).trim();
-  const text =
-    row.message ??
-    row.message_text ??
-    row.text ??
-    row.content ??
-    row.body ??
-    "";
+  const text = extractMessageTextFromDbRow(row);
   const fileAttachment = row.file_url
     ? {
         url: row.file_url,
@@ -760,23 +810,7 @@ function mapPatientMessagesRowToLegacy(row) {
       if (!Number.isNaN(p)) readAt = p;
     } else if (readRaw instanceof Date) readAt = readRaw.getTime();
   }
-  let bodyText =
-    row.text ??
-    row.message ??
-    row.content ??
-    row.message_text ??
-    row.body ??
-    "";
-  if (!String(bodyText || "").trim() && row.payload != null) {
-    try {
-      const p = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
-      if (p && typeof p === "object") {
-        bodyText = p.text ?? p.message ?? p.body ?? p.content ?? bodyText;
-      }
-    } catch (_) {
-      /* ignore */
-    }
-  }
+  let bodyText = extractMessageTextFromDbRow(row);
   const inboundKind =
     role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
   const senderNameTrim = String(
@@ -1646,12 +1680,14 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
       Object.entries({ ...payload }).filter(([, v]) => v !== undefined)
     );
   for (const from_role of fromRoles) {
-    const { data, error } = await supabase
-      .from("patient_messages")
-        .insert({ ...rowIns, from_role })
-      .select("*")
-      .single();
-    if (!error) return { data, error: null };
+    const insertPayload = {
+      ...rowIns,
+      from_role,
+      message: String(rowIns.text || "").trim(),
+    };
+    const pr = await insertIntoTableWithColumnPruning("patient_messages", insertPayload);
+    if (!pr.error && pr.data) return { data: pr.data, error: null };
+    const error = pr.error;
     lastError = error;
     const msg = String(error?.message || "").toLowerCase();
     const code = String(error?.code || "");

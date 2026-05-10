@@ -175,6 +175,12 @@
     .message{ max-width:70%; padding:12px 16px; border-radius:12px; font-size:14px; line-height:1.5; }
     .message.from-CLINIC{ background:var(--p); color:#fff; align-self:flex-end; }
     .message.from-PATIENT{ background:#0b1220; color:#e6eaf2; align-self:flex-start; border:1px solid #1f2937; }
+    /* Doctor / mixed casing: same bubble as clinic so text is never low-contrast on default bg */
+    .message.from-DOCTOR, .message.from-doctor, .message.from-CLINIC_STAFF, .message.from-clinic_staff {
+      background: var(--p);
+      color: #fff;
+      align-self: flex-end;
+    }
     .message-time{ font-size:11px; color:var(--muted); margin-top:4px; }
     .chat-input-area{ padding:16px; border-top:1px solid var(--b); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .chat-input{ flex:1; padding:12px; border:1px solid #1f2937; border-radius:8px; font-size:14px; background:#1f2937; color:#e6eaf2; }
@@ -624,24 +630,31 @@
       // Save scroll position before rendering
       const wasNearBottom = forceScroll || (container.scrollHeight - container.scrollTop - container.clientHeight) <= 100;
 
-      // Find the index of the last CLINIC message
+      // Find the index of the last non-patient (clinic/doctor/admin) message
       let lastClinicIndex = -1;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if ((messages[i].from || 'CLINIC') === 'CLINIC') {
+        const fu = String(messages[i].from != null ? messages[i].from : 'CLINIC').trim().toUpperCase();
+        if (fu !== 'PATIENT') {
           lastClinicIndex = i;
           break;
         }
       }
 
       container.innerHTML = messages.map((msg, index) => {
-        const from = msg.from || 'CLINIC';
+        const fromRaw = String(msg.from != null ? msg.from : 'CLINIC').trim();
+        const fromUpper = fromRaw.toUpperCase();
+        const fromClass = fromUpper === 'PATIENT' ? 'PATIENT' : 'CLINIC';
         const text = String(
           msg.text != null && msg.text !== ''
             ? msg.text
             : (msg.message != null ? msg.message
               : (msg.message_text != null ? msg.message_text
                 : (msg.content != null ? msg.content
-                  : (msg.body != null ? msg.body : ''))))
+                  : (msg.body != null ? msg.body
+                    : (msg.msg != null ? msg.msg
+                      : (msg.note != null ? msg.note
+                        : (msg.snippet != null ? msg.snippet
+                          : (msg.preview != null ? msg.preview : ''))))))))
         ).trim();
         const time = msg.createdAt ? new Date(msg.createdAt).toLocaleString(chatLocale()) : '';
         const attachment = msg.attachment || null;
@@ -710,12 +723,12 @@
         let ctaButton = '';
         
         // Show patient name for PATIENT messages
-        const patientNameDisplay = from === 'PATIENT' && selectedPatientName 
+        const patientNameDisplay = fromClass === 'PATIENT' && selectedPatientName 
           ? `<div style="font-size:11px; font-weight:600; color:var(--muted); margin-bottom:4px;">${escapeHtml(selectedPatientName)}</div>` 
           : '';
         
         return `
-          <div class="message from-${from}">
+          <div class="message from-${fromClass}">
             ${patientNameDisplay}
             ${text ? `<div>${escapeHtml(text)}</div>` : ''}
             ${attachmentHtml}
