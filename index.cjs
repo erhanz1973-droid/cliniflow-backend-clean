@@ -653,6 +653,17 @@ function mapDbMessageToLegacyMessage(row) {
     (row.from_patient !== undefined ? (row.from_patient ? "patient" : "clinic") : "");
   const sender = String(senderRaw || "").toLowerCase();
   const from = sender === "patient" ? "PATIENT" : "CLINIC";
+  const inboundKind =
+    sender === "patient"
+      ? undefined
+      : sender === "doctor" || sender === "dr" || sender === "physician"
+        ? "doctor"
+        : sender === "admin"
+          ? "admin"
+          : "clinic";
+  const senderNameTrim = String(
+    row.sender_name || row.senderName || row.sender_display_name || row.doctor_name || "",
+  ).trim();
   const text =
     row.message ??
     row.message_text ??
@@ -712,6 +723,8 @@ function mapDbMessageToLegacyMessage(row) {
   };
   const tidRaw = row.thread_id ?? row.threadId;
   if (tidRaw != null && String(tidRaw).trim()) out.thread_id = String(tidRaw).trim();
+  if (from === "CLINIC" && inboundKind) out.inboundKind = inboundKind;
+  if (from === "CLINIC" && senderNameTrim) out.senderName = senderNameTrim;
   return out;
 }
 
@@ -754,6 +767,12 @@ function mapPatientMessagesRowToLegacy(row) {
     row.message_text ??
     row.body ??
     "";
+  const inboundKind =
+    role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
+  const senderNameTrim = String(
+    row.sender_name || row.senderName || row.doctor_name || row.sender_display_name || "",
+  ).trim();
+
   const outPm = {
     id: String(row.message_id || row.id || ""),
     text: String(bodyText || ""),
@@ -766,6 +785,10 @@ function mapPatientMessagesRowToLegacy(row) {
   };
   const tidRawPm = row.thread_id ?? row.threadId;
   if (tidRawPm != null && String(tidRawPm).trim()) outPm.thread_id = String(tidRawPm).trim();
+  if (from === "CLINIC") {
+    outPm.inboundKind = inboundKind;
+    if (senderNameTrim) outPm.senderName = senderNameTrim;
+  }
   return outPm;
 }
 
@@ -1057,8 +1080,9 @@ async function fetchMessagesFromSupabase(patientId) {
 }
 
 /**
- * Patient-facing messaging assignment (one row per patient+clinic).
- * **Source of truth for chat identity / operational responder:** `patient_chat_threads.assigned_doctor_id`.
+ * Patient-facing messaging assignment (one row per patient+clinic; UNIQUE patient_id + clinic_id).
+ * **Source of truth for chat identity / operational responder:** `patient_chat_threads.assigned_doctor_id`
+ * for both lead threads and enrolled members — do **not** require `is_lead` on the thread row (enrollment may set it false while keeping the same assignee).
  * `patients.primary_doctor_id` is **medical / roster** context only — exposed separately as `medicalPrimaryDoctor*`;
  * it MUST NOT override messaging display and MUST NOT trigger silent thread updates from this read path.
  */
@@ -1098,10 +1122,9 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
   try {
     const { data, error } = await supabase
       .from("patient_chat_threads")
-      .select("id, assigned_doctor_id, assigned_at")
+      .select("id, assigned_doctor_id, assigned_at, is_lead")
       .eq("patient_id", patientResolvedId)
       .eq("clinic_id", clinicId)
-      .eq("is_lead", true)
       .maybeSingle();
     if (!error && data?.id) thr = data;
     else if (error && !isPatientChatThreadsTableUnavailable(error))
@@ -1139,6 +1162,10 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
     out.medicalPrimaryDoctorId = primDisp.id;
     if (primDisp.assignedDoctor) out.medicalPrimaryDoctor = primDisp.assignedDoctor;
     out.doctorAssignmentMismatch = mismatch;
+  }
+
+  if (thr?.is_lead != null) {
+    out.threadIsLead = thr.is_lead === true;
   }
 
   return out;
@@ -1180,7 +1207,6 @@ async function syncPatientLeadThreadAssignedDoctor(resolvedPatientId, clinicUuid
       .update(upd)
       .eq("patient_id", pid)
       .eq("clinic_id", clinicId)
-      .eq("is_lead", true)
       .select("id, patient_id, assigned_doctor_id, status, assigned_at")
       .maybeSingle();
 
@@ -1196,7 +1222,6 @@ async function syncPatientLeadThreadAssignedDoctor(resolvedPatientId, clinicUuid
         .update(upd)
         .eq("patient_id", pid)
         .eq("clinic_id", clinicId)
-        .eq("is_lead", true)
         .select("id, patient_id, assigned_doctor_id, status, assigned_at")
         .maybeSingle();
       if (!up2 && upd2?.id) updated = upd2;
@@ -11157,6 +11182,23 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
     }
 
     console.log("[PATCH /api/patient/clinic] ok patient:", String(patientRow.id).slice(0, 8), "clinic:", codeStored);
+
+    // Graduate the single patient+clinic chat thread from "lead" to member **without** clearing assignee —
+    // keeps Doctor A on the same thread after enrollment (shared care; admin/clinic can still post as before).
+    try {
+      const { error: thErr } = await supabase
+        .from("patient_chat_threads")
+        .update({ is_lead: false, updated_at: new Date().toISOString() })
+        .eq("patient_id", resolvedUuid)
+        .eq("clinic_id", clinic.id);
+      if (thErr && !isPatientChatThreadsTableUnavailable(thErr)) {
+        console.warn("[PATCH /api/patient/clinic] thread graduate:", thErr.message || thErr);
+      }
+    } catch (thEx) {
+      if (!isPatientChatThreadsTableUnavailable(thEx)) {
+        console.warn("[PATCH /api/patient/clinic] thread graduate exception:", thEx?.message || thEx);
+      }
+    }
 
     return res.json({
       ok: true,
@@ -40822,10 +40864,11 @@ function patientRowRequiresAssignedDoctorMessagingOnly(prow) {
 }
 
 /**
- * Lead threads (`is_lead`): primary responsibility is `assigned_doctor_id`; clinic staff still share visibility.
- * Send rules: **approved** enrolled (non-lead) patient + different assignee → 403 assigned_doctor_only when `forSend`.
+ * `patient_chat_threads.assigned_doctor_id` is the relationship owner; treatment-team doctors may participate
+ * on the same thread. `assigned_doctor_only` runs only after team access fails — enrollment must not block
+ * collaborators before that check.
  * `PENDING` (joined clinic, awaiting admin approve) keeps treatment-team send access like pre-approval lead flow.
- * opts.forSend: true on POST replies; enrolled patient + thread assignee mismatch → 403 assigned_doctor_only.
+ * opts.forSend: true on POST replies.
  */
 async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
   const forSend = !!(opts && opts.forSend);
@@ -40850,36 +40893,36 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
     thread = null;
   }
 
-  // Assigned doctor on this thread — always allow (even after is_lead cleared on patient upgrade).
   if (thread?.assigned_doctor_id) {
     const match = await compareDoctorIds(thread.assigned_doctor_id, req.doctorId);
     if (match) {
       return { ok: true, patientId: resolvedPatientId };
     }
-
-    if (forSend) {
-      const prow = await loadPatientMessagingEnrollmentRow(resolvedPatientId);
-      if (patientRowRequiresAssignedDoctorMessagingOnly(prow)) {
-        return {
-          ok: false,
-          status: 403,
-          error: "assigned_doctor_only",
-          message: PATIENT_MESSAGES_ASSIGNED_DOCTOR_ONLY_TR,
-        };
-      }
-    }
-
-    // Not the assigned thread doctor — but still allow read/send if they have treatment-team access (pre-member / ekip)
   } else if (thread?.is_lead) {
-    // Lead thread exists but unassigned — allow treatment-team doctors through
+    // Lead thread exists but unassigned — treatment-team lane below
   }
 
-  const allowed = await doctorHasTreatmentTeamAccessToPatientId(resolvedPatientId, req);
-  if (!allowed) {
-    const error = thread?.assigned_doctor_id && thread?.is_lead ? "not_assigned_doctor" : "patient_access_denied";
-    return { ok: false, status: 403, error };
+  const teamAllowed = await doctorHasTreatmentTeamAccessToPatientId(resolvedPatientId, req);
+  if (teamAllowed) {
+    return { ok: true, patientId: resolvedPatientId };
   }
-  return { ok: true, patientId: resolvedPatientId };
+
+  if (forSend && thread?.assigned_doctor_id) {
+    const prow = await loadPatientMessagingEnrollmentRow(resolvedPatientId);
+    if (patientRowRequiresAssignedDoctorMessagingOnly(prow)) {
+      return {
+        ok: false,
+        status: 403,
+        error: "assigned_doctor_only",
+        message: PATIENT_MESSAGES_ASSIGNED_DOCTOR_ONLY_TR,
+      };
+    }
+  }
+
+  if (thread?.assigned_doctor_id && thread?.is_lead) {
+    return { ok: false, status: 403, error: "not_assigned_doctor" };
+  }
+  return { ok: false, status: 403, error: "patient_access_denied" };
 }
 
 /**
@@ -43228,7 +43271,6 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
         .from("patient_chat_threads")
         .select("patient_id, assigned_doctor_id, is_lead")
         .eq("clinic_id", cidNorm)
-        .eq("is_lead", true)
         .in("patient_id", chunk);
       if (terr || !Array.isArray(trows)) continue;
       for (const tr of trows) {
@@ -43270,14 +43312,22 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
     const pidKey = String(pid || "").trim().toLowerCase();
     const lt = leadThreadByPatient.get(pidKey) || null;
     const aid = lt?.assigned_doctor_id != null ? String(lt.assigned_doctor_id).trim() : "";
-    const leadPrimaryResponder =
-      lt && lt.is_lead === true
-        ? {
-            doctorId: aid && UUID_RE.test(aid) ? aid : null,
-            displayName: aid && UUID_RE.test(aid) ? leadResponderDoctorNames[aid] || null : null,
-            unassigned: !(aid && UUID_RE.test(aid)),
+    const leadPrimaryResponder = lt
+      ? (() => {
+          if (aid && UUID_RE.test(aid)) {
+            return {
+              doctorId: aid,
+              displayName: leadResponderDoctorNames[aid] || null,
+              unassigned: false,
+              threadIsLead: lt.is_lead === true,
+            };
           }
-        : null;
+          if (lt.is_lead === true) {
+            return { doctorId: null, displayName: null, unassigned: true, threadIsLead: true };
+          }
+          return null;
+        })()
+      : null;
     threads.push({
       patientDbId: pid,
       patientPublicId: canonicalPatientPublicId(pid),
