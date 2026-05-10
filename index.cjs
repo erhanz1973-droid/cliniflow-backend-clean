@@ -1529,10 +1529,54 @@ function isSupabaseSchemaMissingColumnError(error) {
   );
 }
 
+/** HEAD counts — skip UPDATE churn when nothing is unread (POST /messages/read spam). */
+async function adminHasUnreadInboundForMark(resolvedPatientId) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id || !isSupabaseEnabled()) return true;
+  let sawAllZero = true;
+  let gotAnyCount = false;
+  const pm = await supabase
+    .from("patient_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("patient_id", id)
+    .or("from_role.eq.patient,from_role.eq.PATIENT")
+    .is("read_at", null);
+  if (!pm.error) {
+    gotAnyCount = true;
+    if (Number(pm.count || 0) > 0) return true;
+  } else {
+    const c = String(pm.error?.code || "");
+    const msg = String(pm.error?.message || "").toLowerCase();
+    const missing =
+      c === "42P01" ||
+      c === "PGRST205" ||
+      (msg.includes("relation") && msg.includes("does not exist")) ||
+      isSupabaseSchemaMissingColumnError(pm.error);
+    if (!missing) sawAllZero = false;
+  }
+  const mg = await supabase
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("patient_id", id)
+    .eq("from_patient", true)
+    .is("read_at", null);
+  if (!mg.error) {
+    gotAnyCount = true;
+    if (Number(mg.count || 0) > 0) return true;
+  } else if (!isSupabaseSchemaMissingColumnError(mg.error)) {
+    const c = String(mg.error?.code || "");
+    if (!["42P01", "PGRST205"].includes(c)) sawAllZero = false;
+  }
+  if (gotAnyCount && sawAllZero) return false;
+  return true;
+}
+
 /** Admin marked patient-originated rows as read (patient_messages and/or messages). */
 async function markPatientMessagesReadForAdmin(resolvedPatientId) {
   const id = String(resolvedPatientId || "").trim();
   if (!id) return { ok: false, error: { message: "patient_id_required" } };
+  const hasUnread = await adminHasUnreadInboundForMark(id);
+  if (!hasUnread) return { ok: true, error: null, noop: true, updated: 0 };
   const readAtIso = new Date().toISOString();
 
   const pmUp = await supabase
@@ -1541,7 +1585,7 @@ async function markPatientMessagesReadForAdmin(resolvedPatientId) {
     .eq("patient_id", id)
     .or("from_role.eq.patient,from_role.eq.PATIENT")
     .is("read_at", null);
-  if (!pmUp.error) return { ok: true, error: null };
+  if (!pmUp.error) return { ok: true, error: null, updated: 1 };
   const pmCode = String(pmUp.error?.code || "");
   const pmMsg = String(pmUp.error?.message || "").toLowerCase();
   const skipPm =
@@ -1569,14 +1613,14 @@ async function markPatientMessagesReadForAdmin(resolvedPatientId) {
       q = applyFilter(q);
       q = q.is(col, null);
       const { error } = await q;
-      if (!error) return { ok: true, error: null };
+      if (!error) return { ok: true, error: null, updated: 1 };
       if (isSupabaseSchemaMissingColumnError(error)) break;
       const msg = String(error?.message || "").toLowerCase();
       if (msg.includes("from_patient") || msg.includes("sender_type")) continue;
       return { ok: false, error };
     }
   }
-  return { ok: true, error: null, noop: true };
+  return { ok: true, error: null, noop: true, updated: 0 };
 }
 
 async function handlePatientMessagesReadMark(req, res) {
@@ -1617,8 +1661,9 @@ async function handlePatientMessagesReadMark(req, res) {
       const supabasePublic = supabaseErrorPublic(result.error);
       return res.status(500).json({ ok: false, error: "mark_read_failed", supabase: supabasePublic });
     }
-    bumpUnreadCountsCache(req.clinicId);
-    return res.json({ ok: true, noop: !!result.noop });
+    const updated = Number(result.updated ?? (result.noop ? 0 : 1)) || 0;
+    if (updated > 0) bumpUnreadCountsCache(req.clinicId);
+    return res.json({ ok: true, noop: !!result.noop, updated });
   } catch (error) {
     if (error?.name === "JsonWebTokenError" || error?.name === "TokenExpiredError") {
       return res.status(401).json({ ok: false, error: "invalid_token" });
@@ -4650,8 +4695,12 @@ const DOCTOR_VISIBLE_MSG_TTL_MS = 60000;
 const doctorVisiblePatientIdCache = new Map(); // key: doctorId → { set, expires }
 const doctorVisiblePatientIdInFlight = new Map(); // key: doctorId -> Promise<Set>
 /** Aggregated chat preview — avoids N× GET /api/patient/:id/messages on dashboard load. */
-const DOCTOR_MSG_THREAD_SUMMARY_TTL_MS = 12000;
+const DOCTOR_MSG_THREAD_SUMMARY_TTL_MS = 22000;
 const doctorMessagesThreadSummaryCache = new Map(); // key: doc:${did}:… → { body, expires }
+
+/** Short-lived cache for dashboard treatment_events fan-out (today vs tomorrow shared TTL). */
+const dashboardTevSlotsCache = new Map(); // key: `tev:${clinicId}:${dayYmd}` → { slots, exp }
+const DASHBOARD_TEV_SLOTS_TTL_MS = 90000;
 
 function bumpUnreadCountsCache(clinicId) {
   if (clinicId) {
@@ -43314,19 +43363,22 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
 
   const uuidList = [...visibleDbUuids];
   const latestByPid = new Map();
-  const perChunkLimit = (n) => Math.min(3200, Math.max(400, n * 48));
+  /** ~5 rows/patient per chunk cap — enough for latest-per-patient without 3k-row pulls per chunk. */
+  const perChunkLimit = (n) => Math.min(280, Math.max(48, n * 5));
 
   for (let i = 0; i < uuidList.length; i += 72) {
     const chunk = uuidList.slice(i, i + 72);
     const lim = perChunkLimit(chunk.length);
-    const mgRows = await fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim);
-    for (const row of mgRows) {
+    const [mgRows, pmRows] = await Promise.all([
+      fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim),
+      fetchRecentPatientMessagesRowsForChunk(chunk, lim),
+    ]);
+    for (const row of mgRows || []) {
       const leg = mapDbMessageToLegacyMessage(row);
       if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
       ingestLatestLegacyMessage(latestByPid, leg);
     }
-    const pmRows = await fetchRecentPatientMessagesRowsForChunk(chunk, lim);
-    for (const row of pmRows) {
+    for (const row of pmRows || []) {
       const leg = mapPatientMessagesRowToLegacy(row);
       if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
       ingestLatestLegacyMessage(latestByPid, leg);
@@ -43565,54 +43617,21 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
   try {
     const doctorId = req.doctorId;
     const clinicId = req.doctor.clinic_id || req.clinicId || null;
-    const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim().toUpperCase();
-    const doctorKeysRaw = [...new Set([
-      String(doctorId || "").trim(),
-      String(req?.doctor?.id || "").trim(),
-      String(req?.doctor?.doctor_id || "").trim(),
-    ].filter(Boolean))];
-    const doctorKeysUuidFk = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
+    const includeHealth = String(req.query.includeHealth || "").trim() === "1";
 
-    console.log("[DOCTOR PATIENTS] Request:", {
-      doctorId,
-      doctorKeysRaw,
-      doctorKeysUuidFk,
-      clinicId,
-      clinicCode
-    });
+    /** Same visibility + 60s cache as messaging/unread (avoids duplicating 5 parallel assignment queries). */
+    const visiblePatientIds = await getDoctorVisiblePatientIdSetCached(req);
 
-    // Tedavi ekibi + patients tablosu + lead thread ataması + işlem / takvim (dashboard ile aynı küme mantığı)
-    const [teamPatientIds, fromPatientTableAssign, fromLeadThreads, fromProcessAssign, fromCalendar] =
-      await Promise.all([
-      collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
-      collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
-      collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw),
-      collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-      collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
-    ]);
-    const visiblePatientIds = new Set(teamPatientIds);
-    for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
-    for (const pid of fromLeadThreads) visiblePatientIds.add(pid);
-    for (const pid of fromProcessAssign) visiblePatientIds.add(pid);
-    for (const pid of fromCalendar) visiblePatientIds.add(pid);
-    const mergedBeforeExpand = visiblePatientIds.size;
-    await expandPatientIdSetForDoctorMatching(visiblePatientIds);
-
-    console.log("[DOCTOR PATIENTS] visible id keys:", {
-      treatment_team: teamPatientIds.size,
-      patient_table_assign: fromPatientTableAssign.size,
-      lead_thread_assign: fromLeadThreads.size,
-      process_or_appt_assign: fromProcessAssign.size,
-      calendar_today_tomorrow: fromCalendar.size,
-      merged_before_expand: mergedBeforeExpand,
-      after_expand: visiblePatientIds.size,
-    });
-
-    const patientSelectAttempts = [
-      "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at,health",
-      "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at",
-      "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,created_at",
-    ];
+    const patientSelectAttempts = includeHealth
+      ? [
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at,health",
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at",
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,created_at",
+        ]
+      : [
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at",
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,created_at",
+        ];
 
     if (visiblePatientIds.size === 0) {
       return res.json({ ok: true, patients: [] });
@@ -43694,8 +43713,6 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       return true;
     });
 
-    console.log(`[DOCTOR PATIENTS] Fetched ${finalPatients.length || 0} patients for doctor ${doctorId} (team + table + process/appt assign)`);
-
     // Helper to compute risk flags from health formData (patients endpoint)
     function computePatientRiskFlags(formData) {
       const fd = formData || {};
@@ -43718,15 +43735,11 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       return flags;
     }
 
-    console.log('[DOCTOR PATIENTS] finalPatients health check: total', finalPatients.length, '| with health.formData:', finalPatients.filter((p) => p.health && p.health.formData && Object.keys(p.health.formData).length > 0).length);
-
     const formattedPatients = finalPatients.map(patient => {
-      const healthData = (patient.health && typeof patient.health === 'object') ? patient.health : {};
+      const healthData =
+        includeHealth && patient.health && typeof patient.health === "object" ? patient.health : {};
       const formData = healthData.formData || {};
-      const riskFlags = computePatientRiskFlags(formData);
-      if (riskFlags.length > 0) {
-        console.log('[DOCTOR PATIENTS] RISK patient', patient.id, patient.name || patient.full_name, riskFlags);
-      }
+      const riskFlags = includeHealth ? computePatientRiskFlags(formData) : [];
       return {
         id: patient.id || patient.patient_id,
         patientId: patient.patient_id || patient.id,
@@ -44410,6 +44423,9 @@ async function handleDoctorInboxSummary(req, res) {
     async function collectDashboardTreatmentEventSlotsForDay(dayYmd) {
       const cid = clinicId ? String(clinicId).trim() : "";
       if (!cid) return [];
+      const tevKey = `tev:${cid}:${dayYmd}`;
+      const tevHit = dashboardTevSlotsCache.get(tevKey);
+      if (tevHit && tevHit.exp > Date.now()) return tevHit.slots;
       const { startMs, endMsExclusive } = dayBoundsMs(dayYmd);
       const out = [];
       const selectTries = [
@@ -44482,6 +44498,7 @@ async function handleDoctorInboxSummary(req, res) {
           out.push(row);
         }
       }
+      dashboardTevSlotsCache.set(tevKey, { slots: out, exp: Date.now() + DASHBOARD_TEV_SLOTS_TTL_MS });
       return out;
     }
 

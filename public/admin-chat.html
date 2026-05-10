@@ -576,7 +576,7 @@
         }
         messagesReadFingerprint = fp;
         renderMessages(messages, forceScroll);
-        markMessagesRead(selectedPatientId);
+        if (unreadPatient > 0) markMessagesRead(selectedPatientId);
       } catch (error) {
         console.error('Load messages error:', error);
         showError(t('chat.errLoadMessagesFull', { message: error.message }));
