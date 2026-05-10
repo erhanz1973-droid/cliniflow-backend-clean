@@ -1490,7 +1490,8 @@ async function bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTabl
       .select("assigned_doctor_id")
       .eq("patient_id", resolved)
       .eq("clinic_id", clinicUuid)
-      .eq("is_lead", true)
+      .order("updated_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     const aid = String(data?.assigned_doctor_id || "").trim();
     if (UUID_RE.test(aid)) await incrementDoctorUnreadForAssignedDoctor(aid);
@@ -3268,7 +3269,8 @@ async function resolveLeadAssignedDoctorForPatientClinic(resolvedPatientId, clin
       .select("assigned_doctor_id")
       .eq("patient_id", pid)
       .eq("clinic_id", cid)
-      .eq("is_lead", true)
+      .order("updated_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     const aid = String(data?.assigned_doctor_id || "").trim();
     return UUID_RE.test(aid) ? aid : null;
@@ -3355,7 +3357,8 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       .select("assigned_doctor_id")
       .eq("patient_id", resolvedPatientId)
       .eq("clinic_id", clinicUuid)
-      .eq("is_lead", true)
+      .order("updated_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     const did = String(data?.assigned_doctor_id || "").trim();
     if (!did || !UUID_RE.test(did)) return;
@@ -3465,13 +3468,10 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
       try {
         const pid = await resolveMessagesPatientDbId(String(opts.patientId));
         if (pid) {
-          const { data: thr } = await supabase
-            .from("patient_chat_threads")
-            .select("id")
-            .eq("patient_id", pid)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
+          let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", pid);
+          const ctxCid = String(opts?.contextClinicId || "").trim();
+          if (UUID_RE.test(ctxCid)) tq = tq.eq("clinic_id", ctxCid);
+          const { data: thr } = await tq.order("updated_at", { ascending: false }).limit(1).maybeSingle();
           if (thr?.id && UUID_RE.test(String(thr.id).trim())) {
             tid = String(thr.id).trim();
             console.log("[chat-socket] thread_id resolved from patient_chat_threads fallback", tid);
@@ -41169,7 +41169,10 @@ async function collectPatientIdsFromTreatmentTeam(doctorKeysRaw) {
   return out;
 }
 
-/** Lead thread `assigned_doctor_id` — doktor inbox ataması hasta listesinde de görünsün (primary’dan bağımsız). */
+/**
+ * `patient_chat_threads.assigned_doctor_id` → doktorun görebileceği hastalar.
+ * **Enrollment sonrası `is_lead` false olur;** atanan doktor yine aynı thread’te kalmalı — bu yüzden `is_lead` filtrelenmez.
+ */
 async function collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw) {
   const out = new Set();
   const keys = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
@@ -41178,7 +41181,6 @@ async function collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw) {
     const { data, error } = await supabase
       .from("patient_chat_threads")
       .select("patient_id")
-      .eq("is_lead", true)
       .not("assigned_doctor_id", "is", null)
       .in("assigned_doctor_id", keys)
       .limit(800);
