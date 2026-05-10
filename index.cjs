@@ -22239,7 +22239,8 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
                   .from("patient_chat_threads")
                   .select("clinic_id")
                   .eq("patient_id", rpid)
-                  .eq("is_lead", true)
+                  .order("updated_at", { ascending: false })
+                  .limit(1)
                   .maybeSingle();
                 clinicUuidNotify = th?.clinic_id ? String(th.clinic_id).trim() : null;
               }
@@ -22251,6 +22252,20 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
             messageStableId: stable,
             clinicUuid: clinicUuidNotify,
           });
+          // Same as doctor POST /api/messages/:id/reply: patient_messages insert does not go through
+          // insertMessageToSupabase (which emits). Without this, Socket.IO room `chat:{threadId}` never
+          // receives admin rows — doctors/patients on polling fallback miss live admin↔thread parity.
+          void emitRealtimeChatMessageToThread(
+            {
+              patientId,
+              sender: "clinic",
+              message: text,
+              senderId: null,
+              contextClinicId: clinicUuidNotify || null,
+            },
+            pmTry.data,
+            "patient_messages",
+          );
           return respondSuccess(leg, pmTry.data);
         }
         const { data, error, insertedTable } = await insertMessageToSupabase({
