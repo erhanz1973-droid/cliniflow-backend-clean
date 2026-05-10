@@ -1057,9 +1057,10 @@ async function fetchMessagesFromSupabase(patientId) {
 }
 
 /**
- * Lead thread doctor assignment for patient chat UI (one row per patient+clinic).
- * **`patients.primary_doctor_id` wins over `patient_chat_threads.assigned_doctor_id`** when both exist
- * (admin banner + hasta UI aynı ismi göstersin). Thread eski atanmış doktor ile kalabiliyor — arka planda uyum güncellenir.
+ * Patient-facing messaging assignment (one row per patient+clinic).
+ * **Source of truth for chat identity / operational responder:** `patient_chat_threads.assigned_doctor_id`.
+ * `patients.primary_doctor_id` is **medical / roster** context only — exposed separately as `medicalPrimaryDoctor*`;
+ * it MUST NOT override messaging display and MUST NOT trigger silent thread updates from this read path.
  */
 async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFromQuery) {
   if (!isSupabaseEnabled() || !patientResolvedId) return null;
@@ -1073,9 +1074,9 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
       .select("clinic_id, primary_doctor_id")
       .eq("id", patientResolvedId)
       .maybeSingle();
-  if (!UUID_RE.test(clinicId)) {
-    clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
-  }
+    if (!UUID_RE.test(clinicId)) {
+      clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
+    }
     primaryDoctorUuid =
       prow?.primary_doctor_id != null ? String(prow.primary_doctor_id).trim() : "";
   } catch (_) {
@@ -1112,42 +1113,40 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
   const threadDoctorIdRaw = thr?.assigned_doctor_id != null ? String(thr.assigned_doctor_id).trim() : "";
   const threadDoctorId = threadDoctorIdRaw && UUID_RE.test(threadDoctorIdRaw) ? threadDoctorIdRaw : "";
 
-  /** Prefer primary clinician for banners; fallback to thread assignee. */
-  let primDisp =
+  const threadDisp = threadDoctorId ? await hydrateDoctorDisplay(threadDoctorId) : null;
+  const primDisp =
     primaryDoctorUuid && UUID_RE.test(primaryDoctorUuid)
       ? await hydrateDoctorDisplay(primaryDoctorUuid)
       : null;
-  let threadDisp = threadDoctorId ? await hydrateDoctorDisplay(threadDoctorId) : null;
 
-  const effectiveDoctorId = primDisp?.id ?? threadDisp?.id ?? "";
-  const display = primDisp ?? threadDisp;
+  const mismatch =
+    !!(threadDoctorId && primDisp?.id && String(primDisp.id).trim() !== threadDoctorId);
 
-  if (!thr?.id && !effectiveDoctorId) return null;
-
-  if (
-    primaryDoctorUuid &&
-    UUID_RE.test(primaryDoctorUuid) &&
-    threadDoctorId &&
-    primaryDoctorUuid !== threadDoctorId
-  ) {
-    void syncPatientLeadThreadAssignedDoctor(patientResolvedId, clinicId, primaryDoctorUuid).catch(() => {});
-  }
+  if (!thr?.id && !threadDisp && !primDisp) return null;
 
   const threadId = thr?.id && UUID_RE.test(String(thr.id).trim()) ? String(thr.id).trim() : null;
 
-    return {
-      clinicId,
+  const out = {
+    clinicId,
     ...(threadId ? { threadId } : {}),
-    assignedDoctorId: effectiveDoctorId || threadDoctorId || null,
-    doctorName: display?.doctorName ?? null,
-    ...(display?.assignedDoctor ? { assignedDoctor: display.assignedDoctor } : {}),
+    assignedDoctorId: threadDoctorId || null,
+    doctorName: threadDisp?.doctorName ?? null,
+    ...(threadDisp?.assignedDoctor ? { assignedDoctor: threadDisp.assignedDoctor } : {}),
     assignedAt: thr?.assigned_at != null ? String(thr.assigned_at) : null,
   };
+
+  if (primDisp?.id) {
+    out.medicalPrimaryDoctorId = primDisp.id;
+    if (primDisp.assignedDoctor) out.medicalPrimaryDoctor = primDisp.assignedDoctor;
+    out.doctorAssignmentMismatch = mismatch;
+  }
+
+  return out;
 }
 
 /**
- * Keep lead chat thread assignment aligned with patients.primary_doctor_id (best-effort).
- * Used after PUT /api/admin/patients/assign-doctor so admin chat banner matches hasta listesi.
+ * Set lead thread `assigned_doctor_id` to match an **explicit** operational assignment (e.g. admin assign-doctor).
+ * Do **not** call from read/resolver paths — silent drift from `primary_doctor_id` is forbidden (ADR 002).
  */
 async function syncPatientLeadThreadAssignedDoctor(resolvedPatientId, clinicUuid, doctorUuid) {
   const pid = String(resolvedPatientId || "").trim();
@@ -7935,7 +7934,79 @@ async function resolveDoctorForOtp({ email, phone }) {
   };
 }
 
-async function resolvePatientForOtp({ email, phone }) {
+/** JWT `patientId` should be `patients.id` (uuid) when we have a DB row. */
+async function canonicalPatientUuidForJwt(foundPatient, resolvedPidFallback) {
+  const fid = foundPatient?.id != null ? String(foundPatient.id).trim() : "";
+  if (fid && UUID_RE.test(fid)) return fid;
+  const fb = String(resolvedPidFallback || "").trim();
+  if (fb && UUID_RE.test(fb)) return fb;
+  if (fb && isSupabaseEnabled()) {
+    const r = await resolveMessagesPatientDbId(fb);
+    if (r && UUID_RE.test(String(r).trim())) return String(r).trim();
+  }
+  return fb || null;
+}
+
+function pickPatientRowDeterministicForOtp(rows, clinicUuidHint) {
+  const list = Array.isArray(rows) ? rows.filter((r) => r && (r.id || r.patient_id)) : [];
+  if (!list.length) return null;
+  let pool = list;
+  const hint = clinicUuidHint && UUID_RE.test(String(clinicUuidHint).trim()) ? String(clinicUuidHint).trim() : "";
+  if (hint) {
+    const matched = list.filter((r) => String(r.clinic_id || "").trim() === hint);
+    if (matched.length) {
+      pool = matched;
+    } else if (list.length > 1) {
+      console.warn("[OTP] resolvePatientForOtp: clinic hint matched no row; using global deterministic pick", {
+        hint: hint.slice(0, 8),
+        candidates: list.length,
+      });
+    }
+  }
+  const ts = (r) => {
+    const n = r.updated_at ? new Date(r.updated_at).getTime() : NaN;
+    return Number.isFinite(n) ? n : 0;
+  };
+  pool.sort((a, b) => {
+    const d = ts(b) - ts(a);
+    if (d !== 0) return d;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+  return pool[0];
+}
+
+async function resolveClinicUuidForOtpHint(clinicCodeRaw, clinicIdRaw) {
+  const idRaw = String(clinicIdRaw || "").trim();
+  if (idRaw && UUID_RE.test(idRaw)) return idRaw;
+  const code = String(clinicCodeRaw || "").trim().toUpperCase();
+  if (!code || !isSupabaseEnabled()) return null;
+  try {
+    const c = await getClinicByCode(code);
+    return c?.id ? String(c.id).trim() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fetchPatientsForOtpByField(field, value) {
+  let sel = "id, patient_id, email, phone, status, name, language, role, clinic_id, updated_at";
+  let { data, error } = await supabase.from("patients").select(sel).eq(field, value).limit(40);
+  if (error && isMissingColumnError(error, "updated_at")) {
+    sel = "id, patient_id, email, phone, status, name, language, role, clinic_id";
+    ({ data, error } = await supabase.from("patients").select(sel).eq(field, value).limit(40));
+  }
+  if (error) {
+    console.error(`[OTP] Supabase patient lookup (${field}) failed:`, error.message || error);
+    return [];
+  }
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Resolve patient row for OTP / login. Prefer optional clinicId / clinicCode to disambiguate duplicates.
+ * Deterministic ordering: clinic match → updated_at desc → id asc.
+ */
+async function resolvePatientForOtp({ email, phone, clinicId, clinicCode }) {
   const emailNormalized = email ? String(email).trim().toLowerCase() : "";
   const phoneTrimmed = phone ? String(phone).trim() : "";
   const phoneNormalized = phoneTrimmed ? normalizePhone(phoneTrimmed) : "";
@@ -7949,48 +8020,27 @@ async function resolvePatientForOtp({ email, phone }) {
   let foundLanguage = "en";
   let resolvedEmail = emailNormalized || "";
 
-  // Initialize foundPatientId to prevent undefined errors
   foundPatientId = null;
 
-  const selectColumns = "id, patient_id, email, phone, status, name, language, role"; // 🔥 ADD ROLE COLUMN
+  const clinicUuidHint = await resolveClinicUuidForOtpHint(clinicCode, clinicId);
 
   if (isSupabaseEnabled()) {
     try {
-      // Use .limit(1) instead of .single() to avoid PGRST116 failures when
-      // multiple clinics share the same email (or duplicate rows exist).
+      let rows = [];
       if (emailNormalized) {
-        const { data: rows, error: pErr } = await supabase
-          .from("patients")
-          .select(selectColumns)
-          .eq("email", emailNormalized)
-          .limit(1);
-        if (!pErr && rows && rows.length > 0) {
-          foundPatient = rows[0];
-        } else if (pErr) {
-          console.error("[OTP] Supabase patient lookup (email) failed:", {
-            message: pErr.message,
-            code: pErr.code,
-            details: pErr.details,
-          });
-        }
+        rows = await fetchPatientsForOtpByField("email", emailNormalized);
       }
-
-      if (!foundPatient && phoneNormalized) {
-        const { data: rows, error: pErr } = await supabase
-          .from("patients")
-          .select(selectColumns)
-          .eq("phone", phoneNormalized)
-          .limit(1);
-        if (!pErr && rows && rows.length > 0) {
-          foundPatient = rows[0];
-        } else if (pErr) {
-          console.error("[OTP] Supabase patient lookup (phone) failed:", {
-            message: pErr.message,
-            code: pErr.code,
-            details: pErr.details,
-          });
-        }
+      if ((!rows || rows.length === 0) && phoneNormalized) {
+        rows = await fetchPatientsForOtpByField("phone", phoneNormalized);
       }
+      if (rows.length > 1) {
+        console.log("[OTP] resolvePatientForOtp: multiple patient candidates", {
+          count: rows.length,
+          keyedBy: emailNormalized ? "email" : phoneNormalized ? "phone" : "?",
+          clinicHint: clinicUuidHint ? String(clinicUuidHint).slice(0, 8) : null,
+        });
+      }
+      foundPatient = pickPatientRowDeterministicForOtp(rows, clinicUuidHint);
     } catch (e) {
       console.error("[OTP] resolvePatientForOtp unexpected error:", e?.message || e);
     }
@@ -8017,7 +8067,6 @@ async function resolvePatientForOtp({ email, phone }) {
   }
 
   if (foundPatient) {
-    // Önce Supabase UUID (id) — API / token ile uyum; yoksa legacy patient_id / patientId (p_…)
     foundPatientId =
       foundPatientId ||
       foundPatient.id ||
@@ -8026,12 +8075,11 @@ async function resolvePatientForOtp({ email, phone }) {
     foundPhone = foundPatient.phone || foundPhone;
     foundLanguage = normalizePatientLanguage(foundPatient.language);
     resolvedEmail = String(foundPatient.email || resolvedEmail || "").trim().toLowerCase();
-
   }
 
   console.log("USER QUERY RESULT:", foundPatient);
 
-  const result = {
+  return {
     patient: foundPatient,
     patientId: foundPatientId,
     email: resolvedEmail,
@@ -8039,9 +8087,6 @@ async function resolvePatientForOtp({ email, phone }) {
     language: foundLanguage,
     phoneNormalized,
   };
-  
-
-  return result;
 }
 
 // POST /auth/request-otp
@@ -8051,7 +8096,7 @@ app.post("/auth/request-otp", async (req, res) => {
   try {
     console.log("[AUTH REQUEST-OTP] FULL BODY:", JSON.stringify(req.body, null, 2));
     
-    const { email, phone, role } = req.body || {};
+    const { email, phone, role, clinicCode, clinicId } = req.body || {};
     
     console.log("[AUTH REQUEST-OTP] ROLE:", role);
     console.log("[AUTH REQUEST-OTP] PHONE:", phone);
@@ -8105,7 +8150,12 @@ app.post("/auth/request-otp", async (req, res) => {
       errorMessage = "Bu telefon numarası ile kayıtlı doktor bulunamadı. Lütfen kayıt olun.";
     } else {
       // 🔥 PATIENT LOOKUP
-      resolved = await resolvePatientForOtp({ email: emailNormalized, phone: phoneNormalized });
+      resolved = await resolvePatientForOtp({
+        email: emailNormalized,
+        phone: phoneNormalized,
+        clinicId,
+        clinicCode,
+      });
       foundUserId = resolved.patientId;
       foundLanguage = resolved.language;
       foundPhone = resolved.phone;
@@ -9053,7 +9103,7 @@ app.post("/api/register/doctor", async (req, res) => {
 // PATIENTS ONLY - Clean separation
 app.post("/auth/verify-otp-patient", async (req, res) => {
   try {
-    const { email, phone, otp, sessionId } = req.body || {};
+    const { email, phone, otp, sessionId, clinicCode, clinicId } = req.body || {};
 
     // Strict parameter validation
     if (!otp || typeof otp !== 'string' || !otp.trim()) {
@@ -9075,7 +9125,12 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
 
     
     // 🔥 CLEAN SEPARATION: Resolve patient from PATIENTS table only
-    const resolved = await resolvePatientForOtp({ email: emailNormalized, phone });
+    const resolved = await resolvePatientForOtp({
+      email: emailNormalized,
+      phone,
+      clinicId,
+      clinicCode,
+    });
 
     const resolvedEmail = resolved.email || emailNormalized;
 
@@ -9164,11 +9219,8 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
     const foundPatient = resolved.patient;
     const resolvedPid = resolved.patientId;
     const foundLanguage = resolved.language;
-    const canonicalPatientId =
-      (foundPatient &&
-        (foundPatient.id || foundPatient.patient_id || foundPatient.patientId)) ||
-      resolvedPid;
-    
+    const canonicalPatientId = await canonicalPatientUuidForJwt(foundPatient, resolvedPid);
+
     if (!canonicalPatientId) {
       return res.status(404).json({
         ok: false,
@@ -9176,7 +9228,7 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
         message: "Bu email ile kayıtlı hasta bulunamadı.",
       });
     }
-    
+
     // Mark OTP as verified
     markOTPVerified(emailNormalized);
 
@@ -9555,7 +9607,7 @@ app.post("/api/admin/verify-otp", async (req, res) => {
 // UNIFIED OTP ENDPOINT - Single server, type-based separation
 app.post(["/auth/verify-otp", "/api/auth/verify-otp"], async (req, res) => {
   try {
-    const { otp, email, phone, sessionId } = req.body || {};
+    const { otp, email, phone, sessionId, clinicCode, clinicId } = req.body || {};
     let role = req.body?.role;
     if (!role && req.body?.type != null) {
       const t = String(req.body.type).toLowerCase();
@@ -9700,7 +9752,12 @@ app.post(["/auth/verify-otp", "/api/auth/verify-otp"], async (req, res) => {
 
     } else {
       // PATIENT FLOW
-      const resolved = await resolvePatientForOtp({ email: emailNormalized, phone });
+      const resolved = await resolvePatientForOtp({
+        email: emailNormalized,
+        phone,
+        clinicId,
+        clinicCode,
+      });
 
       const resolvedEmail = resolved.email || emailNormalized;
       
@@ -9766,11 +9823,8 @@ app.post(["/auth/verify-otp", "/api/auth/verify-otp"], async (req, res) => {
       console.log("[PATIENT VERIFY] Resolved object:", resolved);
       const foundPatient = resolved.patient;
       const resolvedPid = resolved.patientId;
-      const canonicalPatientId =
-        (foundPatient &&
-          (foundPatient.id || foundPatient.patient_id || foundPatient.patientId)) ||
-        resolvedPid;
-      
+      const canonicalPatientId = await canonicalPatientUuidForJwt(foundPatient, resolvedPid);
+
       console.log("[PATIENT VERIFY] foundPatient:", foundPatient);
       console.log("[PATIENT VERIFY] canonicalPatientId:", canonicalPatientId);
       
@@ -16030,6 +16084,7 @@ app.put('/api/admin/patients/assign-doctor', requireAdminAuth, async (req, res) 
 
     console.log(`[ASSIGN DOCTOR] patient=${patientUuid} → doctor=${canonicalDoctorUuid} (raw=${rawDoc})`);
 
+    /** Explicit admin action: align lead-thread messaging assignee with chosen doctor (not a read-path silent sync). */
     let leadThreadSync = { ok: false };
     try {
       leadThreadSync = await syncPatientLeadThreadAssignedDoctor(patientUuid, clinicId, canonicalDoctorUuid);
@@ -22396,6 +22451,51 @@ async function resolvePatientUUID(patientId) {
   return patientId;
 }
 
+/**
+ * Folder names under public/uploads/{intraoral,chat,patient}/ — historically keyed by JWT patientId,
+ * which may be patients.id (uuid) OR patients.patient_id (legacy string). Admin UI often passes uuid only.
+ */
+async function resolvePatientFolderIdVariants(rawPatientId) {
+  const variants = new Set();
+  const raw = String(rawPatientId || "").trim();
+  if (raw) variants.add(raw);
+  if (!isSupabaseEnabled()) return [...variants];
+
+  const uuid = await resolvePatientUUID(raw);
+  if (uuid && String(uuid).trim()) variants.add(String(uuid).trim());
+
+  try {
+    const UUID_RE_F = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let prow = null;
+    if (UUID_RE_F.test(raw)) {
+      const { data } = await supabase.from("patients").select("id, patient_id").eq("id", raw).maybeSingle();
+      prow = data;
+    }
+    if (!prow) {
+      const { data } = await supabase.from("patients").select("id, patient_id").eq("patient_id", raw).maybeSingle();
+      prow = data;
+    }
+    if (prow?.id) variants.add(String(prow.id).trim());
+    const legacyPid = prow?.patient_id != null ? String(prow.patient_id).trim() : "";
+    if (legacyPid) variants.add(legacyPid);
+  } catch (_) {}
+
+  return [...variants].filter(Boolean);
+}
+
+/** Clinic-scoped admin/doctor: patient row must belong to this clinic (cross-clinic denied). */
+async function assertPatientInClinicForStaff(patientRawId, staffClinicId) {
+  const cid = String(staffClinicId || "").trim();
+  if (!cid || !UUID_RE.test(cid)) return { ok: false, code: "clinic_missing", patientUuid: null };
+  if (!isSupabaseEnabled()) return { ok: true, patientUuid: String(patientRawId || "").trim(), skipped: true };
+  const patientUuid = await resolvePatientUUID(String(patientRawId || "").trim());
+  const { data: pr, error } = await supabase.from("patients").select("id, clinic_id").eq("id", patientUuid).maybeSingle();
+  if (error || !pr?.id) return { ok: false, code: "patient_not_found", patientUuid };
+  const pc = pr.clinic_id != null ? String(pr.clinic_id).trim() : "";
+  if (!pc || pc !== cid) return { ok: false, code: "patient_clinic_mismatch", patientUuid };
+  return { ok: true, patientUuid };
+}
+
 // ─── Helper: collect files from all sources for a patient ─────────────────────
 async function collectPatientFiles(patientId) {
   const filesMap = new Map(); // id → FileItem (dedup)
@@ -22403,15 +22503,22 @@ async function collectPatientFiles(patientId) {
   const addFile = (f) => { if (f && f.id && f.url) filesMap.set(f.id, f); };
 
   const patientUUID = isSupabaseEnabled() ? await resolvePatientUUID(patientId) : patientId;
+  const folderVariants = await resolvePatientFolderIdVariants(patientId);
+  const messagePatientIdCandidates = [...new Set([patientUUID, ...folderVariants])].filter(Boolean).slice(0, 12);
 
   // ── Source 1: messages table (chat uploads) ───────────────────────────────
   if (isSupabaseEnabled()) {
     try {
       // Try primary schema (sender column)
       let msgRows = [];
-      const r1 = await supabase.from('messages')
+      const baseQ = (q) =>
+        messagePatientIdCandidates.length <= 1
+          ? q.eq("patient_id", patientUUID)
+          : q.in("patient_id", messagePatientIdCandidates);
+      const r1 = await baseQ(
+        supabase.from('messages')
         .select('id, patient_id, sender, attachments, attachment, created_at')
-        .eq('patient_id', patientUUID)
+      )
         .not('attachments', 'is', null)
         .order('created_at', { ascending: false })
         .limit(200);
@@ -22419,9 +22526,10 @@ async function collectPatientFiles(patientId) {
         msgRows = r1.data || [];
       } else {
         // Fallback schema (from_patient column)
-        const r2 = await supabase.from('messages')
+        const r2 = await baseQ(
+          supabase.from('messages')
           .select('id, patient_id, from_patient, attachment, created_at')
-          .eq('patient_id', patientUUID)
+        )
           .not('attachment', 'is', null)
           .order('created_at', { ascending: false })
           .limit(200);
@@ -22525,26 +22633,27 @@ async function collectPatientFiles(patientId) {
     }
   }
 
-  // ── Source 3: local disk — intraoral photos ───────────────────────────────
+  // ── Source 3: local disk — intraoral photos (all legacy folder id variants) ─
   try {
-    const INTRAORAL_DIR = path.join(__dirname, 'public', 'uploads', 'intraoral', patientId);
-    if (fs.existsSync(INTRAORAL_DIR)) {
+    for (const folderId of folderVariants) {
+      const INTRAORAL_DIR = path.join(__dirname, "public", "uploads", "intraoral", folderId);
+      if (!fs.existsSync(INTRAORAL_DIR)) continue;
       const diskFiles = fs.readdirSync(INTRAORAL_DIR).filter((f) => /\.(jpg|jpeg|png|heic|heif|webp)$/i.test(f));
       for (const fname of diskFiles) {
         const fpath = path.join(INTRAORAL_DIR, fname);
         const stat = fs.statSync(fpath);
-        const fileId = 'intraoral_' + fname;
+        const fileId = "intraoral_" + folderId + "_" + fname;
         addFile({
           id: fileId,
           name: fname,
-          url: `/uploads/intraoral/${encodeURIComponent(patientId)}/${encodeURIComponent(fname)}`,
-          mimeType: 'image/jpeg',
-          fileType: 'image',
+          url: `/uploads/intraoral/${encodeURIComponent(folderId)}/${encodeURIComponent(fname)}`,
+          mimeType: "image/jpeg",
+          fileType: "image",
           subtype: null,
           size: stat.size,
           createdAt: stat.mtimeMs,
-          from: 'PATIENT',
-          source: 'intraoral',
+          from: "PATIENT",
+          source: "intraoral",
         });
       }
     }
@@ -22552,26 +22661,57 @@ async function collectPatientFiles(patientId) {
 
   // ── Source 4: local disk — chat uploads ───────────────────────────────────
   try {
-    const CHAT_UPLOAD_DIR = path.join(__dirname, 'public', 'uploads', 'chat', patientId);
-    if (fs.existsSync(CHAT_UPLOAD_DIR)) {
-      const diskFiles = fs.readdirSync(CHAT_UPLOAD_DIR).filter((f) => /\.(jpg|jpeg|png|heic|heif|webp|pdf)$/i.test(f));
+    for (const folderId of folderVariants) {
+      const CHAT_UPLOAD_DIR = path.join(__dirname, "public", "uploads", "chat", folderId);
+      if (!fs.existsSync(CHAT_UPLOAD_DIR)) continue;
+      const diskFiles = fs.readdirSync(CHAT_UPLOAD_DIR).filter((f) =>
+        /\.(jpg|jpeg|png|heic|heif|webp|pdf)$/i.test(f)
+      );
       for (const fname of diskFiles) {
         const fpath = path.join(CHAT_UPLOAD_DIR, fname);
         const stat = fs.statSync(fpath);
         const isPdf = /\.pdf$/i.test(fname);
-        const fileId = 'chat_disk_' + fname;
-        if (filesMap.has(fileId)) continue; // already in Supabase messages
+        const fileId = "chat_disk_" + folderId + "_" + fname;
         addFile({
           id: fileId,
           name: fname,
-          url: `/uploads/chat/${encodeURIComponent(patientId)}/${encodeURIComponent(fname)}`,
-          mimeType: isPdf ? 'application/pdf' : 'image/jpeg',
-          fileType: isPdf ? 'pdf' : 'image',
+          url: `/uploads/chat/${encodeURIComponent(folderId)}/${encodeURIComponent(fname)}`,
+          mimeType: isPdf ? "application/pdf" : "image/jpeg",
+          fileType: isPdf ? "pdf" : "image",
           subtype: null,
           size: stat.size,
           createdAt: stat.mtimeMs,
-          from: 'PATIENT',
-          source: 'chat',
+          from: "PATIENT",
+          source: "chat",
+        });
+      }
+    }
+  } catch (_) {}
+
+  // ── Source 5: local disk — guided / general uploads (may exist without DB row)
+  try {
+    for (const folderId of folderVariants) {
+      const PAT_DIR = path.join(__dirname, "public", "uploads", "patient", folderId);
+      if (!fs.existsSync(PAT_DIR)) continue;
+      const diskFiles = fs.readdirSync(PAT_DIR).filter((f) =>
+        /\.(jpg|jpeg|png|heic|heif|webp|pdf)$/i.test(f)
+      );
+      for (const fname of diskFiles) {
+        const fpath = path.join(PAT_DIR, fname);
+        const stat = fs.statSync(fpath);
+        const isPdf = /\.pdf$/i.test(fname);
+        const fileId = "patient_disk_" + folderId + "_" + fname;
+        addFile({
+          id: fileId,
+          name: fname,
+          url: `/uploads/patient/${encodeURIComponent(folderId)}/${encodeURIComponent(fname)}`,
+          mimeType: isPdf ? "application/pdf" : "image/jpeg",
+          fileType: isPdf ? "pdf" : "image",
+          subtype: null,
+          size: stat.size,
+          createdAt: stat.mtimeMs,
+          from: "PATIENT",
+          source: "upload",
         });
       }
     }
@@ -22615,6 +22755,15 @@ app.get('/api/doctor/patient/:patientId/files', requireDoctorAuth, async (req, r
   try {
     const patientId = String(req.params.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
+    const docClinic =
+      req.doctor?.clinic_id != null ? String(req.doctor.clinic_id).trim() : "";
+    if (isSupabaseEnabled() && docClinic && UUID_RE.test(docClinic)) {
+      const gate = await assertPatientInClinicForStaff(patientId, docClinic);
+      if (!gate.ok) {
+        const st = gate.code === "patient_not_found" ? 404 : 403;
+        return res.status(st).json({ ok: false, error: gate.code || "forbidden", files: [] });
+      }
+    }
     const files = await collectPatientFiles(patientId);
     return res.json({ ok: true, files });
   } catch (err) {
@@ -22889,6 +23038,14 @@ app.get('/api/admin/patient/:patientId/files', requireAdminAuth, async (req, res
     const patientId = String(req.params.patientId || '').trim();
     if (!patientId) return res.status(400).json({ ok: false, error: 'patient_id_required' });
 
+    if (isSupabaseEnabled() && req.clinicId) {
+      const gate = await assertPatientInClinicForStaff(patientId, req.clinicId);
+      if (!gate.ok) {
+        const st = gate.code === "patient_not_found" ? 404 : 403;
+        return res.status(st).json({ ok: false, error: gate.code || "forbidden", files: [] });
+      }
+    }
+
     const debug = req.query.debug === '1';
     const debugInfo = {};
 
@@ -23154,6 +23311,7 @@ async function handleGetIntraoralPhotos(req, res) {
     const REQUIRED_ANGLES = ['FRONT', 'LEFT', 'RIGHT', 'UPPER', 'LOWER'];
     const byAngle = {};
     const allPhotos = [];
+    const folderVariants = await resolvePatientFolderIdVariants(patientId);
 
     // ── Source 1: Supabase patient_files table ─────────────────────────────
     if (isSupabaseEnabled()) {
@@ -23183,54 +23341,56 @@ async function handleGetIntraoralPhotos(req, res) {
       }
     }
 
-    // ── Source 2: local disk uploads/patient/:patientId/ ──────────────────
-    const LOCAL_DIR = path.join(__dirname, 'public', 'uploads', 'patient', patientId);
-    if (fs.existsSync(LOCAL_DIR)) {
+    // ── Source 2: local disk uploads/patient (all folder id variants) ─────
+    for (const folderId of folderVariants) {
+      const LOCAL_DIR = path.join(__dirname, "public", "uploads", "patient", folderId);
+      if (!fs.existsSync(LOCAL_DIR)) continue;
       const files = fs.readdirSync(LOCAL_DIR).sort().reverse();
       for (const fname of files) {
         const fnameLow = fname.toLowerCase();
         if (!fnameLow.match(/\.(jpg|jpeg|png)$/)) continue;
-        const angle = REQUIRED_ANGLES.find(a => fnameLow.includes(a.toLowerCase()));
+        const angle = REQUIRED_ANGLES.find((a) => fnameLow.includes(a.toLowerCase()));
         if (!angle || byAngle[angle]) continue;
         const stat = fs.statSync(path.join(LOCAL_DIR, fname));
         const buf = fs.readFileSync(path.join(LOCAL_DIR, fname));
         const vr = validateIntraoralBuffer(buf);
         byAngle[angle] = {
-          id: 'local_' + fname,
+          id: "local_" + folderId + "_" + fname,
           angle_type: angle,
-          url: `/uploads/patient/${encodeURIComponent(patientId)}/${encodeURIComponent(fname)}`,
+          url: `/uploads/patient/${encodeURIComponent(folderId)}/${encodeURIComponent(fname)}`,
           name: fname,
           validation_status: vr.status,
           score: vr.score,
           issues: vr.issues,
           created_at: stat.mtime.toISOString(),
-          source: 'local',
+          source: "local",
         };
       }
     }
 
     // ── Source 3: local intraoral dir ─────────────────────────────────────
-    const INTRAORAL_DIR = path.join(__dirname, 'public', 'uploads', 'intraoral', patientId);
-    if (fs.existsSync(INTRAORAL_DIR)) {
+    for (const folderId of folderVariants) {
+      const INTRAORAL_DIR = path.join(__dirname, "public", "uploads", "intraoral", folderId);
+      if (!fs.existsSync(INTRAORAL_DIR)) continue;
       const files = fs.readdirSync(INTRAORAL_DIR).sort().reverse();
       for (const fname of files) {
         const fnameLow = fname.toLowerCase();
         if (!fnameLow.match(/\.(jpg|jpeg|png)$/)) continue;
-        const angle = REQUIRED_ANGLES.find(a => fnameLow.includes(a.toLowerCase()));
+        const angle = REQUIRED_ANGLES.find((a) => fnameLow.includes(a.toLowerCase()));
         if (!angle || byAngle[angle]) continue;
         const stat = fs.statSync(path.join(INTRAORAL_DIR, fname));
         const buf = fs.readFileSync(path.join(INTRAORAL_DIR, fname));
         const vr = validateIntraoralBuffer(buf);
         byAngle[angle] = {
-          id: 'intraoral_' + fname,
+          id: "intraoral_" + folderId + "_" + fname,
           angle_type: angle,
-          url: `/uploads/intraoral/${encodeURIComponent(patientId)}/${encodeURIComponent(fname)}`,
+          url: `/uploads/intraoral/${encodeURIComponent(folderId)}/${encodeURIComponent(fname)}`,
           name: fname,
           validation_status: vr.status,
           score: vr.score,
           issues: vr.issues,
           created_at: stat.mtime.toISOString(),
-          source: 'intraoral',
+          source: "intraoral",
         };
       }
     }
@@ -23261,6 +23421,16 @@ async function handleGetIntraoralPhotos(req, res) {
 app.get('/api/doctor/patient/:patientId/intraoral-photos', requireDoctorAuth, async (req, res) => {
   try {
     const patientId = String(req.params.patientId || '').trim();
+    const docClinic =
+      req.doctor?.clinic_id != null ? String(req.doctor.clinic_id).trim() : "";
+    if (isSupabaseEnabled() && docClinic && UUID_RE.test(docClinic)) {
+      const gate = await assertPatientInClinicForStaff(patientId, docClinic);
+      if (!gate.ok) {
+        const st = gate.code === "patient_not_found" ? 404 : 403;
+        return res.status(st).json({ ok: false, error: gate.code || "forbidden" });
+      }
+    }
+    const folderVariants = await resolvePatientFolderIdVariants(patientId);
     const REQUIRED_ANGLES = ['FRONT', 'LEFT', 'RIGHT', 'UPPER', 'LOWER'];
     const byAngle = {};
 
@@ -23289,26 +23459,28 @@ app.get('/api/doctor/patient/:patientId/intraoral-photos', requireDoctorAuth, as
       }
     }
 
-    // Fallback: local dirs
-    for (const dir of ['patient', 'intraoral']) {
-      const D = path.join(__dirname, 'public', 'uploads', dir, patientId);
-      if (!fs.existsSync(D)) continue;
-      for (const fname of fs.readdirSync(D).sort().reverse()) {
-        if (!fname.match(/\.(jpg|jpeg|png)$/i)) continue;
-        const angle = REQUIRED_ANGLES.find(a => fname.toLowerCase().includes(a.toLowerCase()));
-        if (!angle || byAngle[angle]) continue;
-        const buf = fs.readFileSync(path.join(D, fname));
-        const vr = validateIntraoralBuffer(buf);
-        byAngle[angle] = {
-          id: `${dir}_${fname}`,
-          angle_type: angle,
-          url: `/uploads/${dir}/${encodeURIComponent(patientId)}/${encodeURIComponent(fname)}`,
-          name: fname,
-          validation_status: vr.status,
-          score: vr.score,
-          issues: vr.issues,
-          created_at: fs.statSync(path.join(D, fname)).mtime.toISOString(),
-        };
+    // Fallback: local dirs (scan all legacy on-disk folder id variants)
+    for (const dir of ["patient", "intraoral"]) {
+      for (const folderId of folderVariants) {
+        const D = path.join(__dirname, "public", "uploads", dir, folderId);
+        if (!fs.existsSync(D)) continue;
+        for (const fname of fs.readdirSync(D).sort().reverse()) {
+          if (!fname.match(/\.(jpg|jpeg|png)$/i)) continue;
+          const angle = REQUIRED_ANGLES.find((a) => fname.toLowerCase().includes(a.toLowerCase()));
+          if (!angle || byAngle[angle]) continue;
+          const buf = fs.readFileSync(path.join(D, fname));
+          const vr = validateIntraoralBuffer(buf);
+          byAngle[angle] = {
+            id: `${dir}_${folderId}_${fname}`,
+            angle_type: angle,
+            url: `/uploads/${dir}/${encodeURIComponent(folderId)}/${encodeURIComponent(fname)}`,
+            name: fname,
+            validation_status: vr.status,
+            score: vr.score,
+            issues: vr.issues,
+            created_at: fs.statSync(path.join(D, fname)).mtime.toISOString(),
+          };
+        }
       }
     }
 
@@ -40632,7 +40804,11 @@ async function loadPatientMessagingEnrollmentRow(internalPatientUuid) {
   }
 }
 
-/** true ⇒ lead konuşmasında yanıt yalnızca thread'deki atanmış doktora (lead dönemi bitti / üye hasta). */
+/**
+ * When true, POST replies from doctors who are not `patient_chat_threads.assigned_doctor_id` get 403 (assigned_doctor_only).
+ * MUST apply only to **approved** clinic members — not `PENDING` after PATCH /api/patient/clinic (is_lead cleared but admin not approved yet).
+ * Bug we fixed: `(is_lead === false) || ACTIVE` made every non-lead row strict, including PENDING → team doctors blocked after join.
+ */
 function patientRowRequiresAssignedDoctorMessagingOnly(prow) {
   if (!prow) return false;
   const cid = prow.clinic_id != null ? String(prow.clinic_id).trim() : "";
@@ -40640,19 +40816,15 @@ function patientRowRequiresAssignedDoctorMessagingOnly(prow) {
   if (prow.is_lead === true) return false;
   const status = String(prow.status || "").trim().toUpperCase();
   if (status === "LEAD") return false;
-  if (
-    prow.is_lead === false ||
-    ["ACTIVE", "PATIENT", "REGISTERED", "MEMBER"].includes(status)
-  ) {
-    return true;
-  }
-  return false;
+  const approvedLike = ["ACTIVE", "PATIENT", "REGISTERED", "MEMBER"].includes(status);
+  const nonLead = prow.is_lead !== true;
+  return nonLead && approvedLike;
 }
 
 /**
  * Lead threads (`is_lead`): primary responsibility is `assigned_doctor_id`; clinic staff still share visibility.
- * Send rules: enrolled (non-lead) patient + different assignee → 403 assigned_doctor_only when `forSend`.
- * Until enrollment, treatment-team members may participate per `doctorHasTreatmentTeamAccessToPatientId`.
+ * Send rules: **approved** enrolled (non-lead) patient + different assignee → 403 assigned_doctor_only when `forSend`.
+ * `PENDING` (joined clinic, awaiting admin approve) keeps treatment-team send access like pre-approval lead flow.
  * opts.forSend: true on POST replies; enrolled patient + thread assignee mismatch → 403 assigned_doctor_only.
  */
 async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
