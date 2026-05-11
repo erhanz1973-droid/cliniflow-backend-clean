@@ -6616,6 +6616,14 @@ async function runPatientRegister(req, res, route, otpMode) {
     language = "",
   } = body;
   const referralCode = String(body.referralCode || body.inviterReferralCode || "").trim();
+  if (referralCode) {
+    console.log("[REFERRAL_REGISTER] input", {
+      hasReferralCode: true,
+      codeLen: referralCode.length,
+      rawReferralCode: Boolean(body.referralCode),
+      rawInviterReferralCode: Boolean(body.inviterReferralCode),
+    });
+  }
   console.log("[REGISTER] name fields", {
     hasFirst: body.firstName != null || body.first_name != null,
     hasLast: body.lastName != null || body.last_name != null,
@@ -7444,69 +7452,61 @@ async function runPatientRegister(req, res, route, otpMode) {
 
       // ================== SUPABASE PATH (source of truth) ==================
       if (isSupabaseEnabled() && supabaseClinicId) {
+        console.log("[REFERRAL_REGISTER] supabase_path", {
+          targetClinicId: String(supabaseClinicId).slice(0, 8) + "…",
+          invitedRowPresent: Boolean(supabasePatientRow?.id || supabasePatientRow?.patient_id),
+          invitedUuid: supabasePatientRow?.id ? String(supabasePatientRow.id).slice(0, 8) + "…" : null,
+          invitedPatientId: supabasePatientRow?.patient_id || patientId || null,
+        });
         const variants = Array.from(
           new Set([refCode, refCode.toUpperCase(), refCode.toLowerCase()].filter(Boolean))
         );
 
         let inviter = null;
         let lastInviterErr = null;
+        const PATIENT_REFERRAL_SELECT = "id, patient_id, clinic_id, name, referral_code";
+        const lookupPatientField = async (label, buildQuery) => {
+          const r = await supabaseCallOrCrash(label, () => buildQuery().limit(1).maybeSingle());
+          if (!r.ok) return { row: null, err: null, aborted: true };
+          const out = r.out;
+          if (!out.error && out.data) return { row: out.data, err: null, aborted: false };
+          const e = out.error;
+          if (
+            e &&
+            String(e.code || "") !== "PGRST116" &&
+            !isMissingColumnError(e, "referral_code") &&
+            !isMissingColumnError(e, "patient_id")
+          ) {
+            return { row: null, err: e, aborted: false };
+          }
+          return { row: null, err: e || null, aborted: false };
+        };
         for (const v of variants) {
-          // 1) referral_code match (if column exists)
-          const rQ1 = await supabaseCallOrCrash("register referral lookup referral_code", () =>
-            supabase
-              .from("patients")
-              .select("id, patient_id, clinic_id, name, referral_code")
-              .eq("referral_code", v)
-              .limit(1)
-              .maybeSingle(),
-          );
-          if (!rQ1.ok) return;
-          const q1 = rQ1.out;
-          if (!q1.error && q1.data) {
-            inviter = q1.data;
-            break;
-          }
-          if (q1.error && !isMissingColumnError(q1.error, "referral_code") && String(q1.error.code || "") !== "PGRST116") {
-            lastInviterErr = q1.error;
-          }
+          const attempts = [];
+          // Prefer inviter in the same clinic (avoids picking another clinic’s row then failing mismatch).
+          attempts.push(["register referral lookup referral_code+clinic", () =>
+            supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("referral_code", v).eq("clinic_id", supabaseClinicId)]);
+          attempts.push(["register referral lookup referral_code", () =>
+            supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("referral_code", v)]);
+          attempts.push(["register referral lookup patient_id+clinic", () =>
+            supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("patient_id", v).eq("clinic_id", supabaseClinicId)]);
+          attempts.push(["register referral lookup patient_id", () =>
+            supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("patient_id", v)]);
+          attempts.push(["register referral lookup id+clinic", () =>
+            supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("id", v).eq("clinic_id", supabaseClinicId)]);
+          attempts.push(["register referral lookup id", () =>
+            supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("id", v)]);
 
-          // 2) patient_id match (if column exists)
-          const rQ2 = await supabaseCallOrCrash("register referral lookup patient_id", () =>
-            supabase
-              .from("patients")
-              .select("id, patient_id, clinic_id, name, referral_code")
-              .eq("patient_id", v)
-              .limit(1)
-              .maybeSingle(),
-          );
-          if (!rQ2.ok) return;
-          const q2 = rQ2.out;
-          if (!q2.error && q2.data) {
-            inviter = q2.data;
-            break;
+          for (const [label, qFn] of attempts) {
+            const { row, err, aborted } = await lookupPatientField(label, qFn);
+            if (aborted) return;
+            if (row) {
+              inviter = row;
+              break;
+            }
+            if (err) lastInviterErr = err;
           }
-          if (q2.error && !isMissingColumnError(q2.error, "patient_id") && String(q2.error.code || "") !== "PGRST116") {
-            lastInviterErr = q2.error;
-          }
-
-          // 3) id match (covers schemas where patient id is stored in `id`)
-          const rQ3 = await supabaseCallOrCrash("register referral lookup id", () =>
-            supabase
-              .from("patients")
-              .select("id, patient_id, clinic_id, name, referral_code")
-              .eq("id", v)
-              .limit(1)
-              .maybeSingle(),
-          );
-          if (!rQ3.ok) return;
-          const q3 = rQ3.out;
-          if (!q3.error && q3.data) {
-            inviter = q3.data;
-            break;
-          }
-          if (q3.error && String(q3.error.code || "") !== "PGRST116") {
-            lastInviterErr = q3.error;
-          }
+          if (inviter) break;
         }
 
         if (!inviter) {
@@ -7533,6 +7533,13 @@ async function runPatientRegister(req, res, route, otpMode) {
             message: REGISTER_USER_MSG.invalidReferralCode(refCodeRaw),
           });
         }
+
+        console.log("[REFERRAL_FOUND]", {
+          inviterId: inviter.id ? String(inviter.id).slice(0, 8) + "…" : null,
+          inviterPatientId: inviter.patient_id || null,
+          inviterClinicId: inviter.clinic_id ? String(inviter.clinic_id).slice(0, 8) + "…" : null,
+          targetClinicId: String(supabaseClinicId).slice(0, 8) + "…",
+        });
 
         const uuidLike = (s) =>
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || ""));
@@ -7619,11 +7626,39 @@ async function runPatientRegister(req, res, route, otpMode) {
           });
         }
 
+        console.log("[REFERRAL_CREATED]", {
+          referralRowId: created?.id ? String(created.id).slice(0, 8) + "…" : null,
+          duplicate: Boolean(created?.duplicate),
+          inviterCandidate: inviterCandidates[0] || null,
+          invitedCandidate: invitedCandidates[0] || null,
+        });
+        if (clinicReferralDiscountPercent != null && clinicReferralDiscountPercent > 0) {
+          console.log("[REFERRAL_REWARD_APPLIED]", {
+            inviterDiscountPercent: clinicReferralDiscountPercent,
+            invitedDiscountPercent: clinicReferralDiscountPercent,
+            note: "stored on referrals row at signup; admin approval may adjust",
+          });
+        } else {
+          console.log("[REFERRAL_REWARD_APPLIED]", {
+            inviterDiscountPercent: null,
+            invitedDiscountPercent: null,
+            note: "no clinic level1 referral percent configured",
+          });
+        }
         console.log("[REGISTER] ✅ Referral linked on register", {
           inviter: inviterCandidates[0],
           invited: invitedCandidates[0],
         });
       } else {
+        console.log("[REFERRAL_REGISTER] file_or_skipped", {
+          supabase: isSupabaseEnabled(),
+          supabaseClinicId: Boolean(supabaseClinicId),
+          reason: !isSupabaseEnabled()
+            ? "supabase_disabled"
+            : !supabaseClinicId
+              ? "no_target_clinic_id"
+              : "unknown",
+        });
         // ================== FILE FALLBACK ==================
         const allPatients = readJson(PAT_FILE, {});
         let inviterPatientId = null;
@@ -7645,9 +7680,9 @@ async function runPatientRegister(req, res, route, otpMode) {
         }
 
         if (!inviterPatientId) {
-
+          console.log("[REFERRAL_REGISTER] file_lookup_no_inviter", { refCode: refCodeRaw });
         } else if (inviterPatientId === patientId) {
-
+          console.log("[REFERRAL_REGISTER] file_lookup_self_referral_skipped", { refCode: refCodeRaw });
         } else if (canUseFileFallback()) {
           const referrals = readJson(REF_FILE, []);
           const referralList = Array.isArray(referrals) ? referrals : Object.values(referrals);
@@ -7667,11 +7702,16 @@ async function runPatientRegister(req, res, route, otpMode) {
             clinicCode: validatedClinicCode,
           });
           writeJson(REF_FILE, referralList);
+          console.log("[REFERRAL_CREATED]", { source: "file", inviterPatientId, invitedPatientId: patientId });
         }
       }
     } catch (err) {
-
-      // Don't fail registration if referral creation fails
+      console.error("[REFERRAL_REGISTER_ERROR]", {
+        message: err?.message || String(err),
+        code: err?.code,
+        stack: err?.stack ? String(err.stack).slice(0, 800) : null,
+      });
+      // Don't fail registration if referral creation fails (legacy behavior — see logs above).
     }
   }
 
