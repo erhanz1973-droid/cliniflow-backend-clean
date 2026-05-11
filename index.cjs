@@ -4942,6 +4942,30 @@ function invalidateTreatmentsCacheForPatient(patientId) {
   bumpTreatmentsCache();
 }
 
+/** Coalesce concurrent identical GET /api/patient/:id/messages tail fetches (same resolved patient + clinic scope + limit). */
+const PATIENT_MESSAGES_TAIL_INFLIGHT = new Map();
+
+function patientMessagesTailInflightKey(resolvedDbId, clinicQP, msgOpts, wantFull) {
+  if (wantFull) return null;
+  const lim =
+    msgOpts && typeof msgOpts.limit === "number" && Number.isFinite(msgOpts.limit)
+      ? msgOpts.limit
+      : "tail";
+  return `${String(resolvedDbId || "").trim()}|${String(clinicQP || "").trim()}|${lim}`;
+}
+
+function patientMessagesTailInflightFetch(key, fn) {
+  if (!key) return fn();
+  let p = PATIENT_MESSAGES_TAIL_INFLIGHT.get(key);
+  if (!p) {
+    p = fn().finally(() => {
+      PATIENT_MESSAGES_TAIL_INFLIGHT.delete(key);
+    });
+    PATIENT_MESSAGES_TAIL_INFLIGHT.set(key, p);
+  }
+  return p;
+}
+
 function buildTreatmentsCacheKey({ patientId, planId, isAdmin, clinicId, actorPatientId }) {
   return [
     String(patientId || "").trim(),
@@ -21878,10 +21902,17 @@ app.get("/api/patient/me/messages", requireToken, (req, res) => {
             : Number.isFinite(limN) && limN > 0
               ? { limit: limN }
               : { limit: 180 };
-          const [pack, leadAssignment] = await Promise.all([
-            fetchMessagesFromSupabase(patientId, msgOpts),
-            fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
-          ]);
+          const nocache = String(req.query?.nocache ?? "").trim() === "1";
+          const inflightKey =
+            wantFull || nocache || !resolvedDbId
+              ? null
+              : patientMessagesTailInflightKey(resolvedDbId, clinicQP, msgOpts, wantFull);
+          const [pack, leadAssignment] = await patientMessagesTailInflightFetch(inflightKey, () =>
+            Promise.all([
+              fetchMessagesFromSupabase(patientId, msgOpts),
+              fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
+            ])
+          );
           const { data, error, preMapped } = pack;
           if (error) {
             const supabasePublic = supabaseErrorPublic(error);
@@ -22128,10 +22159,17 @@ app.get("/api/patient/:patientId/messages", (req, res) => {
             : Number.isFinite(limN) && limN > 0
               ? { limit: limN }
               : { limit: 180 };
-          const [pack, leadAssignment] = await Promise.all([
-            fetchMessagesFromSupabase(patientId, msgOpts),
-            fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
-          ]);
+          const nocache = String(req.query?.nocache ?? "").trim() === "1";
+          const inflightKey =
+            wantFull || nocache || !resolvedDbId
+              ? null
+              : patientMessagesTailInflightKey(resolvedDbId, clinicQP, msgOpts, wantFull);
+          const [pack, leadAssignment] = await patientMessagesTailInflightFetch(inflightKey, () =>
+            Promise.all([
+              fetchMessagesFromSupabase(patientId, msgOpts),
+              fetchLeadThreadAssignmentForPatient(resolvedDbId, clinicQP),
+            ])
+          );
           const { data, error, preMapped } = pack;
           if (error) {
             const supabasePublic = supabaseErrorPublic(error);

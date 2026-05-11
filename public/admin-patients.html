@@ -534,7 +534,7 @@
 <body>
   <div class="wrap">
     <header>
-      <h1>👥 Clinifly Admin – Patients</h1>
+      <h1 data-i18n="patients.title">👥 Clinifly Admin – Patients</h1>
       <div id="usageBadge" style="display:none; padding:6px 12px; border:1px solid #cbd5e1; border-radius:999px; background:#eff6ff; color:#1e40af; font-size:12px; font-weight:800; margin-top:12px;"></div>
     </header>
 
@@ -1140,20 +1140,20 @@ if (Array.isArray(json)) {
                 font-weight:600;
                 color:#3b82f6;
               ">
-                No doctor assigned
+                ${t('patients.noDoctorAssigned')}
               </div>
             `}
             
             <!-- Doctor Assignment Section -->
             <div class="doctor-assignment" style="margin-top: 12px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
               <div style="display: flex; align-items: center; gap: 8px;">
-                <label style="font-size: 12px; color: #64748b; font-weight:600;">Assign Doctor:</label>
+                <label style="font-size: 12px; color: #64748b; font-weight:600;">${t('patients.assignDoctorLabel')}</label>
                 <select 
                   id="doctor-${escapeHtml(patientId)}"
                   class="doctor-select"
                   onchange="assignDoctor('${escapeHtml(patientId)}', this.value)"
                   style="flex:1; padding:8px 10px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; color:#0f172a; font-size:12px;">
-                  ${!p.primary_doctor_id ? `<option value="" selected disabled>Select Doctor</option>` : ''}
+                  ${!p.primary_doctor_id ? `<option value="" selected disabled>${escapeHtml(t('patients.selectDoctorPlaceholder'))}</option>` : ''}
                   ${primaryDoctorIdStr && !DOCTORS_CACHE.some(function (d) {
                     return normalizeDoctorKey(d.id) === primaryNk || (d.doctor_id && String(d.doctor_id).trim() === primaryDoctorIdStr);
                   }) ? `<option value="${escapeHtml(primaryDoctorIdStr)}" selected>— Atanmış doktor (yenile) —</option>` : ''}
@@ -1172,7 +1172,7 @@ if (Array.isArray(json)) {
                 <button 
                   onclick="assignDoctor('${escapeHtml(patientId)}', this.closest('.doctor-assignment').querySelector('.doctor-select').value)"
                   style="padding: 4px 12px; background: var(--p); border: none; border-radius: 4px; color: white; font-size: 12px; cursor: pointer;">
-                  Assign
+                  ${escapeHtml(t('patients.assignButton'))}
                 </button>
               </div>
             </div>
