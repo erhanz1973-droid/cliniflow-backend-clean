@@ -6617,6 +6617,13 @@ async function runPatientRegister(req, res, route, otpMode) {
   } = body;
   const referralCode = String(body.referralCode || body.inviterReferralCode || "").trim();
   if (referralCode) {
+    console.log("REFERRAL_CODE_RECEIVED", {
+      context: "register",
+      route,
+      codeLen: referralCode.length,
+      rawReferralCode: Boolean(body.referralCode),
+      rawInviterReferralCode: Boolean(body.inviterReferralCode),
+    });
     console.log("[REFERRAL_REGISTER] input", {
       hasReferralCode: true,
       codeLen: referralCode.length,
@@ -11333,6 +11340,7 @@ app.get("/api/clinics/nearby", async (req, res) => {
 
 // PATCH /api/patient/clinic — join / switch clinic (mobile: profil "kod ile katıl" + teklif kartı "Kliniğe katıl")
 // Body: { clinic_code | clinicCode } and/or { clinic_id | clinicId } — teklif akışı UUID gönderir, kod şartsız.
+// Opsiyonel referral: { referral_code | referralCode | inviterReferralCode } — klinik yazıldıktan sonra referrals satırı (register ile aynı kurallar).
 app.patch("/api/patient/clinic", requireToken, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
@@ -11446,6 +11454,30 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
 
     console.log("[PATCH /api/patient/clinic] ok patient:", String(patientRow.id).slice(0, 8), "clinic:", codeStored);
 
+    const joinReferralCode = String(
+      body.referral_code || body.referralCode || body.inviterReferralCode || ""
+    ).trim();
+    let referralJoinResult = null;
+    if (joinReferralCode) {
+      referralJoinResult = await tryApplyReferralCodeForPatientInClinic({
+        referralCodeRaw: joinReferralCode,
+        supabaseClinicId: clinic.id,
+        invitedRow: patientRow,
+        tokenPatientId: String(req.patientId || "").trim(),
+        nameForReferral: String(patientRow.name || "").trim().slice(0, 100) || null,
+        context: "patch_patient_clinic",
+      });
+    }
+
+    console.log("MEMBERSHIP_CREATED", {
+      patientId: String(patientRow.id).slice(0, 8) + "…",
+      clinicId: String(clinic.id).slice(0, 8) + "…",
+      clinicCode: codeStored,
+      referralCodeSent: Boolean(joinReferralCode),
+      referralLinked: Boolean(referralJoinResult?.linked),
+      referralError: referralJoinResult?.error || null,
+    });
+
     // Graduate the single patient+clinic chat thread from "lead" to member **without** clearing assignee —
     // keeps Doctor A on the same thread after enrollment (shared care; admin/clinic can still post as before).
     try {
@@ -11471,7 +11503,16 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
         name: clinic.name || "Klinik",
         clinic_code: codeStored,
       },
-      referral: null,
+      referral:
+        joinReferralCode || referralJoinResult
+          ? {
+              attempted: Boolean(joinReferralCode),
+              linked: Boolean(referralJoinResult?.linked),
+              duplicate: Boolean(referralJoinResult?.duplicate),
+              error: referralJoinResult?.error || null,
+              referralId: referralJoinResult?.referralRowId || null,
+            }
+          : null,
     });
   } catch (e) {
     console.error("[PATCH /api/patient/clinic]", e?.message || e);
@@ -33572,6 +33613,203 @@ function generateReferralCodeV2() {
   return `R_${bytes.substring(0, 10).toUpperCase()}`;
 }
 
+/**
+ * After patients.clinic_id is set, optionally create referrals row (same rules as register).
+ * Does not throw — clinic membership is already saved.
+ * @returns {Promise<{ linked?: boolean, skipped?: boolean, duplicate?: boolean, error?: string, referralRowId?: string }>}
+ */
+async function tryApplyReferralCodeForPatientInClinic({
+  referralCodeRaw,
+  supabaseClinicId,
+  invitedRow,
+  tokenPatientId,
+  nameForReferral,
+  context,
+}) {
+  const refCodeRaw = String(referralCodeRaw || "").trim();
+  const ctx = String(context || "clinic_join");
+  if (!refCodeRaw || !isSupabaseEnabled() || !supabaseClinicId || !invitedRow?.id) {
+    return { skipped: true };
+  }
+  console.log("REFERRAL_CODE_RECEIVED", {
+    context: ctx,
+    codeLen: refCodeRaw.length,
+    clinicId: String(supabaseClinicId).slice(0, 8) + "…",
+    invitedUuid: String(invitedRow.id).slice(0, 8) + "…",
+  });
+  try {
+    let clinicReferralDiscountPercent = null;
+    try {
+      const clinic = await getClinicById(String(supabaseClinicId).trim());
+      const levels = clinic?.settings?.referralLevels || clinic?.referralLevels || {};
+      const l1 = Number(levels?.level1 ?? levels?.referralLevel1Percent ?? NaN);
+      if (!Number.isNaN(l1) && l1 > 0) clinicReferralDiscountPercent = l1;
+    } catch (_) {}
+
+    const variants = Array.from(
+      new Set([refCodeRaw, refCodeRaw.toUpperCase(), refCodeRaw.toLowerCase()].filter(Boolean))
+    );
+    const PATIENT_REFERRAL_SELECT = "id, patient_id, clinic_id, name, referral_code";
+    let inviter = null;
+    let lastInviterErr = null;
+
+    const lookupOnce = async (label, qFn) => {
+      try {
+        const out = await qFn();
+        if (!out.error && out.data) return { row: out.data, err: null };
+        const e = out.error;
+        if (
+          e &&
+          String(e.code || "") !== "PGRST116" &&
+          !isMissingColumnError(e, "referral_code") &&
+          !isMissingColumnError(e, "patient_id")
+        ) {
+          return { row: null, err: e };
+        }
+        return { row: null, err: e || null };
+      } catch (e) {
+        console.warn("[tryApplyReferralCodeForPatientInClinic] lookup", label, e?.message || e);
+        return { row: null, err: e };
+      }
+    };
+
+    for (const v of variants) {
+      const attempts = [
+        ["referral_code+clinic", () =>
+          supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("referral_code", v).eq("clinic_id", supabaseClinicId).limit(1).maybeSingle()],
+        ["referral_code", () => supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("referral_code", v).limit(1).maybeSingle()],
+        ["patient_id+clinic", () =>
+          supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("patient_id", v).eq("clinic_id", supabaseClinicId).limit(1).maybeSingle()],
+        ["patient_id", () => supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("patient_id", v).limit(1).maybeSingle()],
+        ["id+clinic", () =>
+          supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("id", v).eq("clinic_id", supabaseClinicId).limit(1).maybeSingle()],
+        ["id", () => supabase.from("patients").select(PATIENT_REFERRAL_SELECT).eq("id", v).limit(1).maybeSingle()],
+      ];
+      for (const [label, qFn] of attempts) {
+        const { row, err } = await lookupOnce(label, qFn);
+        if (row) {
+          inviter = row;
+          break;
+        }
+        if (err) lastInviterErr = err;
+      }
+      if (inviter) break;
+    }
+
+    if (!inviter) {
+      console.log("REFERRAL_LOOKUP_MISS", {
+        context: ctx,
+        refCodePrefix: refCodeRaw.slice(0, 4),
+        supabase: lastInviterErr ? supabaseErrorPublic(lastInviterErr) : null,
+      });
+      return { linked: false, error: "invalid_referral_code" };
+    }
+
+    const inviterClinicId = inviter.clinic_id || null;
+    if (inviterClinicId && String(inviterClinicId) !== String(supabaseClinicId)) {
+      console.log("[tryApplyReferralCodeForPatientInClinic] clinic_mismatch", {
+        context: ctx,
+        inviterClinicId: String(inviterClinicId).slice(0, 8) + "…",
+        targetClinicId: String(supabaseClinicId).slice(0, 8) + "…",
+      });
+      return { linked: false, error: "invalid_referral_code" };
+    }
+
+    console.log("REFERRAL_FOUND", {
+      context: ctx,
+      inviterId: inviter.id ? String(inviter.id).slice(0, 8) + "…" : null,
+      inviterPatientId: inviter.patient_id || null,
+      inviterClinicId: inviter.clinic_id ? String(inviter.clinic_id).slice(0, 8) + "…" : null,
+      targetClinicId: String(supabaseClinicId).slice(0, 8) + "…",
+    });
+
+    const uuidLike = (s) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || ""));
+
+    let inviterCandidates = Array.from(new Set([inviter.id, inviter.patient_id].filter(Boolean)));
+    let invitedCandidates = Array.from(
+      new Set([invitedRow.id, invitedRow.patient_id, tokenPatientId].filter(Boolean))
+    );
+
+    const resolvedInviterUuids = (await Promise.all(inviterCandidates.map(resolvePatientUuidForReferral))).filter(Boolean);
+    inviterCandidates = Array.from(new Set([...inviterCandidates, ...resolvedInviterUuids]));
+    inviterCandidates = [
+      ...inviterCandidates.filter((x) => uuidLike(x)),
+      ...inviterCandidates.filter((x) => !uuidLike(x)),
+    ];
+
+    const resolvedInvitedUuids = (await Promise.all(invitedCandidates.map(resolvePatientUuidForReferral))).filter(Boolean);
+    invitedCandidates = Array.from(new Set([...invitedCandidates, ...resolvedInvitedUuids]));
+    invitedCandidates = [
+      ...invitedCandidates.filter((x) => uuidLike(x)),
+      ...invitedCandidates.filter((x) => !uuidLike(x)),
+    ];
+
+    const inviterSet = new Set(inviterCandidates.map((x) => String(x)));
+    const invitedSet = new Set(invitedCandidates.map((x) => String(x)));
+    for (const x of inviterSet) {
+      if (invitedSet.has(x)) {
+        return { linked: false, error: "self_referral" };
+      }
+    }
+
+    let created = null;
+    let lastCreateErr = null;
+    const invitedName = String(nameForReferral || invitedRow.name || "").trim().slice(0, 100) || null;
+    for (const invId of inviterCandidates) {
+      for (const invitedId of invitedCandidates) {
+        try {
+          const referralData = {
+            clinic_id: supabaseClinicId,
+            inviter_patient_id: invId,
+            invited_patient_id: invitedId,
+            referral_code: generateReferralCodeV2(),
+            status: "PENDING",
+            inviter_discount_percent: clinicReferralDiscountPercent,
+            invited_discount_percent: clinicReferralDiscountPercent,
+            discount_percent: clinicReferralDiscountPercent,
+            inviter_patient_name: inviter?.name || null,
+            invited_patient_name: invitedName,
+          };
+          created = await createReferralInDBFlexible(referralData);
+          break;
+        } catch (e) {
+          lastCreateErr = e;
+          if (String(e?.code || "") === "23505") {
+            created = { id: null, duplicate: true };
+            break;
+          }
+          if (isInvalidUuidError(e)) continue;
+        }
+      }
+      if (created) break;
+    }
+
+    if (!created) {
+      console.error("[tryApplyReferralCodeForPatientInClinic] create_failed", ctx, supabaseErrorPublic(lastCreateErr));
+      return { linked: false, error: "referral_create_failed" };
+    }
+
+    console.log("REFERRAL_CREATED", {
+      context: ctx,
+      referralRowId: created?.id ? String(created.id).slice(0, 8) + "…" : null,
+      duplicate: Boolean(created?.duplicate),
+    });
+    return {
+      linked: true,
+      duplicate: Boolean(created?.duplicate),
+      referralRowId: created?.id ? String(created.id) : null,
+    };
+  } catch (err) {
+    console.error("REFERRAL_JOIN_ERROR", {
+      context: ctx,
+      message: err?.message || String(err),
+      code: err?.code,
+    });
+    return { linked: false, error: String(err?.message || err || "referral_error") };
+  }
+}
+
 // POST /api/referral/invite
 // Patient creates an invite; legacy flow continues to work in parallel.
 app.post("/api/referral/invite", requireToken, async (req, res) => {
@@ -49762,14 +50000,6 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
     const requestIds = requests.map((r) => r.id);
     const reqClinicIds = [...new Set(requests.map((r) => r.clinic_id).filter(Boolean))];
 
-    const clinicNameById = {};
-    if (reqClinicIds.length > 0) {
-      const { data: clinicRows } = await supabase.from('clinics').select('id, name').in('id', reqClinicIds);
-      for (const c of clinicRows || []) {
-        if (c?.id) clinicNameById[String(c.id)] = c.name || null;
-      }
-    }
-
     const { data: offers, error: offErr } = await supabase
       .from('treatment_offers')
       .select('*')
@@ -49792,11 +50022,22 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         }
       }
     }
-    const extraClinicIds = offerClinicIds.filter((cid) => cid && clinicNameById[String(cid)] == null);
-    if (extraClinicIds.length > 0) {
-      const { data: moreClinics } = await supabase.from('clinics').select('id, name').in('id', extraClinicIds);
-      for (const c of moreClinics || []) {
-        if (c?.id) clinicNameById[String(c.id)] = c.name || null;
+    const clinicNameById = {};
+    const clinicCodeById = {};
+    const allClinicIds = [...new Set([...reqClinicIds, ...offerClinicIds].map((x) => String(x || '').trim()).filter(Boolean))];
+    if (allClinicIds.length > 0) {
+      const { data: clinicRows } = await supabase
+        .from('clinics')
+        .select('id, name, clinic_code')
+        .in('id', allClinicIds);
+      for (const c of clinicRows || []) {
+        if (!c?.id) continue;
+        const id = String(c.id);
+        clinicNameById[id] = c.name || null;
+        clinicCodeById[id] =
+          c.clinic_code != null && String(c.clinic_code).trim()
+            ? String(c.clinic_code).trim().toUpperCase()
+            : null;
       }
     }
 
@@ -49810,6 +50051,7 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         id: offer.id,
         clinic_id: offer.clinic_id || null,
         clinic_name: cid ? clinicNameById[cid] ?? null : null,
+        clinic_code: cid ? clinicCodeById[cid] ?? null : null,
         doctor_name: docId ? doctorNameById[docId] ?? null : null,
         treatment_type: offer.treatment_type,
         price_text: offer.price_text || offer.price_range || null,
@@ -49831,6 +50073,7 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         id: r.id,
         clinic_id: r.clinic_id || null,
         clinic_name: cid ? clinicNameById[cid] ?? null : null,
+        clinic_code: cid ? clinicCodeById[cid] ?? null : null,
         description: r.description,
         photos,
         image_url,

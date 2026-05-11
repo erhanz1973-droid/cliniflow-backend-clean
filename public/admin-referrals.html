@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605098"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Clinifly Admin – Referrals</title>
+  <title data-i18n="referrals.title">Clinifly Admin – Referrals</title>
   <script>
     (function() {
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
       if (!token) window.location.href = "/admin-login.html";
     })();
   </script>
-  <script src="/admin-i18n.js?v=30"></script>
+  <script src="/admin-i18n.js?v=35"></script>
   <link rel="stylesheet" href="/admin-layout.css" />
   <script src="/admin-layout.js?v=202605082" defer></script>
   <style>
@@ -78,41 +78,41 @@
 <body>
   <div class="wrap">
     <div class="page-header">
-      <h1 class="page-title">🎁 Referral Activity</h1>
-      <button class="refresh-btn" onclick="load()">↻ Refresh</button>
+      <h1 class="page-title" data-i18n="referrals.activityPageTitle">🎁 Referral activity</h1>
+      <button type="button" class="refresh-btn" onclick="load()" data-i18n="referrals.refresh">↻ Refresh</button>
     </div>
 
     <!-- Stats -->
     <div class="stats-row" id="statsRow">
-      <div class="stat-card"><div class="stat-label">Total Referrers</div><div class="stat-value" id="statReferrers">—</div></div>
-      <div class="stat-card" title="Same count as Plan &amp; usage → Referral invites (billing / SaaS)">
-        <div class="stat-label">Invited this UTC month</div>
+      <div class="stat-card"><div class="stat-label" data-i18n="referrals.statTotalReferrers">Total referrers</div><div class="stat-value" id="statReferrers">—</div></div>
+      <div class="stat-card" data-i18n-title="referrals.statInvitedUtcMonthTitle">
+        <div class="stat-label" data-i18n="referrals.statInvitedUtcMonth">Invited this UTC month</div>
         <div class="stat-value" id="statInvitedUtcMonth">—</div>
       </div>
-      <div class="stat-card"><div class="stat-label">Total Invited (all time)</div><div class="stat-value" id="statInvited">—</div></div>
-      <div class="stat-card"><div class="stat-label">Registered</div><div class="stat-value" id="statRegistered">—</div></div>
-      <div class="stat-card"><div class="stat-label">Treated</div><div class="stat-value" id="statTreated">—</div></div>
-      <div class="stat-card"><div class="stat-label">Bekleyen onay</div><div class="stat-value" id="statPending">—</div></div>
+      <div class="stat-card"><div class="stat-label" data-i18n="referrals.statTotalInvitedAllTime">Total invited (all time)</div><div class="stat-value" id="statInvited">—</div></div>
+      <div class="stat-card"><div class="stat-label" data-i18n="referrals.statRegistered">Registered</div><div class="stat-value" id="statRegistered">—</div></div>
+      <div class="stat-card"><div class="stat-label" data-i18n="referrals.statTreated">Treated</div><div class="stat-value" id="statTreated">—</div></div>
+      <div class="stat-card"><div class="stat-label" data-i18n="referrals.statPending">Pending approval</div><div class="stat-value" id="statPending">—</div></div>
     </div>
 
     <!-- Pending admin approval -->
     <div class="card" id="pendingApprovalCard" style="margin-bottom: 24px;">
       <div class="card-header">
-        <span class="card-title">Onay bekleyen referral'lar</span>
+        <span class="card-title" data-i18n="referrals.pendingSectionTitle">Referrals pending approval</span>
       </div>
       <table>
         <thead>
           <tr>
-            <th>Davet eden</th>
-            <th>Davet edilen</th>
-            <th>Durum</th>
-            <th>Kod</th>
-            <th>Tarih</th>
-            <th style="min-width: 160px;">İşlem</th>
+            <th data-i18n="referrals.inviter">Inviter</th>
+            <th data-i18n="referrals.invited">Invited</th>
+            <th data-i18n="referrals.thStatus">Status</th>
+            <th data-i18n="referrals.thCode">Code</th>
+            <th data-i18n="referrals.thDate">Date</th>
+            <th style="min-width: 160px;" data-i18n="referrals.thActions">Actions</th>
           </tr>
         </thead>
         <tbody id="pendingBody">
-          <tr class="loading-row"><td colspan="6">Yükleniyor…</td></tr>
+          <tr class="loading-row"><td colspan="6" data-i18n="referrals.loadingMain">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -120,13 +120,13 @@
     <!-- Table -->
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Referrer Summary</span>
+        <span class="card-title" data-i18n="referrals.summaryTitle">Referrer summary</span>
         <div class="filter-row">
           <select id="statusFilter" onchange="load()">
-            <option value="">All statuses</option>
-            <option value="registered">Registered</option>
-            <option value="treated">Treated</option>
-            <option value="rewarded">Rewarded</option>
+            <option value="" data-i18n="referrals.filterAllStatuses">All statuses</option>
+            <option value="registered" data-i18n="referrals.filterRegisteredOpt">Registered</option>
+            <option value="treated" data-i18n="referrals.filterTreatedOpt">Treated</option>
+            <option value="rewarded" data-i18n="referrals.filterRewardedOpt">Rewarded</option>
           </select>
         </div>
       </div>
@@ -134,15 +134,15 @@
       <table>
         <thead>
           <tr>
-            <th>Referrer</th>
-            <th style="text-align:center;">Invited</th>
-            <th style="text-align:center;">Registered</th>
-            <th style="text-align:center;">Treated</th>
-            <th>Invited Patients</th>
+            <th data-i18n="referrals.thReferrer">Referrer</th>
+            <th style="text-align:center;" data-i18n="referrals.thInvitedCount">Invited</th>
+            <th style="text-align:center;" data-i18n="referrals.thRegisteredCount">Registered</th>
+            <th style="text-align:center;" data-i18n="referrals.thTreatedCount">Treated</th>
+            <th data-i18n="referrals.thInvitedPatients">Invited patients</th>
           </tr>
         </thead>
         <tbody id="tableBody">
-          <tr class="loading-row"><td colspan="5">Loading…</td></tr>
+          <tr class="loading-row"><td colspan="5" data-i18n="referrals.loadingMain">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -150,14 +150,48 @@
 
 <script>
   const API = (typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app');
+  const DEFAULT_DISCOUNT_ERR = "Default discount percentages must be entered in Clinic Settings page";
+
+  function t(key, params) {
+    if (window.i18n && typeof window.i18n.t === "function") return window.i18n.t(key, params || {});
+    return key;
+  }
+
+  function adminLocaleTag() {
+    const L = window.i18n && typeof window.i18n.getLang === "function" ? window.i18n.getLang() : "en";
+    if (L === "ka") return "ka-GE";
+    if (L === "ru") return "ru-RU";
+    if (L === "tr") return "tr-TR";
+    return "en-US";
+  }
+
+  function refreshReferralFilterOptions() {
+    const sel = document.getElementById("statusFilter");
+    if (!sel || !window.i18n || typeof window.i18n.t !== "function") return;
+    const prev = sel.value;
+    const map = [
+      ["", "referrals.filterAllStatuses"],
+      ["registered", "referrals.filterRegisteredOpt"],
+      ["treated", "referrals.filterTreatedOpt"],
+      ["rewarded", "referrals.filterRewardedOpt"],
+    ];
+    map.forEach(([val, i18nKey], i) => {
+      const opt = sel.options[i];
+      if (opt) {
+        opt.value = val;
+        opt.textContent = window.i18n.t(i18nKey);
+      }
+    });
+    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  }
 
   function token() {
     return (localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "").trim();
   }
 
   function headers() {
-    const t = token();
-    return { Authorization: t.startsWith("Bearer ") ? t : `Bearer ${t}`, "Content-Type": "application/json" };
+    const tok = token();
+    return { Authorization: tok.startsWith("Bearer ") ? tok : `Bearer ${tok}`, "Content-Type": "application/json" };
   }
 
   function statusClass(s) {
@@ -170,11 +204,11 @@
 
   function statusLabel(s) {
     const v = String(s || "").toLowerCase();
-    if (v === "treated")    return "Treated";
-    if (v === "registered") return "Registered";
-    if (v === "rewarded")   return "Rewarded";
-    if (v === "approved")   return "Registered";
-    return "Invited";
+    if (v === "treated")    return t("referrals.statusShortTreated");
+    if (v === "registered") return t("referrals.statusShortRegistered");
+    if (v === "rewarded")   return t("referrals.statusShortRewarded");
+    if (v === "approved")   return t("referrals.statusShortRegistered");
+    return t("referrals.statusShortInvited");
   }
 
   function normalizeStatus(s) {
@@ -195,7 +229,7 @@
     if (createdAt == null || createdAt === "") return "—";
     const n = typeof createdAt === "number" ? createdAt : Date.parse(createdAt);
     if (Number.isNaN(n)) return "—";
-    return new Date(n).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" });
+    return new Date(n).toLocaleString(adminLocaleTag(), { dateStyle: "short", timeStyle: "short" });
   }
 
   async function patchReferralAction(id, action) {
@@ -210,11 +244,9 @@
       const rawErr = json.error;
       const msg =
         json.message ||
-        (rawErr === "Default discount percentages must be entered in Clinic Settings page"
-          ? "Klinik ayarlarında referral indirim yüzdeleri tanımlanmalı (Clinic Settings)."
-          : rawErr) ||
+        (rawErr === DEFAULT_DISCOUNT_ERR ? t("referrals.discountErrorHint") : rawErr) ||
         r.statusText;
-      throw new Error(String(msg || "İstek başarısız"));
+      throw new Error(String(msg || t("referrals.requestFailed")));
     }
     return json;
   }
@@ -222,14 +254,14 @@
   function renderPendingRows(items, pendingBody, sessionExpired) {
     if (sessionExpired) {
       pendingBody.innerHTML =
-        '<tr class="loading-row"><td colspan="6" style="color:#f87171;">Oturum süresi doldu. Lütfen tekrar giriş yapın.</td></tr>';
+        '<tr class="loading-row"><td colspan="6" style="color:#f87171;">' + escHtml(t("referrals.sessionExpired")) + "</td></tr>";
       return;
     }
     const pending = items.filter(needsAdminApproval).filter((r) => r.id);
     document.getElementById("statPending").textContent = String(pending.length);
     if (pending.length === 0) {
       pendingBody.innerHTML =
-        '<tr><td colspan="6"><div class="empty" style="padding:24px;"><div>Bekleyen onay yok.</div></div></td></tr>';
+        '<tr><td colspan="6"><div class="empty" style="padding:24px;"><div>' + escHtml(t("referrals.emptyPending")) + "</div></div></td></tr>";
       return;
     }
     pending.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
@@ -239,15 +271,18 @@
         const inviter = escHtml(ref.inviterPatientName || ref.inviterPatientId || "—");
         const invited = escHtml(ref.invitedPatientName || ref.invitedPatientId || "—");
         const code = ref.referralCode ? `<span class="pending-code">${escHtml(String(ref.referralCode))}</span>` : "—";
+        const badge = escHtml(t("referrals.statusBadgePending"));
+        const btnAp = escHtml(t("referrals.approve"));
+        const btnRej = escHtml(t("referrals.reject"));
         return `<tr data-pending-row="${escHtml(id)}">
         <td>${inviter}</td>
         <td>${invited}</td>
-        <td><span class="badge badge-registered">Onay bekliyor</span></td>
+        <td><span class="badge badge-registered">${badge}</span></td>
         <td>${code}</td>
         <td>${escHtml(formatReferralDate(ref.createdAt))}</td>
         <td class="actions-cell">
-          <button type="button" class="btn-approve" data-ref-action="approve" data-ref-id="${escHtml(id)}">Onayla</button>
-          <button type="button" class="btn-reject" data-ref-action="reject" data-ref-id="${escHtml(id)}">Reddet</button>
+          <button type="button" class="btn-approve" data-ref-action="approve" data-ref-id="${escHtml(id)}">${btnAp}</button>
+          <button type="button" class="btn-reject" data-ref-action="reject" data-ref-id="${escHtml(id)}">${btnRej}</button>
         </td>
       </tr>`;
       })
@@ -279,93 +314,107 @@
   async function load() {
     const tbody = document.getElementById("tableBody");
     const pendingBody = document.getElementById("pendingBody");
-    tbody.innerHTML = '<tr class="loading-row"><td colspan="5">Loading…</td></tr>';
-    pendingBody.innerHTML = '<tr class="loading-row"><td colspan="6">Yükleniyor…</td></tr>';
+    const lm = escHtml(t("referrals.loadingMain"));
+    tbody.innerHTML = '<tr class="loading-row"><td colspan="5">' + lm + "</td></tr>";
+    pendingBody.innerHTML = '<tr class="loading-row"><td colspan="6">' + lm + "</td></tr>";
 
     const statusFilter = document.getElementById("statusFilter").value.toLowerCase();
 
     let items = [];
     let sessionExpired = false;
+    let apiJson = {};
     try {
       const r = await fetch(`${API}/api/admin/referrals`, { headers: headers(), cache: "no-store" });
       if (r.status === 401) {
         sessionExpired = true;
-        tbody.innerHTML = '<tr class="loading-row"><td colspan="5" style="color:#f87171;">Session expired. Please log in again.</td></tr>';
+        tbody.innerHTML = '<tr class="loading-row"><td colspan="5" style="color:#f87171;">' + escHtml(t("referrals.sessionExpired")) + "</td></tr>";
         renderPendingRows([], pendingBody, true);
         document.getElementById("statPending").textContent = "—";
-        var elUtc2 = document.getElementById("statInvitedUtcMonth");
+        const elUtc2 = document.getElementById("statInvitedUtcMonth");
         if (elUtc2) elUtc2.textContent = "—";
         return;
       }
-      const json = await r.json();
-      items = json.items || [];
+      apiJson = await r.json();
+      items = apiJson.items || [];
     } catch (e) {
-      tbody.innerHTML = `<tr class="loading-row"><td colspan="5" style="color:#f87171;">Error: ${e.message}</td></tr>`;
-      pendingBody.innerHTML = `<tr class="loading-row"><td colspan="6" style="color:#f87171;">Hata: ${escHtml(e.message)}</td></tr>`;
+      tbody.innerHTML = '<tr class="loading-row"><td colspan="5" style="color:#f87171;">' + escHtml(t("referrals.errorLoad", { message: e.message })) + "</td></tr>";
+      pendingBody.innerHTML = '<tr class="loading-row"><td colspan="6" style="color:#f87171;">' + escHtml(t("referrals.errorLoad", { message: e.message })) + "</td></tr>";
       document.getElementById("statPending").textContent = "—";
-      var elUtcErr = document.getElementById("statInvitedUtcMonth");
+      const elUtcErr = document.getElementById("statInvitedUtcMonth");
       if (elUtcErr) elUtcErr.textContent = "—";
       return;
     }
 
+    const elUtc = document.getElementById("statInvitedUtcMonth");
+    if (elUtc) {
+      const utcVal = apiJson.referralInvitesThisUtcMonth;
+      elUtc.textContent = utcVal != null && utcVal !== "" ? String(utcVal) : "—";
+    }
+
     // Normalize statuses
-    items = items.map(r => ({ ...r, _status: normalizeStatus(r.status) }));
+    items = items.map((r) => ({ ...r, _status: normalizeStatus(r.status) }));
     renderPendingRows(items, pendingBody, false);
 
     // Filter by status if selected
-    const filtered = statusFilter ? items.filter(r => r._status === statusFilter) : items;
+    const filtered = statusFilter ? items.filter((r) => r._status === statusFilter) : items;
 
     // Group by referrer name
     const referrerMap = {};
+    const unknown = t("referrals.unknownReferrer");
     for (const ref of filtered) {
-      const key = ref.inviterPatientName || ref.inviterPatientId || "Unknown";
+      const key = ref.inviterPatientName || ref.inviterPatientId || unknown;
       if (!referrerMap[key]) referrerMap[key] = { name: key, items: [] };
       referrerMap[key].items.push(ref);
     }
 
     // Update stats (always from full items, not filtered)
-    const allReferrers = new Set(items.map(r => r.inviterPatientName || r.inviterPatientId || "Unknown"));
-    document.getElementById("statReferrers").textContent  = allReferrers.size;
-    document.getElementById("statInvited").textContent    = items.length;
-    document.getElementById("statRegistered").textContent = items.filter(r => ["registered", "treated", "rewarded"].includes(r._status)).length;
-    document.getElementById("statTreated").textContent    = items.filter(r => r._status === "treated").length;
+    const allReferrers = new Set(items.map((r) => r.inviterPatientName || r.inviterPatientId || unknown));
+    document.getElementById("statReferrers").textContent = String(allReferrers.size);
+    document.getElementById("statInvited").textContent = String(items.length);
+    document.getElementById("statRegistered").textContent = String(items.filter((r) => ["registered", "treated", "rewarded"].includes(r._status)).length);
+    document.getElementById("statTreated").textContent = String(items.filter((r) => r._status === "treated").length);
 
     const rows = Object.values(referrerMap);
     if (rows.length === 0) {
-      tbody.innerHTML = `
-        <tr><td colspan="5">
-          <div class="empty">
-            <div class="empty-icon">📭</div>
-            <div>No referral activity found.</div>
-          </div>
-        </td></tr>`;
+      tbody.innerHTML =
+        '<tr><td colspan="5"><div class="empty"><div class="empty-icon">📭</div><div>' +
+        escHtml(t("referrals.emptyActivity")) +
+        "</div></div></td></tr>";
       return;
     }
 
     // Sort by total invited descending
     rows.sort((a, b) => b.items.length - a.items.length);
 
-    tbody.innerHTML = rows.map(row => {
-      const total      = row.items.length;
-      const registered = row.items.filter(r => ["registered", "treated", "rewarded"].includes(r._status)).length;
-      const treated    = row.items.filter(r => r._status === "treated").length;
+    tbody.innerHTML = rows.map((row) => {
+      const total = row.items.length;
+      const registered = row.items.filter((r) => ["registered", "treated", "rewarded"].includes(r._status)).length;
+      const treated = row.items.filter((r) => r._status === "treated").length;
 
       const registrationRate = total > 0 ? Math.round((registered / total) * 100) : 0;
 
-      const invitedHtml = row.items.slice(0, 5).map(ref => {
+      const invitedHtml = row.items.slice(0, 5).map((ref) => {
         const name = ref.invitedPatientName || "—";
-        return `<span class="badge ${statusClass(ref._status)}" title="${name}">
-          ${escHtml(name.length > 14 ? name.slice(0, 13) + "…" : name)}
-          <span style="opacity:.7;font-size:10px;">${statusLabel(ref._status)}</span>
+        const short = name.length > 14 ? name.slice(0, 13) + "…" : name;
+        const lbl = statusLabel(ref._status);
+        return `<span class="badge ${statusClass(ref._status)}" title="${escHtml(name)}">
+          ${escHtml(short)}
+          <span style="opacity:.7;font-size:10px;">${escHtml(lbl)}</span>
         </span>`;
       }).join(" ");
-      const moreCount = row.items.length > 5 ? `<span style="color:#64748b;font-size:12px;">+${row.items.length - 5} more</span>` : "";
+      const moreN = row.items.length - 5;
+      const moreCount =
+        row.items.length > 5
+          ? `<span style="color:#64748b;font-size:12px;">${escHtml(t("referrals.morePatients", { count: moreN }))}</span>`
+          : "";
+
+      const rateLine = escHtml(t("referrals.registrationRate", { percent: registrationRate }));
 
       return `<tr>
         <td>
           <div class="referrer-name">${escHtml(row.name)}</div>
           <div class="progress-bar"><div class="progress-fill" style="width:${registrationRate}%"></div></div>
-          <div style="font-size:11px;color:#64748b;margin-top:3px;">${registrationRate}% registration rate</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">${rateLine}</div>
         </td>
         <td class="count-cell count-invited">${total}</td>
         <td class="count-cell count-registered">${registered}</td>
@@ -383,7 +432,10 @@
     return d.innerHTML;
   }
 
-  load();
+  window.rerenderReferralsAdmin = function () {
+    refreshReferralFilterOptions();
+    load();
+  };
 </script>
 </body>
 </html>
