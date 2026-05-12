@@ -1488,7 +1488,9 @@ async function incrementDoctorUnreadForAssignedDoctor(doctorUuid) {
 }
 
 /**
- * Persisted tally for push payloads (cheap SELECT). Prefer column; approximate when missing.
+ * Persisted tally for push payloads (cheap SELECT on `patients.chat_unread_from_clinic`).
+ * Scope: **patient-wide** total unread inbound from clinic/staff (not one thread); falls back
+ * to `countUnreadClinicMessagesForPatient` if column missing/null.
  */
 async function getPatientChatUnreadForPushBadge(resolvedPatientId) {
   const id = String(resolvedPatientId || "").trim();
@@ -1519,6 +1521,11 @@ async function getPatientChatUnreadForPushBadge(resolvedPatientId) {
   }
 }
 
+/**
+ * Doctor Expo badge: `doctors.chat_unread_from_patients` (incremented on **patient**→clinic
+ * messages for the assigned doctor). Scope: **doctor-wide** running total, not per-thread.
+ * Falls back to `computeDoctorUnreadInboundForPush` (message-row scan) if column missing.
+ */
 async function getDoctorChatUnreadForPushBadge(doctorUuid) {
   const id = String(doctorUuid || "").trim();
   if (!id) return 0;
@@ -3600,6 +3607,33 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   if (badge != null && Number.isFinite(Number(badge)) && Number(badge) >= 0) {
     badgeNum = Math.min(999999, Math.floor(Number(badge)));
   }
+  const threadIdRaw =
+    payloadBase && payloadBase.threadId != null ? String(payloadBase.threadId).trim() : "";
+  const threadIdNorm = UUID_RE.test(threadIdRaw) ? threadIdRaw : null;
+  const patientPushDiag = String(
+    process.env.PATIENT_PUSH_PAYLOAD_LOG || process.env.EXPO_PUSH_DEBUG_LOGS || "",
+  ).trim() === "1";
+  const badgeDiag =
+    String(process.env.CHAT_PUSH_BADGE_LOG || "").trim() === "1" ||
+    (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) ||
+    (kind === "patient" && patientPushDiag);
+  if (badgeDiag) {
+    const rawN = badge == null ? null : Number(badge);
+    console.log(
+      "[CHAT_PUSH_BADGE]",
+      JSON.stringify({
+        phase: "before_expo_messages",
+        kind,
+        recipientId: u,
+        threadId: threadIdNorm,
+        unreadCountInput: rawN,
+        computedUnreadBadge: badgeNum,
+        expoMessageBadgeIsNumber: true,
+        dataUnreadBadgeNote:
+          "data.unreadBadge is stringified for Expo data contract; iOS app icon badge uses top-level `badge` (number).",
+      }),
+    );
+  }
   const channelId =
     String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "default").trim() || "default";
   const soundWhenOn = String(process.env.EXPO_PUSH_SOUND || "default").trim() || "default";
@@ -3620,20 +3654,21 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     };
     if (useSound) msg.sound = soundWhenOn;
     msg.badge = badgeNum;
-    if (
-      kind === "patient" &&
-      String(process.env.PATIENT_PUSH_PAYLOAD_LOG || process.env.EXPO_PUSH_DEBUG_LOGS || "").trim() === "1"
-    ) {
+    if (kind === "patient" && patientPushDiag) {
       console.log(
         "[patient-push-payload]",
         JSON.stringify({
           ownerId: u,
+          threadId: threadIdNorm,
           channelId: msg.channelId,
           sound: msg.sound ?? null,
-          badge: msg.badge,
+          badgeNumeric: msg.badge,
+          unreadCountInput: badge == null ? null : Number(badge),
+          computedUnreadBadge: badgeNum,
+          dataUnreadBadgeString: dataPayload.unreadBadge,
           messageSoundRow: useSound,
           title: t,
-        })
+        }),
       );
     }
     messages.push(msg);
@@ -3648,6 +3683,11 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
         doctorId: u,
         recipientCount: messages.length,
         tokenPreviews: messages.map((m) => expoPushTokenPreview(m.to)),
+        routingPath: expoTrace.routingPath ?? null,
+        senderRole: expoTrace.senderRole ?? null,
+        badgeRaw: badge == null ? null : Number(badge),
+        badgeComputed: badgeNum,
+        threadId: threadIdNorm,
         firstMessage: {
           title: m0.title,
           body: m0.body,
@@ -4135,7 +4175,13 @@ async function insertMessageToSupabase(opts) {
   const result = await _insertMessageToSupabaseCore(opts);
   try {
     if (!result?.error && result?.data) {
-      void bumpChatUnreadCountersAfterInsert(opts, result.data, result.insertedTable || "");
+      // Unread counters must settle before push reads `chat_unread_from_*` for Expo `badge`;
+      // otherwise badge/unreadBadge stay 0 (race with increment RPC / column update).
+      try {
+        await bumpChatUnreadCountersAfterInsert(opts, result.data, result.insertedTable || "");
+      } catch (e) {
+        console.warn("[MESSAGES unread bump before notify]", e?.message || e);
+      }
       enqueueChatMessagePushNotifications(opts, result.data, result.insertedTable || "");
       void emitRealtimeChatMessageToThread(opts, result.data, result.insertedTable || "");
     }
