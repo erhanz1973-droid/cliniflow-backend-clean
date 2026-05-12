@@ -3522,6 +3522,42 @@ async function postExpoNotificationsBatch(messagesSlice) {
   }
 }
 
+async function logDoctorNoExpoTokensDebug(ownerUuid, expoTrace) {
+  const u = String(ownerUuid || "").trim();
+  let pushTokensDb = null;
+  let rowCountExact = null;
+  try {
+    pushTokensDb = await probePushTokensDbAvailable();
+  } catch (_) {
+    pushTokensDb = false;
+  }
+  if (pushTokensDb && isSupabaseEnabled() && UUID_RE.test(u)) {
+    try {
+      const { count, error } = await supabase
+        .from("push_tokens")
+        .select("id", { count: "exact", head: true })
+        .eq("owner_kind", "doctor")
+        .eq("owner_id", u);
+      if (error) rowCountExact = `error:${String(error.message || error.code || error)}`;
+      else rowCountExact = typeof count === "number" ? count : null;
+    } catch (e) {
+      rowCountExact = `throw:${String(e?.message || e)}`;
+    }
+  }
+  console.log(
+    "[DOCTOR_PUSH_SEND]",
+    JSON.stringify({
+      phase: "no_expo_tokens",
+      trace: expoTrace || null,
+      doctorId: u,
+      pushTokensTableAvailable: !!pushTokensDb,
+      pushTokensRowCountForThisDoctorId: rowCountExact,
+      hint:
+        "If row count is 0: open doctor-clean on a physical device, grant notifications, ensure POST /api/doctor/me/expo-push-token succeeds (Metro [PUSH_SYNC] success). JWT doctors.id must match patient_chat_threads.assigned_doctor_id.",
+    }),
+  );
+}
+
 async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, expoTrace) {
   const u = String(uuidRaw || "").trim();
   if (await fetchUserNotificationsMuted(kind, u)) {
@@ -3535,11 +3571,10 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   }
   const rows = await loadExpoTokenRows(kind, u);
   if (!rows.length) {
-    if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
-      console.log(
-        "[DOCTOR_PUSH_SEND]",
-        JSON.stringify({ phase: "no_expo_tokens", trace: expoTrace, doctorId: u }),
-      );
+    if (kind === "doctor") {
+      const traceOn = !!(expoTrace && isDoctorPushExpoTraceEnabled());
+      const forceLog = String(process.env.DOCTOR_PUSH_NO_TOKEN_LOG || "").trim() === "1";
+      if (traceOn || forceLog) void logDoctorNoExpoTokensDebug(u, expoTrace);
     }
     return;
   }
