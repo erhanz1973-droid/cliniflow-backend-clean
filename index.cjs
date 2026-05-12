@@ -2964,24 +2964,37 @@ const EXPO_PUSH_STORE_FILE = path.join(DATA_DIR, "expoPushTokens.json");
 
 let pushTokensDbAvailableMemo = undefined;
 let chatPushDispatchesDbAvailableMemo = undefined;
+/** Last PostgREST error from `push_tokens` probe (for diagnostics). */
+let pushTokensProbeLastError = null;
+let pushTokensProbeLogged = false;
 
 async function probePushTokensDbAvailable() {
   if (pushTokensDbAvailableMemo !== undefined) return pushTokensDbAvailableMemo;
   pushTokensDbAvailableMemo = false;
-  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return false;
+  pushTokensProbeLastError = null;
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") {
+    pushTokensProbeLastError = "supabase_disabled_or_no_client";
+    return false;
+  }
   try {
     const { error } = await supabase.from("push_tokens").select("id").limit(1);
     if (!error) {
       pushTokensDbAvailableMemo = true;
     } else {
-      const c = String(error.code || "");
-      const m = String(error.message || "").toLowerCase();
-      const missingTbl =
-        ["42P01", "PGRST205"].includes(c) || (m.includes("relation") && m.includes("does not exist"));
-      pushTokensDbAvailableMemo = missingTbl ? false : true;
+      pushTokensProbeLastError = `${String(error.code || "?")}: ${String(error.message || error)}`;
+      pushTokensDbAvailableMemo = false;
+      if (!pushTokensProbeLogged) {
+        pushTokensProbeLogged = true;
+        console.warn("[push_tokens] probe_select_failed", pushTokensProbeLastError);
+      }
     }
-  } catch (_) {
+  } catch (e) {
+    pushTokensProbeLastError = String(e?.message || e);
     pushTokensDbAvailableMemo = false;
+    if (!pushTokensProbeLogged) {
+      pushTokensProbeLogged = true;
+      console.warn("[push_tokens] probe_throw", pushTokensProbeLastError);
+    }
   }
   return pushTokensDbAvailableMemo;
 }
@@ -3551,9 +3564,11 @@ async function logDoctorNoExpoTokensDebug(ownerUuid, expoTrace) {
       trace: expoTrace || null,
       doctorId: u,
       pushTokensTableAvailable: !!pushTokensDb,
+      pushTokensProbeLastError: pushTokensProbeLastError || null,
       pushTokensRowCountForThisDoctorId: rowCountExact,
-      hint:
-        "If row count is 0: open doctor-clean on a physical device, grant notifications, ensure POST /api/doctor/me/expo-push-token succeeds (Metro [PUSH_SYNC] success). JWT doctors.id must match patient_chat_threads.assigned_doctor_id.",
+      hint: !pushTokensDb
+        ? "push_tokens table missing or not readable — run supabase/migrations/20260512130000_create_push_tokens.sql in Supabase SQL editor; confirm Railway SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY match this project."
+        : "If row count is 0: doctor-clean must POST /api/doctor/me/expo-push-token after notification permission. JWT doctors.id must match patient_chat_threads.assigned_doctor_id.",
     }),
   );
 }
