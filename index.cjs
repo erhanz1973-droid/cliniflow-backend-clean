@@ -3844,9 +3844,14 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
     const senderDoctorIdTrace = UUID_RE.test(bodySd) ? bodySd : null;
     const senderStaffOrDoctorIdTrace =
       (staffOpt || (role === "clinic" ? composerId : "") || "").trim() || null;
+    const routingPathTrace =
+      composerOpts && String(composerOpts.routingPath || "").trim()
+        ? String(composerOpts.routingPath).trim()
+        : null;
     const expoTrace = isDoctorPushExpoTraceEnabled()
       ? {
           source: "notify_assigned_doctor_expo_inbound",
+          routingPath: routingPathTrace,
           patientId: resolvedPatientId,
           clinicId: clinicUuid,
           assignedDoctorId: did,
@@ -3859,6 +3864,17 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         }
       : null;
 
+    const dataPayload = {
+      type: "chat_message",
+      ...(UUID_RE.test(threadId) ? { threadId } : {}),
+      patientId: resolvedPatientId,
+      patientName,
+      clinicId: clinicUuid,
+      preview: pv,
+      messageComposerRole: role,
+      messageComposerId: role === "patient" ? resolvedPatientId : composerId || "",
+      ...(routingPathTrace ? { routingPath: routingPathTrace } : {}),
+    };
     const sendP = sendExpoToEntity(
       "doctor",
       did,
@@ -3866,16 +3882,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         title: patientName.slice(0, 80),
         body: pv || "Yeni mesaj",
         badge,
-        data: {
-          type: "chat_message",
-          ...(UUID_RE.test(threadId) ? { threadId } : {}),
-          patientId: resolvedPatientId,
-          patientName,
-          clinicId: clinicUuid,
-          preview: pv,
-          messageComposerRole: role,
-          messageComposerId: role === "patient" ? resolvedPatientId : composerId || "",
-        },
+        data: dataPayload,
       },
       expoTrace,
     );
@@ -3928,6 +3935,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
             "[CHAT_PUSH_ROUTING]",
             JSON.stringify({
               path: "patient_inbound",
+              routingPath: "enqueue_patient_inbound",
               senderRole: "patient",
               receiverRole: "assigned_doctor_expo",
               doctorId: assignedDoctorId,
@@ -3942,7 +3950,10 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
             })
           );
         }
-        if (clinicUuid) await notifyAssignedDoctorExpoInbound(resolved, clinicUuid, clip);
+        if (clinicUuid)
+          await notifyAssignedDoctorExpoInbound(resolved, clinicUuid, clip, {
+            routingPath: "enqueue_patient_inbound",
+          });
         return;
       }
 
@@ -3956,6 +3967,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
         "[CHAT_PUSH_ROUTING]",
         JSON.stringify({
           path: "clinic_or_admin_outbound",
+          routingPath: "enqueue_clinic_or_admin_outbound",
           senderRole,
           receiverRole: "patient_expo_and_optional_doctor_expo",
           doctorId: assignedDoctorId,
@@ -3987,6 +3999,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
           messageComposerId: senderDoctorId || null,
           senderDoctorId: UUID_RE.test(senderDoctorId) ? senderDoctorId : null,
           senderStaffOrDoctorId: senderDoctorId || null,
+          routingPath: "enqueue_clinic_or_admin_outbound",
         });
       }
     } catch (e) {
@@ -23005,6 +23018,7 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
               "[CHAT_PUSH_ROUTING]",
               JSON.stringify({
                 path: "admin_insertClinicMessageViaPatientMessages",
+                routingPath: "admin_messages_admin_post",
                 senderRole: "clinic",
                 receiverRole: "patient_expo_and_optional_doctor_expo",
                 patientId: rpidPush,
@@ -23024,6 +23038,7 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
                 messageComposerId: adminComposerId || null,
                 senderDoctorId: UUID_RE.test(bodySenderDoctor) ? bodySenderDoctor : null,
                 senderStaffOrDoctorId: adminComposerId || null,
+                routingPath: "admin_messages_admin_post",
               });
             }
           } catch (e) {
