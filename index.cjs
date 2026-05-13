@@ -2970,6 +2970,60 @@ async function _insertMessageToSupabaseCore({
 // ── Expo push tokens (patient + doctor) — Supabase push_tokens + legacy file fallback ─────────
 const EXPO_PUSH_STORE_FILE = path.join(DATA_DIR, "expoPushTokens.json");
 
+/** One Expo push HTTP request must not mix tokens from different experiences (Expo: PUSH_TOO_MANY_EXPERIENCE_IDS). */
+const EXPO_EXPERIENCE_ID_DOCTOR = String(
+  process.env.EXPO_EXPERIENCE_ID_DOCTOR || "@erhanzorlu/doctor-clean",
+).trim();
+const EXPO_EXPERIENCE_ID_PATIENT = String(
+  process.env.EXPO_EXPERIENCE_ID_PATIENT || "@erhanzorlu/clinifly-new",
+).trim();
+
+function normalizeExpoExperienceIdFromRegisterBody(body, kind) {
+  const raw =
+    body?.expoExperienceId ??
+    body?.experienceId ??
+    body?.experience_id ??
+    body?.expo_experience_id;
+  const s = raw != null ? String(raw).trim() : "";
+  if (s) return s.slice(0, 200);
+  return kind === "doctor" ? EXPO_EXPERIENCE_ID_DOCTOR : EXPO_EXPERIENCE_ID_PATIENT;
+}
+
+/** Drop cross-app tokens for this owner_kind; split remainder so each Expo batch is single-experience. */
+function partitionExpoTokenRowsForPushBatch(rows, kind) {
+  const other = kind === "doctor" ? EXPO_EXPERIENCE_ID_PATIENT : EXPO_EXPERIENCE_ID_DOCTOR;
+  const safe = rows.filter((r) => {
+    const e = String(r.expoExperienceId || "").trim();
+    if (e && e === other) return false;
+    return true;
+  });
+  const dropped = rows.length - safe.length;
+  if (dropped > 0) {
+    const log =
+      String(process.env.EXPO_PUSH_EXPERIENCE_FILTER_LOG || "").trim() === "1" ||
+      (kind === "doctor" && isDoctorPushExpoTraceEnabled());
+    if (log) {
+      console.warn(
+        "[push_tokens]",
+        JSON.stringify({
+          phase: "dropped_cross_app_experience_tokens",
+          kind,
+          dropped,
+          rejectedExperienceId: other,
+          kept: safe.length,
+        }),
+      );
+    }
+  }
+  const map = new Map();
+  for (const r of safe) {
+    const key = String(r.expoExperienceId || "").trim() || "_legacy_null_";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  }
+  return [...map.values()];
+}
+
 let pushTokensDbAvailableMemo = undefined;
 let chatPushDispatchesDbAvailableMemo = undefined;
 /** Last PostgREST error from `push_tokens` probe (for diagnostics). */
@@ -3385,6 +3439,7 @@ async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
   const muted =
     Boolean(body?.muted === true || String(body?.muted || "").toLowerCase() === "true");
   const platform = body?.platform || body?.devicePlatform || body?.os || body?.Platform || null;
+  const expoExperienceId = normalizeExpoExperienceIdFromRegisterBody(body, kind);
 
   const useDb = await probePushTokensDbAvailable();
   if (useDb && isSupabaseEnabled()) {
@@ -3393,6 +3448,7 @@ async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
       owner_id: uuid,
       expo_push_token: token,
       message_sound: soundOn !== false,
+      expo_experience_id: expoExperienceId,
       platform: platform != null ? String(platform).slice(0, 64) : null,
       updated_at: new Date().toISOString(),
     };
@@ -3465,16 +3521,22 @@ async function loadExpoTokenRows(kind, uuidRaw) {
     try {
       const { data, error } = await supabase
         .from("push_tokens")
-        .select("expo_push_token, message_sound")
+        .select("expo_push_token, message_sound, expo_experience_id")
         .eq("owner_kind", kind === "doctor" ? "doctor" : "patient")
         .eq("owner_id", u);
       if (!error && Array.isArray(data) && data.length) {
+        const otherExp = kind === "doctor" ? EXPO_EXPERIENCE_ID_PATIENT : EXPO_EXPERIENCE_ID_DOCTOR;
         return data
           .map((r) => ({
             token: String(r.expo_push_token || "").trim(),
             messageSound: r.message_sound !== false,
+            expoExperienceId:
+              r.expo_experience_id != null && String(r.expo_experience_id).trim()
+                ? String(r.expo_experience_id).trim()
+                : "",
           }))
-          .filter((r) => r.token.startsWith("ExponentPushToken["));
+          .filter((r) => r.token.startsWith("ExponentPushToken["))
+          .filter((r) => !r.expoExperienceId || r.expoExperienceId !== otherExp);
       }
     } catch (e) {
       console.warn("[push_tokens] load:", e?.message || e);
@@ -3641,111 +3703,140 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   const channelId =
     String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "default").trim() || "default";
   const soundWhenOn = String(process.env.EXPO_PUSH_SOUND || "default").trim() || "default";
-  const messages = [];
-  for (const row of rows) {
-    const useSound = row.messageSound !== false;
-    const dataPayload = expoPushStringData({
-      ...payloadBase,
-      unreadBadge: badgeNum,
-    });
-    const msg = {
-      to: row.token,
-      title: t,
-      body: b,
-      priority: "high",
-      channelId,
-      data: dataPayload,
-    };
-    if (useSound) msg.sound = soundWhenOn;
-    msg.badge = badgeNum;
-    if (kind === "patient" && patientPushDiag) {
-      console.log(
-        "[patient-push-payload]",
-        JSON.stringify({
-          ownerId: u,
-          threadId: threadIdNorm,
-          channelId: msg.channelId,
-          sound: msg.sound ?? null,
-          badgeNumeric: msg.badge,
-          unreadCountInput: badge == null ? null : Number(badge),
-          computedUnreadBadge: badgeNum,
-          dataUnreadBadgeString: dataPayload.unreadBadge,
-          messageSoundRow: useSound,
-          title: t,
-        }),
-      );
-    }
-    messages.push(msg);
-  }
-  if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled() && messages.length) {
-    const m0 = messages[0];
-    console.log(
-      "[DOCTOR_PUSH_SEND]",
-      JSON.stringify({
-        phase: "outbound_payload",
-        trace: expoTrace,
-        doctorId: u,
-        recipientCount: messages.length,
-        tokenPreviews: messages.map((m) => expoPushTokenPreview(m.to)),
-        routingPath: expoTrace.routingPath ?? null,
-        senderRole: expoTrace.senderRole ?? null,
-        badgeRaw: badge == null ? null : Number(badge),
-        badgeComputed: badgeNum,
-        threadId: threadIdNorm,
-        firstMessage: {
-          title: m0.title,
-          body: m0.body,
-          sound: m0.sound ?? null,
-          badge: m0.badge,
-          channelId: m0.channelId,
-          priority: m0.priority,
-          data: m0.data,
-        },
-      }),
-    );
-  }
-  for (let i = 0; i < messages.length; i += 90) {
-    const chunk = messages.slice(i, i + 90);
-    const { ok, body: expoBody, status: httpStatus } = await postExpoNotificationsBatch(chunk);
-    const ticketInvalid = expoReceiptsYieldInvalidTokens(expoBody, chunk);
-    const receiptInvalidFromTrace = await logDoctorPushExpoDeliveryTrace(
-      kind === "doctor" ? expoTrace : null,
-      chunk,
-      expoBody,
-      ok,
-      httpStatus,
-    );
-    const receiptInvalidSilent =
-      kind === "doctor" &&
-      isExpoPushReceiptPruneEnabled() &&
-      !(isDoctorPushExpoTraceEnabled() && expoTrace)
-        ? await expoSilentReceiptInvalidTokens(expoBody, chunk)
-        : [];
-    const invalid = [
-      ...new Set([
-        ...ticketInvalid,
-        ...(Array.isArray(receiptInvalidFromTrace) ? receiptInvalidFromTrace : []),
-        ...receiptInvalidSilent,
-      ]),
-    ];
-    if (invalid.length) {
-      if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
+  const rowGroups = partitionExpoTokenRowsForPushBatch(rows, kind);
+  const totalGrouped = rowGroups.reduce((n, g) => n + g.length, 0);
+  if (!totalGrouped) {
+    if (kind === "doctor") {
+      const traceOn = !!(expoTrace && isDoctorPushExpoTraceEnabled());
+      const forceLog = String(process.env.DOCTOR_PUSH_NO_TOKEN_LOG || "").trim() === "1";
+      if (traceOn || forceLog) {
         console.log(
-          "[DOCTOR_PUSH_RECEIPT]",
+          "[DOCTOR_PUSH_SEND]",
           JSON.stringify({
-            phase: "prune_invalid_tokens",
+            phase: "no_tokens_after_experience_filter",
+            trace: expoTrace || null,
             doctorId: u,
-            count: invalid.length,
-            previews: invalid.map((tok) => expoPushTokenPreview(tok)),
+            rawTokenRowCount: rows.length,
           }),
         );
-      } else if (kind === "doctor" && isExpoPushReceiptPruneEnabled()) {
+      }
+    }
+    return;
+  }
+  let doctorOutboundLogged = false;
+  for (const groupRows of rowGroups) {
+    const messages = [];
+    for (const row of groupRows) {
+      const useSound = row.messageSound !== false;
+      const dataPayload = expoPushStringData({
+        ...payloadBase,
+        unreadBadge: badgeNum,
+      });
+      const msg = {
+        to: row.token,
+        title: t,
+        body: b,
+        priority: "high",
+        channelId,
+        data: dataPayload,
+      };
+      if (useSound) msg.sound = soundWhenOn;
+      msg.badge = badgeNum;
+      if (kind === "patient" && patientPushDiag) {
         console.log(
-          "[expo-push] receipt_prune",
-          JSON.stringify({ doctorId: u, count: invalid.length }),
+          "[patient-push-payload]",
+          JSON.stringify({
+            ownerId: u,
+            threadId: threadIdNorm,
+            channelId: msg.channelId,
+            sound: msg.sound ?? null,
+            badgeNumeric: msg.badge,
+            unreadCountInput: badge == null ? null : Number(badge),
+            computedUnreadBadge: badgeNum,
+            dataUnreadBadgeString: dataPayload.unreadBadge,
+            messageSoundRow: useSound,
+            title: t,
+            expoExperiencePartition:
+              String(row.expoExperienceId || "").trim() || "_legacy_null_",
+          }),
         );
       }
-      void pruneExpoInvalidTokens(kind, u, invalid);
+      messages.push(msg);
+    }
+    if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled() && messages.length) {
+      const m0 = messages[0];
+      const expKey = String(groupRows[0]?.expoExperienceId || "").trim() || "_legacy_null_";
+      console.log(
+        "[DOCTOR_PUSH_SEND]",
+        JSON.stringify({
+          phase: doctorOutboundLogged ? "outbound_payload_partition" : "outbound_payload",
+          trace: expoTrace,
+          doctorId: u,
+          expoExperiencePartition: expKey,
+          partitionSize: messages.length,
+          recipientCountTotalAcrossPartitions: totalGrouped,
+          tokenPreviews: messages.map((m) => expoPushTokenPreview(m.to)),
+          routingPath: expoTrace.routingPath ?? null,
+          senderRole: expoTrace.senderRole ?? null,
+          badgeRaw: badge == null ? null : Number(badge),
+          badgeComputed: badgeNum,
+          threadId: threadIdNorm,
+          firstMessage: {
+            title: m0.title,
+            body: m0.body,
+            sound: m0.sound ?? null,
+            badge: m0.badge,
+            channelId: m0.channelId,
+            priority: m0.priority,
+            data: m0.data,
+          },
+        }),
+      );
+      doctorOutboundLogged = true;
+    }
+    for (let i = 0; i < messages.length; i += 90) {
+      const chunk = messages.slice(i, i + 90);
+      const { ok, body: expoBody, status: httpStatus } = await postExpoNotificationsBatch(chunk);
+      const ticketInvalid = expoReceiptsYieldInvalidTokens(expoBody, chunk);
+      const receiptInvalidFromTrace = await logDoctorPushExpoDeliveryTrace(
+        kind === "doctor" ? expoTrace : null,
+        chunk,
+        expoBody,
+        ok,
+        httpStatus,
+      );
+      const receiptInvalidSilent =
+        kind === "doctor" &&
+        isExpoPushReceiptPruneEnabled() &&
+        !(isDoctorPushExpoTraceEnabled() && expoTrace)
+          ? await expoSilentReceiptInvalidTokens(expoBody, chunk)
+          : [];
+      const invalid = [
+        ...new Set([
+          ...ticketInvalid,
+          ...(Array.isArray(receiptInvalidFromTrace) ? receiptInvalidFromTrace : []),
+          ...receiptInvalidSilent,
+        ]),
+      ];
+      if (invalid.length) {
+        if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
+          console.log(
+            "[DOCTOR_PUSH_RECEIPT]",
+            JSON.stringify({
+              phase: "prune_invalid_tokens",
+              doctorId: u,
+              count: invalid.length,
+              previews: invalid.map((tok) => expoPushTokenPreview(tok)),
+            }),
+          );
+        } else if (kind === "doctor" && isExpoPushReceiptPruneEnabled()) {
+          console.log(
+            "[expo-push] receipt_prune",
+            JSON.stringify({ doctorId: u, count: invalid.length }),
+          );
+        }
+        void pruneExpoInvalidTokens(kind, u, invalid);
+      }
     }
   }
 }
