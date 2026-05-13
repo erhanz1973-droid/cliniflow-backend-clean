@@ -357,6 +357,7 @@ try {
   /* ignore */
 }
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 console.log("🔥 BACKEND CLEAN NEW VERSION DEPLOYED");
 console.log("🚀 build:", new Date().toISOString());
 console.log("🚀 BACKEND CLEAN RUNNING");
@@ -390,6 +391,16 @@ const PORT = resolveListenPort();
 console.log("[STARTUP] effective PORT =", PORT, "from env =", process.env.PORT != null ? String(process.env.PORT) : "(unset)");
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+const { pushLog, traceMiddleware, pushDeliveryV1, newPushTraceId } = require("./lib/pushLog.cjs");
+const pushMetrics = require("./lib/pushMetrics.cjs");
+const { emitAuthTelemetryV1 } = require("./lib/authTelemetry.cjs");
+const {
+  patientOauthLimiter,
+  authRequestOtpLimiter,
+  authVerifyOtpLimiter,
+  patientLoginLimiter,
+  doctorVerifyOtpLimiter,
+} = require("./lib/httpRateLimits.cjs");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -2990,7 +3001,8 @@ function normalizeExpoExperienceIdFromRegisterBody(body, kind) {
 }
 
 /** Drop cross-app tokens for this owner_kind; split remainder so each Expo batch is single-experience. */
-function partitionExpoTokenRowsForPushBatch(rows, kind) {
+function partitionExpoTokenRowsForPushBatch(rows, kind, deliveryCtx) {
+  const ctx = deliveryCtx && typeof deliveryCtx === "object" ? deliveryCtx : {};
   const other = kind === "doctor" ? EXPO_EXPERIENCE_ID_PATIENT : EXPO_EXPERIENCE_ID_DOCTOR;
   const safe = rows.filter((r) => {
     const e = String(r.expoExperienceId || "").trim();
@@ -3001,18 +3013,20 @@ function partitionExpoTokenRowsForPushBatch(rows, kind) {
   if (dropped > 0) {
     const log =
       String(process.env.EXPO_PUSH_EXPERIENCE_FILTER_LOG || "").trim() === "1" ||
-      (kind === "doctor" && isDoctorPushExpoTraceEnabled());
+      (kind === "doctor" && isDoctorPushExpoTraceEnabled()) ||
+      String(process.env.PUSH_DELIVERY_UNIFIED_LOG || "").trim() === "1";
     if (log) {
-      console.warn(
-        "[push_tokens]",
-        JSON.stringify({
-          phase: "dropped_cross_app_experience_tokens",
-          kind,
-          dropped,
-          rejectedExperienceId: other,
-          kept: safe.length,
-        }),
-      );
+      pushDeliveryV1("warn", {
+        traceId: ctx.traceId,
+        phase: "dropped_cross_experience_tokens",
+        recipientKind: kind,
+        doctorId: kind === "doctor" ? ctx.recipientId || null : null,
+        patientId: kind === "patient" ? ctx.recipientId || null : null,
+        threadId: ctx.threadId ?? null,
+        experiencePartition: other,
+        droppedCrossExperience: dropped,
+        message: `kept_after_filter=${safe.length}`,
+      });
     }
   }
   const map = new Map();
@@ -3082,25 +3096,51 @@ async function probeChatPushDispatchesDbAvailable() {
   return chatPushDispatchesDbAvailableMemo;
 }
 
+/** Same-process guard before DB unique (helps duplicate realtime + HTTP inserts). Set CHAT_PUSH_MEMORY_DEDUPE_MS=0 to disable. */
+const CHAT_PUSH_MEMORY_DEDUPE_MS = Math.max(
+  0,
+  parseInt(String(process.env.CHAT_PUSH_MEMORY_DEDUPE_MS || "120000"), 10) || 120000,
+);
+const _chatPushMemDedupe = new Map();
+
 async function tryClaimChatPushDispatch(stableMessageId) {
   const id = String(stableMessageId || "").trim();
   if (!id) return true;
-  if (!(await probeChatPushDispatchesDbAvailable())) return true;
+  const dbAvail = await probeChatPushDispatchesDbAvailable();
+  if (dbAvail && CHAT_PUSH_MEMORY_DEDUPE_MS > 0) {
+    const now = Date.now();
+    const prev = _chatPushMemDedupe.get(id);
+    if (prev != null && now - prev < CHAT_PUSH_MEMORY_DEDUPE_MS) {
+      pushLog.warn("chat_push.memory_dedupe", { stableMessageId: id.length > 96 ? `${id.slice(0, 96)}…` : id });
+      pushMetrics.recordChatDedupeMemory();
+      return false;
+    }
+  }
+  if (!dbAvail) return true;
   try {
     const { error } = await supabase.from("chat_push_dispatches").insert({
       message_row_id: id,
       kind: "chat",
     });
-    if (!error) return true;
+    if (!error) {
+      if (CHAT_PUSH_MEMORY_DEDUPE_MS > 0) _chatPushMemDedupe.set(id, Date.now());
+      return true;
+    }
     const c = String(error.code || "");
     const m = String(error.message || "").toLowerCase();
-    if (c === "23505" || m.includes("duplicate") || m.includes("unique")) return false;
-    console.warn("[chat_push_dispatches]", error?.message || error);
+    if (c === "23505" || m.includes("duplicate") || m.includes("unique")) {
+      pushMetrics.recordChatDedupeDbDuplicate();
+      return false;
+    }
+    pushLog.warn("chat_push.db_claim_failed", { stableMessageId: id.slice(0, 96), message: String(error?.message || error) });
     return true;
   } catch (e) {
     const m = String(e?.message || e || "").toLowerCase();
-    if (m.includes("duplicate") || m.includes("unique")) return false;
-    console.warn("[chat_push_dispatches]", e?.message || e);
+    if (m.includes("duplicate") || m.includes("unique")) {
+      pushMetrics.recordChatDedupeDbDuplicate();
+      return false;
+    }
+    pushLog.warn("chat_push.db_claim_throw", { stableMessageId: id.slice(0, 96), message: String(e?.message || e) });
     return true;
   }
 }
@@ -3278,11 +3318,11 @@ async function postExpoGetReceipts(ids) {
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
-      console.warn("[expo-push] getReceipts HTTP", res.status, j?.errors?.[0] || j);
+      pushLog.warn("expo.get_receipts_http", { status: res.status, err: j?.errors?.[0] || j });
     }
     return { ok: res.ok, body: j, status: res.status };
   } catch (e) {
-    console.warn("[expo-push] getReceipts", e?.message || e);
+    pushLog.warn("expo.get_receipts_throw", { message: String(e?.message || e) });
     return { ok: false, body: {}, status: 0 };
   }
 }
@@ -3303,7 +3343,10 @@ function expoReceiptRowImpliesPruneToken(row) {
   if (u.includes("DEVICENOTREGISTERED") || u.includes("UNREGISTERED") || u.includes("NOTREGISTERED"))
     return true;
   if (msg.includes("devicenotregistered") || msg.includes("not registered")) return true;
-  if (st === "error" && u) return true;
+  /* Conservative: do not prune on generic errors (transient / payload) — only token/device-class failures. */
+  if (st === "error" && u) {
+    if (/(DEVICE|TOKEN|REGISTER|CREDENTIAL|BADDEVICE|EXPO_PUSH|UNREGISTER|NOTREGISTER)/i.test(u)) return true;
+  }
   return false;
 }
 
@@ -3358,69 +3401,91 @@ async function expoSilentReceiptInvalidTokens(expoBody, chunk) {
     expoBody,
     chunk,
   );
+  pushMetrics.recordMergedReceiptFinals(mergedRowById, okIds);
   return expoInvalidPushTokensFromReceiptMerge(mergedRowById, okIds, ticketIdToToken);
 }
 
 async function logDoctorPushExpoDeliveryTrace(expoTrace, chunk, expoBody, httpOk, httpStatus) {
   if (!isDoctorPushExpoTraceEnabled() || !expoTrace) return [];
+  const traceId = expoTrace.traceId || newPushTraceId();
+  expoTrace.traceId = traceId;
   const tickets = Array.isArray(expoBody?.data) ? expoBody.data : null;
-  console.log(
-    "[DOCTOR_PUSH_SEND]",
-    JSON.stringify({
-      phase: "expo_send_tickets",
-      httpOk: !!httpOk,
-      httpStatus: httpStatus || 0,
-      trace: expoTrace,
-      tickets: tickets
-        ? tickets.map((t, idx) => ({
-            index: idx,
-            status: t?.status ?? null,
-            id: t?.id ?? null,
-            message: t?.message ?? null,
-            detailsError:
-              t?.details && typeof t.details === "object" && t.details.error != null
-                ? String(t.details.error)
-                : null,
-            details: t?.details ?? null,
-            toPreview: chunk[idx]?.to ? expoPushTokenPreview(chunk[idx].to) : null,
-          }))
-        : { raw: expoBody },
-    }),
-  );
+  const expoTicketIds = tickets
+    ? tickets.map((t) => (t && t.id != null ? String(t.id) : "")).filter(Boolean)
+    : [];
+  const firstErr = tickets
+    ? tickets.find((t) => String(t?.status || "").toLowerCase() === "error")
+    : null;
+  let detailsError = null;
+  if (firstErr?.details && typeof firstErr.details === "object" && firstErr.details.error != null) {
+    detailsError = String(firstErr.details.error);
+  }
+  pushDeliveryV1("info", {
+    traceId,
+    phase: "expo_send_batch",
+    doctorId: expoTrace.assignedDoctorId ?? null,
+    patientId: expoTrace.patientId ?? null,
+    recipientKind: "doctor",
+    threadId: expoTrace.threadId ?? null,
+    experiencePartition: null,
+    expoTicketIds: expoTicketIds.length ? expoTicketIds : null,
+    httpOk,
+    httpStatus: httpStatus || 0,
+    batchSize: Array.isArray(chunk) ? chunk.length : 0,
+    tokenPreviews: Array.isArray(chunk) ? chunk.map((c) => c?.to).filter(Boolean) : null,
+    detailsError,
+  });
   if (!tickets) return [];
   const { okIds, ticketIdToToken, firstMap, mergedRowById } = await expoMergeReceiptMapsForOkTickets(
     expoBody,
     chunk,
   );
   if (!okIds.length) return [];
-
-  const logOneReceipt = (phase, id, row) => {
+  for (const id of okIds) {
+    const row = firstMap[id];
     const d = row?.details;
-    let detailsError = null;
+    let err = null;
     if (d && typeof d === "object") {
-      if (d.error != null) detailsError = String(d.error);
-      else if (d.apns && typeof d.apns === "object" && d.apns.reason != null)
-        detailsError = String(d.apns.reason);
+      if (d.error != null) err = String(d.error);
+      else if (d.apns && typeof d.apns === "object" && d.apns.reason != null) err = String(d.apns.reason);
     }
-    console.log(
-      "[DOCTOR_PUSH_RECEIPT]",
-      JSON.stringify({
-        phase,
-        id,
-        trace: expoTrace,
-        status: row?.status ?? null,
-        message: row?.message ?? null,
-        detailsError,
-        details: row?.details ?? null,
-      }),
-    );
-  };
-
-  for (const id of okIds) logOneReceipt("initial", id, firstMap[id]);
+    pushDeliveryV1(String(row?.status || "").toLowerCase() === "error" ? "warn" : "info", {
+      traceId,
+      phase: "expo_receipt_initial",
+      doctorId: expoTrace.assignedDoctorId ?? null,
+      threadId: expoTrace.threadId ?? null,
+      recipientKind: "doctor",
+      expoTicketId: id,
+      detailsError: err,
+      tokenPreview: ticketIdToToken.get(id),
+      message: row?.message != null ? String(row.message).slice(0, 200) : null,
+    });
+  }
   const pending = okIds.filter(
     (id) => String(firstMap[id]?.status || "").toLowerCase() === "pending",
   );
-  for (const id of pending) logOneReceipt("after_pending_poll", id, mergedRowById[id]);
+  for (const id of pending) {
+    const row = mergedRowById[id];
+    const d = row?.details;
+    let err = null;
+    if (d && typeof d === "object") {
+      if (d.error != null) err = String(d.error);
+      else if (d.apns && typeof d.apns === "object" && d.apns.reason != null) err = String(d.apns.reason);
+    }
+    pushDeliveryV1(String(row?.status || "").toLowerCase() === "error" ? "warn" : "info", {
+      traceId,
+      phase: "expo_receipt_after_poll",
+      doctorId: expoTrace.assignedDoctorId ?? null,
+      threadId: expoTrace.threadId ?? null,
+      recipientKind: "doctor",
+      expoTicketId: id,
+      detailsError: err,
+      tokenPreview: ticketIdToToken.get(id),
+      message: row?.message != null ? String(row.message).slice(0, 200) : null,
+    });
+  }
+
+  pushMetrics.recordMergedReceiptFinals(mergedRowById, okIds);
 
   return expoInvalidPushTokensFromReceiptMerge(mergedRowById, okIds, ticketIdToToken);
 }
@@ -3456,6 +3521,29 @@ async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
       onConflict: "owner_kind,owner_id,expo_push_token",
     });
     if (!error) {
+      try {
+        const { data: dupRows, error: dupErr } = await supabase
+          .from("push_tokens")
+          .select("owner_kind, owner_id")
+          .eq("expo_push_token", token);
+        if (!dupErr && Array.isArray(dupRows) && dupRows.length > 1) {
+          const other = dupRows.filter(
+            (r) =>
+              String(r.owner_id || "").trim() !== uuid ||
+              String(r.owner_kind || "").trim() !== row.owner_kind,
+          );
+          if (other.length) {
+            pushMetrics.recordPushTokenCrossOwnerAudit();
+            pushLog.warn("push_tokens.cross_owner_duplicate", {
+              tokenPreview: expoPushTokenPreview(token),
+              distinctOwners: dupRows.length,
+              currentKind: row.owner_kind,
+            });
+          }
+        }
+      } catch (_) {
+        /* non-fatal */
+      }
       if (body && Object.prototype.hasOwnProperty.call(body, "muted")) {
         void patchExpoUserNotificationsMuted(kind, uuid, muted);
       }
@@ -3599,11 +3687,15 @@ async function postExpoNotificationsBatch(messagesSlice) {
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
-      console.warn("[expo-push] send HTTP", res.status, j?.errors?.[0] || j?.data || "");
+      pushLog.warn("expo.push_send_http", {
+        status: res.status,
+        err: j?.errors?.[0] || j?.data || "",
+        batchSize: messagesSlice.length,
+      });
     }
     return { ok: res.ok, body: j, status: res.status };
   } catch (e) {
-    console.warn("[expo-push]", e?.message || e);
+    pushLog.warn("expo.push_send_throw", { message: String(e?.message || e) });
     return { ok: false, body: {}, status: 0 };
   }
 }
@@ -3630,12 +3722,13 @@ async function logDoctorNoExpoTokensDebug(ownerUuid, expoTrace) {
       rowCountExact = `throw:${String(e?.message || e)}`;
     }
   }
-  console.log(
-    "[DOCTOR_PUSH_SEND]",
-    JSON.stringify({
-      phase: "no_expo_tokens",
-      trace: expoTrace || null,
-      doctorId: u,
+  pushDeliveryV1("info", {
+    traceId: expoTrace?.traceId,
+    phase: "no_expo_tokens",
+    doctorId: u,
+    recipientKind: "doctor",
+    threadId: expoTrace?.threadId ?? null,
+    message: JSON.stringify({
       pushTokensTableAvailable: !!pushTokensDb,
       pushTokensProbeLastError: pushTokensProbeLastError || null,
       pushTokensRowCountForThisDoctorId: rowCountExact,
@@ -3643,17 +3736,20 @@ async function logDoctorNoExpoTokensDebug(ownerUuid, expoTrace) {
         ? "push_tokens table missing or not readable — run supabase/migrations/20260512130000_create_push_tokens.sql in Supabase SQL editor; confirm Railway SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY match this project."
         : "If row count is 0: doctor-clean must POST /api/doctor/me/expo-push-token after notification permission. JWT doctors.id must match patient_chat_threads.assigned_doctor_id.",
     }),
-  );
+  });
 }
 
 async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, expoTrace) {
   const u = String(uuidRaw || "").trim();
   if (await fetchUserNotificationsMuted(kind, u)) {
     if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
-      console.log(
-        "[DOCTOR_PUSH_SEND]",
-        JSON.stringify({ phase: "skipped_muted", trace: expoTrace, doctorId: u }),
-      );
+      pushDeliveryV1("info", {
+        traceId: expoTrace.traceId,
+        phase: "skipped_muted",
+        doctorId: u,
+        recipientKind: "doctor",
+        threadId: expoTrace.threadId ?? null,
+      });
     }
     return;
   }
@@ -3703,22 +3799,25 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   const channelId =
     String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "default").trim() || "default";
   const soundWhenOn = String(process.env.EXPO_PUSH_SOUND || "default").trim() || "default";
-  const rowGroups = partitionExpoTokenRowsForPushBatch(rows, kind);
+  const rowGroups = partitionExpoTokenRowsForPushBatch(rows, kind, {
+    traceId: expoTrace?.traceId,
+    recipientId: u,
+    threadId: threadIdNorm,
+  });
   const totalGrouped = rowGroups.reduce((n, g) => n + g.length, 0);
   if (!totalGrouped) {
     if (kind === "doctor") {
       const traceOn = !!(expoTrace && isDoctorPushExpoTraceEnabled());
       const forceLog = String(process.env.DOCTOR_PUSH_NO_TOKEN_LOG || "").trim() === "1";
       if (traceOn || forceLog) {
-        console.log(
-          "[DOCTOR_PUSH_SEND]",
-          JSON.stringify({
-            phase: "no_tokens_after_experience_filter",
-            trace: expoTrace || null,
-            doctorId: u,
-            rawTokenRowCount: rows.length,
-          }),
-        );
+        pushDeliveryV1("info", {
+          traceId: expoTrace?.traceId,
+          phase: "no_tokens_after_experience_filter",
+          doctorId: u,
+          recipientKind: "doctor",
+          threadId: threadIdNorm,
+          message: `rawTokenRowCount=${rows.length}`,
+        });
       }
     }
     return;
@@ -3766,21 +3865,21 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled() && messages.length) {
       const m0 = messages[0];
       const expKey = String(groupRows[0]?.expoExperienceId || "").trim() || "_legacy_null_";
-      console.log(
-        "[DOCTOR_PUSH_SEND]",
-        JSON.stringify({
-          phase: doctorOutboundLogged ? "outbound_payload_partition" : "outbound_payload",
-          trace: expoTrace,
-          doctorId: u,
-          expoExperiencePartition: expKey,
+      pushDeliveryV1("info", {
+        traceId: expoTrace.traceId,
+        phase: doctorOutboundLogged ? "outbound_payload_partition" : "outbound_payload",
+        doctorId: u,
+        recipientKind: "doctor",
+        threadId: threadIdNorm,
+        experiencePartition: expKey,
+        batchSize: messages.length,
+        message: JSON.stringify({
           partitionSize: messages.length,
           recipientCountTotalAcrossPartitions: totalGrouped,
-          tokenPreviews: messages.map((m) => expoPushTokenPreview(m.to)),
           routingPath: expoTrace.routingPath ?? null,
           senderRole: expoTrace.senderRole ?? null,
           badgeRaw: badge == null ? null : Number(badge),
           badgeComputed: badgeNum,
-          threadId: threadIdNorm,
           firstMessage: {
             title: m0.title,
             body: m0.body,
@@ -3788,10 +3887,10 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
             badge: m0.badge,
             channelId: m0.channelId,
             priority: m0.priority,
-            data: m0.data,
           },
         }),
-      );
+        tokenPreviews: messages.map((m) => expoPushTokenPreview(m.to)),
+      });
       doctorOutboundLogged = true;
     }
     for (let i = 0; i < messages.length; i += 90) {
@@ -3806,9 +3905,7 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
         httpStatus,
       );
       const receiptInvalidSilent =
-        kind === "doctor" &&
-        isExpoPushReceiptPruneEnabled() &&
-        !(isDoctorPushExpoTraceEnabled() && expoTrace)
+        isExpoPushReceiptPruneEnabled() && !(kind === "doctor" && isDoctorPushExpoTraceEnabled() && expoTrace)
           ? await expoSilentReceiptInvalidTokens(expoBody, chunk)
           : [];
       const invalid = [
@@ -3820,20 +3917,23 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
       ];
       if (invalid.length) {
         if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
-          console.log(
-            "[DOCTOR_PUSH_RECEIPT]",
-            JSON.stringify({
-              phase: "prune_invalid_tokens",
-              doctorId: u,
-              count: invalid.length,
-              previews: invalid.map((tok) => expoPushTokenPreview(tok)),
-            }),
-          );
+          pushDeliveryV1("info", {
+            traceId: expoTrace.traceId,
+            phase: "prune_invalid_tokens",
+            doctorId: u,
+            recipientKind: "doctor",
+            threadId: threadIdNorm,
+            pruneCount: invalid.length,
+            tokenPreviews: invalid.map((tok) => expoPushTokenPreview(tok)),
+          });
         } else if (kind === "doctor" && isExpoPushReceiptPruneEnabled()) {
-          console.log(
-            "[expo-push] receipt_prune",
-            JSON.stringify({ doctorId: u, count: invalid.length }),
-          );
+          pushDeliveryV1("warn", {
+            traceId: expoTrace?.traceId,
+            phase: "receipt_prune",
+            doctorId: u,
+            recipientKind: "doctor",
+            pruneCount: invalid.length,
+          });
         }
         void pruneExpoInvalidTokens(kind, u, invalid);
       }
@@ -3993,18 +4093,19 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
     if (!did || !UUID_RE.test(did)) {
       if (isDoctorPushExpoTraceEnabled()) {
         const bodySd = String(composerOpts?.senderDoctorId || "").trim();
-        console.log(
-          "[DOCTOR_PUSH_SEND]",
-          JSON.stringify({
-            phase: "notify_skipped_no_assigned_doctor_on_thread",
-            patientId: resolvedPatientId,
+        pushDeliveryV1("info", {
+          traceId: newPushTraceId(),
+          phase: "notify_skipped_no_assigned_doctor_on_thread",
+          patientId: resolvedPatientId,
+          recipientKind: "doctor",
+          message: JSON.stringify({
             clinicId: clinicUuid,
             senderRole: role,
             senderDoctorId: UUID_RE.test(bodySd) ? bodySd : null,
             senderStaffOrDoctorId:
               String(composerOpts?.senderStaffOrDoctorId || composerId || "").trim() || null,
           }),
-        );
+        });
       }
       return;
     }
@@ -4035,6 +4136,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         : null;
     const expoTrace = isDoctorPushExpoTraceEnabled()
       ? {
+          traceId: newPushTraceId(),
           source: "notify_assigned_doctor_expo_inbound",
           routingPath: routingPathTrace,
           patientId: resolvedPatientId,
@@ -5096,6 +5198,7 @@ app.post(
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(traceMiddleware);
 
 // ── Stripe (must be first /api mount after body parsers — Router defers with next() when no match) ──
 const stripeEarlyApi = express.Router();
@@ -9025,7 +9128,7 @@ async function resolvePatientForOtp({ email, phone, clinicId, clinicCode }) {
 
 // POST /auth/request-otp
 // Request OTP: takes email, phone, role, finds user by role, sends OTP
-app.post("/auth/request-otp", async (req, res) => {
+app.post("/auth/request-otp", authRequestOtpLimiter, async (req, res) => {
   console.log("[AUTH REQUEST-OTP] 🔥 ENDPOINT HIT");
   try {
     console.log("[AUTH REQUEST-OTP] FULL BODY:", JSON.stringify(req.body, null, 2));
@@ -9423,7 +9526,7 @@ app.post("/api/admin/verify-otp", async (req, res) => {
 
 // POST /api/doctor/verify-otp
 // Doctor-specific OTP verification endpoint
-app.post("/api/doctor/verify-otp", async (req, res) => {
+app.post("/api/doctor/verify-otp", doctorVerifyOtpLimiter, async (req, res) => {
   try {
     const { email, phone, otp, sessionId } = req.body || {};
 
@@ -10035,7 +10138,7 @@ app.post("/api/register/doctor", async (req, res) => {
 
 // POST /auth/verify-otp-patient
 // PATIENTS ONLY - Clean separation
-app.post("/auth/verify-otp-patient", async (req, res) => {
+app.post("/auth/verify-otp-patient", authVerifyOtpLimiter, async (req, res) => {
   try {
     const { email, phone, otp, sessionId, clinicCode, clinicId } = req.body || {};
 
@@ -10224,7 +10327,7 @@ app.post("/auth/verify-otp-patient", async (req, res) => {
 
 // POST /auth/verify-otp-doctor
 // DOCTORS ONLY - Clean separation
-app.post("/auth/verify-otp-doctor", async (req, res) => {
+app.post("/auth/verify-otp-doctor", doctorVerifyOtpLimiter, async (req, res) => {
   try {
     const { email, phone, otp, sessionId } = req.body || {};
 
@@ -10539,7 +10642,7 @@ app.post("/api/admin/verify-otp", async (req, res) => {
 
 // POST /auth/verify-otp | /api/auth/verify-otp
 // UNIFIED OTP ENDPOINT - Single server, type-based separation
-app.post(["/auth/verify-otp", "/api/auth/verify-otp"], async (req, res) => {
+app.post(["/auth/verify-otp", "/api/auth/verify-otp"], authVerifyOtpLimiter, async (req, res) => {
   try {
     const { otp, email, phone, sessionId, clinicCode, clinicId } = req.body || {};
     let role = req.body?.role;
@@ -10810,7 +10913,7 @@ app.post(["/auth/verify-otp", "/api/auth/verify-otp"], async (req, res) => {
 
 // POST /api/patient/auth/oauth
 // Phase 1: Supabase session access_token (after Google/Apple via Supabase Auth) → validate → link patient → same JWT + body shape as /auth/verify-otp-patient (+ clinic fields for mobile signIn).
-app.post("/api/patient/auth/oauth", async (req, res) => {
+app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
       return res.status(503).json({
@@ -10911,7 +11014,7 @@ app.post("/api/patient/auth/oauth", async (req, res) => {
 // POST /api/patient/login
 // Patient login with phone + clinicCode, returns JWT token
 // Checks Supabase first (production), falls back to local JSON (dev)
-app.post("/api/patient/login", async (req, res) => {
+app.post("/api/patient/login", patientLoginLimiter, async (req, res) => {
   try {
     const { phone, patientId, clinicCode } = req.body || {};
 
