@@ -332,6 +332,7 @@ const {
   savePushSubscription,
   getPushSubscriptionsByPatient,
 } = require("./lib/supabase");
+const { resolvePatientOAuthSession } = require("./lib/patientAuthOauth.cjs");
 const {
   normalizeAdminTimelineEventForIngest,
   finalizeAdminTimelineAfterIso,
@@ -10710,6 +10711,105 @@ app.post(["/auth/verify-otp", "/api/auth/verify-otp"], async (req, res) => {
   } catch (error) {
 
     res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
+// POST /api/patient/auth/oauth
+// Phase 1: Supabase session access_token (after Google/Apple via Supabase Auth) → validate → link patient → same JWT + body shape as /auth/verify-otp-patient (+ clinic fields for mobile signIn).
+app.post("/api/patient/auth/oauth", async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({
+        ok: false,
+        error: "supabase_disabled",
+        message: "OAuth bridge requires Supabase.",
+      });
+    }
+    const { provider, supabaseAccessToken, accessToken, clinicCode } = req.body || {};
+    const tokenIn = String(supabaseAccessToken || accessToken || "").trim();
+    const out = await resolvePatientOAuthSession({
+      supabase,
+      accessToken: tokenIn,
+      declaredProvider: provider,
+      clinicCode,
+    });
+    if (!out.ok) {
+      const j = { ok: false, error: out.error, message: out.message };
+      if (out.meta) j.meta = out.meta;
+      return res.status(out.status).json(j);
+    }
+    const foundPatient = out.patient;
+    const emailNormalized = out.emailNormalized || "";
+    const resolvedPid = String(foundPatient?.id || "").trim();
+    const canonicalPatientId = await canonicalPatientUuidForJwt(foundPatient, resolvedPid);
+    if (!canonicalPatientId) {
+      return res.status(404).json({
+        ok: false,
+        error: "patient_not_found",
+        message: "Could not resolve patient id.",
+      });
+    }
+    const foundLanguage = foundPatient.language || "en";
+    const foundPhone = String(foundPatient?.phone || "").trim();
+    const foundName = String(foundPatient?.full_name || foundPatient?.name || "").trim();
+    const patientStatus = String(foundPatient?.status || "PENDING").toUpperCase();
+    const token = jwt.sign(
+      {
+        type: "patient",
+        patientId: canonicalPatientId,
+        role: "PATIENT",
+        status: patientStatus,
+        email: emailNormalized || "",
+        language: foundLanguage,
+        ...(foundPhone ? { phone: foundPhone } : {}),
+        ...(foundName ? { name: foundName } : {}),
+      },
+      JWT_SECRET,
+      { expiresIn: `${TOKEN_EXPIRY_DAYS}d` },
+    );
+    const tokens = readJson(TOK_FILE, {});
+    tokens[token] = {
+      type: "patient",
+      patientId: canonicalPatientId,
+      role: "PATIENT",
+      createdAt: now(),
+      email: emailNormalized || "",
+      language: foundLanguage,
+      ...(foundPhone ? { phone: foundPhone } : {}),
+      ...(foundName ? { name: foundName } : {}),
+    };
+    writeJson(TOK_FILE, tokens);
+    const clinicRowId =
+      foundPatient.clinic_id || (foundPatient.clinic && foundPatient.clinic.id) || null;
+    const clinicRowCode =
+      foundPatient.clinic_code ||
+      (foundPatient.clinic && foundPatient.clinic.clinic_code) ||
+      (clinicCode ? String(clinicCode).trim().toUpperCase() : null) ||
+      null;
+    return res.json({
+      ok: true,
+      type: "patient",
+      token,
+      patientId: canonicalPatientId,
+      id: canonicalPatientId,
+      role: "PATIENT",
+      status: patientStatus,
+      name: foundPatient.name || foundName || "",
+      ...(foundPhone ? { phone: foundPhone } : {}),
+      email: emailNormalized || String(foundPatient.email || "").trim(),
+      language: foundLanguage,
+      expiresIn: TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
+      clinicId: clinicRowId,
+      clinicCode: clinicRowCode,
+      referralCode: foundPatient.referral_code || null,
+    });
+  } catch (error) {
+    console.warn("[PATIENT AUTH OAUTH]", error?.message || error);
+    return res.status(500).json({
+      ok: false,
+      error: "internal_error",
+      message: error?.message || "internal_error",
+    });
   }
 });
 
