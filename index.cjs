@@ -3375,10 +3375,13 @@ async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
   const uuid = String(uuidRaw || "").trim();
   const token = String(tokenRaw || "").trim();
   if (!uuid || !token.startsWith("ExponentPushToken[")) return { ok: false, error: "invalid_expo_token" };
-  const soundOn =
-    body && Object.prototype.hasOwnProperty.call(body, "messageSound")
-      ? body.messageSound !== false
-      : true;
+  let soundOn = true;
+  if (body && typeof body === "object") {
+    if (Object.prototype.hasOwnProperty.call(body, "messageSound"))
+      soundOn = body.messageSound !== false;
+    else if (Object.prototype.hasOwnProperty.call(body, "message_sound"))
+      soundOn = body.message_sound !== false;
+  }
   const muted =
     Boolean(body?.muted === true || String(body?.muted || "").toLowerCase() === "true");
   const platform = body?.platform || body?.devicePlatform || body?.os || body?.Platform || null;
