@@ -332,7 +332,11 @@ const {
   savePushSubscription,
   getPushSubscriptionsByPatient,
 } = require("./lib/supabase");
-const { resolvePatientOAuthSession } = require("./lib/patientAuthOauth.cjs");
+const {
+  resolvePatientOAuthSession,
+  verifySupabaseAccessToken,
+  pickOAuthIdentity,
+} = require("./lib/patientAuthOauth.cjs");
 const {
   normalizeAdminTimelineEventForIngest,
   finalizeAdminTimelineAfterIso,
@@ -461,6 +465,11 @@ const REGISTER_USER_MSG = {
   referralCreateFailed: "Referans kaydı oluşturulamadı. Lütfen tekrar deneyin.",
   invalidReferralCode: (code) =>
     `"${code}" referans kodu geçersiz veya bulunamadı. Lütfen kontrol edip tekrar deneyin.`,
+  oauthLinkIncomplete:
+    "OAuth hesabını bağlamak için hem giriş sağlayıcısı (google/apple) hem de geçerli oturum belirteci gereklidir.",
+  emailOauthMismatch:
+    "Kayıt e-postası, Apple/Google hesabınızdaki e-posta ile aynı olmalıdır.",
+  oauthAlreadyRegistered: "Bu Apple/Google hesabı zaten kayıtlı. Lütfen giriş yapın.",
 };
 
 function buildRegisterOtpSuccessJson({
@@ -7427,6 +7436,8 @@ async function augmentRegisterClinicFromBody(body) {
 // ================== REGISTER (shared: /api/register + /api/patient/register + /api/register/patient) ==================
 async function runPatientRegister(req, res, route, otpMode) {
   try {
+  /** When set, merged into Supabase patient insert/update so OAuth bridge finds `auth_user_id`. */
+  let oauthLinkFields = null;
   console.log("RAW BODY:", req.body);
   console.log("🔥 REGISTER ENDPOINT HIT:", req.path);
   console.log("🔥 NEW REGISTER FLOW ACTIVE - NO UPSERT", { route });
@@ -7635,6 +7646,103 @@ async function runPatientRegister(req, res, route, otpMode) {
     console.log("[REGISTER] applied DEFAULT_CLINIC_ID →", String(supabaseClinicId).slice(0, 8) + "…");
   }
 
+  // Optional: link Supabase Auth user to new patient row (fixes OAuth bridge `patient_not_found` after onboarding).
+  const oauthTok = String(body.supabaseAccessToken || body.oauthAccessToken || "").trim();
+  const oauthProvRaw = String(body.oauthProvider || "").trim().toLowerCase();
+  const OAUTH_REG_PROVIDERS = new Set(["google", "apple"]);
+  if (oauthTok || oauthProvRaw) {
+    console.log("[oauth-link]", {
+      phase: "incoming",
+      oauthProvider: oauthProvRaw,
+      hasToken: Boolean(oauthTok),
+    });
+    if (!oauthTok || !oauthProvRaw) {
+      return res.status(400).json({
+        ok: false,
+        error: "oauth_link_incomplete",
+        message: REGISTER_USER_MSG.oauthLinkIncomplete,
+      });
+    }
+    if (!OAUTH_REG_PROVIDERS.has(oauthProvRaw)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_oauth_provider",
+        message: "oauthProvider must be google or apple.",
+      });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({
+        ok: false,
+        error: "supabase_unavailable",
+        message: REGISTER_USER_MSG.registerFailed,
+      });
+    }
+    const { user: oauthUser, error: oauthVerErr } = await verifySupabaseAccessToken(supabase, oauthTok);
+    if (!oauthUser) {
+      return res.status(oauthVerErr?.status || 401).json({
+        ok: false,
+        error: "invalid_oauth_token",
+        message: oauthVerErr?.message || "Could not validate Supabase access token.",
+      });
+    }
+    const picked = pickOAuthIdentity(oauthUser, oauthProvRaw);
+    if (!picked.authUserId || !UUID_RE.test(picked.authUserId)) {
+      return res.status(401).json({
+        ok: false,
+        error: "invalid_oauth_token",
+        message: "Supabase user id missing.",
+      });
+    }
+    if (picked.provider && picked.provider !== oauthProvRaw) {
+      return res.status(400).json({
+        ok: false,
+        error: "provider_mismatch",
+        message: `Token identity provider (${picked.provider}) does not match oauthProvider (${oauthProvRaw}).`,
+      });
+    }
+    const tokEmail = String(picked.email || "").trim().toLowerCase();
+    if (tokEmail && emailNormalized && tokEmail !== emailNormalized) {
+      return res.status(400).json({
+        ok: false,
+        error: "email_oauth_mismatch",
+        message: REGISTER_USER_MSG.emailOauthMismatch,
+      });
+    }
+    const rAuthDup = await supabaseCallOrCrash("register preflight oauth auth_user_id", () =>
+      supabase.from("patients").select("id, patient_id").eq("auth_user_id", picked.authUserId).maybeSingle(),
+    );
+    if (!rAuthDup.ok) return;
+    const authDupRow = rAuthDup.out?.data;
+    if (authDupRow && (authDupRow.id || authDupRow.patient_id)) {
+      return res.status(409).json({
+        ok: false,
+        error: "user_already_exists",
+        message: REGISTER_USER_MSG.oauthAlreadyRegistered,
+      });
+    }
+    const subj = picked.subject ? String(picked.subject).trim() : "";
+    console.log("[oauth-link]", {
+      phase: "resolved",
+      oauthProvider: oauthProvRaw,
+      hasToken: Boolean(oauthTok),
+      authUserId: picked?.authUserId,
+    });
+    oauthLinkFields = {
+      auth_user_id: picked.authUserId,
+      auth_provider: oauthProvRaw,
+      provider_subject: subj || null,
+    };
+    const av = picked.avatarUrl ? String(picked.avatarUrl).trim() : "";
+    if (av) oauthLinkFields.avatar_url = av.slice(0, 2048);
+  } else {
+    console.log("[oauth-link]", {
+      phase: "skipped",
+      reason: "no_oauth_in_request",
+      hasToken: Boolean(oauthTok),
+      oauthProvider: oauthProvRaw || null,
+    });
+  }
+
   // Identity: phone-first (E.164 + legacy storage variants), then email, then new id. No cross-clinic reuse.
   let existingUser = false;
   let patientId = null;
@@ -7825,6 +7933,7 @@ async function runPatientRegister(req, res, route, otpMode) {
         is_lead: isGlobalLead,
         updated_at: nowIso,
         ...(phoneDigits ? { phone: phoneDigits } : {}),
+        ...(oauthLinkFields && typeof oauthLinkFields === "object" ? oauthLinkFields : {}),
         ...(forInsert
           ? {
               id: crypto.randomUUID(),
@@ -7928,6 +8037,11 @@ async function runPatientRegister(req, res, route, otpMode) {
         }
         const finalInsertPayload0 = buildFinalInsertPayload(insertPayload0);
         if (!assertFirstNameForDb(finalInsertPayload0)) return;
+        console.log("[oauth-link]", {
+          phase: "insert_payload",
+          auth_user_id: finalInsertPayload0?.auth_user_id ?? null,
+          has_auth_provider: Object.prototype.hasOwnProperty.call(finalInsertPayload0 || {}, "auth_provider"),
+        });
         const rIns = await supabaseCallOrCrash("register INSERT primary", () =>
           supabase.from("patients").insert(finalInsertPayload0).select().single(),
         );
