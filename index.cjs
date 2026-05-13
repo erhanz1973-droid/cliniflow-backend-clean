@@ -400,6 +400,7 @@ const {
   authVerifyOtpLimiter,
   patientLoginLimiter,
   doctorVerifyOtpLimiter,
+  opsObservabilityLimiter,
 } = require("./lib/httpRateLimits.cjs");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
@@ -3824,6 +3825,7 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   }
   let doctorOutboundLogged = false;
   for (const groupRows of rowGroups) {
+    const partitionExperienceKey = String(groupRows[0]?.expoExperienceId || "").trim() || "_legacy_null_";
     const messages = [];
     for (const row of groupRows) {
       const useSound = row.messageSound !== false;
@@ -3896,6 +3898,14 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     for (let i = 0; i < messages.length; i += 90) {
       const chunk = messages.slice(i, i + 90);
       const { ok, body: expoBody, status: httpStatus } = await postExpoNotificationsBatch(chunk);
+      pushMetrics.recordExpoSendBatch({
+        httpOk: !!ok,
+        httpStatus: httpStatus || 0,
+        chunkSize: chunk.length,
+        kind,
+        experienceKey: partitionExperienceKey,
+        expoBody,
+      });
       const ticketInvalid = expoReceiptsYieldInvalidTokens(expoBody, chunk);
       const receiptInvalidFromTrace = await logDoctorPushExpoDeliveryTrace(
         kind === "doctor" ? expoTrace : null,
@@ -3936,6 +3946,7 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
           });
         }
         void pruneExpoInvalidTokens(kind, u, invalid);
+        pushMetrics.recordInvalidPrune(invalid.length);
       }
     }
   }
@@ -5223,6 +5234,74 @@ stripeEarlyApi.post("/payments/create-intent", async (req, res) => {
   }
 });
 app.use("/api", stripeEarlyApi);
+
+async function fetchPushTokenStaleSummary() {
+  if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return null;
+  const now = Date.now();
+  const DAY = 86400000;
+  const iso = (ms) => new Date(now - ms).toISOString();
+  async function cnt(opts) {
+    let q = supabase.from("push_tokens").select("id", { count: "exact", head: true });
+    if (opts.lt) q = q.lt("updated_at", opts.lt);
+    if (opts.gte) q = q.gte("updated_at", opts.gte);
+    const { count, error } = await q;
+    if (error) return null;
+    return Number(count || 0);
+  }
+  const t7 = iso(7 * DAY);
+  const t30 = iso(30 * DAY);
+  const t90 = iso(90 * DAY);
+  const [last7d, d7_30, d30_90, older90, total] = await Promise.all([
+    cnt({ gte: t7 }),
+    cnt({ gte: t30, lt: t7 }),
+    cnt({ gte: t90, lt: t30 }),
+    cnt({ lt: t90 }),
+    cnt({}),
+  ]);
+  return {
+    updatedAt_within_last_7d: last7d,
+    updatedAt_7d_to_30d_ago: d7_30,
+    updatedAt_30d_to_90d_ago: d30_90,
+    updatedAt_over_90d_ago: older90,
+    totalRows: total,
+    countsNullMeansQueryError: [last7d, d7_30, d30_90, older90, total].some((x) => x == null),
+  };
+}
+
+/** Lightweight ops endpoint — set OPS_OBSERVABILITY_KEY in Railway; call with ?key= or X-Ops-Key. */
+app.get("/api/ops/push-observability", opsObservabilityLimiter, async (req, res) => {
+  const key = String(process.env.OPS_OBSERVABILITY_KEY || "").trim();
+  const qk = String(req.query.key || req.headers["x-ops-key"] || "").trim();
+  if (!key || qk !== key) return res.status(404).json({ ok: false, error: "not_found" });
+  try {
+    const stale = await fetchPushTokenStaleSummary();
+    return res.json({
+      ok: true,
+      metrics: pushMetrics.getSnapshot(),
+      pushTokensStaleBuckets: stale,
+      pushTokensUniqueConstraintNote:
+        "Unique on (owner_kind, owner_id, expo_push_token). Cross-owner duplicate token registrations increment pushTokenCrossOwnerAudits and log push_tokens.cross_owner_duplicate.",
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/ops/push-metrics-reset", opsObservabilityLimiter, async (req, res) => {
+  const key = String(process.env.OPS_OBSERVABILITY_KEY || "").trim();
+  const qk = String(req.query.key || req.headers["x-ops-key"] || "").trim();
+  if (!key || qk !== key) return res.status(404).json({ ok: false, error: "not_found" });
+  pushMetrics.reset();
+  return res.json({ ok: true });
+});
+
+app.post("/api/ops/push-metrics-aggregate-log", opsObservabilityLimiter, async (req, res) => {
+  const key = String(process.env.OPS_OBSERVABILITY_KEY || "").trim();
+  const qk = String(req.query.key || req.headers["x-ops-key"] || "").trim();
+  if (!key || qk !== key) return res.status(404).json({ ok: false, error: "not_found" });
+  pushMetrics.emitAggregationLogLine();
+  return res.json({ ok: true, note: "Emitted PUSH_METRICS_AGGREGATE to stdout (Railway logs)" });
+});
 
 const publicDir = path.join(__dirname, "public");
 console.log("STATIC DIR:", publicDir);
@@ -10916,6 +10995,10 @@ app.post(["/auth/verify-otp", "/api/auth/verify-otp"], authVerifyOtpLimiter, asy
 app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
   try {
     if (!isSupabaseEnabled()) {
+      emitAuthTelemetryV1("oauth_bridge_fail", {
+        traceId: req.traceId || null,
+        error: "supabase_disabled",
+      });
       return res.status(503).json({
         ok: false,
         error: "supabase_disabled",
@@ -10931,6 +11014,18 @@ app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
       clinicCode,
     });
     if (!out.ok) {
+      const ev =
+        out.error === "oauth_provider_mismatch"
+          ? "oauth_provider_mismatch"
+          : out.error === "patient_merge_conflict"
+            ? "oauth_merge_conflict"
+            : "oauth_bridge_fail";
+      emitAuthTelemetryV1(ev, {
+        traceId: req.traceId || null,
+        provider: String(provider || "").toLowerCase(),
+        httpStatus: out.status,
+        error: out.error,
+      });
       const j = { ok: false, error: out.error, message: out.message };
       if (out.meta) j.meta = out.meta;
       return res.status(out.status).json(j);
@@ -10940,6 +11035,12 @@ app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
     const resolvedPid = String(foundPatient?.id || "").trim();
     const canonicalPatientId = await canonicalPatientUuidForJwt(foundPatient, resolvedPid);
     if (!canonicalPatientId) {
+      emitAuthTelemetryV1("oauth_bridge_fail", {
+        traceId: req.traceId || null,
+        provider: String(provider || "").toLowerCase(),
+        error: "patient_not_found",
+        phase: "canonical_id",
+      });
       return res.status(404).json({
         ok: false,
         error: "patient_not_found",
@@ -10983,6 +11084,11 @@ app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
       (foundPatient.clinic && foundPatient.clinic.clinic_code) ||
       (clinicCode ? String(clinicCode).trim().toUpperCase() : null) ||
       null;
+    emitAuthTelemetryV1("oauth_login_success", {
+      traceId: req.traceId || null,
+      provider: String(provider || "").toLowerCase(),
+      patientId: canonicalPatientId,
+    });
     return res.json({
       ok: true,
       type: "patient",
@@ -11002,6 +11108,11 @@ app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
     });
   } catch (error) {
     console.warn("[PATIENT AUTH OAUTH]", error?.message || error);
+    emitAuthTelemetryV1("oauth_bridge_fail", {
+      traceId: req.traceId || null,
+      error: "internal_error",
+      message: String(error?.message || error).slice(0, 200),
+    });
     return res.status(500).json({
       ok: false,
       error: "internal_error",
@@ -56085,6 +56196,18 @@ console.log("[STARTUP] http.Server.listen", {
   cwd: process.cwd(),
   env: process.env.NODE_ENV || "(unset)",
 });
+
+const _pushAggMs = parseInt(String(process.env.PUSH_METRICS_AGGREGATE_INTERVAL_MS || "0"), 10);
+if (_pushAggMs >= 120000) {
+  const _aggTimer = setInterval(() => {
+    try {
+      pushMetrics.emitAggregationLogLine();
+    } catch (_) {
+      /* ignore */
+    }
+  }, _pushAggMs);
+  if (typeof _aggTimer.unref === "function") _aggTimer.unref();
+}
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log("🚀 BACKEND STARTED ON PORT:", PORT);
