@@ -28,7 +28,14 @@ Run on a **production-like** build (TestFlight / internal prod track) against th
 | 10 | **Offline app launch** | App opens to login or last screen without crash; no infinite spinner on auth gate | If hang: rollback app splash/auth changes; OAuth warmup timeout should surface user message | P1 |
 | 11 | **Deep link login return** | OAuth browser/session completes; redirect URL returns to app with session | Misconfigured `redirectTo` / scheme → fix Supabase + `app.json` scheme only | P0 |
 
-**Tester:** _______________ **Build / commit:** _______________ **API:** _______________ **Date:** _______________
+**Tester:** _______________ **Date:** _______________
+
+**Post-smoke record** (for rollback / audit — fill when §1 is complete):
+
+- **Overall:** PASS / FAIL — **API commit / deploy:** _______________
+- **Patient app build** (EAS build id or TestFlight version): _______________
+- **Doctor app build:** _______________
+- **Notes** (failed row #, env drift, hotfix): _______________
 
 ---
 
