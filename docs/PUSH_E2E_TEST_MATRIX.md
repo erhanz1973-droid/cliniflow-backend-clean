@@ -51,6 +51,7 @@ Run with **debug env vars unset** (`docs/ENV_OBSERVABILITY_AND_ROLLOUT.md` §4.1
 - [ ] Apple OAuth sign-in / bridge.
 - [ ] Patient sends chat message → assigned doctor receives push with **doctor app fully terminated** (not just background).
 - [ ] Unread badge on doctor app icon updates after inbound messages (may need a second open depending on client).
+- [ ] After reinstall or “clear app data”, doctor app re-registers Expo push token and inbound pushes still arrive.
 
 ---
 
