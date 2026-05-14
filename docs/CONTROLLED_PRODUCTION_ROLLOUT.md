@@ -10,6 +10,8 @@ Related: `ENV_OBSERVABILITY_AND_ROLLOUT.md`, `PUSH_E2E_TEST_MATRIX.md`, `PRODUCT
 
 Run on a **production-like** build (TestFlight / internal prod track) against the **intended** Railway API. Record pass/fail and who ran the script.
 
+**Before this checklist:** clear debug flags on the API per `ENV_OBSERVABILITY_AND_ROLLOUT.md` §4.1 (unset `CHAT_PUSH_PIPELINE_LOG`, `DOCTOR_PUSH_EXPO_TRACE`, `EXPO_PUSH_DEBUG_LOGS`, `CHAT_PUSH_BADGE_LOG`, `CHAT_PUSH_ROUTING_LOG`, `REGISTER_DEBUG_TRACE`, and remove stale `PUSH_HARD_CONFIRM_EXPO_SEND` if present). Do **not** remove `EXPO_EXPERIENCE_ID_*` or `EXPO_ACCESS_TOKEN` unless you are intentionally changing Expo project credentials.
+
 **Severity legend:** **P0** = ship blocker if failed; **P1** = rollback or hotfix candidate; **P2** = monitor / fix next patch.
 
 | # | Test | Expected result | Rollback note | Severity |
