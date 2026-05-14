@@ -419,6 +419,8 @@ const JWT_EXPIRES_IN = String(process.env.JWT_EXPIRES_IN || "30d").trim() || "30
 const PERF_LOGS_ENABLED = !IS_PROD || String(process.env.PERF_LOGS || "").trim() === "1";
 /** Set OTP_DEBUG=1 to log OTP digits in register/send paths (never enable in prod unless short tests). */
 const OTP_DEBUG_LOG = String(process.env.OTP_DEBUG || "").trim() === "1" || !IS_PROD;
+/** When `1`, enables `[REGISTER_TRACE]`, `[oauth-link]`, and register CHECKPOINT console logs (off in prod by default). */
+const REGISTER_DEBUG_TRACE = String(process.env.REGISTER_DEBUG_TRACE || "").trim() === "1";
 
 function maskEmailForLog(email) {
   const e = String(email || "").trim().toLowerCase();
@@ -428,8 +430,9 @@ function maskEmailForLog(email) {
   return `${e.slice(0, 2)}***${e.slice(at)}`;
 }
 
-/** Step markers for register debugging (Railway logs). */
+/** Step markers for register debugging (Railway logs). Opt-in: REGISTER_DEBUG_TRACE=1 */
 function logRegisterTrace(route, step, meta = {}) {
+  if (!REGISTER_DEBUG_TRACE) return;
   console.log("[REGISTER_TRACE]", { route, step, ...meta });
 }
 
@@ -3307,15 +3310,6 @@ function isChatPushPipelineLogEnabled() {
   return String(process.env.CHAT_PUSH_PIPELINE_LOG || "").trim() === "1";
 }
 
-/** Temporary / opt-in: bracket logs around Expo HTTP push/send (see `postExpoNotificationsBatch`). */
-function isPushHardConfirmExpoSendEnabled() {
-  return (
-    String(process.env.PUSH_HARD_CONFIRM_EXPO_SEND || "").trim() === "1" ||
-    isDoctorPushExpoTraceEnabled() ||
-    isChatPushPipelineLogEnabled()
-  );
-}
-
 function expoPushTokenPreview(tok) {
   const s = String(tok || "");
   if (!s) return "";
@@ -3788,31 +3782,12 @@ async function postExpoNotificationsBatch(messagesSlice) {
     };
     const bearer = String(process.env.EXPO_ACCESS_TOKEN || "").trim();
     if (bearer) headers.Authorization = `Bearer ${bearer}`;
-    if (isPushHardConfirmExpoSendEnabled()) {
-      console.log(
-        "[push][hard-confirm] entering Expo send",
-        JSON.stringify({ batchSize: messagesSlice.length, url: "https://exp.host/--/api/v2/push/send" }),
-      );
-    }
     const res = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
       headers,
       body: JSON.stringify(messagesSlice),
     });
     const j = await res.json().catch(() => ({}));
-    if (isPushHardConfirmExpoSendEnabled()) {
-      const dataArr = Array.isArray(j?.data) ? j.data : [];
-      console.log(
-        "[push][hard-confirm] Expo send returned",
-        JSON.stringify({
-          httpOk: res.ok,
-          httpStatus: res.status,
-          ticketCount: dataArr.length,
-          ticketStatuses: dataArr.map((x) => String(x?.status || "")),
-          firstError: j?.errors?.[0] != null ? String(j.errors[0]).slice(0, 200) : null,
-        }),
-      );
-    }
     if (!res.ok) {
       pushLog.warn("expo.push_send_http", {
         status: res.status,
@@ -3822,12 +3797,6 @@ async function postExpoNotificationsBatch(messagesSlice) {
     }
     return { ok: res.ok, body: j, status: res.status };
   } catch (e) {
-    if (isPushHardConfirmExpoSendEnabled()) {
-      console.log(
-        "[push][hard-confirm] Expo send returned",
-        JSON.stringify({ httpOk: false, httpStatus: 0, throw: String(e?.message || e) }),
-      );
-    }
     pushLog.warn("expo.push_send_throw", { message: String(e?.message || e) });
     return { ok: false, body: {}, status: 0 };
   }
@@ -7842,11 +7811,13 @@ async function runPatientRegister(req, res, route, otpMode) {
   const oauthProvRaw = String(body.oauthProvider || "").trim().toLowerCase();
   const OAUTH_REG_PROVIDERS = new Set(["google", "apple"]);
   if (oauthTok || oauthProvRaw) {
-    console.log("[oauth-link]", {
-      phase: "incoming",
-      oauthProvider: oauthProvRaw,
-      hasToken: Boolean(oauthTok),
-    });
+    if (REGISTER_DEBUG_TRACE) {
+      console.log("[oauth-link]", {
+        phase: "incoming",
+        oauthProvider: oauthProvRaw,
+        hasToken: Boolean(oauthTok),
+      });
+    }
     if (!oauthTok || !oauthProvRaw) {
       return res.status(400).json({
         ok: false,
@@ -7912,12 +7883,14 @@ async function runPatientRegister(req, res, route, otpMode) {
       });
     }
     const subj = picked.subject ? String(picked.subject).trim() : "";
-    console.log("[oauth-link]", {
-      phase: "resolved",
-      oauthProvider: oauthProvRaw,
-      hasToken: Boolean(oauthTok),
-      authUserId: picked?.authUserId,
-    });
+    if (REGISTER_DEBUG_TRACE) {
+      console.log("[oauth-link]", {
+        phase: "resolved",
+        oauthProvider: oauthProvRaw,
+        hasToken: Boolean(oauthTok),
+        authUserId: picked?.authUserId,
+      });
+    }
     oauthLinkFields = {
       auth_user_id: picked.authUserId,
       auth_provider: oauthProvRaw,
@@ -7926,12 +7899,14 @@ async function runPatientRegister(req, res, route, otpMode) {
     const av = picked.avatarUrl ? String(picked.avatarUrl).trim() : "";
     if (av) oauthLinkFields.avatar_url = av.slice(0, 2048);
   } else {
-    console.log("[oauth-link]", {
-      phase: "skipped",
-      reason: "no_oauth_in_request",
-      hasToken: Boolean(oauthTok),
-      oauthProvider: oauthProvRaw || null,
-    });
+    if (REGISTER_DEBUG_TRACE) {
+      console.log("[oauth-link]", {
+        phase: "skipped",
+        reason: "no_oauth_in_request",
+        hasToken: Boolean(oauthTok),
+        oauthProvider: oauthProvRaw || null,
+      });
+    }
   }
 
   // Identity: phone-first (E.164 + legacy storage variants), then email, then new id. No cross-clinic reuse.
@@ -8086,12 +8061,14 @@ async function runPatientRegister(req, res, route, otpMode) {
     });
   }
 
-  console.log("🧠 HEALTH FORM PAYLOAD:", {
-    first_name,
-    last_name,
-    name,
-  });
-  console.log("CHECKPOINT 1: after name parse", { route, hasFirst: !!first_name, nameLen: String(name).length });
+  if (REGISTER_DEBUG_TRACE) {
+    console.log("🧠 HEALTH FORM PAYLOAD:", {
+      first_name,
+      last_name,
+      name,
+    });
+    console.log("CHECKPOINT 1: after name parse", { route, hasFirst: !!first_name, nameLen: String(name).length });
+  }
 
   let nameForReferral = name;
   if (name && !isAcceptablePersonName(name)) {
@@ -8143,7 +8120,9 @@ async function runPatientRegister(req, res, route, otpMode) {
     };
     const buildUpdatePayload = () => buildCoreFields(false);
     const buildInsertPayload = () => buildCoreFields(true);
-    console.log("CHECKPOINT 2: after buildCoreFields / payload builders", { route });
+    if (REGISTER_DEBUG_TRACE) {
+      console.log("CHECKPOINT 2: after buildCoreFields / payload builders", { route });
+    }
 
     /** Merge buildInsertPayload row with forced name fields (only object passed to .insert()). */
     const applyNameOverrides = (p) => {
@@ -8215,10 +8194,14 @@ async function runPatientRegister(req, res, route, otpMode) {
       let registeredVia23505 = false;
       try {
         const insertPayload0 = buildInsertPayload();
-        console.log("CHECKPOINT 3: before name override (insert)");
+        if (REGISTER_DEBUG_TRACE) {
+          console.log("CHECKPOINT 3: before name override (insert)");
+        }
         if (!guardPayload(insertPayload0)) return;
         logBeforeDb(insertPayload0, "primary_insert");
-        console.log("CHECKPOINT 4: before supabase insert (primary)");
+        if (REGISTER_DEBUG_TRACE) {
+          console.log("CHECKPOINT 4: before supabase insert (primary)");
+        }
         if (!insertPayload0 || typeof insertPayload0 !== "object") {
           console.error("INVALID PAYLOAD:", insertPayload0);
           if (!res.headersSent) {
@@ -8228,11 +8211,13 @@ async function runPatientRegister(req, res, route, otpMode) {
         }
         const finalInsertPayload0 = buildFinalInsertPayload(insertPayload0);
         if (!assertFirstNameForDb(finalInsertPayload0)) return;
-        console.log("[oauth-link]", {
-          phase: "insert_payload",
-          auth_user_id: finalInsertPayload0?.auth_user_id ?? null,
-          has_auth_provider: Object.prototype.hasOwnProperty.call(finalInsertPayload0 || {}, "auth_provider"),
-        });
+        if (REGISTER_DEBUG_TRACE) {
+          console.log("[oauth-link]", {
+            phase: "insert_payload",
+            auth_user_id: finalInsertPayload0?.auth_user_id ?? null,
+            has_auth_provider: Object.prototype.hasOwnProperty.call(finalInsertPayload0 || {}, "auth_provider"),
+          });
+        }
         const rIns = await supabaseCallOrCrash("register INSERT primary", () =>
           supabase.from("patients").insert(finalInsertPayload0).select().single(),
         );
@@ -8243,7 +8228,7 @@ async function runPatientRegister(req, res, route, otpMode) {
         if (insErr) {
           console.error("SUPABASE ERROR:", insErr);
         } else {
-          console.log("INSERT SUCCESS:", data);
+          if (REGISTER_DEBUG_TRACE) console.log("INSERT SUCCESS:", data);
         }
       } catch (e) {
         console.error("INSERT ERROR:", e);
@@ -8266,7 +8251,9 @@ async function runPatientRegister(req, res, route, otpMode) {
           const finalP1 = p1;
           if (!guardPayload(finalP1)) return;
           logBeforeDb(finalP1, "schema_retry_no_is_lead", "insert");
-          console.log("CHECKPOINT 4: before supabase insert (schema retry 1)");
+          if (REGISTER_DEBUG_TRACE) {
+            console.log("CHECKPOINT 4: before supabase insert (schema retry 1)");
+          }
           if (!finalP1 || typeof finalP1 !== "object") {
             console.error("INVALID PAYLOAD:", finalP1);
             if (!res.headersSent) {
@@ -8286,7 +8273,7 @@ async function runPatientRegister(req, res, route, otpMode) {
           if (insErr) {
             console.error("SUPABASE ERROR:", insErr);
           } else {
-            console.log("INSERT SUCCESS:", data);
+            if (REGISTER_DEBUG_TRACE) console.log("INSERT SUCCESS:", data);
           }
           if (insErr && /notes|42703|pgrst204|column/i.test(detailBlob(insErr))) {
             const p2 = { ...p1 };
@@ -8294,7 +8281,9 @@ async function runPatientRegister(req, res, route, otpMode) {
             const finalP2 = p2;
             if (!guardPayload(finalP2)) return;
             logBeforeDb(finalP2, "schema_retry_no_notes", "insert");
-            console.log("CHECKPOINT 4: before supabase insert (schema retry 2)");
+            if (REGISTER_DEBUG_TRACE) {
+              console.log("CHECKPOINT 4: before supabase insert (schema retry 2)");
+            }
             if (!finalP2 || typeof finalP2 !== "object") {
               console.error("INVALID PAYLOAD:", finalP2);
               if (!res.headersSent) {
@@ -8314,7 +8303,7 @@ async function runPatientRegister(req, res, route, otpMode) {
             if (insErr) {
               console.error("SUPABASE ERROR:", insErr);
             } else {
-              console.log("INSERT SUCCESS:", data);
+              if (REGISTER_DEBUG_TRACE) console.log("INSERT SUCCESS:", data);
             }
           }
         }
@@ -8440,7 +8429,9 @@ async function runPatientRegister(req, res, route, otpMode) {
           const finalU235 = u235Row;
           if (!guardPayload(finalU235)) return;
           logBeforeDb(finalU235, "23505_update", "update");
-          console.log("CHECKPOINT 4: before supabase update (23505)");
+          if (REGISTER_DEBUG_TRACE) {
+            console.log("CHECKPOINT 4: before supabase update (23505)");
+          }
           if (!finalU235 || typeof finalU235 !== "object") {
             console.error("INVALID PAYLOAD (23505 update):", finalU235);
             if (!res.headersSent) {

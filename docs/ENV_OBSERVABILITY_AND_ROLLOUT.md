@@ -69,8 +69,18 @@ One JSON line per event (`tag`, `ts`, `event`, …). Grep: `AUTH_TELEMETRY_V1` i
 | `EXPO_PUSH_RECEIPT_PRUNE` | off | Unset or `0` | When `1`, deletes bad `push_tokens` — watch `invalidTokensPruned` and user complaints. |
 | `PUSH_LOG_VERBOSE` | off in prod | Unset | Verbose logs may include more context — still redacted; avoid in high-traffic unless needed. |
 | `CHAT_PUSH_PIPELINE_LOG` | off | Unset | When `1`, emits `[push]` JSON lines: `chat_push.notify_doctor_assigned`, `chat_push.found_doctor_push_tokens` (includes `afterPartitionTotal`), `chat_push.sending_doctor_push`, `chat_push.expo_push_response`, `chat_push.expo_receipt_summary` (patient→doctor path). Also passes a minimal trace so Expo receipt merge runs without `DOCTOR_PUSH_EXPO_TRACE`. Register path logs `push_tokens.pruned_same_expo_token_other_owners` when same-kind stale rows are deleted. |
-| `PUSH_HARD_CONFIRM_EXPO_SEND` | off | Unset | When `1`, prints `[push][hard-confirm] entering Expo send` / `Expo send returned` around `https://exp.host/--/api/v2/push/send` (includes `httpOk`, `httpStatus`, `ticketCount`, `ticketStatuses`). Also auto-enabled when `DOCTOR_PUSH_EXPO_TRACE=1` or `CHAT_PUSH_PIPELINE_LOG=1`. Remove after incident debugging. |
+| `REGISTER_DEBUG_TRACE` | off | Unset | When `1`, enables `[REGISTER_TRACE]`, `[oauth-link]`, register CHECKPOINT / health-form payload logs (default off in prod). |
 | `RL_*` rate limits | library defaults | Increase `RL_*_MAX` or window | Shared NAT → 429 for real users if too tight. |
+
+### 4.1 Production stdout hygiene (after incident debugging)
+
+In **Railway → Variables**, unset or leave empty unless you are actively debugging:
+
+- `PUSH_HARD_CONFIRM_EXPO_SEND` — **no longer read by code** (hard-confirm logs removed); delete the variable if it still exists.
+- `CHAT_PUSH_PIPELINE_LOG`, `DOCTOR_PUSH_EXPO_TRACE`, `EXPO_PUSH_DEBUG_LOGS`, `CHAT_PUSH_BADGE_LOG`, `CHAT_PUSH_ROUTING_LOG`
+- `REGISTER_DEBUG_TRACE` (register / OAuth step `console.log` replay)
+
+Keep **`EXPO_EXPERIENCE_ID_*`** and **`EXPO_ACCESS_TOKEN`** if your Expo project requires them for push; those are not “debug noise”.
 
 Rollback rule: **prefer unset** (revert to code default) over “creative” values unless you documented the behavior.
 
@@ -110,7 +120,7 @@ Track these explicitly before store submission:
 | `PUSH_LOG_VERBOSE` | off in prod | `0` / unset | Extra logging cost |
 | `DOCTOR_PUSH_EXPO_TRACE` | off | Staging only | Verbose / possibly sensitive routing logs |
 | `CHAT_PUSH_PIPELINE_LOG` | off | Briefly for patient→doctor push debugging | Structured `[push]` lines; receipt merge when set |
-| `PUSH_HARD_CONFIRM_EXPO_SEND` | off | `1` only while verifying Expo HTTP in Railway logs | Bracket `console.log` around Expo push/send; unset after |
+| `REGISTER_DEBUG_TRACE` | off | Unset in prod | `[REGISTER_TRACE]`, `[oauth-link]`, CHECKPOINT / health-form logs on register |
 | `CHAT_PUSH_BADGE_LOG` | off | Enable briefly when debugging badge | Noise |
 | `EXPO_PUSH_DEBUG_LOGS` | off | off | Debug noise |
 | `CHAT_PUSH_ROUTING_LOG` | off | off | Routing noise |

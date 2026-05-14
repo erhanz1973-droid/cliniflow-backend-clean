@@ -42,7 +42,19 @@ Legend: **OS** = iOS unless noted. **Experience** = Expo `projectId` / experienc
 
 ---
 
-## 5. Cold start / auth edge (related)
+## 5. Pre-TestFlight / production smoke (OAuth + push)
+
+Run with **debug env vars unset** (`docs/ENV_OBSERVABILITY_AND_ROLLOUT.md` §4.1). Real device or TestFlight build (not Expo Go) for push.
+
+- [ ] Logout / login still works (Clinifly JWT + Supabase session).
+- [ ] Google OAuth sign-in / bridge.
+- [ ] Apple OAuth sign-in / bridge.
+- [ ] Patient sends chat message → assigned doctor receives push with **doctor app fully terminated** (not just background).
+- [ ] Unread badge on doctor app icon updates after inbound messages (may need a second open depending on client).
+
+---
+
+## 6. Cold start / auth edge (related)
 
 | Case | Expected |
 |------|----------|
@@ -53,6 +65,6 @@ Legend: **OS** = iOS unless noted. **Experience** = Expo `projectId` / experienc
 
 ---
 
-## 6. Sign-off
+## 7. Sign-off
 
 Tester: _______________  Date: _______________  Build: _______________  API commit: _______________
