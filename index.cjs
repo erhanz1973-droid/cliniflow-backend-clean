@@ -3303,6 +3303,19 @@ function isDoctorPushExpoTraceEnabled() {
   return String(process.env.DOCTOR_PUSH_EXPO_TRACE || "").trim() === "1";
 }
 
+function isChatPushPipelineLogEnabled() {
+  return String(process.env.CHAT_PUSH_PIPELINE_LOG || "").trim() === "1";
+}
+
+/** Temporary / opt-in: bracket logs around Expo HTTP push/send (see `postExpoNotificationsBatch`). */
+function isPushHardConfirmExpoSendEnabled() {
+  return (
+    String(process.env.PUSH_HARD_CONFIRM_EXPO_SEND || "").trim() === "1" ||
+    isDoctorPushExpoTraceEnabled() ||
+    isChatPushPipelineLogEnabled()
+  );
+}
+
 function expoPushTokenPreview(tok) {
   const s = String(tok || "");
   if (!s) return "";
@@ -3401,6 +3414,39 @@ function expoInvalidPushTokensFromReceiptMerge(mergedRowById, okIds, ticketIdToT
   return [...new Set(out)];
 }
 
+/**
+ * Same physical Expo token registered again under another account of the same owner_kind (e.g. multiple doctor
+ * logins on one simulator). Removes stale rows so dispatch does not fan out to dead accounts.
+ * Does not delete the other owner_kind (doctor vs patient) so both apps can still share a token string if needed.
+ */
+async function prunePushTokenRowsSameExpoTokenOtherSameKind(expoPushToken, ownerKind, ownerIdUuid) {
+  const tok = String(expoPushToken || "").trim();
+  const k = String(ownerKind || "").trim();
+  const id = String(ownerIdUuid || "").trim();
+  if (!tok || !k || !id || !isSupabaseEnabled()) return 0;
+  if (!(await probePushTokensDbAvailable())) return 0;
+  let pruned = 0;
+  try {
+    const { data: rows, error } = await supabase
+      .from("push_tokens")
+      .select("id, owner_kind, owner_id")
+      .eq("expo_push_token", tok)
+      .eq("owner_kind", k);
+    if (error || !Array.isArray(rows)) return 0;
+    for (const r of rows) {
+      const rid = String(r?.owner_id || "").trim();
+      if (rid === id) continue;
+      const pk = r?.id != null ? String(r.id).trim() : "";
+      if (!pk) continue;
+      const { error: delErr } = await supabase.from("push_tokens").delete().eq("id", pk);
+      if (!delErr) pruned += 1;
+    }
+  } catch (e) {
+    pushLog.warn("push_tokens.prune_same_token_throw", { message: String(e?.message || e) });
+  }
+  return pruned;
+}
+
 function isExpoPushReceiptPruneEnabled() {
   return String(process.env.EXPO_PUSH_RECEIPT_PRUNE || "").trim() === "1";
 }
@@ -3416,88 +3462,132 @@ async function expoSilentReceiptInvalidTokens(expoBody, chunk) {
 }
 
 async function logDoctorPushExpoDeliveryTrace(expoTrace, chunk, expoBody, httpOk, httpStatus) {
-  if (!isDoctorPushExpoTraceEnabled() || !expoTrace) return [];
+  if (!expoTrace) return [];
+  const wantV1 = isDoctorPushExpoTraceEnabled();
+  const wantPipe = isChatPushPipelineLogEnabled();
+  if (!wantV1 && !wantPipe) return [];
   const traceId = expoTrace.traceId || newPushTraceId();
   expoTrace.traceId = traceId;
   const tickets = Array.isArray(expoBody?.data) ? expoBody.data : null;
-  const expoTicketIds = tickets
-    ? tickets.map((t) => (t && t.id != null ? String(t.id) : "")).filter(Boolean)
-    : [];
-  const firstErr = tickets
-    ? tickets.find((t) => String(t?.status || "").toLowerCase() === "error")
-    : null;
-  let detailsError = null;
-  if (firstErr?.details && typeof firstErr.details === "object" && firstErr.details.error != null) {
-    detailsError = String(firstErr.details.error);
+  if (wantV1) {
+    const expoTicketIds = tickets
+      ? tickets.map((t) => (t && t.id != null ? String(t.id) : "")).filter(Boolean)
+      : [];
+    const firstErr = tickets
+      ? tickets.find((t) => String(t?.status || "").toLowerCase() === "error")
+      : null;
+    let detailsError = null;
+    if (firstErr?.details && typeof firstErr.details === "object" && firstErr.details.error != null) {
+      detailsError = String(firstErr.details.error);
+    }
+    pushDeliveryV1("info", {
+      traceId,
+      phase: "expo_send_batch",
+      doctorId: expoTrace.assignedDoctorId ?? null,
+      patientId: expoTrace.patientId ?? null,
+      recipientKind: "doctor",
+      threadId: expoTrace.threadId ?? null,
+      experiencePartition: null,
+      expoTicketIds: expoTicketIds.length ? expoTicketIds : null,
+      httpOk,
+      httpStatus: httpStatus || 0,
+      batchSize: Array.isArray(chunk) ? chunk.length : 0,
+      tokenPreviews: Array.isArray(chunk) ? chunk.map((c) => c?.to).filter(Boolean) : null,
+      detailsError,
+    });
   }
-  pushDeliveryV1("info", {
-    traceId,
-    phase: "expo_send_batch",
-    doctorId: expoTrace.assignedDoctorId ?? null,
-    patientId: expoTrace.patientId ?? null,
-    recipientKind: "doctor",
-    threadId: expoTrace.threadId ?? null,
-    experiencePartition: null,
-    expoTicketIds: expoTicketIds.length ? expoTicketIds : null,
-    httpOk,
-    httpStatus: httpStatus || 0,
-    batchSize: Array.isArray(chunk) ? chunk.length : 0,
-    tokenPreviews: Array.isArray(chunk) ? chunk.map((c) => c?.to).filter(Boolean) : null,
-    detailsError,
-  });
   if (!tickets) return [];
   const { okIds, ticketIdToToken, firstMap, mergedRowById } = await expoMergeReceiptMapsForOkTickets(
     expoBody,
     chunk,
   );
   if (!okIds.length) return [];
-  for (const id of okIds) {
-    const row = firstMap[id];
-    const d = row?.details;
-    let err = null;
-    if (d && typeof d === "object") {
-      if (d.error != null) err = String(d.error);
-      else if (d.apns && typeof d.apns === "object" && d.apns.reason != null) err = String(d.apns.reason);
+  if (wantV1) {
+    for (const id of okIds) {
+      const row = firstMap[id];
+      const d = row?.details;
+      let err = null;
+      if (d && typeof d === "object") {
+        if (d.error != null) err = String(d.error);
+        else if (d.apns && typeof d.apns === "object" && d.apns.reason != null) err = String(d.apns.reason);
+      }
+      pushDeliveryV1(String(row?.status || "").toLowerCase() === "error" ? "warn" : "info", {
+        traceId,
+        phase: "expo_receipt_initial",
+        doctorId: expoTrace.assignedDoctorId ?? null,
+        threadId: expoTrace.threadId ?? null,
+        recipientKind: "doctor",
+        expoTicketId: id,
+        detailsError: err,
+        tokenPreview: ticketIdToToken.get(id),
+        message: row?.message != null ? String(row.message).slice(0, 200) : null,
+      });
     }
-    pushDeliveryV1(String(row?.status || "").toLowerCase() === "error" ? "warn" : "info", {
-      traceId,
-      phase: "expo_receipt_initial",
-      doctorId: expoTrace.assignedDoctorId ?? null,
-      threadId: expoTrace.threadId ?? null,
-      recipientKind: "doctor",
-      expoTicketId: id,
-      detailsError: err,
-      tokenPreview: ticketIdToToken.get(id),
-      message: row?.message != null ? String(row.message).slice(0, 200) : null,
-    });
+    const pending = okIds.filter(
+      (id) => String(firstMap[id]?.status || "").toLowerCase() === "pending",
+    );
+    for (const id of pending) {
+      const row = mergedRowById[id];
+      const d = row?.details;
+      let err = null;
+      if (d && typeof d === "object") {
+        if (d.error != null) err = String(d.error);
+        else if (d.apns && typeof d.apns === "object" && d.apns.reason != null) err = String(d.apns.reason);
+      }
+      pushDeliveryV1(String(row?.status || "").toLowerCase() === "error" ? "warn" : "info", {
+        traceId,
+        phase: "expo_receipt_after_poll",
+        doctorId: expoTrace.assignedDoctorId ?? null,
+        threadId: expoTrace.threadId ?? null,
+        recipientKind: "doctor",
+        expoTicketId: id,
+        detailsError: err,
+        tokenPreview: ticketIdToToken.get(id),
+        message: row?.message != null ? String(row.message).slice(0, 200) : null,
+      });
+    }
   }
-  const pending = okIds.filter(
-    (id) => String(firstMap[id]?.status || "").toLowerCase() === "pending",
-  );
-  for (const id of pending) {
-    const row = mergedRowById[id];
-    const d = row?.details;
-    let err = null;
-    if (d && typeof d === "object") {
-      if (d.error != null) err = String(d.error);
-      else if (d.apns && typeof d.apns === "object" && d.apns.reason != null) err = String(d.apns.reason);
+  if (wantPipe) {
+    let okN = 0;
+    let errN = 0;
+    let pendN = 0;
+    let unkN = 0;
+    for (const id of okIds) {
+      const st = String(mergedRowById[id]?.status || firstMap[id]?.status || "").toLowerCase();
+      if (st === "ok") okN += 1;
+      else if (st === "error") errN += 1;
+      else if (st === "pending") pendN += 1;
+      else unkN += 1;
     }
-    pushDeliveryV1(String(row?.status || "").toLowerCase() === "error" ? "warn" : "info", {
+    pushLog.info("chat_push.expo_receipt_summary", {
       traceId,
-      phase: "expo_receipt_after_poll",
       doctorId: expoTrace.assignedDoctorId ?? null,
       threadId: expoTrace.threadId ?? null,
-      recipientKind: "doctor",
-      expoTicketId: id,
-      detailsError: err,
-      tokenPreview: ticketIdToToken.get(id),
-      message: row?.message != null ? String(row.message).slice(0, 200) : null,
+      ticketCount: okIds.length,
+      okCount: okN,
+      errorCount: errN,
+      pendingCount: pendN,
+      unknownStatusCount: unkN,
     });
   }
 
   pushMetrics.recordMergedReceiptFinals(mergedRowById, okIds);
 
   return expoInvalidPushTokensFromReceiptMerge(mergedRowById, okIds, ticketIdToToken);
+}
+
+/** Ensures receipt merge + pipeline logs run for doctor sends when `CHAT_PUSH_PIPELINE_LOG=1` even if caller omitted `expoTrace`. */
+function doctorExpoTraceForReceiptMerge(expoTrace, doctorId, threadIdNorm) {
+  if (expoTrace) return expoTrace;
+  if (!isChatPushPipelineLogEnabled()) return null;
+  const did = String(doctorId || "").trim();
+  if (!did) return null;
+  return {
+    traceId: newPushTraceId(),
+    assignedDoctorId: did,
+    patientId: null,
+    threadId: threadIdNorm,
+  };
 }
 
 async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
@@ -3531,6 +3621,14 @@ async function registerExpoTokenEntry(kind, uuidRaw, tokenRaw, body) {
       onConflict: "owner_kind,owner_id,expo_push_token",
     });
     if (!error) {
+      const pruned = await prunePushTokenRowsSameExpoTokenOtherSameKind(token, row.owner_kind, uuid);
+      if (pruned > 0) {
+        pushLog.info("push_tokens.pruned_same_expo_token_other_owners", {
+          tokenPreview: expoPushTokenPreview(token),
+          prunedCount: pruned,
+          currentOwnerKind: row.owner_kind,
+        });
+      }
       try {
         const { data: dupRows, error: dupErr } = await supabase
           .from("push_tokens")
@@ -3690,12 +3788,31 @@ async function postExpoNotificationsBatch(messagesSlice) {
     };
     const bearer = String(process.env.EXPO_ACCESS_TOKEN || "").trim();
     if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    if (isPushHardConfirmExpoSendEnabled()) {
+      console.log(
+        "[push][hard-confirm] entering Expo send",
+        JSON.stringify({ batchSize: messagesSlice.length, url: "https://exp.host/--/api/v2/push/send" }),
+      );
+    }
     const res = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
       headers,
       body: JSON.stringify(messagesSlice),
     });
     const j = await res.json().catch(() => ({}));
+    if (isPushHardConfirmExpoSendEnabled()) {
+      const dataArr = Array.isArray(j?.data) ? j.data : [];
+      console.log(
+        "[push][hard-confirm] Expo send returned",
+        JSON.stringify({
+          httpOk: res.ok,
+          httpStatus: res.status,
+          ticketCount: dataArr.length,
+          ticketStatuses: dataArr.map((x) => String(x?.status || "")),
+          firstError: j?.errors?.[0] != null ? String(j.errors[0]).slice(0, 200) : null,
+        }),
+      );
+    }
     if (!res.ok) {
       pushLog.warn("expo.push_send_http", {
         status: res.status,
@@ -3705,6 +3822,12 @@ async function postExpoNotificationsBatch(messagesSlice) {
     }
     return { ok: res.ok, body: j, status: res.status };
   } catch (e) {
+    if (isPushHardConfirmExpoSendEnabled()) {
+      console.log(
+        "[push][hard-confirm] Expo send returned",
+        JSON.stringify({ httpOk: false, httpStatus: 0, throw: String(e?.message || e) }),
+      );
+    }
     pushLog.warn("expo.push_send_throw", { message: String(e?.message || e) });
     return { ok: false, body: {}, status: 0 };
   }
@@ -3766,6 +3889,18 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   const rows = await loadExpoTokenRows(kind, u);
   if (!rows.length) {
     if (kind === "doctor") {
+      if (isChatPushPipelineLogEnabled()) {
+        const payloadEarly = typeof data === "object" && data ? data : {};
+        const tidEarly = String(payloadEarly?.threadId || "").trim();
+        pushLog.info("chat_push.found_doctor_push_tokens", {
+          doctorId: u,
+          threadId: UUID_RE.test(tidEarly) ? tidEarly : null,
+          rawRowCount: 0,
+          afterPartitionTotal: 0,
+          experiencePartitions: [],
+          tokenPreviews: [],
+        });
+      }
       const traceOn = !!(expoTrace && isDoctorPushExpoTraceEnabled());
       const forceLog = String(process.env.DOCTOR_PUSH_NO_TOKEN_LOG || "").trim() === "1";
       if (traceOn || forceLog) void logDoctorNoExpoTokensDebug(u, expoTrace);
@@ -3815,6 +3950,20 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     threadId: threadIdNorm,
   });
   const totalGrouped = rowGroups.reduce((n, g) => n + g.length, 0);
+  if (kind === "doctor" && isChatPushPipelineLogEnabled()) {
+    const expKeys = [
+      ...new Set(rows.map((r) => String(r?.expoExperienceId || "").trim() || "_legacy_null_")),
+    ];
+    pushLog.info("chat_push.found_doctor_push_tokens", {
+      doctorId: u,
+      threadId: threadIdNorm,
+      rawRowCount: rows.length,
+      afterPartitionTotal: totalGrouped,
+      experiencePartitions: expKeys,
+      tokenPreviews: rows.slice(0, 5).map((r) => expoPushTokenPreview(r.token)),
+      ...(totalGrouped === 0 ? { note: "all_rows_filtered_by_experience_or_partition" } : {}),
+    });
+  }
   if (!totalGrouped) {
     if (kind === "doctor") {
       const traceOn = !!(expoTrace && isDoctorPushExpoTraceEnabled());
@@ -3873,6 +4022,15 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
       }
       messages.push(msg);
     }
+    if (kind === "doctor" && isChatPushPipelineLogEnabled() && messages.length) {
+      pushLog.info("chat_push.sending_doctor_push", {
+        doctorId: u,
+        threadId: threadIdNorm,
+        experienceKey: partitionExperienceKey,
+        messageCount: messages.length,
+        recipientCountTotalAcrossPartitions: totalGrouped,
+      });
+    }
     if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled() && messages.length) {
       const m0 = messages[0];
       const expKey = String(groupRows[0]?.expoExperienceId || "").trim() || "_legacy_null_";
@@ -3907,6 +4065,21 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     for (let i = 0; i < messages.length; i += 90) {
       const chunk = messages.slice(i, i + 90);
       const { ok, body: expoBody, status: httpStatus } = await postExpoNotificationsBatch(chunk);
+      if (kind === "doctor" && isChatPushPipelineLogEnabled()) {
+        const tix = Array.isArray(expoBody?.data) ? expoBody.data : [];
+        pushLog.info("chat_push.expo_push_response", {
+          doctorId: u,
+          threadId: threadIdNorm,
+          httpOk: !!ok,
+          httpStatus: httpStatus || 0,
+          chunkSize: chunk.length,
+          experienceKey: partitionExperienceKey,
+          ticketStatuses: tix.map((x) => String(x?.status || "")),
+          ticketIdPrefixes: tix.map((x) =>
+            x?.id != null ? String(x.id).replace(/-/g, "").slice(0, 12) : null,
+          ),
+        });
+      }
       pushMetrics.recordExpoSendBatch({
         httpOk: !!ok,
         httpStatus: httpStatus || 0,
@@ -3916,15 +4089,22 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
         expoBody,
       });
       const ticketInvalid = expoReceiptsYieldInvalidTokens(expoBody, chunk);
+      const doctorReceiptTrace =
+        kind === "doctor" ? doctorExpoTraceForReceiptMerge(expoTrace, u, threadIdNorm) : null;
       const receiptInvalidFromTrace = await logDoctorPushExpoDeliveryTrace(
-        kind === "doctor" ? expoTrace : null,
+        doctorReceiptTrace,
         chunk,
         expoBody,
         ok,
         httpStatus,
       );
       const receiptInvalidSilent =
-        isExpoPushReceiptPruneEnabled() && !(kind === "doctor" && isDoctorPushExpoTraceEnabled() && expoTrace)
+        isExpoPushReceiptPruneEnabled() &&
+        !(
+          kind === "doctor" &&
+          doctorReceiptTrace &&
+          (isDoctorPushExpoTraceEnabled() || isChatPushPipelineLogEnabled())
+        )
           ? await expoSilentReceiptInvalidTokens(expoBody, chunk)
           : [];
       const invalid = [
@@ -4132,6 +4312,16 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
 
     const threadId = String(data?.id || "").trim();
 
+    if (isChatPushPipelineLogEnabled()) {
+      pushLog.info("chat_push.notify_doctor_assigned", {
+        patientId: String(resolvedPatientId || "").trim(),
+        clinicId: clinicUuid,
+        doctorId: did,
+        threadId: UUID_RE.test(threadId) ? threadId : null,
+        senderRole: role,
+      });
+    }
+
     let clinicCode = "";
     const { data: clRow } = await supabase.from("clinics").select("clinic_code").eq("id", clinicUuid).maybeSingle();
     if (clRow?.clinic_code) clinicCode = String(clRow.clinic_code).trim().toUpperCase();
@@ -4154,22 +4344,23 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       composerOpts && String(composerOpts.routingPath || "").trim()
         ? String(composerOpts.routingPath).trim()
         : null;
-    const expoTrace = isDoctorPushExpoTraceEnabled()
-      ? {
-          traceId: newPushTraceId(),
-          source: "notify_assigned_doctor_expo_inbound",
-          routingPath: routingPathTrace,
-          patientId: resolvedPatientId,
-          clinicId: clinicUuid,
-          assignedDoctorId: did,
-          senderRole: role,
-          senderDoctorId: senderDoctorIdTrace,
-          senderStaffOrDoctorId: senderStaffOrDoctorIdTrace,
-          messageComposerId:
-            role === "patient" ? String(resolvedPatientId || "").trim() : composerId || null,
-          threadId: UUID_RE.test(threadId) ? threadId : null,
-        }
-      : null;
+    const expoTrace =
+      isDoctorPushExpoTraceEnabled() || isChatPushPipelineLogEnabled()
+        ? {
+            traceId: newPushTraceId(),
+            source: "notify_assigned_doctor_expo_inbound",
+            routingPath: routingPathTrace,
+            patientId: resolvedPatientId,
+            clinicId: clinicUuid,
+            assignedDoctorId: did,
+            senderRole: role,
+            senderDoctorId: senderDoctorIdTrace,
+            senderStaffOrDoctorId: senderStaffOrDoctorIdTrace,
+            messageComposerId:
+              role === "patient" ? String(resolvedPatientId || "").trim() : composerId || null,
+            threadId: UUID_RE.test(threadId) ? threadId : null,
+          }
+        : null;
 
     const dataPayload = {
       type: "chat_message",
