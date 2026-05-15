@@ -14544,16 +14544,30 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       return res.status(500).json({ ok: false, error: "update_failed" });
     }
     if (!updated?.id) {
-      const { data: upd2, error: up2 } = await supabase
+      const { data: threadRows, error: qThErr } = await supabase
         .from("patient_chat_threads")
-        .update(upd)
+        .select("id")
         .eq("patient_id", patientId)
         .eq("clinic_id", clinicId)
-        .eq("is_lead", true)
-        .select("id, patient_id, assigned_doctor_id, status, assigned_at")
-        .maybeSingle();
-      if (!up2 && upd2?.id) {
-        updated = upd2;
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const existingId =
+        !qThErr && Array.isArray(threadRows) && threadRows.length && threadRows[0]?.id
+          ? String(threadRows[0].id).trim()
+          : "";
+      if (existingId) {
+        const updPromote = { ...upd, is_lead: true };
+        const { data: byId, error: upIdErr } = await supabase
+          .from("patient_chat_threads")
+          .update(updPromote)
+          .eq("id", existingId)
+          .select("id, patient_id, assigned_doctor_id, status, assigned_at")
+          .maybeSingle();
+        if (!upIdErr && byId?.id) {
+          updated = byId;
+        } else if (upIdErr) {
+          console.warn("[ADMIN assign-doctor] update by thread id failed:", upIdErr.message);
+        }
       }
     }
 
@@ -14610,6 +14624,39 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
           message:
             "patient_chat_threads tablosu yok ve patients güncellenemedi. Migration: 20260418120000_patient_chat_threads_leads.sql",
         });
+      }
+      /* Race: row created between our update attempt and insert — retry update by id */
+      if (insErr && String(insErr.code || "") === "23505") {
+        const { data: dupRows } = await supabase
+          .from("patient_chat_threads")
+          .select("id")
+          .eq("patient_id", patientId)
+          .eq("clinic_id", clinicId)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        const dupId =
+          Array.isArray(dupRows) && dupRows.length && dupRows[0]?.id
+            ? String(dupRows[0].id).trim()
+            : "";
+        if (dupId) {
+          const { data: fixed, error: fixErr } = await supabase
+            .from("patient_chat_threads")
+            .update({ ...upd, is_lead: true })
+            .eq("id", dupId)
+            .select("id, patient_id, assigned_doctor_id, status, assigned_at")
+            .maybeSingle();
+          if (!fixErr && fixed?.id) {
+            await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+            return res.json({
+              ok: true,
+              threadId: fixed.id,
+              patientId: fixed.patient_id || patientId,
+              assignedDoctorId: fixed.assigned_doctor_id || doctorUuid,
+              status: fixed.status || "assigned",
+              assignedAt: fixed.assigned_at || assignedAtIso,
+            });
+          }
+        }
       }
       return res.status(409).json({
         ok: false,
