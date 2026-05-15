@@ -122,6 +122,9 @@ body.al-ready {
   border-left: 2px solid transparent;
   position: relative;
 }
+.al-nav-item .al-nav-label {
+  color: inherit;
+}
 .al-nav-item:hover { background: var(--sb-hover); color: var(--sb-text-hov); }
 .al-nav-item.active {
   background: var(--sb-active-bg);

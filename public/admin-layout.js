@@ -247,6 +247,12 @@
       updateSidebarLabels();
       if (typeof prevOnI18nUpdated === 'function') prevOnI18nUpdated();
     };
+    document.addEventListener('i18n:ready', function () {
+      try { updateSidebarLabels(); } catch (e) { /* ignore */ }
+    });
+    document.addEventListener('admin-language-changed', function () {
+      try { updateSidebarLabels(); } catch (e) { /* ignore */ }
+    });
   }
 
   /* ── Mobile drawer navigation ────────────────────────────── */

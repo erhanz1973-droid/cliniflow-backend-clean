@@ -110,6 +110,8 @@
     if (typeof document === 'undefined' || !document.querySelectorAll) return;
     try {
       document.querySelectorAll('*').forEach(function (el) {
+        /* Never strip sidebar/nav — same strings are valid i18n labels on dark sidebar */
+        if (el.closest && el.closest('.al-sidebar')) return;
         if (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3) {
           const txt = el.textContent.trim();
           if (txt === 'Main Menu' || txt === 'Takvim') {
