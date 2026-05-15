@@ -2825,6 +2825,7 @@ async function _insertMessageToSupabaseCore({
     ...clinicFields,
     ...senderFields,
     sender,
+    from_patient: fromPatient,
     message: msgText,
     ...(attachments != null ? { attachments } : {}),
     ...threadOpt,
