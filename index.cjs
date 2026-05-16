@@ -12652,11 +12652,14 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
     }
 
     const codeStored = String(clinic.clinic_code || clinicCodeRaw || "").trim().toUpperCase();
+    const joinAt = new Date().toISOString();
+    const patientStatus = String(patientRow.status || "PENDING").toUpperCase();
     const upJoin = await updatePatientRowWithColumnPruning(patientRow.id, {
       clinic_id: clinic.id,
       clinic_code: codeStored,
-      updated_at: new Date().toISOString(),
+      updated_at: joinAt,
       is_lead: false,
+      ...(patientStatus === "PENDING" || patientStatus === "" ? { status: "ACTIVE" } : {}),
     });
 
     if (!upJoin.ok) {
@@ -12669,7 +12672,8 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
       });
     }
 
-    const patientStatus = String(patientRow.status || "PENDING").toUpperCase();
+    const patientStatusAfterJoin =
+      patientStatus === "PENDING" || patientStatus === "" ? "ACTIVE" : patientStatus;
     const emailNorm = String(patientRow.email || "").trim().toLowerCase();
     const foundPhone = String(patientRow.phone || "").trim();
     const foundLanguage = patientRow.language;
@@ -12678,7 +12682,7 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
       type: "patient",
       patientId: patientRow.id,
       role: "PATIENT",
-      status: patientStatus,
+      status: patientStatusAfterJoin,
       email: emailNorm,
       clinicId: clinic.id,
       clinicCode: codeStored,
@@ -13849,11 +13853,17 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const includeLeadsRaw = String(req.query.include_leads || req.query.includeLeads || "").trim().toLowerCase();
     const includeLeads = includeLeadsRaw === "1" || includeLeadsRaw === "true" || includeLeadsRaw === "yes";
+    const search = String(req.query.search || req.query.q || "").trim();
 
     // DB-level paginated fetch (avoids loading entire clinic patient list)
     let fetchResult;
     try {
-      const fetchPromise = getPatientsByClinicPaginated(req.clinicId, { page, limit, includeLeads });
+      const fetchPromise = getPatientsByClinicPaginated(req.clinicId, {
+        page,
+        limit,
+        includeLeads,
+        search,
+      });
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("supabase_timeout")), 10000)
       );
