@@ -52973,6 +52973,40 @@ app.get("/api/doctor/inbox", requireDoctorAuth, async (req, res) => {
   }
 });
 
+// GET /api/doctor/treatment-requests/offer-unread — per-offer unread counts (lightweight list patch)
+app.get("/api/doctor/treatment-requests/offer-unread", requireDoctorAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.json({ ok: true, by_offer: {} });
+    }
+    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    if (!doctorKey) {
+      return res.status(401).json({ ok: false, error: "doctor_key_missing" });
+    }
+    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+
+    let offerQuery = supabase.from("treatment_offers").select("id").eq("doctor_id", doctorKey);
+    if (clinicId && UUID_RE.test(clinicId)) {
+      offerQuery = offerQuery.eq("clinic_id", clinicId);
+    }
+    const { data: offerRows, error: offerErr } = await offerQuery.limit(400);
+    if (offerErr) {
+      console.warn("[DOCTOR offer-unread] offers select:", offerErr.message);
+      return res.json({ ok: true, by_offer: {} });
+    }
+    const offerIds = (offerRows || [])
+      .map((o) => String(o.id || "").trim())
+      .filter((id) => UUID_RE.test(id));
+    const by_offer = await countUnreadPatientMessagesByOfferIds(offerIds);
+    return res.json({ ok: true, by_offer });
+  } catch (e) {
+    console.error("[DOCTOR offer-unread GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 // GET /api/doctor/treatment-requests — incoming requests for this clinic + offer metadata
 app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) => {
   try {
