@@ -46030,11 +46030,30 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       const supabasePublic = supabaseErrorPublic(error);
       return res.status(500).json({ ok: false, error: "messages_fetch_failed", supabase: supabasePublic });
     }
-    const messages = preMapped
+    const clinicMessages = preMapped
       ? Array.isArray(data)
         ? data
         : []
       : (data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
+
+    let offerArchived = [];
+    try {
+      offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
+        offerLimit: wantFull ? 400 : 180,
+      });
+    } catch (mergeErr) {
+      console.warn("[DOCTOR patient messages] offer archive merge:", mergeErr?.message || mergeErr);
+    }
+
+    let messages = mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived);
+    const tailN = wantFull
+      ? null
+      : Number.isFinite(limN) && limN > 0
+        ? Math.min(500, Math.max(80, limN))
+        : 180;
+    if (tailN && messages.length > tailN) {
+      messages = messages.slice(-tailN);
+    }
 
     let leadAssignment = null;
     try {
@@ -46044,7 +46063,14 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       leadAssignment = null;
     }
 
-    return res.json({ ok: true, messages, leadAssignment });
+    return res.json({
+      ok: true,
+      messages,
+      leadAssignment,
+      canonicalPatientId: pid,
+      unifiedThread: true,
+      offerArchiveCount: offerArchived.length,
+    });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -52447,6 +52473,98 @@ async function countOfferMessagesByRoleForInbox(offerIds, senderRole) {
  * Per-offer unread counts for doctor dashboard: patient messages with read_at IS NULL.
  * Returns { [offerId: string]: number } (only keys for requested ids; missing id ⇒ 0).
  */
+/** Lead-phase offer_messages → same legacy shape as clinic patient chat (read-only archive). */
+function mapOfferMessageRowToUnifiedLegacy(row) {
+  if (!row) return null;
+  const role = String(row.sender_role || "").toLowerCase();
+  const from = role === "patient" ? "PATIENT" : "CLINIC";
+  const createdRaw = row.created_at;
+  let createdAt = now();
+  if (createdRaw != null) {
+    const p = Date.parse(String(createdRaw));
+    if (Number.isFinite(p)) createdAt = p;
+  }
+  const text = String(row.text ?? row.message_text ?? "").trim();
+  const senderName = String(row.sender_name || "").trim();
+  const out = {
+    id: `offer_msg_${String(row.id || "")}`,
+    text,
+    from,
+    type: "text",
+    createdAt,
+    sourceOfferMessage: true,
+    offerId: String(row.offer_id || ""),
+  };
+  if (from === "CLINIC" && senderName) out.senderName = senderName;
+  return out;
+}
+
+async function fetchDoctorPatientArchivedOfferMessages(resolvedPatientId, req, opts = {}) {
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || ""))) return [];
+  const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+  const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+  const doctorIdMatchSet = new Set(doctorKeys.map((k) => String(k || "").trim()).filter(Boolean));
+  if (rawDoctor) doctorIdMatchSet.add(rawDoctor);
+  if (!doctorIdMatchSet.size) return [];
+
+  const { data: trRows } = await supabase
+    .from("treatment_requests")
+    .select("id")
+    .eq("patient_id", resolvedPatientId)
+    .limit(100);
+  const requestIds = (trRows || [])
+    .map((r) => String(r.id || "").trim())
+    .filter((id) => UUID_RE.test(id));
+  if (!requestIds.length) return [];
+
+  const offerIds = [];
+  for (let i = 0; i < requestIds.length; i += 40) {
+    const chunk = requestIds.slice(i, i + 40);
+    const { data: offerRows } = await supabase
+      .from("treatment_offers")
+      .select("id, doctor_id")
+      .in("request_id", chunk);
+    for (const o of offerRows || []) {
+      const oid = String(o.id || "").trim();
+      if (!UUID_RE.test(oid)) continue;
+      if (doctorIdMatchSet.has(String(o.doctor_id || "").trim())) offerIds.push(oid);
+    }
+  }
+  const uniqueOfferIds = [...new Set(offerIds)];
+  if (!uniqueOfferIds.length) return [];
+
+  const perOfferCap = Math.min(300, Number(opts.offerLimit) > 0 ? Number(opts.offerLimit) : 200);
+  const archived = [];
+  for (let i = 0; i < uniqueOfferIds.length; i += 25) {
+    const chunk = uniqueOfferIds.slice(i, i + 25);
+    const { data: rows } = await supabase
+      .from("offer_messages")
+      .select("id, offer_id, sender_role, sender_name, text, message_text, created_at")
+      .in("offer_id", chunk)
+      .order("created_at", { ascending: true })
+      .limit(perOfferCap);
+    for (const row of rows || []) {
+      const leg = mapOfferMessageRowToUnifiedLegacy(row);
+      if (leg) archived.push(leg);
+    }
+  }
+  return archived;
+}
+
+function mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived) {
+  const byId = new Map();
+  for (const m of [...(offerArchived || []), ...(clinicMessages || [])]) {
+    const id = String(m?.id || "").trim();
+    if (!id) continue;
+    if (!byId.has(id)) byId.set(id, m);
+  }
+  return [...byId.values()].sort((a, b) => {
+    const ta = Number(a?.createdAt) || 0;
+    const tb = Number(b?.createdAt) || 0;
+    return ta - tb;
+  });
+}
+
 async function countUnreadPatientMessagesByOfferIds(offerIds, opts = {}) {
   const ids = [
     ...new Set(
