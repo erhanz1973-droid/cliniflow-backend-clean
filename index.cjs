@@ -45137,6 +45137,198 @@ async function fetchRecentPatientMessagesRowsForChunk(patientChunk, limitRows) {
   return [];
 }
 
+/** Latest offer_messages row per offer_id (desc scan). */
+async function fetchLatestOfferMessageByOfferIds(offerIds) {
+  const map = new Map();
+  const ids = [...new Set((offerIds || []).map((x) => String(x || "").trim()).filter((id) => UUID_RE.test(id)))];
+  for (let i = 0; i < ids.length; i += 72) {
+    const part = ids.slice(i, i + 72);
+    const { data, error } = await supabase
+      .from("offer_messages")
+      .select("id, offer_id, text, message_text, created_at, sender_role, sender_name")
+      .in("offer_id", part)
+      .order("created_at", { ascending: false })
+      .limit(Math.min(800, part.length * 12));
+    if (error) {
+      if (!isOfferMessagesTableUnavailableError(error)) {
+        console.warn("[fetchLatestOfferMessageByOfferIds]", error.message);
+      }
+      continue;
+    }
+    for (const row of data || []) {
+      const oid = String(row.offer_id || "").trim();
+      if (oid && !map.has(oid)) map.set(oid, row);
+    }
+  }
+  return map;
+}
+
+/**
+ * Lead-phase offer threads for doctor Leads Inbox — same universe as unread-counts.offerUnread.
+ * Foreign leads often have offer_messages but no patient_chat_threads row yet.
+ */
+async function buildDoctorOfferInboxThreads(req, opts = {}) {
+  const onlyActive = opts.onlyActive !== false;
+  const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+  const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+  const doctorIdMatchSet = new Set(doctorKeys.map((k) => String(k || "").trim()).filter(Boolean));
+  if (rawDoctor) doctorIdMatchSet.add(rawDoctor);
+  if (!doctorIdMatchSet.size) return { rows: [], offerUnreadTotal: 0 };
+
+  const clinicId = String(req.doctor?.clinic_id || req.clinicId || "").trim();
+  const doctorIdList = [...doctorIdMatchSet];
+
+  let offerQuery = supabase
+    .from("treatment_offers")
+    .select("id, request_id, treatment_type, created_at, doctor_id, clinic_id")
+    .in("doctor_id", doctorIdList)
+    .order("created_at", { ascending: false })
+    .limit(400);
+  if (clinicId && UUID_RE.test(clinicId)) {
+    offerQuery = offerQuery.or(`clinic_id.eq.${clinicId},clinic_id.is.null`);
+  }
+  const { data: offerRows, error: offerErr } = await offerQuery;
+  if (offerErr || !offerRows?.length) {
+    if (offerErr) console.warn("[buildDoctorOfferInboxThreads] offers:", offerErr.message);
+    return { rows: [], offerUnreadTotal: 0 };
+  }
+
+  const offers = offerRows.filter((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
+  const offerIds = offers.map((o) => String(o.id || "").trim()).filter((id) => UUID_RE.test(id));
+  if (!offerIds.length) return { rows: [], offerUnreadTotal: 0 };
+
+  const unreadByOffer = await countUnreadPatientMessagesByOfferIds(offerIds);
+  const offerUnreadTotal = Object.values(unreadByOffer).reduce((s, n) => s + (Number(n) || 0), 0);
+  const latestByOffer = await fetchLatestOfferMessageByOfferIds(offerIds);
+
+  const requestIds = [...new Set(offers.map((o) => String(o.request_id || "").trim()).filter((id) => UUID_RE.test(id)))];
+  const trById = Object.create(null);
+  const patientIds = new Set();
+  for (let i = 0; i < requestIds.length; i += 80) {
+    const chunk = requestIds.slice(i, i + 80);
+    const { data: trRows } = await supabase
+      .from("treatment_requests")
+      .select("id, patient_id, clinic_id")
+      .in("id", chunk);
+    for (const tr of trRows || []) {
+      const rid = String(tr.id || "").trim();
+      if (rid) trById[rid] = tr;
+      const pid = String(tr.patient_id || "").trim();
+      if (UUID_RE.test(pid)) patientIds.add(pid);
+    }
+  }
+
+  const patientMetaById = Object.create(null);
+  const pids = [...patientIds];
+  for (let i = 0; i < pids.length; i += 80) {
+    const chunk = pids.slice(i, i + 80);
+    const { data: prow } = await supabase
+      .from("patients")
+      .select("id, name, full_name, patient_id, clinic_id, is_lead")
+      .in("id", chunk);
+    for (const p of prow || []) {
+      const id = String(p.id || "").trim().toLowerCase();
+      if (id) patientMetaById[id] = p;
+    }
+  }
+
+  const leadThreadByPatient = new Map();
+  if (clinicId && UUID_RE.test(clinicId) && pids.length) {
+    for (let i = 0; i < pids.length; i += 90) {
+      const chunk = pids.slice(i, i + 90);
+      const { data: trows } = await supabase
+        .from("patient_chat_threads")
+        .select("patient_id, is_lead, updated_at")
+        .eq("clinic_id", clinicId)
+        .in("patient_id", chunk);
+      const tsMs = (row) => {
+        const u = row?.updated_at != null ? Date.parse(String(row.updated_at)) : NaN;
+        return Number.isFinite(u) ? u : 0;
+      };
+      const pickBetter = (prev, next) => {
+        if (!prev) return next;
+        const pLead = prev.is_lead === true;
+        const nLead = next.is_lead === true;
+        if (pLead && !nLead) return next;
+        if (!pLead && nLead) return prev;
+        return tsMs(next) >= tsMs(prev) ? next : prev;
+      };
+      for (const tr of trows || []) {
+        const pkey = String(tr.patient_id || "").trim().toLowerCase();
+        if (pkey) leadThreadByPatient.set(pkey, pickBetter(leadThreadByPatient.get(pkey), tr));
+      }
+    }
+  }
+
+  const rows = [];
+  for (const offer of offers) {
+    const oid = String(offer.id || "").trim();
+    if (!UUID_RE.test(oid)) continue;
+    const rid = String(offer.request_id || "").trim();
+    const tr = rid ? trById[rid] : null;
+    const pid = tr?.patient_id ? String(tr.patient_id).trim() : "";
+    const pidKey = pid ? pid.toLowerCase() : "";
+    const pmeta = pidKey ? patientMetaById[pidKey] : null;
+    const thrMerged = pidKey ? leadThreadByPatient.get(pidKey) : null;
+    const patientMemberThisClinic =
+      UUID_RE.test(clinicId) &&
+      pmeta &&
+      pmeta.clinic_id &&
+      String(pmeta.clinic_id).toLowerCase() === String(clinicId).toLowerCase() &&
+      pmeta.is_lead === false;
+    const enrolledSharedCare =
+      patientMemberThisClinic || Boolean(thrMerged && thrMerged.is_lead === false);
+    if (enrolledSharedCare) continue;
+
+    const unread = Math.max(0, Number(unreadByOffer[oid]) || 0);
+    const lastRow = latestByOffer.get(oid) || null;
+    const lastText = String(
+      lastRow?.text ?? lastRow?.message_text ?? "",
+    )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240);
+    const lastTs = lastRow?.created_at ? Date.parse(String(lastRow.created_at)) : NaN;
+    const lastActivityAt = Number.isFinite(lastTs) ? lastTs : null;
+    if (onlyActive && unread === 0 && !lastRow) continue;
+
+    let lead_thread_is_lead = true;
+    if (thrMerged && thrMerged.is_lead === false) lead_thread_is_lead = false;
+    else if (thrMerged && thrMerged.is_lead === true) lead_thread_is_lead = true;
+
+    rows.push({
+      threadKind: "offer",
+      offerId: oid,
+      requestId: rid || null,
+      patientDbId: pid || "",
+      patientPublicId: pid ? canonicalPatientPublicId(pid) : null,
+      patientLegacyId: pmeta?.patient_id != null ? String(pmeta.patient_id).trim() : null,
+      patientName: String(pmeta?.full_name || pmeta?.name || "").trim() || "Patient",
+      unreadFromPatient: unread,
+      treatmentType: offer.treatment_type != null ? String(offer.treatment_type) : null,
+      lastMessage: lastRow
+        ? {
+            id: String(lastRow.id || ""),
+            text: lastText,
+            from: String(lastRow.sender_role || "patient"),
+            type: "text",
+            createdAt: lastActivityAt,
+          }
+        : null,
+      lastActivityAt,
+      leadPrimaryResponder: {
+        doctorId: rawDoctor || null,
+        displayName: null,
+        unassigned: false,
+        threadIsLead: lead_thread_is_lead,
+      },
+    });
+  }
+
+  rows.sort((a, b) => (Number(b.lastActivityAt || 0) || 0) - (Number(a.lastActivityAt || 0) || 0));
+  return { rows, offerUnreadTotal };
+}
+
 async function buildDoctorMessagesThreadSummaryBody(req) {
   const clinicId = req.doctor?.clinic_id || req.clinicId || null;
   const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim().toUpperCase();
@@ -45243,7 +45435,7 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
   }
 
   const onlyActive = String(req.query.onlyActive || "").trim() === "1";
-  const threads = [];
+  const patientThreads = [];
   for (const pid of uuidList) {
     const unread = unreadByPatient.get(pid) || 0;
     const last = latestByPid.get(pid) || null;
@@ -45284,7 +45476,8 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
           };
         })()
       : null;
-    threads.push({
+    patientThreads.push({
+      threadKind: "patient",
       patientDbId: pid,
       patientPublicId: canonicalPatientPublicId(pid),
       patientLegacyId: meta.patient_id || null,
@@ -45295,15 +45488,30 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       leadPrimaryResponder,
     });
   }
-  threads.sort((a, b) => (Number(b.lastActivityAt || 0) || 0) - (Number(a.lastActivityAt || 0) || 0));
+
+  const { rows: offerThreads, offerUnreadTotal } = await buildDoctorOfferInboxThreads(req, { onlyActive });
+  const chatUnreadTotal = patientThreads.reduce((s, t) => s + (Number(t.unreadFromPatient) || 0), 0);
+  const threads = [...patientThreads, ...offerThreads].sort(
+    (a, b) => (Number(b.lastActivityAt || 0) || 0) - (Number(a.lastActivityAt || 0) || 0),
+  );
 
   return {
     ok: true,
     threads,
     visiblePatientCount: visible.size,
     resolvedPatientCount: visibleDbUuids.size,
+    inboxMeta: {
+      onlyActive,
+      chatThreadCount: patientThreads.length,
+      offerThreadCount: offerThreads.length,
+      lead_inbox_query_result_count: threads.length,
+      lead_inbox_filtered_count: threads.length,
+      chatUnreadTotal,
+      offerUnreadTotal,
+      lead_inbox_unread_count: chatUnreadTotal + offerUnreadTotal,
+    },
     hint:
-      "Prefer this endpoint over parallel GET /api/patient/:patientId/messages for inbox lists; open a single thread when the user taps a row.",
+      "Prefer this endpoint over parallel GET /api/patient/:patientId/messages for inbox lists; open offer rows via offer-chat (threadKind=offer).",
   };
 }
 
