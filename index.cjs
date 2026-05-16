@@ -52245,15 +52245,15 @@ async function isTreatmentRequestPatientEnrolledSharedCare(tr, clinicId) {
     ) {
       return true;
     }
-    const { data: thr } = await supabase
+    const { data: enrolledThr } = await supabase
       .from("patient_chat_threads")
-      .select("is_lead")
+      .select("id")
       .eq("patient_id", patientId)
       .eq("clinic_id", clinic)
-      .order("updated_at", { ascending: false })
+      .eq("is_lead", false)
       .limit(1)
       .maybeSingle();
-    if (thr && thr.is_lead === false) return true;
+    if (enrolledThr?.id) return true;
   }
   return false;
 }
@@ -53876,15 +53876,15 @@ app.post("/api/doctor/treatment-requests/:requestId/ensure-offer-chat", requireD
     let threadId = null;
     let enrolledSharedCare = patientMemberThisClinic;
     if (!enrolledSharedCare && UUID_RE.test(trClinicId)) {
-      const { data: thrRow } = await supabase
+      const { data: enrolledThr } = await supabase
         .from("patient_chat_threads")
-        .select("id, is_lead")
+        .select("id")
         .eq("patient_id", patientId)
         .eq("clinic_id", trClinicId)
-        .order("updated_at", { ascending: false })
+        .eq("is_lead", false)
         .limit(1)
         .maybeSingle();
-      if (thrRow && thrRow.is_lead === false) enrolledSharedCare = true;
+      if (enrolledThr?.id) enrolledSharedCare = true;
     }
 
     if (enrolledSharedCare) {
