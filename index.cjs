@@ -4186,7 +4186,12 @@ async function deliverClinicInboundPatientNotifications(meta) {
   const title = `${senderLabel}`;
   let badge;
   try {
-    if (resolvedDb) badge = await getPatientChatUnreadForPushBadge(resolvedDb);
+    if (resolvedDb) {
+      badge = await getOfferNotificationsApi().getPatientCombinedUnreadForPushBadge(
+        patientLookupId,
+        resolvedDb,
+      );
+    }
   } catch (_) {}
   let messageComposerRole = "clinic";
   let messageComposerId = null;
@@ -4302,7 +4307,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
     } catch (_) {}
     let badge = 0;
     try {
-      badge = await getDoctorChatUnreadForPushBadge(did);
+      badge = await getOfferNotificationsApi().getDoctorCombinedUnreadForPushBadge(did, clinicUuid);
     } catch (_) {}
 
     const bodySd = String(composerOpts?.senderDoctorId || "").trim();
@@ -45349,9 +45354,29 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
     const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuids);
 
     if (totalOnly) {
-      const t = rows.length;
+      const chatUnread = rows.length;
+      let offerUnread = 0;
+      try {
+        const doctorKeys = await doctorKeysForUuidFkInQuery([did].filter(Boolean));
+        const doctorKey = doctorKeys[0] || did;
+        offerUnread = await getOfferNotificationsApi().countDoctorOfferUnreadTotal(
+          doctorKey,
+          clinicId,
+        );
+      } catch (offerErr) {
+        console.warn("[DOCTOR UNREAD COUNTS] offer tally:", offerErr?.message || offerErr);
+      }
+      const t = chatUnread + offerUnread;
       void persistDoctorChatUnreadMergedTally(did, t);
-      const body = { ok: true, total: t, totalUnread: t, counts: {}, byPatient: [] };
+      const body = {
+        ok: true,
+        total: t,
+        totalUnread: t,
+        chatUnread,
+        offerUnread,
+        counts: {},
+        byPatient: [],
+      };
       unreadCountsDoctorCache.set(cacheKey, { body, expires: Date.now() + UNREAD_COUNTS_TTL_MS });
       return res.json(body);
     }
@@ -52125,6 +52150,31 @@ async function countUnreadPatientMessagesByOfferIds(offerIds) {
   return tally;
 }
 
+const { createOfferNotifications } = require("./lib/offerNotifications.cjs");
+let _offerNotificationsApi = null;
+function getOfferNotificationsApi() {
+  if (!_offerNotificationsApi) {
+    _offerNotificationsApi = createOfferNotifications({
+      supabase,
+      UUID_RE,
+      pushLog,
+      sendExpoToEntity,
+      truncateChatPreview,
+      countOfferMessagesByRoleForInbox,
+      countUnreadPatientMessagesByOfferIds,
+      resolveMessagesPatientDbId,
+      doctorKeysForUuidFkInQuery,
+      isSupabaseEnabled,
+      tryClaimChatPushDispatch,
+      getDoctorChatUnreadForPushBadge,
+      getPatientChatUnreadForPushBadge,
+      treatmentRequestPatientIdFilters,
+      bumpUnreadCountsCache,
+    });
+  }
+  return _offerNotificationsApi;
+}
+
 /** Normalize treatment_requests photo storage (photo_urls vs photos jsonb, string JSON, {url} objects). */
 function extractTreatmentRequestPhotoList(tr) {
   if (!tr || typeof tr !== "object") return [];
@@ -52512,6 +52562,11 @@ app.post("/api/offer-messages/:offerId/read", async (req, res) => {
       console.error("[OFFER-MESSAGES READ]", uErr.message);
       return res.status(500).json({ ok: false, error: "db_error" });
     }
+    void getOfferNotificationsApi().afterOfferMessagesMarkedRead(actor, {
+      offerId,
+      tr: access.tr,
+    });
+
     return res.json({ ok: true });
   } catch (e) {
     console.error("[OFFER-MESSAGES READ]", e);
@@ -52732,6 +52787,14 @@ app.post("/api/offer-messages", async (req, res) => {
       }
     }
 
+    void getOfferNotificationsApi().enqueueOfferMessagePush({
+      actor,
+      offerId,
+      tr,
+      messageRow: message,
+      doctorRow: access.offer,
+    });
+
     return res.json({ ok: true, message });
   } catch (e) {
     console.error("[OFFER-MESSAGES POST]", e);
@@ -52796,10 +52859,14 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
       console.warn('[INBOX-SUMMARY messages]', e2?.message);
     }
 
+    const newN = Number(newOffers) || 0;
+    const docN = Number(doctorMessages) || 0;
     return res.json({
-      ok:              true,
-      new_offers:      newOffers    || 0,
-      doctor_messages: doctorMessages,
+      ok: true,
+      new_offers: newN,
+      doctor_messages: docN,
+      offers_unread: newN + docN,
+      total_unread: newN + docN,
     });
   } catch (e) {
     console.error('[INBOX-SUMMARY]', e);
@@ -53115,8 +53182,13 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       let lead_thread_is_lead = null;
       if (patientMemberThisClinic) {
         lead_thread_is_lead = false;
-      } else if (thrMerged && thrMerged.is_lead != null) {
-        lead_thread_is_lead = thrMerged.is_lead === true;
+      } else if (thrMerged && thrMerged.is_lead === false) {
+        lead_thread_is_lead = false;
+      } else if (thrMerged && thrMerged.is_lead === true) {
+        lead_thread_is_lead = true;
+      } else if (myOid) {
+        // Foreign / pre-enrollment lead with an offer — offer_messages thread (no patient_chat_threads row yet).
+        lead_thread_is_lead = true;
       }
       /** After enrollment (`is_lead === false`), offer-thread unread is not surfaced — canonical chat is under Patients. */
       const enrolledSharedCare =
@@ -53146,6 +53218,171 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     return res.json({ ok: true, requests });
   } catch (e) {
     console.error("[DOCTOR treatment-requests GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/doctor/treatment-requests/:requestId/ensure-offer-chat — resolve offer thread + lead row for Start Messaging
+app.post("/api/doctor/treatment-requests/:requestId/ensure-offer-chat", requireDoctorAuth, async (req, res) => {
+  const requestId = String(req.params.requestId || "").trim();
+  const logBase = {
+    requestId,
+    doctorId: String(req.doctorId || req?.doctor?.id || "").slice(0, 12),
+  };
+  try {
+    if (!UUID_RE.test(requestId)) {
+      return res.status(400).json({ ok: false, error: "invalid_request_id" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    if (!doctorKey) {
+      return res.status(401).json({ ok: false, error: "doctor_key_missing" });
+    }
+
+    const { data: tr, error: trErr } = await supabase
+      .from("treatment_requests")
+      .select("id, patient_id, clinic_id, preferred_treatment, status")
+      .eq("id", requestId)
+      .maybeSingle();
+    if (trErr || !tr?.id) {
+      console.warn("[ensure-offer-chat] request_not_found", { ...logBase, message: trErr?.message });
+      return res.status(404).json({ ok: false, error: "not_found" });
+    }
+
+    const patientId = String(tr.patient_id || "").trim();
+    if (!UUID_RE.test(patientId)) {
+      return res.status(400).json({ ok: false, error: "invalid_patient_id" });
+    }
+
+    const trClinicId = String(tr.clinic_id || clinicId || "").trim();
+    let patientMemberThisClinic = false;
+    if (UUID_RE.test(trClinicId)) {
+      const { data: prow } = await supabase
+        .from("patients")
+        .select("id, clinic_id, is_lead")
+        .eq("id", patientId)
+        .maybeSingle();
+      patientMemberThisClinic =
+        prow?.clinic_id != null &&
+        String(prow.clinic_id).trim().toLowerCase() === trClinicId.toLowerCase() &&
+        prow.is_lead === false;
+    }
+
+    if (patientMemberThisClinic) {
+      let threadId = null;
+      if (UUID_RE.test(trClinicId)) {
+        const ensured = await ensureInboundLeadThread(patientId, trClinicId);
+        threadId = ensured?.threadId || null;
+      }
+      console.log("incoming_request_start_chat_thread_found", {
+        ...logBase,
+        patientId: patientId.slice(0, 8),
+        route: "patient_chat",
+        enrolled: true,
+      });
+      return res.json({
+        ok: true,
+        route: "patient_chat",
+        enrolled: true,
+        patient_id: patientId,
+        thread_id: threadId,
+        lead_thread_is_lead: false,
+      });
+    }
+
+    let threadId = null;
+    let lead_thread_is_lead = true;
+    if (UUID_RE.test(trClinicId)) {
+      const ensured = await ensureInboundLeadThread(patientId, trClinicId);
+      threadId = ensured?.threadId || null;
+      if (ensured?.error) {
+        console.warn("[ensure-offer-chat] lead_thread_warn", {
+          ...logBase,
+          message: String(ensured.error?.message || ensured.error).slice(0, 120),
+        });
+      }
+    }
+
+    const body = req.body || {};
+    let offerId = String(body.offer_id || body.offerId || "").trim();
+    if (!UUID_RE.test(offerId)) {
+      const { data: existingOffers } = await supabase
+        .from("treatment_offers")
+        .select("id")
+        .eq("request_id", requestId)
+        .eq("doctor_id", doctorKey)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (existingOffers?.length && existingOffers[0]?.id) {
+        offerId = String(existingOffers[0].id);
+      }
+    }
+
+    let offerCreated = false;
+    if (!UUID_RE.test(offerId)) {
+      const pref = String(tr.preferred_treatment || "CONSULT").trim() || "CONSULT";
+      const insert = {
+        request_id: requestId,
+        doctor_id: doctorKey,
+        clinic_id: UUID_RE.test(trClinicId) ? trClinicId : null,
+        treatment_type: pref,
+        price_text: null,
+        price_range: null,
+        duration: null,
+        note: "Messaging thread started by clinic",
+        created_at: new Date().toISOString(),
+      };
+      const { data: inserted, error: insErr } = await supabase
+        .from("treatment_offers")
+        .insert(insert)
+        .select("id")
+        .maybeSingle();
+      if (insErr || !inserted?.id) {
+        console.error("[ensure-offer-chat] offer_insert_failed", {
+          ...logBase,
+          message: insErr?.message || "insert_failed",
+        });
+        return res.status(500).json({ ok: false, error: "offer_create_failed" });
+      }
+      offerId = String(inserted.id);
+      offerCreated = true;
+      await supabase
+        .from("treatment_requests")
+        .update({ status: "answered", updated_at: new Date().toISOString() })
+        .eq("id", requestId);
+    }
+
+    console.log(
+      offerCreated ? "incoming_request_start_chat_thread_created" : "incoming_request_start_chat_thread_found",
+      {
+        ...logBase,
+        patientId: patientId.slice(0, 8),
+        offerId: offerId.slice(0, 8),
+        threadId: threadId ? String(threadId).slice(0, 8) : null,
+        route: "offer_chat",
+      },
+    );
+
+    return res.json({
+      ok: true,
+      route: "offer_chat",
+      enrolled: false,
+      offer_id: offerId,
+      patient_id: patientId,
+      thread_id: threadId,
+      lead_thread_is_lead,
+      offer_created: offerCreated,
+    });
+  } catch (e) {
+    console.error("incoming_request_start_chat_failed", {
+      ...logBase,
+      message: String(e?.message || e).slice(0, 200),
+    });
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
@@ -53202,7 +53439,31 @@ app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, a
       .update({ status: "answered", updated_at: new Date().toISOString() })
       .eq("id", requestId);
 
-    return res.json({ ok: true, offer_id: inserted?.id ? String(inserted.id) : null });
+    const offerIdStr = inserted?.id ? String(inserted.id) : null;
+    if (offerIdStr) {
+      const { data: trRow } = await supabase
+        .from("treatment_requests")
+        .select("id, patient_id, clinic_id")
+        .eq("id", requestId)
+        .maybeSingle();
+      const trPatientId = String(trRow?.patient_id || "").trim();
+      const trClinicId =
+        String(trRow?.clinic_id || clinicId || "").trim();
+      if (UUID_RE.test(trPatientId) && UUID_RE.test(trClinicId)) {
+        void ensureInboundLeadThread(trPatientId, trClinicId).catch((e) =>
+          console.warn("[DOCTOR treatment-requests offer] ensureInboundLeadThread:", e?.message || e)
+        );
+      }
+      const doctorName = String(req.doctor?.full_name || req.doctor?.name || "Doctor").trim();
+      void getOfferNotificationsApi().enqueueNewOfferPush({
+        offerId: offerIdStr,
+        requestId,
+        tr: trRow || { id: requestId, patient_id: null },
+        doctorName,
+      });
+    }
+
+    return res.json({ ok: true, offer_id: offerIdStr });
   } catch (e) {
     console.error("[DOCTOR treatment-requests offer]", e);
     return res.status(500).json({ ok: false, error: "internal_error" });
