@@ -52989,7 +52989,8 @@ app.get("/api/doctor/treatment-requests/offer-unread", requireDoctorAuth, async 
 
     let offerQuery = supabase.from("treatment_offers").select("id").eq("doctor_id", doctorKey);
     if (clinicId && UUID_RE.test(clinicId)) {
-      offerQuery = offerQuery.eq("clinic_id", clinicId);
+      // Include rows with null clinic_id (legacy offers) — strict eq hid unread on request cards.
+      offerQuery = offerQuery.or(`clinic_id.eq.${clinicId},clinic_id.is.null`);
     }
     const { data: offerRows, error: offerErr } = await offerQuery.limit(400);
     if (offerErr) {
