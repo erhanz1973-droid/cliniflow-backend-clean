@@ -45197,7 +45197,7 @@ async function buildDoctorOfferInboxThreads(req, opts = {}) {
   const offerIds = offers.map((o) => String(o.id || "").trim()).filter((id) => UUID_RE.test(id));
   if (!offerIds.length) return { rows: [], offerUnreadTotal: 0 };
 
-  const unreadByOffer = await countUnreadPatientMessagesByOfferIds(offerIds);
+  const unreadByOffer = await countUnreadPatientMessagesByOfferIds(offerIds, { clinicId });
   const offerUnreadTotal = Object.values(unreadByOffer).reduce((s, n) => s + (Number(n) || 0), 0);
   const latestByOffer = await fetchLatestOfferMessageByOfferIds(offerIds);
 
@@ -52194,11 +52194,142 @@ async function resolveOfferMessagingActor(req, res) {
   return null;
 }
 
+/** True when patient joined clinic / shared-care — offer_messages thread is archived. */
+async function isTreatmentRequestPatientEnrolledSharedCare(tr, clinicId) {
+  const patientId = String(tr?.patient_id || "").trim();
+  if (!UUID_RE.test(patientId)) return false;
+
+  const clinicsToCheck = [
+    ...new Set(
+      [String(clinicId || "").trim(), String(tr?.clinic_id || "").trim()].filter((c) => UUID_RE.test(c)),
+    ),
+  ];
+  if (!clinicsToCheck.length) return false;
+
+  for (const clinic of clinicsToCheck) {
+    const { data: prow } = await supabase
+      .from("patients")
+      .select("clinic_id, is_lead")
+      .eq("id", patientId)
+      .maybeSingle();
+    if (
+      prow?.clinic_id != null &&
+      String(prow.clinic_id).trim().toLowerCase() === clinic.toLowerCase() &&
+      prow.is_lead === false
+    ) {
+      return true;
+    }
+    const { data: thr } = await supabase
+      .from("patient_chat_threads")
+      .select("is_lead")
+      .eq("patient_id", patientId)
+      .eq("clinic_id", clinic)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (thr && thr.is_lead === false) return true;
+  }
+  return false;
+}
+
+async function resolveTreatmentRequestMessagingMeta(tr, doctorReq) {
+  const clinicId = String(doctorReq?.clinicId || doctorReq?.doctor?.clinic_id || "").trim();
+  const patientId = String(tr?.patient_id || "").trim();
+  const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(tr, clinicId);
+  let offerId = null;
+  if (!enrolled && UUID_RE.test(String(tr?.id || ""))) {
+    const rawDoctor = String(doctorReq?.doctorId || doctorReq?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    if (doctorKey) {
+      const { data: existingOffers } = await supabase
+        .from("treatment_offers")
+        .select("id")
+        .eq("request_id", String(tr.id))
+        .eq("doctor_id", doctorKey)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (existingOffers?.[0]?.id) offerId = String(existingOffers[0].id);
+    }
+  }
+  return {
+    enrolled,
+    route: enrolled ? "patient_chat" : "offer_chat",
+    patient_id: UUID_RE.test(patientId) ? patientId : null,
+    offer_id: offerId,
+    lead_thread_is_lead: enrolled ? false : true,
+  };
+}
+
+async function isOfferPatientEnrolledSharedCare(offerId, clinicId) {
+  const ctx = await loadOfferMessagingContext(offerId);
+  if (!ctx?.tr) return false;
+  return isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
+}
+
+/** Offer ids whose patients are enrolled — offer-thread unread must not increment. */
+async function offerIdsWithEnrolledSharedCare(offerIds, clinicId) {
+  const enrolled = new Set();
+  const ids = [
+    ...new Set(
+      (offerIds || [])
+        .map((x) => String(x || "").trim())
+        .filter((id) => UUID_RE.test(id)),
+    ),
+  ];
+  if (!ids.length || !isSupabaseEnabled()) return enrolled;
+  const clinic = String(clinicId || "").trim();
+  if (!UUID_RE.test(clinic)) return enrolled;
+
+  const { data: offers } = await supabase
+    .from("treatment_offers")
+    .select("id, request_id")
+    .in("id", ids);
+  if (!offers?.length) return enrolled;
+
+  const requestIds = [
+    ...new Set(offers.map((o) => String(o.request_id || "").trim()).filter((id) => UUID_RE.test(id))),
+  ];
+  const trById = Object.create(null);
+  for (let i = 0; i < requestIds.length; i += 80) {
+    const chunk = requestIds.slice(i, i + 80);
+    const { data: trRows } = await supabase
+      .from("treatment_requests")
+      .select("id, patient_id, clinic_id")
+      .in("id", chunk);
+    for (const tr of trRows || []) {
+      const rid = String(tr.id || "").trim();
+      if (rid) trById[rid] = tr;
+    }
+  }
+
+  for (const offer of offers) {
+    const oid = String(offer.id || "").trim();
+    const rid = String(offer.request_id || "").trim();
+    const tr = rid ? trById[rid] : null;
+    if (!oid || !tr) continue;
+    if (await isTreatmentRequestPatientEnrolledSharedCare(tr, clinic)) enrolled.add(oid);
+  }
+  return enrolled;
+}
+
 async function assertOfferMessagingAccess(actor, offerId) {
   if (!isSupabaseEnabled()) return { error: "supabase_disabled" };
   const ctx = await loadOfferMessagingContext(offerId);
   if (!ctx) return { error: "not_found" };
   const { offer, tr } = ctx;
+
+  const actorClinicId =
+    actor.kind === "doctor"
+      ? String(actor.doctor?.clinic_id || actor.clinicId || "").trim()
+      : String(tr.clinic_id || "").trim();
+  if (await isTreatmentRequestPatientEnrolledSharedCare(tr, actorClinicId)) {
+    return {
+      error: "offer_thread_archived",
+      patient_id: String(tr.patient_id || "").trim() || null,
+      route: "patient_chat",
+    };
+  }
 
   if (actor.kind === "patient") {
     // Fast path: if patientId is already a UUID and matches tr.patient_id, skip DB lookup
@@ -52316,7 +52447,7 @@ async function countOfferMessagesByRoleForInbox(offerIds, senderRole) {
  * Per-offer unread counts for doctor dashboard: patient messages with read_at IS NULL.
  * Returns { [offerId: string]: number } (only keys for requested ids; missing id ⇒ 0).
  */
-async function countUnreadPatientMessagesByOfferIds(offerIds) {
+async function countUnreadPatientMessagesByOfferIds(offerIds, opts = {}) {
   const ids = [
     ...new Set(
       (offerIds || [])
@@ -52326,6 +52457,12 @@ async function countUnreadPatientMessagesByOfferIds(offerIds) {
   ];
   const tally = Object.fromEntries(ids.map((id) => [id, 0]));
   if (!ids.length) return tally;
+
+  const clinicId = String(opts.clinicId || "").trim();
+  const enrolledSet =
+    opts.excludeEnrolled !== false && UUID_RE.test(clinicId)
+      ? await offerIdsWithEnrolledSharedCare(ids, clinicId)
+      : new Set();
 
   const chunkSize = 80;
   for (let i = 0; i < ids.length; i += chunkSize) {
@@ -52352,8 +52489,12 @@ async function countUnreadPatientMessagesByOfferIds(offerIds) {
     }
     for (const row of data || []) {
       const oid = String(row.offer_id || "").trim();
+      if (enrolledSet.has(oid)) continue;
       if (Object.prototype.hasOwnProperty.call(tally, oid)) tally[oid] += 1;
     }
+  }
+  for (const oid of enrolledSet) {
+    if (Object.prototype.hasOwnProperty.call(tally, oid)) tally[oid] = 0;
   }
   return tally;
 }
@@ -52647,7 +52788,7 @@ async function loadOfferMessagingContext(offerId) {
   // Avoid column-probing loops that add ~7s per failed attempt.
   const { data: tr, error: tErr } = await supabase
       .from("treatment_requests")
-    .select("id, patient_id")
+    .select("id, patient_id, clinic_id")
       .eq("id", offer.request_id)
       .maybeSingle();
 
@@ -52691,6 +52832,14 @@ app.post("/api/offer-messages/upload", chatUpload.single("file"), async (req, re
     const access = await assertOfferMessagingAccess(actor, offerId);
     if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
+    if (access.error === "offer_thread_archived") {
+      return res.status(403).json({
+        ok: false,
+        error: access.error,
+        route: access.route || "patient_chat",
+        patient_id: access.patient_id || null,
+      });
+    }
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
 
     const file = req.file;
@@ -52849,9 +52998,33 @@ app.post("/api/offer-messages", async (req, res) => {
     console.log(`[offer-msg PERF] access check in ${Date.now()-_t1}ms`);
     if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
+    if (access.error === "offer_thread_archived") {
+      console.log("[canonical-send] offer_messages blocked (archived)", {
+        canonical_chat_type: "offer",
+        resolved_thread_kind: "offer_chat",
+        resolved_offer_id: offerId,
+        resolved_patient_id: access.patient_id || null,
+        resolved_offer_archived: true,
+        actor: actor.kind,
+      });
+      return res.status(403).json({
+        ok: false,
+        error: access.error,
+        route: access.route || "patient_chat",
+        patient_id: access.patient_id || null,
+      });
+    }
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
 
     const { tr } = access;
+    console.log("[canonical-send] offer_messages allowed", {
+      canonical_chat_type: "offer",
+      resolved_thread_kind: "offer_chat",
+      resolved_offer_id: offerId,
+      resolved_patient_id: String(tr?.patient_id || "").trim() || null,
+      resolved_offer_archived: false,
+      actor: actor.kind,
+    });
     const textRaw = body.text != null ? String(body.text) : "";
     const text = textRaw.trim().slice(0, 5000);
     const attachment_url = body.attachment_url != null ? String(body.attachment_url).trim().slice(0, 2048) : "";
@@ -53208,7 +53381,7 @@ app.get("/api/doctor/treatment-requests/offer-unread", requireDoctorAuth, async 
     const offerIds = (offerRows || [])
       .map((o) => String(o.id || "").trim())
       .filter((id) => UUID_RE.test(id));
-    const by_offer = await countUnreadPatientMessagesByOfferIds(offerIds);
+    const by_offer = await countUnreadPatientMessagesByOfferIds(offerIds, { clinicId });
     return res.json({ ok: true, by_offer });
   } catch (e) {
     console.error("[DOCTOR offer-unread GET]", e);
@@ -53386,7 +53559,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
       if (mine?.id) mineOfferIds.push(String(mine.id));
     }
-    const unreadByOffer = await countUnreadPatientMessagesByOfferIds(mineOfferIds);
+    const unreadByOffer = await countUnreadPatientMessagesByOfferIds(mineOfferIds, { clinicId });
 
     const requests = list.map((r) => {
       const offs = offersByReq[r.id] || [];
@@ -53465,6 +53638,72 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
   }
 });
 
+// GET /api/doctor/treatment-requests/:requestId/messaging-meta — canonical route (no side effects)
+app.get(
+  "/api/doctor/treatment-requests/:requestId/messaging-meta",
+  requireDoctorAuth,
+  async (req, res) => {
+    try {
+      const requestId = String(req.params.requestId || "").trim();
+      if (!UUID_RE.test(requestId)) {
+        return res.status(400).json({ ok: false, error: "invalid_request_id" });
+      }
+      if (!isSupabaseEnabled()) {
+        return res.status(503).json({ ok: false, error: "supabase_disabled" });
+      }
+      const { data: tr, error: trErr } = await supabase
+        .from("treatment_requests")
+        .select("id, patient_id, clinic_id")
+        .eq("id", requestId)
+        .maybeSingle();
+      if (trErr || !tr?.id) {
+        return res.status(404).json({ ok: false, error: "not_found" });
+      }
+      const meta = await resolveTreatmentRequestMessagingMeta(tr, req);
+      return res.json({ ok: true, request_id: requestId, ...meta });
+    } catch (e) {
+      console.error("[DOCTOR request messaging-meta GET]", e);
+      return res.status(500).json({ ok: false, error: "internal_error" });
+    }
+  },
+);
+
+// GET /api/doctor/offers/:offerId/messaging-meta — canonical route hint (patient_chat vs offer_chat)
+app.get("/api/doctor/offers/:offerId/messaging-meta", requireDoctorAuth, async (req, res) => {
+  try {
+    const offerId = String(req.params.offerId || "").trim();
+    if (!UUID_RE.test(offerId)) {
+      return res.status(400).json({ ok: false, error: "invalid_offer_id" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_disabled" });
+    }
+    const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
+    const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
+    const doctorKey = doctorKeys[0] || rawDoctor;
+    const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+
+    const ctx = await loadOfferMessagingContext(offerId);
+    if (!ctx) return res.status(404).json({ ok: false, error: "not_found" });
+    const okDoc = await compareDoctorIds(doctorKey, ctx.offer.doctor_id);
+    if (!okDoc) return res.status(403).json({ ok: false, error: "forbidden" });
+
+    const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
+    const patientId = String(ctx.tr.patient_id || "").trim();
+    return res.json({
+      ok: true,
+      enrolled,
+      route: enrolled ? "patient_chat" : "offer_chat",
+      patient_id: UUID_RE.test(patientId) ? patientId : null,
+      lead_thread_is_lead: enrolled ? false : true,
+      offer_id: offerId,
+    });
+  } catch (e) {
+    console.error("[DOCTOR offer messaging-meta GET]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
 // POST /api/doctor/treatment-requests/:requestId/ensure-offer-chat — resolve offer thread + lead row for Start Messaging
 app.post("/api/doctor/treatment-requests/:requestId/ensure-offer-chat", requireDoctorAuth, async (req, res) => {
   const requestId = String(req.params.requestId || "").trim();
@@ -53516,8 +53755,21 @@ app.post("/api/doctor/treatment-requests/:requestId/ensure-offer-chat", requireD
         prow.is_lead === false;
     }
 
-    if (patientMemberThisClinic) {
-      let threadId = null;
+    let threadId = null;
+    let enrolledSharedCare = patientMemberThisClinic;
+    if (!enrolledSharedCare && UUID_RE.test(trClinicId)) {
+      const { data: thrRow } = await supabase
+        .from("patient_chat_threads")
+        .select("id, is_lead")
+        .eq("patient_id", patientId)
+        .eq("clinic_id", trClinicId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (thrRow && thrRow.is_lead === false) enrolledSharedCare = true;
+    }
+
+    if (enrolledSharedCare) {
       if (UUID_RE.test(trClinicId)) {
         const ensured = await ensureInboundLeadThread(patientId, trClinicId);
         threadId = ensured?.threadId || null;
@@ -53538,7 +53790,6 @@ app.post("/api/doctor/treatment-requests/:requestId/ensure-offer-chat", requireD
       });
     }
 
-    let threadId = null;
     let lead_thread_is_lead = true;
     if (UUID_RE.test(trClinicId)) {
       const ensured = await ensureInboundLeadThread(patientId, trClinicId);
