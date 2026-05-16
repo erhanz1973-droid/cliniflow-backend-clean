@@ -51471,23 +51471,35 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       ? body.clinicIds.map((x) => String(x || '').trim()).filter(Boolean)
       : [];
 
-    // Mobil AI teklif akışı: çoklu klinik + zorunlu https fotoğraf + her kliniğe mesajda ek
+    // Çoklu klinik: request-treatment (açıklama, fotoğraf isteğe bağlı) veya AI teklif (fotoğraf isteğe bağlı)
     if (clinicIdsMulti.length > 0) {
       const resolvedMulti = await resolveMessagesPatientDbId(tokenPatientId);
       if (!resolvedMulti) {
         return res.status(404).json({ ok: false, error: 'patient_not_found' });
       }
+
+      const descriptionStd = String(body.description || '').trim();
       const messageMc = String(body.message || '').trim();
-      const imageMc = String(body.image || body.imageUrl || '').trim();
-      if (!imageMc || !/^https?:\/\//i.test(imageMc)) {
-        return res.status(400).json({
-          ok: false,
-          error: 'photo_url_required',
-          message: 'Teklif talebi için geçerli bir fotoğraf adresi (https) zorunludur.',
-        });
+      const budgetMc =
+        body.budget != null && String(body.budget).trim() ? String(body.budget).trim() : null;
+      let preferredMc =
+        body.preferred_treatment != null && String(body.preferred_treatment).trim()
+          ? String(body.preferred_treatment).trim()
+          : null;
+      if (!preferredMc && body.treatment != null && String(body.treatment).trim()) {
+        preferredMc = String(body.treatment).trim();
       }
+
+      const photoUrlList = collectHttpsPhotoUrlsFromMessageBody(body);
+      if (Array.isArray(body.photos)) {
+        for (const x of body.photos) {
+          const s = String(x || '').trim();
+          if (/^https?:\/\//i.test(s) && !photoUrlList.includes(s)) photoUrlList.push(s);
+        }
+      }
+
       const analysisMc = body.analysis;
-      let descriptionMc = messageMc;
+      let descriptionMc = descriptionStd || messageMc;
       const analysisBlockMc =
         analysisMc === undefined || analysisMc === null
           ? ''
@@ -51496,30 +51508,47 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
             : JSON.stringify(analysisMc);
       const trimmedAnalysisMc = analysisBlockMc.slice(0, 12000);
       if (trimmedAnalysisMc) {
-        descriptionMc = messageMc
-          ? `${messageMc}\n\n--- AI analysis (summary) ---\n${trimmedAnalysisMc}`
+        descriptionMc = descriptionMc
+          ? `${descriptionMc}\n\n--- AI analysis (summary) ---\n${trimmedAnalysisMc}`
           : `Dental quote request (AI-assisted).\n\n--- AI analysis (summary) ---\n${trimmedAnalysisMc}`;
       }
       if (!descriptionMc) {
         descriptionMc = 'I would like to receive a quote from your clinic.';
       }
-      descriptionMc = `${descriptionMc}\n\n--- Photo ---\n${imageMc}`;
+      if (photoUrlList.length) {
+        descriptionMc = `${descriptionMc}\n\n--- Photo ---\n${photoUrlList.join('\n')}`;
+      }
       if (descriptionMc.length > 50000) descriptionMc = descriptionMc.slice(0, 50000);
 
-      const photosMc = [{ url: imageMc }];
+      const hasPayload = Boolean(
+        descriptionStd ||
+          messageMc ||
+          budgetMc ||
+          preferredMc ||
+          trimmedAnalysisMc ||
+          photoUrlList.length,
+      );
+      if (!hasPayload) {
+        return res.status(400).json({
+          ok: false,
+          error: 'empty_request',
+          message:
+            'En azından açıklama, bütçe, tedavi tercihi veya fotoğraf URL’lerinden biri gerekli.',
+        });
+      }
+
+      const photosMc = photoUrlList.map((url) => ({ url }));
       const requestIdsMc = [];
       const nowIsoMc = new Date().toISOString();
+      const primaryPhoto = photoUrlList[0] || null;
       const chatTextMc =
+        descriptionStd ||
         messageMc ||
         (trimmedAnalysisMc
-          ? 'Diş hekimliği teklif talebi — fotoğraf ve AI özeti eklendi.'
-          : 'Diş hekimliği teklif talebi — fotoğraf eklendi.');
-      const photoAttachMc = {
-        url: imageMc,
-        name: 'dental-quote.jpg',
-        fileType: 'image',
-        mimeType: 'image/jpeg',
-      };
+          ? 'Diş hekimliği teklif talebi — AI özeti eklendi.'
+          : primaryPhoto
+            ? 'Diş hekimliği teklif talebi — fotoğraf eklendi.'
+            : 'Yeni tedavi talebi gönderildi.');
 
       for (const cidRaw of clinicIdsMulti) {
         const cidMc = String(cidRaw || '').trim();
@@ -51530,12 +51559,16 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
           patient_id: resolvedMulti,
           clinic_id: cidMc,
           description: descriptionMc,
+          budget: budgetMc,
+          preferred_treatment: preferredMc,
           status: 'pending',
           created_at: nowIsoMc,
           updated_at: nowIsoMc,
-          photos: photosMc,
-          photo_urls: [imageMc],
         };
+        if (photoUrlList.length) {
+          payloadMc.photos = photosMc;
+          payloadMc.photo_urls = photoUrlList;
+        }
         const { data: insertedMc, error: insErrMc } = await insertIntoTableWithColumnPruning(
           'treatment_requests',
           payloadMc,
@@ -51552,21 +51585,24 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
         const rowMc = insertedMc || {};
         if (rowMc.id != null) requestIdsMc.push(String(rowMc.id));
 
-        const msgInsMc = await insertMessageToSupabase({
-          patientId: tokenPatientId,
-          sender: 'patient',
-          message: chatTextMc,
-          attachments: photoAttachMc,
-          type: 'image',
-          contextClinicId: cidMc,
-        });
-        if (msgInsMc.error) {
-          console.error('[TREATMENT-REQUESTS] Mesaj/foto eklenemedi', cidMc, msgInsMc.error);
-          return res.status(500).json({
-            ok: false,
-            error: 'message_attach_failed',
-            message: String(msgInsMc.error?.message || msgInsMc.error || 'Mesaj kaydı başarısız'),
+        if (primaryPhoto) {
+          const photoAttachMc = attachmentObjectFromPhotoUrl(primaryPhoto);
+          const msgInsMc = await insertMessageToSupabase({
+            patientId: tokenPatientId,
+            sender: 'patient',
+            message: chatTextMc,
+            attachments: photoAttachMc,
+            type: 'image',
+            contextClinicId: cidMc,
           });
+          if (msgInsMc.error) {
+            console.error('[TREATMENT-REQUESTS] Mesaj/foto eklenemedi', cidMc, msgInsMc.error);
+            return res.status(500).json({
+              ok: false,
+              error: 'message_attach_failed',
+              message: String(msgInsMc.error?.message || msgInsMc.error || 'Mesaj kaydı başarısız'),
+            });
+          }
         }
       }
 
