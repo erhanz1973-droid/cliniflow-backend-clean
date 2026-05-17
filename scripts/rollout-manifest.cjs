@@ -21,6 +21,7 @@ const REQUIRED_MIGRATIONS = [
   "20260518150000_clinic_operations_profile_v2.sql",
   "20260518160000_clinic_treatment_protocols_ensure.sql",
   "20260518170000_clinic_operations_profile_v2_repair.sql",
+  "20260518180000_clinic_treatment_variants.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
@@ -94,6 +95,20 @@ const SCHEMA_PROBES = [
     id: "clinic_treatment_catalog",
     table: "clinic_treatment_catalog",
     columns: ["clinic_id", "name", "price_min", "price_max", "currency", "ai_notes"],
+  },
+  {
+    id: "clinic_treatment_variants",
+    table: "clinic_treatment_variants",
+    columns: [
+      "treatment_catalog_id",
+      "brand_name",
+      "origin_country",
+      "material_type",
+      "tier",
+      "price_min",
+      "currency",
+      "is_default",
+    ],
   },
   {
     id: "clinic_treatment_protocols",
