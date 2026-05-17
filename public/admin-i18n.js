@@ -789,7 +789,257 @@
           emergencies: "Acil durumlar",
           complications: "Komplikasyonlar"
         },
-        langs: { en: "İngilizce", tr: "Türkçe", ru: "Rusça", ka: "Gürcüce", ar: "Arapça", de: "Almanca", fr: "Fransızca" }
+        langs: { en: "İngilizce", tr: "Türkçe", ru: "Rusça", ka: "Gürcüce", ar: "Arapça", de: "Almanca", fr: "Fransızca" },
+        ui: {
+          usedByAi: "YZ yanıtlarında kullanılır",
+          usedByAiTitle: "Bu alan yapay zeka orkestrasyon katmanına beslenir",
+          usedByAiSection: "YZ kullanır",
+          seeExample: "Örnek gör",
+          aiPrefix: "YZ:"
+        },
+        visibility: {
+          patient_visible: { short: "Hastaya görünür", label: "Hasta mesajlarında görünebilir" },
+          ai_reply: { short: "YZ yanıtları", label: "YZ yanıtlarında kullanılır" },
+          internal: { short: "Dahili", label: "Yalnızca dahili / operasyonel" }
+        },
+        options: {
+          toneStyle: {
+            warm_professional: "Sıcak + profesyonel",
+            clinical_concise: "Klinik ve öz",
+            friendly_casual: "Samimi ve rahat",
+            luxury_premium: "Lüks / premium"
+          },
+          signatureStyle: {
+            name_only: "Yalnızca asistan adı",
+            name_clinic: "Ad + klinik",
+            none: "İmza yok"
+          }
+        },
+        sectionHelp: {
+          aiProfile: {
+            intro: "Çok dilli YZ orkestrasyonu — dilleri etkinleştirin ve isteğe bağlı yerelleştirilmiş hasta metinleri ekleyin. Operasyonel bilgi (markalar, fiyatlar, iş akışı) tek kaynakta kalır; YZ yanıt sırasında yerelleştirir.",
+            aiUsageSummary: "Dil yönlendirme, yerelleştirilmiş karşılama/imzalar ve koordinatör istemleri için çalışma zamanı yerelleştirme rehberi."
+          },
+          materials: {
+            intro: "Kliniğinizin çalıştığı marka ve malzemeler. YZ marka uydurmadan seçenekleri açıklar.",
+            aiUsageSummary: "İmplant, zirkonyum, laboratuvar ve garanti hakkında bilgilendirici yanıtlar."
+          },
+          logistics: {
+            intro: "Çalışma saatleri, yanıt süreleri ve pratik klinik operasyonları.",
+            aiUsageSummary: "Randevu, müsaitlik, acil yönlendirme ve SLA yedekleme."
+          },
+          payment: {
+            intro: "Depozito, finansman, iade. YZ politikaları açıklar — istisna vaat etmez.",
+            aiUsageSummary: "Ödeme ve politika soruları; iadelerde insana yönlendirir."
+          },
+          workflow: {
+            intro: "Ziyaret süreleri, iyileşme ve tedavi sonrası koordinasyon. Yalnızca operasyonel rehber — tanı değil.",
+            aiUsageSummary: "Tedavi süreci, iyileşme, takip ve operasyon sonrası hasta soruları."
+          },
+          aiSafety: {
+            intro: "YZ ne kadar bağımsız hareket edebilir. Tıbbi konular her zaman insan incelemesi gerektirir.",
+            aiUsageSummary: "Konu başına otomatik yanıt, öneri veya kapalı mod."
+          },
+          handoff: {
+            intro: "YZ ne zaman durmalı ve koordinatörünüzü veya doktorunuzu uyarmalı.",
+            aiUsageSummary: "Görüşmede otomatik yükseltme tetikleyicileri."
+          },
+          internalNotes: {
+            intro: "Klinik konumlandırma ve strateji. YZ markanızla uyum sağlar — hastaya aynen gösterilmez.",
+            aiUsageSummary: "Ton, öncelikler ve vurgulanacaklar için istem bağlamı."
+          },
+          travel: {
+            intro: "Partner oteller yapay zeka tıbbi seyahat koordinatörünü besler — görüşme başına en fazla 3 aktif tesis YZ ile paylaşılır (vektör veritabanı yok).",
+            aiUsageSummary: "Tıbbi seyahat koordinasyonu, otel önerileri ve transfer soruları."
+          }
+        },
+        autonomyLevels: {
+          OFF: "Kapalı",
+          SUGGEST_ONLY: "Yalnızca öneri",
+          AUTO_REPLY: "Otomatik yanıt",
+          FULLY_AUTONOMOUS: "Tam özerk"
+        },
+        fieldHelp: {
+          supportedLanguages: {
+            label: "Çok dilli YZ desteği",
+            helper: "YZ orkestrasyonu için dilleri etkinleştirin. Operasyonel veriler tek yerde kalır — YZ markaları, fiyatları ve lojistiği yanıt sırasında yerelleştirir.",
+            aiUsage: "Hasta dili algılama, yanıt dili ve insan personel yönlendirme ipuçları.",
+            example: "Birincil İngilizce; diş turizmi için Türkçe, Rusça, Gürcüce."
+          },
+          displayNameLocalized: {
+            label: "Asistan adı (yerelleştirilmiş)",
+            helper: "İsteğe bağlı dil bazlı asistan görünen adları. Boş bırakılırsa YZ İngilizceden çevirir.",
+            aiUsage: "Hastanın dilinde karşılama ve imzalar.",
+            example: "en: DentX Care Team · tr: DentX Hasta Destek Ekibi"
+          },
+          welcomeMessageLocalized: {
+            label: "Karşılama mesajı (yerelleştirilmiş)",
+            helper: "İsteğe bağlı dil bazlı açılış mesajı şablonları — MVP için zorunlu değil.",
+            aiUsage: "İlk temas tonu ve klinik tanıtımı.",
+            placeholder: "Her etkin dilde kısa karşılama"
+          },
+          toneStyle: {
+            label: "Ton / üslup",
+            helper: "Hasta sohbetleri için genel iletişim tarzı.",
+            aiUsage: "Yanıtlarda sıcaklık, resmiyet ve lüks seviyesini belirler.",
+            example: "Uluslararası diş turizmi için sıcak + profesyonel."
+          },
+          signatureStyle: {
+            label: "İmza stili",
+            helper: "Mesajların sonunda nasıl imzalanacağı.",
+            aiUsage: "YZ tarafından üretilen hasta mesajlarına eklenir."
+          },
+          profileTags: {
+            label: "Profil etiketleri",
+            helper: "Klinik havanızı tanımlayan kısa etiketler (lüks, hızlı yanıt vb.).",
+            aiUsage: "Dahili ton ipuçları — hastaya doğrudan gösterilmez.",
+            placeholder: "lüks, samimi, premium, hızlı_yanıt",
+            example: "premium, samimi, hızlı_yanıt"
+          },
+          implantBrands: {
+            label: "İmplant markaları",
+            helper: "Rutin kullandığınız markalar. YZ üst düzey karşılaştırma yapar — tıbbi öneri değil.",
+            aiUsage: "Marka ve seçenek açıklamaları.",
+            placeholder: "Straumann, Nobel, Osstem"
+          },
+          premiumBrands: {
+            label: "Premium markalar",
+            helper: "Sunuyorsanız üst segment markalar.",
+            aiUsage: "Premium seçenek sorularında üst satış veya karşılaştırma."
+          },
+          zirconiumTypes: {
+            label: "Zirkonyum türleri",
+            helper: "Kron/kaplama için kullandığınız malzemeler.",
+            aiUsage: "Estetik ve kron malzemesi soruları.",
+            placeholder: "E.max, çok katmanlı zirkonya"
+          },
+          labPartners: {
+            label: "Laboratuvar ortakları",
+            helper: "Klinik içi veya partner laboratuvarlar — süreç yanıtlarında güven.",
+            aiUsage: "Operasyonel süreç açıklamaları."
+          },
+          warrantyInformation: {
+            label: "Garanti politikası",
+            helper: "Garanti koşullarının özeti. YZ yasal garanti uydurmaz.",
+            aiUsage: "Garanti ve güvence soruları.",
+            placeholder: "Yıllık kontrol ile 10 yıl implant garantisi"
+          },
+          sedationAvailability: {
+            label: "Sedasyon mevcut",
+            helper: "Kaygılı hastalar için sedasyon sunuluyor mu.",
+            aiUsage: "Konfor ve kaygı ile ilgili sorular."
+          },
+          weekdayHours: {
+            label: "Hafta içi saatler",
+            helper: "Randevu ve yanıt için normal açılış saatleri.",
+            aiUsage: "Randevu ve “ne zaman açıksınız?” soruları.",
+            placeholder: "09:00 – 18:00"
+          },
+          timezone: {
+            label: "Klinik saat dilimi",
+            helper: "Randevu ve SLA için IANA saat dilimi.",
+            aiUsage: "Uluslararası hastalar için saat ve yanıt penceresi dönüşümü.",
+            placeholder: "Europe/Istanbul"
+          },
+          averageResponseSlaMinutes: {
+            label: "Yanıt SLA (dakika)",
+            helper: "İnsan personel hedef yanıt süresi. YZ yedek zamanlaması için — hastaya gösterilmez.",
+            aiUsage: "SLA otomasyonu ve koordinatör yükseltme.",
+            placeholder: "120"
+          },
+          emergencyContact: {
+            label: "Acil iletişim",
+            helper: "Acil durum telefonu veya talimatı. YZ tıbbi tavsiye vermez, acile yönlendirir.",
+            aiUsage: "Acil / şiddetli ağrı yönlendirmesi (insan devri ile).",
+            placeholder: "+90 … / WhatsApp acil hattı"
+          },
+          transportationNotes: {
+            label: "Ulaşım notları",
+            helper: "Havalimanı karşılama, VIP transfer, servis detayları.",
+            aiUsage: "Seyahat ve varış koordinasyonu.",
+            example: "Tedavi hastaları için Pzt–Cmt ücretsiz havalimanı karşılama; istek üzerine VIP transfer."
+          },
+          refundPolicy: {
+            label: "İade politikası",
+            helper: "Standart iade kuralları. YZ özetler — anlaşmazlıklarda insana yönlendirir.",
+            aiUsage: "İade soruları (çatışmada devir).",
+            placeholder: "Tedaviden 14+ gün önce iptalde depozito iade edilir"
+          },
+          cancellationPolicy: {
+            label: "İptal politikası",
+            helper: "Randevu veya paket iptal koşulları.",
+            aiUsage: "Randevu ve iptal soruları."
+          },
+          positioningNotes: {
+            label: "Konumlandırma maddeleri",
+            helper: "Kliniği nasıl konumlandırmak istediğiniz (estetik, muhafazakâr planlama, tipik kalış). Satır başına bir madde.",
+            aiUsage: "YZ vurgu ve öneri tarzını şekillendirir — aynen alıntılanmaz.",
+            example: "Doğal estetiğe odaklanırız\nÇoğu uluslararası hasta 5–7 gün kalır"
+          },
+          freeformNotes: {
+            label: "Ek dahili notlar",
+            helper: "YZ lead koordine ederken personelin bilmesi gereken diğer bilgiler.",
+            aiUsage: "Ek orkestrasyon bağlamı."
+          },
+          protocol_postOpNotes: {
+            label: "Operasyon sonrası koordinasyon notları",
+            helper: "Tedavi sonrası hastaları kliniğinizin nasıl yönlendirdiğini açıklayın. YZ iyileşme, takip, şişlik, beslenme ve kontrol sorularında kullanabilir.",
+            aiUsage: "Operasyon sonrası koordinasyon yanıtları — doktor tavsiyesi yerine geçmez.",
+            placeholder: "İmplant cerrahisinden sonra 48 saat sert gıdalardan kaçınılır. İlk 2–3 gün hafif şişlik normaldir.",
+            example: "Yumuşak diyet 48 saat, ilk gün buz, uçuş öncesi kontrol, 3. gün WhatsApp takibi."
+          }
+        }
+      },
+
+      travel: {
+        pageTitle: "Seyahat ve Konaklama — Clinifly Admin",
+        breadcrumbSettings: "Klinik Ayarları",
+        breadcrumbCurrent: "Seyahat ve Konaklama",
+        title: "Seyahat ve Konaklama",
+        lead: "Partner oteller yapay zeka tıbbi seyahat koordinatörünü besler — görüşme başına en fazla 3 aktif tesis YZ ile paylaşılır (vektör veritabanı yok).",
+        partnerHotels: "Partner oteller",
+        addHotel: "+ Otel ekle",
+        editHotel: "Oteli düzenle",
+        emptyList: "Henüz partner otel yok. YZ'nin konaklama önerebilmesi için ilk tesisinizi ekleyin.",
+        loading: "Yükleniyor…",
+        futureNote: "Yakında: havalimanı transferleri, şoförler, tercümanlar, apartmanlar — mimari hazır, henüz etkin değil.",
+        saveHotel: "Oteli kaydet",
+        cancel: "İptal",
+        delete: "Sil",
+        edit: "Düzenle",
+        deleteConfirm: "Bu otel silinsin mi?",
+        openMaps: "Haritayı aç",
+        minFromClinic: "dk — klinikten",
+        chipPreferred: "Tercih edilen",
+        chipActive: "Aktif",
+        chipInactive: "Pasif",
+        chipTransfer: "Transfer",
+        chipBreakfast: "Kahvaltı",
+        fieldName: "Ad *",
+        fieldPrice: "Fiyat aralığı (yaklaşık)",
+        fieldDistance: "Mesafe (klinikten dakika)",
+        fieldSort: "Sıralama",
+        fieldAddress: "Adres",
+        fieldMaps: "Google Maps URL",
+        fieldBooking: "Rezervasyon URL (isteğe bağlı)",
+        fieldLangs: "Desteklenen diller",
+        fieldDiscount: "Klinik indirim notları",
+        fieldNotes: "Dahili notlar",
+        checkTransfer: "Transfer dahil / ayarlanabilir",
+        checkBreakfast: "Kahvaltı dahil",
+        checkPreferred: "Tercih edilen partner",
+        checkActive: "Aktif (YZ'ye görünür)",
+        phName: "Radisson Blu Tiflis",
+        phPrice: "120–180 USD / gece",
+        phDistance: "8",
+        phAddress: "Rose Revolution Square…",
+        phMaps: "https://maps.google.com/…",
+        phLangs: "en, ru, tr",
+        phDiscount: "%10 klinik partner oranı",
+        phNotes: "Yalnızca koordinatör notları",
+        errLoad: "Yükleme başarısız",
+        errDelete: "Silme başarısız",
+        errSave: "Kaydetme başarısız"
       },
 
       // Patients (admin-patients.html)
@@ -1788,7 +2038,190 @@
           emergencies: "Emergencies",
           complications: "Complications"
         },
-        langs: { en: "English", tr: "Turkish", ru: "Russian", ka: "Georgian", ar: "Arabic", de: "German", fr: "French" }
+        langs: { en: "English", tr: "Turkish", ru: "Russian", ka: "Georgian", ar: "Arabic", de: "German", fr: "French" },
+        ui: {
+          usedByAi: "Used by AI replies",
+          usedByAiTitle: "This field feeds the AI orchestration layer",
+          usedByAiSection: "Used by AI",
+          seeExample: "See example",
+          aiPrefix: "AI:"
+        },
+        visibility: {
+          patient_visible: { short: "Patient-visible", label: "May appear in patient messages" },
+          ai_reply: { short: "AI replies", label: "Used by AI replies" },
+          internal: { short: "Internal", label: "Internal / operational only" }
+        },
+        options: {
+          toneStyle: {
+            warm_professional: "Warm + professional",
+            clinical_concise: "Clinical & concise",
+            friendly_casual: "Friendly & casual",
+            luxury_premium: "Luxury / premium"
+          },
+          signatureStyle: {
+            name_only: "Assistant name only",
+            name_clinic: "Name + clinic",
+            none: "No signature"
+          }
+        },
+        sectionHelp: {
+          aiProfile: {
+            intro: "Multilingual AI orchestration — enable languages and optional localized patient-facing text. Operational knowledge (brands, pricing, workflow) stays single-source; the AI localizes at reply time.",
+            aiUsageSummary: "Language routing, localized greetings/signatures, and runtime localization guidance for coordinator prompts."
+          },
+          materials: {
+            intro: "Which brands and materials your clinic works with. Helps AI explain options without inventing brands.",
+            aiUsageSummary: "Educational replies about implants, zirconium, labs, warranty."
+          },
+          logistics: {
+            intro: "Hours, response times, and practical clinic operations.",
+            aiUsageSummary: "Scheduling, availability, emergency routing, SLA fallback."
+          },
+          payment: {
+            intro: "Deposits, financing, refunds. AI explains policies — does not negotiate or promise exceptions.",
+            aiUsageSummary: "Payment and policy questions; escalates refunds to humans."
+          },
+          workflow: {
+            intro: "Visit timelines, healing periods, and post-treatment coordination. Operational guidance only — not diagnosis.",
+            aiUsageSummary: "Treatment process, recovery, follow-up, and post-op patient questions."
+          },
+          aiSafety: {
+            intro: "How much the AI can act alone vs suggest drafts. Medical topics always stay human-reviewed.",
+            aiUsageSummary: "Orchestration: auto-reply, suggest-only, or off per topic."
+          },
+          handoff: {
+            intro: "When the AI must stop and alert your coordinator or doctor.",
+            aiUsageSummary: "Automatic escalation triggers in conversation."
+          },
+          internalNotes: {
+            intro: "Clinic positioning and strategy. Helps AI align with your brand — not shown verbatim to patients.",
+            aiUsageSummary: "Prompt context for tone, priorities, and what to emphasize."
+          },
+          travel: {
+            intro: "Partner hotels power the AI medical travel coordinator — up to 3 active properties are shared with the AI per conversation (no vector DB).",
+            aiUsageSummary: "Medical travel coordination, hotel suggestions, and transfer questions."
+          }
+        },
+        autonomyLevels: {
+          OFF: "Off",
+          SUGGEST_ONLY: "Suggest only",
+          AUTO_REPLY: "Auto-reply",
+          FULLY_AUTONOMOUS: "Fully autonomous"
+        },
+        fieldHelp: {
+          supportedLanguages: {
+            label: "Multilingual AI support",
+            helper: "Enable languages for AI orchestration. Operational data stays in one place — the AI localizes brands, pricing, and logistics at reply time.",
+            aiUsage: "Patient language detection, reply language, and human-staff routing hints.",
+            example: "English (primary), Turkish, Russian, Georgian for dental tourism."
+          },
+          displayNameLocalized: {
+            label: "Assistant name (localized)",
+            helper: "Optional per-language assistant display names. Leave blank to let AI translate from English.",
+            aiUsage: "Greetings and signatures in the patient's language.",
+            example: "en: DentX Care Team · tr: DentX Hasta Destek Ekibi"
+          },
+          welcomeMessageLocalized: {
+            label: "Welcome message (localized)",
+            helper: "Optional opening message templates per language — not required for MVP.",
+            aiUsage: "First-contact tone and clinic introduction.",
+            placeholder: "Short welcome in each enabled language"
+          },
+          toneStyle: {
+            label: "Tone / style",
+            helper: "Overall communication style for patient chats.",
+            aiUsage: "Sets warmth, formality, and luxury level in replies.",
+            example: "Warm + professional for international dental tourists."
+          },
+          signatureStyle: {
+            label: "Signature style",
+            helper: "How messages are signed at the end.",
+            aiUsage: "Appended to AI-generated patient messages."
+          },
+          profileTags: {
+            label: "Profile tags",
+            helper: "Short tags describing your clinic vibe (luxury, fast response, etc.).",
+            aiUsage: "Internal tone hints — not shown directly to patients.",
+            placeholder: "luxury, friendly, premium, fast_response",
+            example: "premium, friendly, fast_response"
+          },
+          implantBrands: {
+            label: "Implant brands",
+            helper: "Brands you routinely use. AI can compare at a high level — not medical recommendations.",
+            aiUsage: "Brand and option explanations.",
+            placeholder: "Straumann, Nobel, Osstem"
+          },
+          premiumBrands: { label: "Premium brands", helper: "Higher-tier brands if you offer them.", aiUsage: "Upsell or comparison replies when patients ask about premium options." },
+          zirconiumTypes: { label: "Zirconium types", helper: "Materials for crowns/veneers you use.", aiUsage: "Cosmetic and crown material questions.", placeholder: "E.max, multilayer zirconia" },
+          labPartners: { label: "Lab partners", helper: "In-house or partner labs — builds trust in process answers.", aiUsage: "Operational process explanations." },
+          warrantyInformation: { label: "Warranty policy", helper: "Summary of warranty terms. Keep factual; AI will not invent legal guarantees.", aiUsage: "Warranty and guarantee questions.", placeholder: "10-year implant warranty with annual check-up" },
+          sedationAvailability: { label: "Sedation available", helper: "Whether sedation is offered for anxious patients.", aiUsage: "Comfort and anxiety-related questions." },
+          weekdayHours: { label: "Weekday hours", helper: "When the clinic is normally open for appointments and replies.", aiUsage: "Scheduling and “when are you open?” questions.", placeholder: "09:00 – 18:00" },
+          timezone: { label: "Clinic timezone", helper: "IANA timezone for scheduling and SLA calculations.", aiUsage: "Converts appointment times and response windows for international patients.", placeholder: "Europe/Istanbul" },
+          averageResponseSlaMinutes: { label: "Response SLA (minutes)", helper: "Target time for human staff to respond. Used for AI fallback timing — not shown to patients.", aiUsage: "SLA automation and coordinator escalation.", placeholder: "120" },
+          emergencyContact: { label: "Emergency contact", helper: "Phone or instruction for urgent cases. AI directs emergencies here — does not give medical advice.", aiUsage: "Urgent / severe pain routing (with human handoff)." },
+          transportationNotes: { label: "Transport notes", helper: "Airport pickup, VIP transfer, shuttle details.", aiUsage: "Travel and arrival coordination." },
+          refundPolicy: { label: "Refund policy", helper: "Your standard refund rules. AI summarizes — escalates disputes to humans.", aiUsage: "Refund questions (with handoff for conflicts)." },
+          cancellationPolicy: { label: "Cancellation policy", helper: "Cancellation terms for appointments or packages.", aiUsage: "Scheduling and cancellation questions." },
+          positioningNotes: { label: "Positioning bullets", helper: "How you want the clinic positioned. One point per line.", aiUsage: "Shapes AI emphasis — not quoted directly." },
+          freeformNotes: { label: "Additional internal notes", helper: "Anything else staff should know when AI coordinates leads.", aiUsage: "Extra orchestration context." },
+          protocol_postOpNotes: {
+            label: "Post-op coordination notes",
+            helper: "Describe how your clinic usually guides patients after treatment.",
+            aiUsage: "Post-operative coordination replies — not a substitute for doctor advice."
+          }
+        }
+      },
+
+      travel: {
+        pageTitle: "Travel & Accommodation — Clinifly Admin",
+        breadcrumbSettings: "Clinic Settings",
+        breadcrumbCurrent: "Travel & Accommodation",
+        title: "Travel & Accommodation",
+        lead: "Partner hotels power the AI medical travel coordinator — up to 3 active properties are shared with the AI per conversation (no vector DB).",
+        partnerHotels: "Partner hotels",
+        addHotel: "+ Add hotel",
+        editHotel: "Edit hotel",
+        emptyList: "No partner hotels yet. Add your first property so the AI can recommend stays.",
+        loading: "Loading…",
+        futureNote: "Coming later: airport transfers, drivers, translators, apartments — architecture prepared, not enabled yet.",
+        saveHotel: "Save hotel",
+        cancel: "Cancel",
+        delete: "Delete",
+        edit: "Edit",
+        deleteConfirm: "Delete this hotel?",
+        openMaps: "Open Maps",
+        minFromClinic: "min from clinic",
+        chipPreferred: "Preferred",
+        chipActive: "Active",
+        chipInactive: "Inactive",
+        chipTransfer: "Transfer",
+        chipBreakfast: "Breakfast",
+        fieldName: "Name *",
+        fieldPrice: "Price range (approx.)",
+        fieldDistance: "Distance (minutes from clinic)",
+        fieldSort: "Sort order",
+        fieldAddress: "Address",
+        fieldMaps: "Google Maps URL",
+        fieldBooking: "Booking URL (optional)",
+        fieldLangs: "Supported languages",
+        fieldDiscount: "Clinic discount notes",
+        fieldNotes: "Internal notes",
+        checkTransfer: "Transfer included / can arrange",
+        checkBreakfast: "Breakfast included",
+        checkPreferred: "Preferred partner",
+        checkActive: "Active (visible to AI)",
+        phName: "Radisson Blu Tbilisi",
+        phPrice: "120–180 USD / night",
+        phDistance: "8",
+        phAddress: "Rose Revolution Square…",
+        phMaps: "https://maps.google.com/…",
+        phLangs: "en, ru, tr",
+        phDiscount: "10% clinic partner rate",
+        phNotes: "Coordinator-only notes",
+        errLoad: "Failed to load",
+        errDelete: "Delete failed",
+        errSave: "Save failed"
       },
 
       // Patients (admin-patients.html)
@@ -2632,7 +3065,187 @@
           emergencies: "Экстренные случаи",
           complications: "Осложнения"
         },
-        langs: { en: "Английский", tr: "Турецкий", ru: "Русский", ka: "Грузинский", ar: "Арабский", de: "Немецкий", fr: "Французский" }
+        langs: { en: "Английский", tr: "Турецкий", ru: "Русский", ka: "Грузинский", ar: "Арабский", de: "Немецкий", fr: "Французский" },
+        ui: {
+          usedByAi: "Используется в ответах ИИ",
+          usedByAiTitle: "Это поле питает слой оркестрации ИИ",
+          usedByAiSection: "ИИ использует",
+          seeExample: "Смотреть пример",
+          aiPrefix: "ИИ:"
+        },
+        visibility: {
+          patient_visible: { short: "Видно пациенту", label: "Может появиться в сообщениях пациенту" },
+          ai_reply: { short: "Ответы ИИ", label: "Используется в ответах ИИ" },
+          internal: { short: "Внутреннее", label: "Только внутреннее / операционное" }
+        },
+        options: {
+          toneStyle: {
+            warm_professional: "Тёплый + профессиональный",
+            clinical_concise: "Клинический и краткий",
+            friendly_casual: "Дружелюбный и неформальный",
+            luxury_premium: "Люкс / премиум"
+          },
+          signatureStyle: {
+            name_only: "Только имя ассистента",
+            name_clinic: "Имя + клиника",
+            none: "Без подписи"
+          }
+        },
+        sectionHelp: {
+          aiProfile: {
+            intro: "Многоязычная оркестрация ИИ — включите языки и добавьте необязательные локализованные тексты для пациентов. Операционные знания (бренды, цены, workflow) остаются в одном источнике; ИИ локализует при ответе.",
+            aiUsageSummary: "Маршрутизация языка, локализованные приветствия/подписи и руководство по локализации для координатора."
+          },
+          materials: {
+            intro: "Какие бренды и материалы использует ваша клиника. ИИ объясняет варианты без выдуманных брендов.",
+            aiUsageSummary: "Образовательные ответы об имплантах, цирконии, лабораториях и гарантии."
+          },
+          travel: {
+            intro: "Партнёрские отели питают ИИ-координатора медицинского туризма — до 3 активных объектов на разговор (без векторной БД).",
+            aiUsageSummary: "Координация медтуризма, рекомендации отелей и вопросы трансфера."
+          },
+          logistics: {
+            intro: "Часы работы, время ответа и практические операции клиники.",
+            aiUsageSummary: "Запись, доступность, экстренная маршрутизация и SLA fallback."
+          },
+          payment: {
+            intro: "Депозит, финансирование, возвраты. ИИ объясняет политику — не обещает исключений.",
+            aiUsageSummary: "Вопросы об оплате и политике; возвраты передаются человеку."
+          },
+          workflow: {
+            intro: "Сроки визитов, заживление и координация после лечения. Только операционно — не диагноз.",
+            aiUsageSummary: "Процесс лечения, восстановление, follow-up и post-op вопросы."
+          },
+          aiSafety: {
+            intro: "Насколько независимо может действовать ИИ. Медицинские темы всегда требуют человека.",
+            aiUsageSummary: "Оркестрация: автоответ, только предложение или выкл. по теме."
+          },
+          handoff: {
+            intro: "Когда ИИ должен остановиться и предупредить координатора или врача.",
+            aiUsageSummary: "Автоматические триггеры эскалации в разговоре."
+          },
+          internalNotes: {
+            intro: "Позиционирование и стратегия клиники. ИИ согласуется с брендом — не показывается пациенту дословно.",
+            aiUsageSummary: "Контекст промпта для тона, приоритетов и акцентов."
+          }
+        },
+        autonomyLevels: {
+          OFF: "Выкл.",
+          SUGGEST_ONLY: "Только предложение",
+          AUTO_REPLY: "Автоответ",
+          FULLY_AUTONOMOUS: "Полная автономия"
+        },
+        fieldHelp: {
+          supportedLanguages: {
+            label: "Многоязычная поддержка ИИ",
+            helper: "Включите языки для оркестрации ИИ. Операционные данные в одном месте — ИИ локализует бренды, цены и логистику при ответе.",
+            aiUsage: "Определение языка пациента, язык ответа и подсказки маршрутизации персонала.",
+            example: "Основной английский; для dental tourism турецкий, русский, грузинский."
+          },
+          displayNameLocalized: {
+            label: "Имя ассистента (локализовано)",
+            helper: "Необязательные отображаемые имена по языкам. Пусто — ИИ переведёт с английского.",
+            aiUsage: "Приветствия и подписи на языке пациента.",
+            example: "en: DentX Care Team · ru: DentX Поддержка пациентов"
+          },
+          welcomeMessageLocalized: {
+            label: "Приветственное сообщение (локализовано)",
+            helper: "Необязательные шаблоны открытия по языкам — для MVP не обязательно.",
+            aiUsage: "Тон первого контакта и представление клиники.",
+            placeholder: "Краткое приветствие на каждом включённом языке"
+          },
+          toneStyle: {
+            label: "Тон / стиль",
+            helper: "Общий стиль общения с пациентами.",
+            aiUsage: "Задаёт теплоту, формальность и уровень люкса в ответах.",
+            example: "Тёплый + профессиональный для международного dental tourism."
+          },
+          signatureStyle: {
+            label: "Стиль подписи",
+            helper: "Как подписываются сообщения в конце.",
+            aiUsage: "Добавляется к сообщениям ИИ для пациента."
+          },
+          profileTags: {
+            label: "Теги профиля",
+            helper: "Короткие теги атмосферы клиники (люкс, быстрый ответ и т.д.).",
+            aiUsage: "Внутренние подсказки тона — не показываются пациенту напрямую.",
+            placeholder: "люкс, дружелюбный, премиум, быстрый_ответ",
+            example: "премиум, дружелюбный, быстрый_ответ"
+          },
+          implantBrands: { label: "Бренды имплантов", helper: "Бренды, которые вы обычно используете.", aiUsage: "Объяснение брендов и вариантов.", placeholder: "Straumann, Nobel, Osstem" },
+          premiumBrands: { label: "Премиум бренды", helper: "Бренды высшего сегмента, если предлагаете.", aiUsage: "Сравнение премиум-вариантов." },
+          zirconiumTypes: { label: "Типы циркония", helper: "Материалы для коронок/виниров.", aiUsage: "Вопросы о материалах.", placeholder: "E.max, многослойный цирконий" },
+          labPartners: { label: "Партнёрские лаборатории", helper: "Своя или партнёрская лаборатория.", aiUsage: "Объяснение процессов." },
+          warrantyInformation: { label: "Политика гарантии", helper: "Кратко условия гарантии.", aiUsage: "Вопросы о гарантии.", placeholder: "10 лет на имплант при ежегодном осмотре" },
+          sedationAvailability: { label: "Седация доступна", helper: "Предлагается ли седация тревожным пациентам.", aiUsage: "Вопросы о комфорте и тревоге." },
+          weekdayHours: { label: "Часы в будни", helper: "Когда клиника обычно открыта для записи и ответов.", aiUsage: "Запись и «когда вы открыты?»", placeholder: "09:00 – 18:00" },
+          timezone: { label: "Часовой пояс клиники", helper: "IANA для записи и SLA.", aiUsage: "Конвертация времени для иностранных пациентов.", placeholder: "Europe/Istanbul" },
+          averageResponseSlaMinutes: { label: "SLA ответа (минуты)", helper: "Целевое время ответа персонала. Для fallback ИИ — не показывается пациенту.", aiUsage: "SLA и эскалация.", placeholder: "120" },
+          emergencyContact: { label: "Экстренный контакт", helper: "Телефон или инструкция. ИИ не даёт медсовет.", aiUsage: "Срочные случаи / сильная боль.", placeholder: "+90 … / WhatsApp срочная линия" },
+          transportationNotes: { label: "Транспорт", helper: "Встреча в аэропорту, VIP трансфер.", aiUsage: "Координация приезда.", example: "Бесплатная встреча Пн–Сб для пациентов на лечении." },
+          refundPolicy: { label: "Политика возврата", helper: "Стандартные правила. ИИ резюмирует — споры человеку.", aiUsage: "Вопросы о возврате.", placeholder: "Депозит возвращается при отмене за 14+ дней" },
+          cancellationPolicy: { label: "Политика отмены", helper: "Условия отмены записи или пакета.", aiUsage: "Вопросы об отмене." },
+          positioningNotes: { label: "Пункты позиционирования", helper: "Как позиционировать клинику. Один пункт на строку.", aiUsage: "Формирует акценты ИИ.", example: "Фокус на естественной эстетике\nБольшинство иностранных пациентов 5–7 дней" },
+          freeformNotes: { label: "Доп. внутренние заметки", helper: "Что ещё должен знать персонал.", aiUsage: "Доп. контекст оркестрации." },
+          protocol_postOpNotes: {
+            label: "Post-op заметки координации",
+            helper: "Как клиника обычно сопровождает пациентов после лечения.",
+            aiUsage: "Post-op ответы — не замена совета врача.",
+            placeholder: "После имплантации 48 ч избегать твёрдой пищи.",
+            example: "Мягкая диета 48 ч, лёд в первый день, контроль перед вылетом."
+          }
+        }
+      },
+
+      travel: {
+        pageTitle: "Путешествие и проживание — Clinifly Admin",
+        breadcrumbSettings: "Настройки клиники",
+        breadcrumbCurrent: "Путешествие и проживание",
+        title: "Путешествие и проживание",
+        lead: "Партнёрские отели питают ИИ-координатора медтуризма — до 3 активных объектов на разговор (без векторной БД).",
+        partnerHotels: "Партнёрские отели",
+        addHotel: "+ Добавить отель",
+        editHotel: "Редактировать отель",
+        emptyList: "Партнёрских отелей пока нет. Добавьте первый объект для рекомендаций ИИ.",
+        loading: "Загрузка…",
+        futureNote: "Скоро: трансферы, водители, переводчики, апартаменты — архитектура готова, пока не включено.",
+        saveHotel: "Сохранить отель",
+        cancel: "Отмена",
+        delete: "Удалить",
+        edit: "Изменить",
+        deleteConfirm: "Удалить этот отель?",
+        openMaps: "Открыть карту",
+        minFromClinic: "мин от клиники",
+        chipPreferred: "Приоритетный",
+        chipActive: "Активный",
+        chipInactive: "Неактивный",
+        chipTransfer: "Трансфер",
+        chipBreakfast: "Завтрак",
+        fieldName: "Название *",
+        fieldPrice: "Диапазон цен (прибл.)",
+        fieldDistance: "Расстояние (минуты от клиники)",
+        fieldSort: "Порядок сортировки",
+        fieldAddress: "Адрес",
+        fieldMaps: "URL Google Maps",
+        fieldBooking: "URL бронирования (необяз.)",
+        fieldLangs: "Поддерживаемые языки",
+        fieldDiscount: "Заметки о скидке клиники",
+        fieldNotes: "Внутренние заметки",
+        checkTransfer: "Трансфер включён / можно организовать",
+        checkBreakfast: "Завтрак включён",
+        checkPreferred: "Приоритетный партнёр",
+        checkActive: "Активен (виден ИИ)",
+        phName: "Radisson Blu Тбилиси",
+        phPrice: "120–180 USD / ночь",
+        phDistance: "8",
+        phAddress: "Rose Revolution Square…",
+        phMaps: "https://maps.google.com/…",
+        phLangs: "en, ru, tr",
+        phDiscount: "10% партнёрская скидка клиники",
+        phNotes: "Только для координатора",
+        errLoad: "Ошибка загрузки",
+        errDelete: "Ошибка удаления",
+        errSave: "Ошибка сохранения"
       },
 
       treatment: {
@@ -3448,7 +4061,257 @@
           emergencies: "გადაუდებელი შემთხვევები",
           complications: "გართულებები"
         },
-        langs: { en: "ინგლისური", tr: "თურქული", ru: "რუსული", ka: "ქართული", ar: "არაბული", de: "გერმანული", fr: "ფრანგული" }
+        langs: { en: "ინგლისური", tr: "თურქული", ru: "რუსული", ka: "ქართული", ar: "არაბული", de: "გერმანული", fr: "ფრანგული" },
+        ui: {
+          usedByAi: "გამოიყენება AI პასუხებში",
+          usedByAiTitle: "ეს ველი კვებავს AI ორკესტრაციის ფენას",
+          usedByAiSection: "AI იყენებს",
+          seeExample: "მაგალითის ნახვა",
+          aiPrefix: "AI:"
+        },
+        visibility: {
+          patient_visible: { short: "პაციენტისთვის ხილული", label: "შეიძლება გამოჩნდეს პაციენტის შეტყობინებებში" },
+          ai_reply: { short: "AI პასუხები", label: "გამოიყენება AI პასუხებში" },
+          internal: { short: "შიდა", label: "მხოლოდ შიდა / ოპერაციული" }
+        },
+        options: {
+          toneStyle: {
+            warm_professional: "თბილი + პროფესიონალური",
+            clinical_concise: "კლინიკური და მოკლე",
+            friendly_casual: "მეგობრული და თავისუფალი",
+            luxury_premium: "ლუქსი / პრემიუმ"
+          },
+          signatureStyle: {
+            name_only: "მხოლოდ ასისტენტის სახელი",
+            name_clinic: "სახელი + კლინიკა",
+            none: "ხელმოწერის გარეშე"
+          }
+        },
+        sectionHelp: {
+          aiProfile: {
+            intro: "მრავალენოვანი AI ორკესტრაცია — ჩართეთ ენები და დაამატეთ არასავალდებულო ლოკალიზებული ტექსტი პაციენტისთვის. ოპერაციული ცოდნა (ბრენდები, ფასები, workflow) რჩება ერთ წყაროში; AI ლოკალიზაციას პასუხის დროს აკეთებს.",
+            aiUsageSummary: "ენის მიმართვა, ლოკალიზებული მისალმება/ხელმოწერები და კოორდინატორის prompt-ების ლოკალიზაციის სახელმძღვანელო."
+          },
+          materials: {
+            intro: "რომელ ბრენდებსა და მასალებს იყენებთ. AI ახსნის ვარიანტებს გამოგონილი ბრენდების გარეშე.",
+            aiUsageSummary: "საგანმანათლებლო პასუხები იმპლანტებზე, ცირკონიუმზე, ლაბორატორიებსა და გარანტიაზე."
+          },
+          travel: {
+            intro: "პარტნიორი სასტუმროები კვებავს AI სამედიცინო მოგზაურობის კოორდინატორს — საუბარზე მაქს. 3 აქტიური ობიექტი იზიარება AI-თან (ვექტორული DB არა).",
+            aiUsageSummary: "სამედიცინო მოგზაურობის კოორდინაცია, სასტუმროს რეკომენდაციები და ტრანსფერის კითხვები."
+          },
+          logistics: {
+            intro: "სამუშაო საათები, პასუხის დრო და პრაქტიკული კლინიკის ოპერაციები.",
+            aiUsageSummary: "ჩაწერა, ხელმისაწვდომობა, გადაუდებელი მიმართვა და SLA fallback."
+          },
+          payment: {
+            intro: "დეპოზიტი, დაფინანსება, დაბრუნება. AI ახსნის პოლიტიკას — არ აღებს გარანტიას გამონაკლისებზე.",
+            aiUsageSummary: "გადახდისა და პოლიტიკის კითხვები; დაბრუნებაზე ადამიანზე გადაცემა."
+          },
+          workflow: {
+            intro: "ვიზიტების ხანგრძლივობა, განკურნება და მკურნალობის შემდგომი კოორდინაცია. მხოლოდ ოპერაციული — არა დიაგნოზი.",
+            aiUsageSummary: "მკურნალობის პროცესი, აღდგენა, follow-up და ოპერაციის შემდგომი კითხვები."
+          },
+          aiSafety: {
+            intro: "რამდენად დამოუკიდებლად შეუძლია AI-ს ქმედება. სამედიცინო თემები ყოველთვის საჭიროებს ადამიანის შემოწმებას.",
+            aiUsageSummary: "ორკესტრაცია: ავტოპასუხი, მხოლოდ შეთავაზება ან გამორთული თემატურად."
+          },
+          handoff: {
+            intro: "როდის უნდა შეჩერდეს AI და გაგაფრთხილოთ კოორდინატორი ან ექიმი.",
+            aiUsageSummary: "ავტომატური ესკალაციის ტრიგერები საუბარში."
+          },
+          internalNotes: {
+            intro: "კლინიკის პოზიციონირება და სტრატეგია. AI ემთხვევა თქვენს ბრენდს — პაციენტისთვის არ ჩანს ზუსტად.",
+            aiUsageSummary: "prompt-ის კონტექსტი ტონის, პრიორიტეტებისა და აქცენტებისთვის."
+          }
+        },
+        autonomyLevels: {
+          OFF: "გამორთული",
+          SUGGEST_ONLY: "მხოლოდ შეთავაზება",
+          AUTO_REPLY: "ავტოპასუხი",
+          FULLY_AUTONOMOUS: "სრული ავტონომია"
+        },
+        fieldHelp: {
+          supportedLanguages: {
+            label: "მრავალენოვანი AI მხარდაჭერა",
+            helper: "ჩართეთ ენები AI ორკესტრაციისთვის. ოპერაციული მონაცემები რჩება ერთ ადგილას — AI ლოკალიზაციას აკეთებს ბრენდებზე, ფასებსა და ლოჯისტიკაზე პასუხის დროს.",
+            aiUsage: "პაციენტის ენის ამოცნობა, პასუხის ენა და პერსონალზე მიმართვის მინიშნებები.",
+            example: "ძირითადი ინგლისური; dental tourism-ისთვის ქართული, თურქული, რუსული."
+          },
+          displayNameLocalized: {
+            label: "ასისტენტის სახელი (ლოკალიზებული)",
+            helper: "არასავალდებულო ასისტენტის სახელები ენების მიხედვით. ცარიელი დატოვეთ — AI ინგლისურიდან თარგმნის.",
+            aiUsage: "მისალმება და ხელმოწერა პაციენტის ენაზე.",
+            example: "en: DentX Care Team · ka: DentX პაციენტთა მხარდაჭერა"
+          },
+          welcomeMessageLocalized: {
+            label: "მისალმების შეტყობინება (ლოკალიზებული)",
+            helper: "არასავალდებულო გახსნის შაბლონები ენების მიხედვით — MVP-სთვის არ არის სავალდებულო.",
+            aiUsage: "პირველი კონტაქტის ტონი და კლინიკის წარდგენა.",
+            placeholder: "მოკლე მისალმება თითოეულ ჩართულ ენაზე"
+          },
+          toneStyle: {
+            label: "ტონი / სტილი",
+            helper: "ზოგადი კომუნიკაციის სტილი პაციენტთან საუბარში.",
+            aiUsage: "ანგარიშს უწევს სიმჭვირვალეს, ფორმალობასა და ლუქსის დონეს პასუხებში.",
+            example: "საერთაშორისო dental tourism-ისთვის თბილი + პროფესიონალური."
+          },
+          signatureStyle: {
+            label: "ხელმოწერის სტილი",
+            helper: "როგორ ხელმოეწერება შეტყობინებები ბოლოში.",
+            aiUsage: "ემატება AI-ის მიერ შექმნილ პაციენტის შეტყობინებებს."
+          },
+          profileTags: {
+            label: "პროფილის ტეგები",
+            helper: "მოკლე ტეგები კლინიკის ატმოსფეროზე (ლუქსი, სწრაფი პასუხი და ა.შ.).",
+            aiUsage: "შიდა ტონის მინიშნებები — პაციენტისთვის პირდაპირ არ ჩანს.",
+            placeholder: "ლუქსი, მეგობრული, პრემიუმ, სწრაფი_პასუხი",
+            example: "პრემიუმ, მეგობრული, სწრაფი_პასუხი"
+          },
+          implantBrands: {
+            label: "იმპლანტის ბრენდები",
+            helper: "ბრენდები, რომლებსაც რუტინულად იყენებთ. AI ადარებს მაღალი დონით — არა სამედიცინო რეკომენდაცია.",
+            aiUsage: "ბრენდისა და ვარიანტის ახსნები.",
+            placeholder: "Straumann, Nobel, Osstem"
+          },
+          premiumBrands: {
+            label: "პრემიუმ ბრენდები",
+            helper: "უმაღლესი სეგმენტის ბრენდები, თუ გთავაზობთ.",
+            aiUsage: "პრემიუმ ვარიანტების შედარება ან upsell."
+          },
+          zirconiumTypes: {
+            label: "ცირკონიუმის ტიპები",
+            helper: "გვირგვინის/ფირისთვის გამოყენებული მასალები.",
+            aiUsage: "ესთეტიკისა და გვირგვინის მასალის კითხვები.",
+            placeholder: "E.max, მრავალფენიანი ცირკონია"
+          },
+          labPartners: {
+            label: "ლაბორატორიის პარტნიორები",
+            helper: "კლინიკის ან პარტნიორი ლაბორატორიები — ნდობას აძლიერებს პროცესის პასუხებში.",
+            aiUsage: "ოპერაციული პროცესის ახსნები."
+          },
+          warrantyInformation: {
+            label: "გარანტიის პოლიტიკა",
+            helper: "გარანტიის პირობების შეჯამება. AI არ გამოიგონებს იურიდიულ გარანტიებს.",
+            aiUsage: "გარანტიისა და უზრუნველყოფის კითხვები.",
+            placeholder: "10 წლის იმპლანტის გარანტია ყოველწლიური შემოწმებით"
+          },
+          sedationAvailability: {
+            label: "სედაცია ხელმისაწვდომია",
+            helper: "სედაცია შეუსაბამო პაციენტებისთვის.",
+            aiUsage: "კომფორტისა და შფოთვის შესახებ კითხვები."
+          },
+          weekdayHours: {
+            label: "სამუშაო დღეების საათები",
+            helper: "როდის არის კლინიკა ჩვეულებრივ ღია ჩაწერისა და პასუხისთვის.",
+            aiUsage: "ჩაწერისა და „როდის ხართ ღია?“ კითხვები.",
+            placeholder: "09:00 – 18:00"
+          },
+          timezone: {
+            label: "კლინიკის დროის სარტყელი",
+            helper: "IANA timezone ჩაწერისა და SLA გამოთვლისთვის.",
+            aiUsage: "საერთაშორისო პაციენტებისთვის დროისა და პასუხის ფანჯრის კონვერტაცია.",
+            placeholder: "Europe/Istanbul"
+          },
+          averageResponseSlaMinutes: {
+            label: "პასუხის SLA (წუთები)",
+            helper: "პერსონალის სამიზნე პასუხის დრო. AI fallback-ისთვის — პაციენტისთვის არ ჩანს.",
+            aiUsage: "SLA ავტომატიზაცია და კოორდინატორზე ესკალაცია.",
+            placeholder: "120"
+          },
+          emergencyContact: {
+            label: "გადაუდებელი კონტაქტი",
+            helper: "ტელეფონი ან ინსტრუქცია გადაუდებელი შემთხვევებისთვის. AI არ აძლევს სამედიცინო რჩევას.",
+            aiUsage: "გადაუდებელი / მძიმე ტკივილის მიმართვა (ადამიანზე გადაცემით).",
+            placeholder: "+995 … / WhatsApp გადაუდებელი ხაზი"
+          },
+          transportationNotes: {
+            label: "ტრანსპორტის შენიშვნები",
+            helper: "აეროპორტიდან შეხვედრა, VIP ტრანსფერი, შატლის დეტალები.",
+            aiUsage: "მოგზაურობისა და ჩამოსვლის კოორდინაცია.",
+            example: "უფასო აეროპორტის შეხვედრა ორშ–შაბ მკურნალობის პაციენტებისთვის."
+          },
+          refundPolicy: {
+            label: "დაბრუნების პოლიტიკა",
+            helper: "სტანდარტული დაბრუნების წესები. AI აჯამებს — კონფლიქტზე ადამიანზე გადაცემა.",
+            aiUsage: "დაბრუნების კითხვები (კონფლიქტში ესკალაცია).",
+            placeholder: "დეპოზიტი ბრუნდება მკურნალობამდე 14+ დღით ადრე გაუქმებისას"
+          },
+          cancellationPolicy: {
+            label: "გაუქმების პოლიტიკა",
+            helper: "ჩაწერის ან პაკეტის გაუქმების პირობები.",
+            aiUsage: "ჩაწერისა და გაუქმების კითხვები."
+          },
+          positioningNotes: {
+            label: "პოზიციონირების პუნქტები",
+            helper: "როგორ გსურთ კლინიკის პოზიციონირება. ერთი პუნქტი ხაზზე.",
+            aiUsage: "აყალიბებს AI-ის აქცენტს — პირდაპირ არ იკორება.",
+            example: "ბუნებრივ ესთეტიკაზე ვფოკუსირდებით\nუმეტესი საერთაშორისო პაციენტი რჩება 5–7 დღე"
+          },
+          freeformNotes: {
+            label: "დამატებითი შიდა შენიშვნები",
+            helper: "სხვა ინფორმაცია, რაც პერსონალმა უნდა იცოდეს AI-ის კოორდინაციისას.",
+            aiUsage: "დამატებითი ორკესტრაციის კონტექსტი."
+          },
+          protocol_postOpNotes: {
+            label: "ოპერაციის შემდგომი კოორდინაციის შენიშვნები",
+            helper: "აღწერეთ, როგორ ხელმძღვანელობთ პაციენტებს მკურნალობის შემდეგ. AI შეუძლია გამოიყენოს აღდგენის, follow-up-ის, შეშუპების, კვებისა და კონტროლის კითხვებზე.",
+            aiUsage: "ოპერაციის შემდგომი კოორდინაციის პასუხები — არ ცვლის ექიმის რჩევას.",
+            placeholder: "იმპლანტის ოპერაციის შემდეგ 48 საათი მკაცრი საკვებისგან თავი შევიკავოთ.",
+            example: "რბილი დიეტა 48 სთ, ყინვა პირველ დღეს, კონტროლი ფრეხამდე, WhatsApp დღე 3."
+          }
+        }
+      },
+
+      travel: {
+        pageTitle: "მოგზაურობა და საცხოვრებელი — Clinifly Admin",
+        breadcrumbSettings: "კლინიკის პარამეტრები",
+        breadcrumbCurrent: "მოგზაურობა და საცხოვრებელი",
+        title: "მოგზაურობა და საცხოვრებელი",
+        lead: "პარტნიორი სასტუმროები კვებავს AI სამედიცინო მოგზაურობის კოორდინატორს — საუბარზე მაქს. 3 აქტიური ობიექტი იზიარება AI-თან (ვექტორული DB არა).",
+        partnerHotels: "პარტნიორი სასტუმროები",
+        addHotel: "+ სასტუმროს დამატება",
+        editHotel: "სასტუმროს რედაქტირება",
+        emptyList: "პარტნიორი სასტუმრო ჯერ არ არის. დაამატეთ პირველი ობიექტი, რომ AI-მ რეკომენდაცია გაუკეთოს.",
+        loading: "იტვირთება…",
+        futureNote: "მომავალში: აეროპორტის ტრანსფერი, მძღოლები, თარგმანები, აპარტამენტები — არქიტექტურა მზადაა, ჯერ არ არის ჩართული.",
+        saveHotel: "სასტუმროს შენახვა",
+        cancel: "გაუქმება",
+        delete: "წაშლა",
+        edit: "რედაქტირება",
+        deleteConfirm: "წავშალოთ ეს სასტუმრო?",
+        openMaps: "რუკის გახსნა",
+        minFromClinic: "წთ კლინიკიდან",
+        chipPreferred: "პრიორიტეტული",
+        chipActive: "აქტიური",
+        chipInactive: "არააქტიური",
+        chipTransfer: "ტრანსფერი",
+        chipBreakfast: "საუზმე",
+        fieldName: "სახელი *",
+        fieldPrice: "ფასის დიაპაზონი (დაახლ.)",
+        fieldDistance: "მანძილი (წუთები კლინიკიდან)",
+        fieldSort: "სორტირება",
+        fieldAddress: "მისამართი",
+        fieldMaps: "Google Maps URL",
+        fieldBooking: "ბუქინგის URL (არასავალდებულო)",
+        fieldLangs: "მხარდაჭერილი ენები",
+        fieldDiscount: "კლინიკის ფასდაკლების შენიშვნები",
+        fieldNotes: "შიდა შენიშვნები",
+        checkTransfer: "ტრანსფერი ჩართული / შესაძლებელია",
+        checkBreakfast: "საუზმე ჩართული",
+        checkPreferred: "პრიორიტეტული პარტნიორი",
+        checkActive: "აქტიური (ხილული AI-სთვის)",
+        phName: "Radisson Blu თბილისი",
+        phPrice: "120–180 USD / ღამე",
+        phDistance: "8",
+        phAddress: "Rose Revolution Square…",
+        phMaps: "https://maps.google.com/…",
+        phLangs: "en, ru, ka",
+        phDiscount: "10% კლინიკის პარტნიორი განაკვეთი",
+        phNotes: "მხოლოდ კოორდინატორის შენიშვნები",
+        errLoad: "ჩატვირთვა ვერ მოხერხდა",
+        errDelete: "წაშლა ვერ მოხერხდა",
+        errSave: "შენახვა ვერ მოხერხდა"
       },
 
       treatment: {
@@ -3847,6 +4710,9 @@
     }
     if (typeof window.rerenderOpsProfile === 'function') {
       try { window.rerenderOpsProfile(); } catch (e) { console.warn('rerenderOpsProfile', e); }
+    }
+    if (typeof window.rerenderTravelPage === 'function') {
+      try { window.rerenderTravelPage(); } catch (e) { console.warn('rerenderTravelPage', e); }
     }
     if (typeof window.rerenderSettings === 'function') {
       try {

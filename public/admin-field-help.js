@@ -17,8 +17,22 @@
     return `<span class="vis-badge ${esc(cls)}" title="${esc(t.label || "")}">${esc(label)}</span>`;
   }
 
+  function opUi(key, fallback) {
+    if (window.i18n && typeof window.i18n.t === "function") {
+      const v = window.i18n.t("opsProfile.ui." + key);
+      if (v && !String(v).startsWith("opsProfile.")) return v;
+    }
+    return fallback;
+  }
+
   function aiUsedBadge() {
-    return '<span class="ai-used-badge" title="This field feeds the AI orchestration layer">Used by AI replies</span>';
+    return (
+      '<span class="ai-used-badge" title="' +
+      esc(opUi("usedByAiTitle", "This field feeds the AI orchestration layer")) +
+      '">' +
+      esc(opUi("usedByAi", "Used by AI replies")) +
+      "</span>"
+    );
   }
 
   /**
@@ -34,7 +48,7 @@
     const showAi =
       def.visibility === "ai_reply" || def.visibility === "patient_visible";
     const example = def.example
-      ? `<details class="example-expander"><summary>See example</summary><p class="example-text">${esc(def.example)}</p></details>`
+      ? `<details class="example-expander"><summary>${esc(opUi("seeExample", "See example"))}</summary><p class="example-text">${esc(def.example)}</p></details>`
       : "";
 
     return `<div class="field-block"${span}>
@@ -47,7 +61,7 @@
         </span>
       </div>
       <p class="field-helper">${esc(def.helper)}</p>
-      ${def.aiUsage ? `<p class="field-ai-usage"><strong>AI:</strong> ${esc(def.aiUsage)}</p>` : ""}
+      ${def.aiUsage ? `<p class="field-ai-usage"><strong>${esc(opUi("aiPrefix", "AI:"))}</strong> ${esc(def.aiUsage)}</p>` : ""}
       ${controlHtml}
       ${example}
     </div>`;
@@ -57,7 +71,7 @@
     if (!sectionHelp) return "";
     return `<div class="section-intro" data-section-intro="${esc(sectionId)}">
       <p class="section-intro-text">${esc(sectionHelp.intro)}</p>
-      <p class="section-ai-summary"><span class="ai-used-badge">Used by AI</span> ${esc(sectionHelp.aiUsageSummary)}</p>
+      <p class="section-ai-summary"><span class="ai-used-badge">${esc(opUi("usedByAiSection", "Used by AI"))}</span> ${esc(sectionHelp.aiUsageSummary)}</p>
     </div>`;
   }
 

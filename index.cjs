@@ -42321,7 +42321,7 @@ app.get("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
 
       return {
         id: row.id,
-        treatment_name: treatmentName,
+        treatment_name: treatmentKey,
         label_i18n: labelI18n,
         default_price:
           row.price !== undefined && row.price !== null
@@ -42338,7 +42338,9 @@ app.get("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
 
     const { listVariantsByPriceIds } = require("./lib/clinicTreatmentPriceVariants");
     const { VARIANT_TIERS, MATERIAL_TYPE_PRESETS } = require("./lib/clinicOpsProfileTypes");
-    const variantMap = await listVariantsByPriceIds(prices.map((p) => p.id).filter(Boolean));
+    const variantMap = await listVariantsByPriceIds(prices.map((p) => p.id).filter(Boolean), {
+      activeOnly: false,
+    });
     const pricesOut = prices.map((p) => ({
       ...p,
       variants: (variantMap[p.id] || []).map((v) => ({

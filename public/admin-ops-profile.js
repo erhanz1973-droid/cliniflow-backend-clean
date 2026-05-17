@@ -27,26 +27,26 @@ const SECTION_I18N_ID = {
 };
 
 function op(key, params) {
+  const fullKey = "opsProfile." + key;
   if (window.i18n && typeof window.i18n.t === "function") {
-    return window.i18n.t("opsProfile." + key, params);
+    const v = window.i18n.t(fullKey, params);
+    if (v != null && v !== "" && v !== fullKey) return v;
   }
-  return key;
+  return null;
 }
 
 function secTitle(sectionId) {
   const sid = SECTION_I18N_ID[sectionId] || sectionId;
-  return op("sections." + sid + ".title");
+  return op("sections." + sid + ".title") || sid;
 }
 
 function secHint(sectionId) {
   const sid = SECTION_I18N_ID[sectionId] || sectionId;
-  return op("sections." + sid + ".hint");
+  return op("sections." + sid + ".hint") || "";
 }
 
 function metaLabel(group, key, fallback) {
-  const v = op(group + "." + key);
-  if (!v || String(v).indexOf("opsProfile.") === 0) return fallback;
-  return v;
+  return op(group + "." + key) || fallback;
 }
 
 function applyPageI18n() {
@@ -189,25 +189,95 @@ function fh() {
   return window.ClinicFieldHelp;
 }
 
+function fieldI18nKey(id) {
+  return "fieldHelp." + String(id || "").replace(/\./g, "_");
+}
+
 function fieldDef(id) {
   return meta && meta.fieldHelp ? meta.fieldHelp[id] : null;
 }
 
+function localizedFieldDef(id) {
+  const base = fieldDef(id);
+  if (!base) return null;
+  const prefix = fieldI18nKey(id);
+  return {
+    id,
+    visibility: base.visibility,
+    gridSpan: base.gridSpan,
+    inputType: base.inputType,
+    label: op(prefix + ".label") || "",
+    helper: op(prefix + ".helper") || "",
+    aiUsage: op(prefix + ".aiUsage") || "",
+    placeholder: op(prefix + ".placeholder") || "",
+    example: op(prefix + ".example") || "",
+  };
+}
+
+function localizedVisibilityTypes() {
+  if (!meta || !meta.visibilityTypes) return {};
+  const out = {};
+  Object.keys(meta.visibilityTypes).forEach((key) => {
+    const base = meta.visibilityTypes[key];
+    const short = op("visibility." + key + ".short");
+    const label = op("visibility." + key + ".label");
+    out[key] = {
+      ...base,
+      short: short || base.short,
+      label: label || base.label,
+    };
+  });
+  return out;
+}
+
+function localizedSectionHelp(sectionId) {
+  const sid = SECTION_I18N_ID[sectionId] || sectionId;
+  const intro = op("sectionHelp." + sid + ".intro");
+  const aiUsageSummary = op("sectionHelp." + sid + ".aiUsageSummary");
+  if (!intro) return null;
+  return {
+    intro,
+    aiUsageSummary: aiUsageSummary || "",
+  };
+}
+
+function optionLabel(group, value, fallback) {
+  return op("options." + group + "." + value) || fallback;
+}
+
+function autonomyLevelLabel(level) {
+  return op("autonomyLevels." + level) || level;
+}
+
 function fld(id, inner, gridSpan) {
   if (!fh()) return `<div class="field-block"${gridSpan ? ' style="grid-column:1/-1"' : ""}>${inner}</div>`;
-  return fh().renderFieldBlock(fieldDef(id), inner, {
-    visibilityTypes: meta.visibilityTypes,
+  return fh().renderFieldBlock(localizedFieldDef(id), inner, {
+    visibilityTypes: localizedVisibilityTypes(),
     gridSpan,
   });
 }
 
+function sectionIntroHtml(sectionId) {
+  const sid = SECTION_I18N_ID[sectionId] || sectionId;
+  const intro = op("sectionHelp." + sid + ".intro");
+  const aiUsageSummary = op("sectionHelp." + sid + ".aiUsageSummary");
+  if (!intro) return "";
+  const usedBy = op("ui.usedByAiSection") || "";
+  const summary = aiUsageSummary
+    ? `<p class="section-ai-summary"><span class="ai-used-badge">${esc(usedBy)}</span> ${esc(aiUsageSummary)}</p>`
+    : "";
+  return `<div class="section-intro" data-section-intro="${esc(sectionId)}">
+    <p class="section-intro-text">${esc(intro)}</p>
+    ${summary}
+  </div>`;
+}
+
 function secIntro(sectionId) {
-  if (!fh() || !meta.sectionHelp) return "";
-  return fh().renderSectionHeader(meta.sectionHelp[sectionId], sectionId);
+  return sectionIntroHtml(sectionId);
 }
 
 function ph(id) {
-  const d = fieldDef(id);
+  const d = localizedFieldDef(id);
   return d && d.placeholder ? ` placeholder="${esc(d.placeholder)}"` : "";
 }
 
@@ -249,9 +319,10 @@ function buildNav() {
 function renderSectionShell(id, title, hint, bodyHtml, saveLabel) {
   const el = document.getElementById("sec-" + id);
   if (!el) return;
+  const introBlock = secIntro(id);
   el.innerHTML =
-    `<h2>${esc(title)}</h2><p class="hint">${esc(hint)}</p>` +
-    secIntro(id) +
+    `<h2>${esc(title)}</h2>` +
+    (introBlock || (hint ? `<p class="hint">${esc(hint)}</p>` : "")) +
     bodyHtml +
     `<div style="margin-top:12px"><button type="button" class="btn" data-save="${esc(id)}">${esc(
       saveLabel || op("saveSection"),
@@ -277,8 +348,8 @@ function renderAllSections() {
       ${fld("displayNameLocalized", renderLocalizedInputs("displayNameLoc", ai.displayNameLocalized || {}, enabledCodes), true)}
       ${fld("welcomeMessageLocalized", renderLocalizedInputs("welcomeLoc", ai.welcomeMessageLocalized || {}, enabledCodes), true)}
       <div class="form-grid">
-        ${fld("toneStyle", `<select name="toneStyle">${(meta.toneStyles || []).map((o) => `<option value="${esc(o.value)}"${ai.toneStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
-        ${fld("signatureStyle", `<select name="signatureStyle">${(meta.signatureStyles || []).map((o) => `<option value="${esc(o.value)}"${ai.signatureStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
+        ${fld("toneStyle", `<select name="toneStyle">${(meta.toneStyles || []).map((o) => `<option value="${esc(o.value)}"${ai.toneStyle === o.value ? " selected" : ""}>${esc(optionLabel("toneStyle", o.value, o.label))}</option>`).join("")}</select>`)}
+        ${fld("signatureStyle", `<select name="signatureStyle">${(meta.signatureStyles || []).map((o) => `<option value="${esc(o.value)}"${ai.signatureStyle === o.value ? " selected" : ""}>${esc(optionLabel("signatureStyle", o.value, o.label))}</option>`).join("")}</select>`)}
         ${fld("profileTags", `<input name="profileTags" value="${esc(joinList(ai.profileTags))}"${ph("profileTags")} />`, true)}
       </div>
     </form>`,
@@ -347,7 +418,7 @@ function renderAllSections() {
     </div></form>`,
   );
 
-  const postOpHelp = fieldDef("protocol.postOpNotes");
+  const postOpHelp = localizedFieldDef("protocol.postOpNotes");
   renderSectionShell(
     "workflow",
     secTitle("workflow"),
@@ -365,7 +436,7 @@ function renderAllSections() {
     secTitle("ai-safety"),
     secHint("ai-safety"),
     `<p class="field-helper">${esc(op("autonomyIntro"))}</p>
-    <table class="autonomy"><thead><tr><th>${esc(op("autonomyCategory"))}</th><th>${esc(op("autonomyLevel"))}</th></tr></thead><tbody>${(meta.autonomyCategories || []).map((cat) => `<tr><td>${esc(metaLabel("autonomy", cat.key, cat.label))}</td><td><select data-autonomy="${esc(cat.key)}">${(meta.autonomyLevels || []).map((lv) => `<option value="${esc(lv)}"${autonomy[cat.key] === lv ? " selected" : ""}>${esc(lv)}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>
+    <table class="autonomy"><thead><tr><th>${esc(op("autonomyCategory"))}</th><th>${esc(op("autonomyLevel"))}</th></tr></thead><tbody>${(meta.autonomyCategories || []).map((cat) => `<tr><td>${esc(metaLabel("autonomy", cat.key, cat.label))}</td><td><select data-autonomy="${esc(cat.key)}">${(meta.autonomyLevels || []).map((lv) => `<option value="${esc(lv)}"${autonomy[cat.key] === lv ? " selected" : ""}>${esc(autonomyLevelLabel(lv))}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>
     <p class="hint" style="margin-top:12px">${esc(op("safetyIntro"))}</p>
     <div class="check-row" id="safetyChecks">${(meta.hardHumanReviewKeys || []).map((h) => `<label><input type="checkbox" data-safety="${esc(h.key)}" ${safety[h.key] !== false ? "checked" : ""}/> ${esc(metaLabel("safety", h.key, h.label))}</label>`).join("")}</div>`,
   );
@@ -538,24 +609,31 @@ async function loadProfile() {
   renderAllSections();
 }
 
-async function init() {
-  const bootI18n = () => {
-    if (window.i18n && typeof window.i18n.init === "function") window.i18n.init();
-    applyPageI18n();
-  };
-  if (window.i18n) bootI18n();
-  else document.addEventListener("i18n:ready", bootI18n, { once: true });
+function ensureAdminI18nReady() {
+  return new Promise((resolve) => {
+    const boot = () => {
+      if (window.i18n && typeof window.i18n.init === "function") window.i18n.init();
+      resolve();
+    };
+    if (window.i18n) boot();
+    else document.addEventListener("i18n:ready", boot, { once: true });
+  });
+}
 
-  setStatus(op("loading"));
+async function init() {
+  await ensureAdminI18nReady();
+
+  setStatus(op("loading") || "Loading…");
   const metaRes = await adminFetch("/api/admin/clinic/ops-profile/meta");
   meta = await metaRes.json();
   if (!metaRes.ok) {
-    setStatus(op("loadMetaFailed"), false);
+    setStatus(op("loadMetaFailed") || "Failed to load meta", false);
     return;
   }
   buildNav();
   await loadProfile();
-  applyPageI18n();
+  if (typeof window.rerenderOpsProfile === "function") window.rerenderOpsProfile();
+  else applyPageI18n();
   setStatus("");
   const hash = (location.hash || "#ai-profile").replace("#", "");
   if (document.getElementById("sec-" + hash)) showSection(hash);

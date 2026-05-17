@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202605171"></script>
-  <script src="/admin-i18n.js?v=37"></script>
+  <script src="/api-base.js?v=202605182"></script>
+  <script src="/admin-i18n.js?v=42"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Travel & Accommodation — Clinifly Admin</title>
-  <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
+  <title data-i18n="travel.pageTitle">Travel & Accommodation — Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605182" />
   <script>
     (function () {
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
@@ -78,57 +78,66 @@
 </head>
 <body>
   <div class="travel-wrap">
-    <div class="breadcrumb"><a href="/admin-settings.html">Clinic Settings</a> / Travel & Accommodation</div>
+    <div class="breadcrumb"><a href="/admin-settings.html" data-i18n="travel.breadcrumbSettings">Clinic Settings</a> / <span data-i18n="travel.breadcrumbCurrent">Travel & Accommodation</span></div>
     <div class="travel-header">
-      <h1>Travel & Accommodation</h1>
-      <p>Partner hotels power the AI medical travel coordinator — up to 3 active properties are shared with the AI per conversation (no vector DB).</p>
+      <h1 data-i18n="travel.title">Travel & Accommodation</h1>
+      <p data-i18n="travel.lead">Partner hotels power the AI medical travel coordinator — up to 3 active properties are shared with the AI per conversation (no vector DB).</p>
     </div>
 
     <div id="globalErr" class="err" style="display:none"></div>
 
     <section class="panel">
       <div class="panel-hd">
-        <h2>Partner hotels</h2>
-        <button type="button" class="btn" id="btnAdd">+ Add hotel</button>
+        <h2 data-i18n="travel.partnerHotels">Partner hotels</h2>
+        <button type="button" class="btn" id="btnAdd" data-i18n="travel.addHotel">+ Add hotel</button>
       </div>
-      <div id="hotelList" class="hotel-grid"><div class="empty">Loading…</div>
+      <div id="hotelList" class="hotel-grid"><div class="empty" data-i18n="travel.loading">Loading…</div>
       </div>
     </section>
 
     <section class="panel" id="editorPanel" style="display:none">
-      <div class="panel-hd"><h2 id="editorTitle">Add hotel</h2></div>
+      <div class="panel-hd"><h2 id="editorTitle" data-i18n="travel.addHotel">Add hotel</h2></div>
       <form id="hotelForm">
         <input type="hidden" id="hotelId" />
         <div class="form-grid">
-          <div><label>Name *</label><input id="fName" required placeholder="Radisson Blu Tbilisi" /></div>
-          <div><label>Price range (approx.)</label><input id="fPrice" placeholder="120–180 USD / night" /></div>
-          <div><label>Distance (minutes from clinic)</label><input id="fDistance" type="number" min="0" placeholder="8" /></div>
-          <div><label>Sort order</label><input id="fSort" type="number" value="0" /></div>
-          <div style="grid-column:1/-1"><label>Address</label><input id="fAddress" placeholder="Rose Revolution Square…" /></div>
-          <div style="grid-column:1/-1"><label>Google Maps URL</label><input id="fMaps" type="url" placeholder="https://maps.google.com/…" /></div>
-          <div style="grid-column:1/-1"><label>Booking URL (optional)</label><input id="fBooking" type="url" /></div>
-          <div><label>Supported languages</label><input id="fLangs" placeholder="en, ru, tr" /></div>
-          <div><label>Clinic discount notes</label><input id="fDiscount" placeholder="10% clinic partner rate" /></div>
+          <div><label data-i18n="travel.fieldName">Name *</label><input id="fName" required data-i18n-placeholder="travel.phName" placeholder="Radisson Blu Tbilisi" /></div>
+          <div><label data-i18n="travel.fieldPrice">Price range (approx.)</label><input id="fPrice" data-i18n-placeholder="travel.phPrice" placeholder="120–180 USD / night" /></div>
+          <div><label data-i18n="travel.fieldDistance">Distance (minutes from clinic)</label><input id="fDistance" type="number" min="0" data-i18n-placeholder="travel.phDistance" placeholder="8" /></div>
+          <div><label data-i18n="travel.fieldSort">Sort order</label><input id="fSort" type="number" value="0" /></div>
+          <div style="grid-column:1/-1"><label data-i18n="travel.fieldAddress">Address</label><input id="fAddress" data-i18n-placeholder="travel.phAddress" placeholder="Rose Revolution Square…" /></div>
+          <div style="grid-column:1/-1"><label data-i18n="travel.fieldMaps">Google Maps URL</label><input id="fMaps" type="url" data-i18n-placeholder="travel.phMaps" placeholder="https://maps.google.com/…" /></div>
+          <div style="grid-column:1/-1"><label data-i18n="travel.fieldBooking">Booking URL (optional)</label><input id="fBooking" type="url" /></div>
+          <div><label data-i18n="travel.fieldLangs">Supported languages</label><input id="fLangs" data-i18n-placeholder="travel.phLangs" placeholder="en, ru, tr" /></div>
+          <div><label data-i18n="travel.fieldDiscount">Clinic discount notes</label><input id="fDiscount" data-i18n-placeholder="travel.phDiscount" placeholder="10% clinic partner rate" /></div>
         </div>
         <div class="check-row">
-          <label><input type="checkbox" id="fTransfer" /> Transfer included / can arrange</label>
-          <label><input type="checkbox" id="fBreakfast" /> Breakfast included</label>
-          <label><input type="checkbox" id="fPreferred" /> Preferred partner</label>
-          <label><input type="checkbox" id="fActive" checked /> Active (visible to AI)</label>
+          <label><input type="checkbox" id="fTransfer" /> <span data-i18n="travel.checkTransfer">Transfer included / can arrange</span></label>
+          <label><input type="checkbox" id="fBreakfast" /> <span data-i18n="travel.checkBreakfast">Breakfast included</span></label>
+          <label><input type="checkbox" id="fPreferred" /> <span data-i18n="travel.checkPreferred">Preferred partner</span></label>
+          <label><input type="checkbox" id="fActive" checked /> <span data-i18n="travel.checkActive">Active (visible to AI)</span></label>
         </div>
-        <div><label>Internal notes</label><textarea id="fNotes" placeholder="Coordinator-only notes"></textarea></div>
+        <div><label data-i18n="travel.fieldNotes">Internal notes</label><textarea id="fNotes" data-i18n-placeholder="travel.phNotes" placeholder="Coordinator-only notes"></textarea></div>
         <div style="display:flex;gap:8px;margin-top:12px">
-          <button type="submit" class="btn">Save hotel</button>
-          <button type="button" class="btn secondary" id="btnCancelEdit">Cancel</button>
+          <button type="submit" class="btn" data-i18n="travel.saveHotel">Save hotel</button>
+          <button type="button" class="btn secondary" id="btnCancelEdit" data-i18n="travel.cancel">Cancel</button>
         </div>
         <div id="formErr" class="err" style="display:none"></div>
       </form>
     </section>
 
-    <p class="future-note">Coming later: airport transfers, drivers, translators, apartments — architecture prepared, not enabled yet.</p>
+    <p class="future-note" data-i18n="travel.futureNote">Coming later: airport transfers, drivers, translators, apartments — architecture prepared, not enabled yet.</p>
   </div>
 
   <script>
+    function tt(key, params) {
+      const fullKey = "travel." + key;
+      if (window.i18n && typeof window.i18n.t === "function") {
+        const v = window.i18n.t(fullKey, params);
+        if (v != null && v !== "" && v !== fullKey) return v;
+      }
+      return null;
+    }
+
     function adminFetch(path, opts) {
       const url = typeof adminFetchUrl === "function" ? adminFetchUrl(path) : path;
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
@@ -145,6 +154,19 @@
 
     let hotels = [];
 
+    function applyTravelStaticI18n() {
+      if (typeof window.applyI18n === "function") window.applyI18n();
+      if (window.i18n && typeof window.i18n.t === "function") {
+        document.title = window.i18n.t("travel.pageTitle");
+      }
+      document.querySelectorAll("[data-i18n-placeholder]").forEach(function (el) {
+        const key = el.getAttribute("data-i18n-placeholder");
+        if (!key) return;
+        const v = window.i18n && window.i18n.t ? window.i18n.t(key) : "";
+        if (v && v !== key) el.placeholder = v;
+      });
+    }
+
     function showErr(msg) {
       const el = document.getElementById("globalErr");
       el.style.display = "block";
@@ -154,34 +176,35 @@
     function renderList() {
       const el = document.getElementById("hotelList");
       if (!hotels.length) {
-        el.innerHTML = '<div class="empty">No partner hotels yet. Add your first property so the AI can recommend stays.</div>';
+        el.innerHTML = '<div class="empty">' + esc(tt("emptyList") || "No partner hotels yet.") + "</div>";
         return;
       }
       el.innerHTML = hotels
         .map(function (h) {
           const cls = "hotel-card" + (h.isActive ? "" : " inactive") + (h.isPreferred ? " preferred" : "");
           const maps = h.mapsUrl
-            ? '<a href="' + esc(h.mapsUrl) + '" target="_blank" rel="noopener">Open Maps</a>'
+            ? '<a href="' + esc(h.mapsUrl) + '" target="_blank" rel="noopener">' + esc(tt("openMaps") || "Open Maps") + "</a>"
             : "";
+          const dist =
+            h.distanceMinutes != null
+              ? h.distanceMinutes + " " + esc(tt("minFromClinic") || "min from clinic")
+              : "";
           return (
             '<div class="' + cls + '">' +
-            '<div><div class="hotel-name">' + esc(h.name) + "</div>" +
+            "<div><div class=\"hotel-name\">" + esc(h.name) + "</div>" +
             '<div class="hotel-meta">' +
-            [h.priceRange, h.distanceMinutes != null ? h.distanceMinutes + " min from clinic" : "", h.address]
-              .filter(Boolean)
-              .map(esc)
-              .join(" · ") +
+            [h.priceRange, dist, h.address].filter(Boolean).map(esc).join(" · ") +
             (maps ? " · " + maps : "") +
             "</div>" +
             '<div class="chips">' +
-            (h.isPreferred ? '<span class="chip pref">Preferred</span>' : "") +
-            (h.isActive ? '<span class="chip on">Active</span>' : '<span class="chip">Inactive</span>') +
-            (h.transferIncluded ? '<span class="chip">Transfer</span>' : "") +
-            (h.breakfastIncluded ? '<span class="chip">Breakfast</span>' : "") +
+            (h.isPreferred ? '<span class="chip pref">' + esc(tt("chipPreferred") || "Preferred") + "</span>" : "") +
+            (h.isActive ? '<span class="chip on">' + esc(tt("chipActive") || "Active") + "</span>" : '<span class="chip">' + esc(tt("chipInactive") || "Inactive") + "</span>") +
+            (h.transferIncluded ? '<span class="chip">' + esc(tt("chipTransfer") || "Transfer") + "</span>" : "") +
+            (h.breakfastIncluded ? '<span class="chip">' + esc(tt("chipBreakfast") || "Breakfast") + "</span>" : "") +
             "</div></div>" +
             '<div class="hotel-actions">' +
-            '<button type="button" class="btn secondary" data-edit="' + esc(h.id) + '">Edit</button>' +
-            '<button type="button" class="btn danger" data-del="' + esc(h.id) + '">Delete</button>' +
+            '<button type="button" class="btn secondary" data-edit="' + esc(h.id) + '">' + esc(tt("edit") || "Edit") + "</button>" +
+            '<button type="button" class="btn danger" data-del="' + esc(h.id) + '">' + esc(tt("delete") || "Delete") + "</button>" +
             "</div></div>"
           );
         })
@@ -194,7 +217,7 @@
       });
       el.querySelectorAll("[data-del]").forEach(function (btn) {
         btn.addEventListener("click", function () {
-          if (confirm("Delete this hotel?")) deleteHotel(btn.getAttribute("data-del"));
+          if (confirm(tt("deleteConfirm") || "Delete this hotel?")) deleteHotel(btn.getAttribute("data-del"));
         });
       });
     }
@@ -204,7 +227,7 @@
       panel.style.display = "block";
       document.getElementById("formErr").style.display = "none";
       const h = id ? hotels.find(function (x) { return x.id === id; }) : null;
-      document.getElementById("editorTitle").textContent = h ? "Edit hotel" : "Add hotel";
+      document.getElementById("editorTitle").textContent = h ? tt("editHotel") || "Edit hotel" : tt("addHotel") || "Add hotel";
       document.getElementById("hotelId").value = h ? h.id : "";
       document.getElementById("fName").value = h ? h.name : "";
       document.getElementById("fPrice").value = h ? h.priceRange || "" : "";
@@ -231,11 +254,12 @@
 
     async function loadHotels() {
       document.getElementById("globalErr").style.display = "none";
-      document.getElementById("hotelList").innerHTML = '<div class="empty">Loading…</div>';
+      document.getElementById("hotelList").innerHTML =
+        '<div class="empty">' + esc(tt("loading") || "Loading…") + "</div>";
       try {
         const res = await adminFetch("/api/admin/clinic/travel/hotels");
         const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load");
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || tt("errLoad") || "Failed to load");
         hotels = json.hotels || [];
         renderList();
       } catch (e) {
@@ -250,12 +274,22 @@
           method: "DELETE",
         });
         const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Delete failed");
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || tt("errDelete") || "Delete failed");
         await loadHotels();
       } catch (e) {
         showErr(e.message);
       }
     }
+
+    window.rerenderTravelPage = function rerenderTravelPage() {
+      applyTravelStaticI18n();
+      renderList();
+      const panel = document.getElementById("editorPanel");
+      if (panel && panel.style.display !== "none") {
+        const id = document.getElementById("hotelId").value.trim();
+        openEditor(id || null);
+      }
+    };
 
     document.getElementById("btnAdd").addEventListener("click", function () { openEditor(null); });
     document.getElementById("btnCancelEdit").addEventListener("click", closeEditor);
@@ -291,7 +325,7 @@
           body: JSON.stringify(body),
         });
         const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Save failed");
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || tt("errSave") || "Save failed");
         closeEditor();
         await loadHotels();
       } catch (err) {
@@ -300,8 +334,9 @@
       }
     });
 
+    applyTravelStaticI18n();
     loadHotels();
   </script>
-  <script src="/admin-layout.js?v=202605171"></script>
+  <script src="/admin-layout.js?v=202605182"></script>
 </body>
 </html>

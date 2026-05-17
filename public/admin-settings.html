@@ -1101,10 +1101,15 @@
     return tiers.map((t) => `<option value="${t.value}"${selected === t.value ? " selected" : ""}>${escapeHtml(t.label)}</option>`).join("");
   }
 
+  function normalizeTreatmentKey(name) {
+    return String(name || "").trim().toUpperCase();
+  }
+
   function renderVariantRow(procType, idx, v) {
     v = v || {};
     const n = idx + 1;
-    return `<div class="price-variant-card" data-vrow="${procType}_${idx}">
+    const idAttr = v.id ? ` data-variant-id="${escapeHtml(String(v.id))}"` : "";
+    return `<div class="price-variant-card" data-vrow="${procType}_${idx}"${idAttr}>
       <div class="variant-card-header">
         <strong>Brand variant ${n}</strong>
         <button type="button" class="btn-variants" data-remove-vrow="${procType}_${idx}">Remove</button>
@@ -1172,7 +1177,9 @@
       if (!brand) return null;
       const minRaw = row.querySelector('[data-vf="min"]')?.value;
       const maxRaw = row.querySelector('[data-vf="max"]')?.value;
+      const variantId = row.getAttribute("data-variant-id");
       return {
+        ...(variantId ? { id: variantId } : {}),
         brand_name: brand,
         origin_country: row.querySelector('[data-vf="country"]')?.value?.trim() || null,
         tier: row.querySelector('[data-vf="tier"]')?.value?.trim() || null,
@@ -1284,8 +1291,10 @@
       prices = {};
       priceVariants = {};
       priceList.forEach(price => {
-        prices[price.treatment_name] = price;
-        priceVariants[price.treatment_name] = price.variants || [];
+        const key = normalizeTreatmentKey(price.treatment_name);
+        if (!key) return;
+        prices[key] = { ...price, treatment_name: key };
+        priceVariants[key] = price.variants || [];
         if (price.currency) defaultCurrency = price.currency;
       });
 
@@ -1408,6 +1417,7 @@
 
       const currency = $("defaultCurrency") ? $("defaultCurrency").value : "EUR";
       const variantSnapshot = snapshotAllVariants();
+      const variantsBeforeSave = { ...priceVariants };
       const saveBtn = $("saveAllPricesBtn");
       if (saveBtn) {
         saveBtn.disabled = true;
@@ -1415,8 +1425,7 @@
         saveBtn.textContent = savingText;
       }
 
-      // Save each price that has a value
-      const promises = [];
+      const savedByType = [];
       PROCEDURE_TYPES.forEach(proc => {
         const priceInput = $(`price_${proc.type}`);
         const durationInput = $(`duration_${proc.type}`);
@@ -1435,9 +1444,10 @@
         const existingRow = prices[proc.type];
         const hasPrice = Number.isFinite(priceValue) && priceValue > 0;
         const isTimingCustomized = durationValue !== recommendedDuration || breakValue > 0;
+        const hasVariantsToSave = (variantSnapshot[proc.type] || []).length > 0;
         
-        // Save row when there is an explicit price, existing row, timing customizations, or inactive toggle
-        if (hasPrice || existingRow || isTimingCustomized || !isActive) {
+        // Save row when there is an explicit price, existing row, timing customizations, inactive toggle, or brand variants
+        if (hasPrice || existingRow || isTimingCustomized || !isActive || hasVariantsToSave) {
           const labelI18n = collectLabelI18n(proc.type);
           const payload = {
             id: prices[proc.type]?.id, // Keep existing ID if updating
@@ -1450,8 +1460,9 @@
             break_minutes: breakValue,
           };
 
-          promises.push(
-            fetch(`${API_BASE}/api/admin/treatment-prices`, {
+          savedByType.push({
+            procType: proc.type,
+            promise: fetch(`${API_BASE}/api/admin/treatment-prices`, {
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${token}`,
@@ -1459,16 +1470,63 @@
                 'Accept': 'application/json'
               },
               body: JSON.stringify(payload)
-            }).then(res => res.json())
-          );
+            }).then(res => res.json()),
+          });
         }
       });
 
-      const results = await Promise.all(promises);
+      const results = await Promise.all(savedByType.map((s) => s.promise));
       const errors = results.filter(r => !r.ok);
       
       if (errors.length > 0) {
         throw new Error(`Some prices failed to save: ${errors.length} errors`);
+      }
+
+      savedByType.forEach((entry, i) => {
+        const json = results[i];
+        if (!json?.ok || !json.price?.id) return;
+        const key = normalizeTreatmentKey(entry.procType);
+        prices[key] = { ...(prices[key] || {}), ...json.price, id: json.price.id, treatment_name: key };
+      });
+
+      const token2 = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      const variantSyncErrors = [];
+      for (const proc of PROCEDURE_TYPES) {
+        const variants = variantSnapshot[proc.type];
+        if (variants === undefined) continue;
+        const hadVariants = (variantsBeforeSave[proc.type] || []).length > 0;
+        if (!variants.length && !hadVariants) continue;
+
+        const priceId = prices[proc.type]?.id;
+        if (!priceId) {
+          variantSyncErrors.push(proc.type + ': save treatment price first (missing row id)');
+          continue;
+        }
+
+        try {
+          const syncRes = await fetch(`${API_BASE}/api/admin/treatment-prices/${priceId}/variants/sync`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token2}`,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({ variants }),
+          });
+          const syncJson = await syncRes.json();
+          if (!syncRes.ok || !syncJson.ok) {
+            const msg = syncJson.message || syncJson.error || `HTTP ${syncRes.status}`;
+            variantSyncErrors.push(proc.type + ': ' + msg);
+          } else if (Array.isArray(syncJson.variants)) {
+            priceVariants[proc.type] = syncJson.variants;
+          }
+        } catch (syncErr) {
+          variantSyncErrors.push(proc.type + ': ' + (syncErr?.message || 'sync failed'));
+        }
+      }
+
+      if (variantSyncErrors.length) {
+        throw new Error('Variant sync failed:\n' + variantSyncErrors.join('\n'));
       }
 
       // Show success message
@@ -1485,28 +1543,6 @@
         if (successMsg.parentElement) successMsg.remove();
       }, 5000);
       
-      // Reload prices to show saved values
-      await loadPrices();
-
-      const token2 = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
-      for (const proc of PROCEDURE_TYPES) {
-        const row = prices[proc.type];
-        const variants = variantSnapshot[proc.type];
-        if (!row?.id || variants === undefined) continue;
-        try {
-          await fetch(`${API_BASE}/api/admin/treatment-prices/${row.id}/variants/sync`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token2}`,
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-            },
-            body: JSON.stringify({ variants }),
-          });
-        } catch (syncErr) {
-          console.warn('Variant sync failed for', proc.type, syncErr);
-        }
-      }
       await loadPrices();
     } catch (error) {
       console.error("Save all prices error:", error);
