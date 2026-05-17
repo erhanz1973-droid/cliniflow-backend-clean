@@ -9404,6 +9404,11 @@ const {
   normalizeContentHash,
   findExistingAiPhotoUpload,
 } = require("./lib/dentalUploadDedupe");
+const {
+  loadAiAnalyzeImageBuffer,
+  probeStorageObjectReadable,
+  parseSupabaseStorageRefFromUrl,
+} = require("./lib/aiAnalyzeImageLoad");
 registerAiPatientDocumentRoutes(app, {
   requireToken,
   requireAdminAuth,
@@ -31711,17 +31716,16 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       contentHash && patientId ? await findExistingAiPhotoUpload(patientId, contentHash) : null;
     if (existingUpload?.fileUrl) {
       let signedUrl = existingUpload.fileUrl;
-      if (existingUpload.storagePath && isSupabaseEnabled()) {
+      const dedupeObjPath =
+        existingUpload.storagePath ||
+        parseSupabaseStorageRefFromUrl(existingUpload.fileUrl)?.objectPath ||
+        null;
+      if (dedupeObjPath && isSupabaseEnabled()) {
         try {
-          const parts = String(existingUpload.storagePath).split("/");
-          const bucket = parts[0];
-          const objPath = parts.slice(1).join("/");
-          if (bucket && objPath) {
-            const { data: signed, error: signErr } = await supabase.storage
-              .from(bucket)
-              .createSignedUrl(objPath, 365 * 24 * 3600);
-            if (!signErr && signed?.signedUrl) signedUrl = signed.signedUrl;
-          }
+          const { data: signed, error: signErr } = await supabase.storage
+            .from("patient-files")
+            .createSignedUrl(dedupeObjPath, 365 * 24 * 3600);
+          if (!signErr && signed?.signedUrl) signedUrl = signed.signedUrl;
         } catch (_) {
           /* use stored url */
         }
@@ -31732,6 +31736,7 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
         reused: true,
         imageUrl: signedUrl,
         url: signedUrl,
+        path: dedupeObjPath || null,
         contentHash,
         patientFileId: existingUpload.patientFileId,
       });
@@ -31772,6 +31777,10 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       console.error('[AI UPLOAD] Signed URL creation failed:', signErr?.message);
       return res.status(500).json({ ok: false, error: 'sign_failed', message: signErr?.message });
     }
+
+    void probeStorageObjectReadable(storagePath, patientId, (level, event, meta) =>
+      logAI(level, event, meta),
+    ).catch(() => {});
 
     const { data: pubData } = supabase.storage.from("patient-files").getPublicUrl(storagePath);
     const publicUrl = String(pubData?.publicUrl || "").trim();
@@ -32753,84 +32762,63 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       }
     }
 
-    logAI('info', 'analyze_start', { patientId, imageUrl, lang, forceReanalyze });
+    const storagePathHint =
+      req.body?.storagePath || req.body?.path || req.body?.storage_path || null;
 
-    // ── Load image — from remote URL (Supabase) or local disk ───────────
+    logAI('info', 'analyze_start', {
+      patientId,
+      imageUrl: String(imageUrl).slice(0, 120),
+      storagePath: storagePathHint ? String(storagePathHint).slice(0, 96) : null,
+      lang,
+      forceReanalyze,
+    });
+
+    // ── Load image — service-role storage download preferred; HTTP fallback ──
     let imageBuffer;
     let mimeType = 'image/jpeg';
 
     const isRemoteUrl = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
 
-    if (isRemoteUrl) {
-      /**
-       * Attempt to fetch a Supabase signed URL.
-       * On 401/403 (expired token) re-sign the file using the service-role key
-       * and retry once — all within the 15 s budget.
-       *
-       * Supabase signed URL format:
-       *   https://<project>.supabase.co/storage/v1/object/sign/<bucket>/<path...>?token=...
-       */
-      async function fetchWithSignedUrlRetry(url, timeoutMs) {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-
-        try {
-          let fetchUrl = url;
-
-          const tryFetch = async (u) => {
-            const r = await fetch(u, { signal: ctrl.signal });
-            return r;
-          };
-
-          let imgRes = await tryFetch(fetchUrl);
-
-          // Expired / forbidden → attempt re-sign once
-          if ((imgRes.status === 401 || imgRes.status === 403) && isSupabaseEnabled()) {
-            logAI('info', 'signed_url_expired_retry', { patientId, status: imgRes.status });
-
-            // Parse bucket + object path from the URL
-            // Pattern: .../object/sign/<bucket>/<object-path>
-            const withoutQuery = url.split('?')[0];
-            const signMatch = withoutQuery.match(/\/object\/sign\/([^/]+)\/(.+)$/);
-
-            if (signMatch) {
-              const bucket  = signMatch[1];
-              const objPath = signMatch[2];
-              const { data: signed, error: signErr } =
-                await supabase.storage.from(bucket).createSignedUrl(objPath, 120); // 2 min
-
-              if (!signErr && signed?.signedUrl) {
-                imgRes = await tryFetch(signed.signedUrl);
-                logAI('info', 'signed_url_refreshed', { patientId, newStatus: imgRes.status });
-              } else {
-                logAI('warn', 'signed_url_refresh_failed', { patientId, signErr: signErr?.message });
-              }
-            }
-          }
-
-          clearTimeout(timer);
-          return imgRes;
-        } catch (e) {
-          clearTimeout(timer);
-          throw e;
-        }
-      }
-
+    if (isRemoteUrl || storagePathHint) {
       try {
-        const imgRes = await fetchWithSignedUrlRetry(imageUrl, 15_000);
-
-        if (!imgRes.ok) {
-          logAI('warn', 'remote_image_fetch_failed', { patientId, imageUrl, status: imgRes.status });
-          return res.status(502).json({ ok: false, error: 'image_fetch_failed', message: 'Görsel indirilemedi.' });
+        const loaded = await loadAiAnalyzeImageBuffer({
+          imageUrl: isRemoteUrl ? imageUrl : null,
+          storagePath: storagePathHint,
+          patientId,
+          log: (level, event, meta) => logAI(level, event, meta),
+          timeoutMs: 15_000,
+        });
+        imageBuffer = loaded.buffer;
+        mimeType = loaded.mimeType || 'image/jpeg';
+        logAI('info', 'analyze_image_loaded', {
+          patientId,
+          source: loaded.source,
+          bytes: imageBuffer.length,
+        });
+      } catch (loadErr) {
+        const code = loadErr?.code || 'image_fetch_failed';
+        if (code === 'image_fetch_timeout') {
+          logAI('warn', 'remote_image_timeout', { patientId, imageUrl: String(imageUrl).slice(0, 120) });
+          return res.status(504).json({
+            ok: false,
+            error: 'image_fetch_timeout',
+            message: 'Photo download timed out. Please try again.',
+            retryable: true,
+          });
         }
-
-        const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
-        mimeType = contentType.split(';')[0].trim() || 'image/jpeg';
-        const arrayBuf = await imgRes.arrayBuffer();
-        imageBuffer = Buffer.from(arrayBuf);
-      } catch (e) {
-        logAI('warn', 'remote_image_timeout', { patientId, imageUrl });
-        return res.status(504).json({ ok: false, error: 'image_fetch_timeout', message: 'Görsel indirme zaman aşımına uğradı.' });
+        logAI('warn', 'remote_image_fetch_failed', {
+          patientId,
+          imageUrl: String(imageUrl).slice(0, 120),
+          status: loadErr.status,
+          bodySnippet: loadErr.bodySnippet,
+          message: loadErr.message,
+        });
+        return res.status(502).json({
+          ok: false,
+          error: 'image_fetch_failed',
+          message: 'Photo could not be processed. Please try again.',
+          retryable: true,
+        });
       }
     } else {
       // Local disk path (legacy / same-server deployments)
@@ -53735,7 +53723,14 @@ app.get('/api/patient/inbox-summary', requireToken, async (req, res) => {
         : offerQ.in('patient_id', patientIdFilters);
     const { count: newOffers, error: offerErr } = await offerQ;
 
-    if (offerErr) console.warn('[INBOX-SUMMARY offers] error:', offerErr?.message || JSON.stringify(offerErr));
+    if (offerErr) {
+      console.warn('[INBOX-SUMMARY offers] error:', {
+        message: offerErr?.message || null,
+        code: offerErr?.code || null,
+        details: offerErr?.details || null,
+        hint: offerErr?.hint || null,
+      });
+    }
 
     // Count unread doctor messages across all offer threads belonging to this patient
     // offer_messages.sender_role = 'doctor' AND read_at IS NULL for messages in the
