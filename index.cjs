@@ -407,6 +407,12 @@ const {
   opsObservabilityLimiter,
 } = require("./lib/httpRateLimits.cjs");
 const { registerAiCoordinatorChatRoutes } = require("./lib/aiCoordinatorChat");
+const {
+  initProposalOnRequestCreate,
+  enrichRequestProposalFields,
+  markProposalQuoteSent,
+  setupProposalSlaSweep,
+} = require("./lib/treatmentProposalWorkflow");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -52739,6 +52745,8 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       const cid = r.clinic_id ? String(r.clinic_id) : '';
       const photos = treatmentRequestRowPhotos(r);
       const image_url = firstTreatmentRequestPhotoUrl(photos);
+      const reqOffers = offersByRequest[r.id] || [];
+      const proposal = enrichRequestProposalFields(r, { offerCount: reqOffers.length });
       return {
         id: r.id,
         clinic_id: r.clinic_id || null,
@@ -52751,7 +52759,11 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         preferred_treatment: r.preferred_treatment || null,
         status: r.status,
         created_at: r.created_at,
-        offers: offersByRequest[r.id] || [],
+        offers: reqOffers,
+        proposal_status: proposal.proposal_status,
+        proposal_status_label: proposal.proposal_status_label,
+        proposal_waiting_minutes: proposal.proposal_waiting_minutes,
+        proposal_draft_available: proposal.proposal_draft_available,
       };
     });
 
@@ -52889,6 +52901,15 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
         }
         const rowMc = insertedMc || {};
         if (rowMc.id != null) requestIdsMc.push(String(rowMc.id));
+        if (rowMc.id != null) {
+          void initProposalOnRequestCreate({
+            id: rowMc.id,
+            clinic_id: cidMc,
+            patient_id: resolvedMulti,
+          }).catch((e) =>
+            console.warn("[treatmentProposalWorkflow] init multi:", e?.message || e),
+          );
+        }
 
         void (async () => {
           const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
@@ -53029,6 +53050,16 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       patient_id: String(resolvedPatientId).slice(0, 8),
       clinic_id: String(clinicId).slice(0, 8),
     });
+
+    if (row.id != null) {
+      void initProposalOnRequestCreate({
+        id: row.id,
+        clinic_id: clinicId,
+        patient_id: resolvedPatientId,
+      }).catch((e) =>
+        console.warn("[treatmentProposalWorkflow] init:", e?.message || e),
+      );
+    }
 
     void (async () => {
       const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
@@ -54888,6 +54919,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         patientMemberThisClinic || Boolean(thrMerged && thrMerged.is_lead === false);
       const rawUnread = myOid ? unreadByOffer[myOid] || 0 : 0;
       const unread_count = enrolledSharedCare ? 0 : rawUnread;
+      const proposal = enrichRequestProposalFields(r, { offerCount: offs.length });
       return {
         id: String(r.id),
         patient_name: patientName,
@@ -54905,6 +54937,11 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         unread_count,
         is_assigned_to_me: Boolean(mine),
         photos: photosNormalized,
+        proposal_status: proposal.proposal_status,
+        proposal_status_label: proposal.proposal_status_label,
+        coordinator_queue_title: proposal.coordinator_queue_title,
+        needs_quote_action: proposal.needs_quote_action,
+        proposal_draft_available: proposal.proposal_draft_available,
       };
     });
 
@@ -55209,6 +55246,10 @@ app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, a
       .from("treatment_requests")
       .update({ status: "answered", updated_at: new Date().toISOString() })
       .eq("id", requestId);
+
+    void markProposalQuoteSent(requestId).catch((e) =>
+      console.warn("[treatmentProposalWorkflow] quote sent:", e?.message || e),
+    );
 
     const offerIdStr = inserted?.id ? String(inserted.id) : null;
     if (offerIdStr) {
@@ -58375,6 +58416,9 @@ app.get("/api/discovery/clinics", async (req, res) => {
 const { registerAiCoordinatorAdminRoutes } = require("./lib/aiCoordinatorAdminRoutes");
 registerAiCoordinatorAdminRoutes(app, { requireAdminAuth });
 
+const { registerTreatmentProposalAdminRoutes } = require("./lib/treatmentProposalAdminRoutes");
+registerTreatmentProposalAdminRoutes(app, { requireAdminAuth });
+
 const { registerAiCoordinatorDoctorRoutes } = require("./lib/aiCoordinatorDoctorRoutes");
 registerAiCoordinatorDoctorRoutes(app, { requireDoctorAuth });
 
@@ -58390,6 +58434,7 @@ const inboundClinicMessageInsert = (params) =>
   });
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
+setupProposalSlaSweep();
 
 const { registerClinicTravelAdminRoutes } = require("./lib/clinicTravelAdminRoutes");
 registerClinicTravelAdminRoutes(app, { requireAdminAuth });
