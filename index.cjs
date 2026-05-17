@@ -58238,8 +58238,8 @@ registerClinicTravelAdminRoutes(app, { requireAdminAuth });
 const { registerClinicJourneyAdminRoutes } = require("./lib/clinicJourneyAdminRoutes");
 registerClinicJourneyAdminRoutes(app, { requireAdminAuth });
 
-const { registerClinicAiSettingsAdminRoutes } = require("./lib/clinicAiSettingsAdminRoutes");
-registerClinicAiSettingsAdminRoutes(app, { requireAdminAuth });
+const { registerClinicOpsProfileAdminRoutes } = require("./lib/clinicOpsProfileAdminRoutes");
+registerClinicOpsProfileAdminRoutes(app, { requireAdminAuth });
 
 app.get("/admin-settings-journeys.html", (req, res) => {
   const p = path.join(publicDir, "admin-settings-journeys.html");
@@ -58264,14 +58264,21 @@ app.get("/admin/settings/travel", (req, res) => {
 });
 
 app.get("/admin-settings-ai-ops.html", (req, res) => {
-  const p = path.join(publicDir, "admin-settings-ai-ops.html");
-  if (fs.existsSync(p)) return res.sendFile(p);
-  return res.status(404).send("admin-settings-ai-ops.html not found");
+  return res.redirect(302, "/admin-ops-profile.html");
 });
 app.get("/admin/settings/ai-ops", (req, res) => {
-  const p = path.join(publicDir, "admin-settings-ai-ops.html");
+  return res.redirect(302, "/admin-ops-profile.html");
+});
+
+app.get("/admin-ops-profile.html", (req, res) => {
+  const p = path.join(publicDir, "admin-ops-profile.html");
   if (fs.existsSync(p)) return res.sendFile(p);
-  return res.status(404).send("admin-settings-ai-ops.html not found");
+  return res.status(404).send("admin-ops-profile.html not found");
+});
+app.get("/admin/ops-profile", (req, res) => {
+  const p = path.join(publicDir, "admin-ops-profile.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-ops-profile.html not found");
 });
 
 app.get("/admin-ai-leads.html", (req, res) => {

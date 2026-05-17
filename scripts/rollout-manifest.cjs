@@ -18,6 +18,7 @@ const REQUIRED_MIGRATIONS = [
   "20260517300000_upload_content_hash_dedupe.sql",
   "20260518120000_patient_clinic_membership_archive.sql",
   "20260518130000_clinic_ai_settings.sql",
+  "20260518150000_clinic_operations_profile_v2.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
@@ -79,10 +80,18 @@ const SCHEMA_PROBES = [
       "autonomy_config",
       "escalation_config",
       "tone_config",
-      "knowledge_base_config",
+      "materials_config",
+      "logistics_config",
+      "payment_policy_config",
+      "internal_notes_config",
       "safety_rules",
       "communication_policy",
     ],
+  },
+  {
+    id: "clinic_treatment_catalog",
+    table: "clinic_treatment_catalog",
+    columns: ["clinic_id", "name", "price_min", "price_max", "currency", "ai_notes"],
   },
 ];
 
@@ -95,6 +104,8 @@ const HTTP_ROUTE_PROBES = [
   { method: "GET", path: "/api/admin/ai-leads/queues", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/clinic/ai-ops/meta", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/clinic/ai-ops/settings", expectStatuses: [401, 403] },
+  { method: "GET", path: "/api/admin/clinic/ops-profile/meta", expectStatuses: [401, 403] },
+  { method: "GET", path: "/api/admin/clinic/ops-profile", expectStatuses: [401, 403] },
 ];
 
 /** Paths that must NOT exist in production API surface. */

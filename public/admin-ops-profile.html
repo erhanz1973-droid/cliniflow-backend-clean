@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605182"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinic Operations Profile</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605182" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      var u = localStorage.getItem("user") || localStorage.getItem("adminUser");
+      if (!t || !u) { location.href = "/admin-login.html"; return; }
+      try { if (JSON.parse(u).role !== "ADMIN") location.href = "/admin-login.html"; } catch (e) { location.href = "/admin-login.html"; }
+    })();
+  </script>
+  <style>
+    .ops-layout { display: grid; grid-template-columns: 240px 1fr; gap: 20px; max-width: 1200px; margin: 0 auto; padding: 20px 24px 48px; }
+    @media (max-width: 800px) { .ops-layout { grid-template-columns: 1fr; } }
+    .ops-nav { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; height: fit-content; position: sticky; top: 16px; }
+    .ops-nav a { display: block; padding: 8px 10px; border-radius: 8px; font-size: 0.82rem; font-weight: 600; color: var(--text); text-decoration: none; margin-bottom: 4px; }
+    .ops-nav a.active { background: #ecfdf5; color: #047857; }
+    .ops-nav a:hover { background: #f1f5f9; }
+    .ops-main h1 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 800; }
+    .ops-main .lead { color: var(--muted); font-size: 0.88rem; margin: 0 0 16px; line-height: 1.45; }
+    .section-panel { display: none; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+    .section-panel.active { display: block; }
+    .section-panel h2 { margin: 0 0 4px; font-size: 1rem; font-weight: 800; }
+    .section-panel .hint { font-size: 0.78rem; color: var(--muted); margin: 0 0 12px; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
+    label { display: block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    input, textarea, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.88rem; }
+    textarea { min-height: 72px; }
+    .btn { border: none; background: var(--blue); color: #fff; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+    .btn.secondary { background: #f1f5f9; color: var(--text); border: 1px solid var(--border); }
+    .catalog-grid { display: grid; gap: 10px; }
+    .catalog-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .catalog-card h3 { margin: 0; font-size: 0.95rem; }
+    .catalog-card .meta { font-size: 0.78rem; color: var(--muted); }
+    .check-row { display: flex; flex-wrap: wrap; gap: 12px; }
+    .check-row label { text-transform: none; font-size: 0.85rem; font-weight: 600; display: flex; gap: 6px; align-items: center; }
+    .status { font-size: 0.85rem; margin-top: 8px; }
+    .status.ok { color: #047857; }
+    .status.err { color: var(--red); }
+    .counts { font-size: 0.78rem; color: var(--muted); margin-bottom: 12px; }
+    .link-out { font-size: 0.82rem; font-weight: 600; }
+    table.autonomy { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    table.autonomy td, table.autonomy th { border-bottom: 1px solid var(--border); padding: 8px 4px; text-align: left; }
+  </style>
+</head>
+<body>
+  <div class="ops-layout">
+    <nav class="ops-nav" id="opsNav"></nav>
+    <main class="ops-main">
+      <p style="font-size:0.8rem;margin:0 0 8px"><a href="/admin-settings.html">← Account settings</a></p>
+      <h1>Clinic Operations Profile</h1>
+      <p class="lead">Source of truth for AI responses, offers, travel coordination, SLA automation, and coordinator workflows.</p>
+      <p class="counts" id="opsCounts"></p>
+      <div id="globalStatus" class="status"></div>
+
+      <section id="sec-ai-profile" class="section-panel" data-section="ai-profile"></section>
+      <section id="sec-treatments-pricing" class="section-panel" data-section="treatments-pricing"></section>
+      <section id="sec-materials" class="section-panel" data-section="materials"></section>
+      <section id="sec-travel" class="section-panel" data-section="travel"></section>
+      <section id="sec-logistics" class="section-panel" data-section="logistics"></section>
+      <section id="sec-payment" class="section-panel" data-section="payment"></section>
+      <section id="sec-workflow" class="section-panel" data-section="workflow"></section>
+      <section id="sec-ai-safety" class="section-panel" data-section="ai-safety"></section>
+      <section id="sec-handoff" class="section-panel" data-section="handoff"></section>
+      <section id="sec-internal-notes" class="section-panel" data-section="internal-notes"></section>
+    </main>
+  </div>
+  <script src="/admin-ops-profile.js?v=1"></script>
+</body>
+</html>
