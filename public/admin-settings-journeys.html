@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202605171"></script>
-  <script src="/admin-i18n.js?v=37"></script>
+  <script src="/api-base.js?v=202605182"></script>
+  <script src="/admin-i18n.js?v=44"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Treatment Journeys — Clinifly Admin</title>
-  <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
+  <title data-i18n="treatmentWorkflows.pageTitle">Treatment Workflows — Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605182" />
   <script>
     (function () {
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
@@ -83,63 +83,104 @@
     .example-expander summary { cursor: pointer; color: var(--blue); font-weight: 600; }
     .example-text { margin: 6px 0 0; padding: 8px; background: #f8fafc; border-radius: 6px; border: 1px dashed var(--border); color: var(--muted); line-height: 1.4; white-space: pre-wrap; }
     .journey-intro { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 0.85rem; line-height: 1.45; }
+    .setup-banner {
+      display: none; background: #eff6ff; color: #1e3a5f; border: 1px solid #bfdbfe;
+      padding: 12px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 0.85rem; line-height: 1.45;
+    }
   </style>
 </head>
 <body>
   <div class="page-wrap">
-    <div class="breadcrumb"><a href="/admin-settings.html">Clinic Settings</a> · <a href="/admin-ops-profile.html#workflow">AI Training</a> / Treatment Journeys</div>
+    <div class="breadcrumb">
+      <a href="/admin-settings.html" data-i18n="treatmentWorkflows.breadcrumbSettings">Clinic Settings</a>
+      · <a href="/admin-ops-profile.html#workflow" data-i18n="treatmentWorkflows.breadcrumbAiTraining">AI Training</a>
+      / <span data-i18n="treatmentWorkflows.breadcrumbCurrent">Treatment workflows</span>
+    </div>
     <div class="page-header">
-      <h1>Treatment Journeys</h1>
-      <p>Operational visit timelines for the AI coordinator — not medical diagnosis. Relevant active protocols are injected into patient chats (no vector DB).</p>
+      <h1 data-i18n="treatmentWorkflows.title">Treatment workflows</h1>
+      <p data-i18n="treatmentWorkflows.lead">Teach the AI how treatment journeys usually work at your clinic, including visit timing, recovery expectations, and follow-up steps.</p>
     </div>
 
+    <p class="journey-intro" data-i18n="treatmentWorkflows.intro">Add typical visit counts, stay duration, and post-treatment guidance for each treatment type. The AI uses this to explain your clinic’s usual process to patients — not as medical diagnosis or prescriptions.</p>
+
+    <div id="setupBanner" class="setup-banner" role="status"></div>
     <div id="globalErr" class="err" style="display:none"></div>
-    <div id="migrationBanner" style="display:none;background:#422006;color:#fde68a;border:1px solid #b45309;padding:12px;border-radius:8px;margin-bottom:12px;font-size:0.85rem;line-height:1.45"></div>
 
     <section class="panel">
       <div class="panel-hd">
-        <h2>Treatment protocols</h2>
-        <button type="button" class="btn" id="btnAdd">+ Add protocol</button>
+        <h2 data-i18n="treatmentWorkflows.panelTitle">Your treatment workflows</h2>
+        <button type="button" class="btn" id="btnAdd" data-i18n="treatmentWorkflows.addWorkflow">+ Add workflow</button>
       </div>
-      <div id="protoList" class="proto-grid"><div class="empty">Loading…</div></div>
+      <div id="protoList" class="proto-grid"><div class="empty" data-i18n="treatmentWorkflows.loading">Loading…</div></div>
     </section>
 
     <section class="panel" id="editorPanel" style="display:none">
-      <div class="panel-hd"><h2 id="editorTitle">Add protocol</h2></div>
+      <div class="panel-hd"><h2 id="editorTitle" data-i18n="treatmentWorkflows.addWorkflowForm">Add workflow</h2></div>
       <form id="protoForm">
         <input type="hidden" id="protoId" />
         <div class="form-grid">
           <div>
-            <label>Treatment type *</label>
+            <label data-i18n="treatmentWorkflows.fieldTreatment">Treatment type *</label>
             <select id="fType" required></select>
           </div>
-          <div><label>Typical visit count</label><input id="fVisits" type="number" min="1" placeholder="2" /></div>
+          <div><label data-i18n="treatmentWorkflows.fieldVisits">Typical visit count</label><input id="fVisits" type="number" min="1" placeholder="2" /></div>
           <div id="wrapStay"></div>
           <div id="wrapSecond"></div>
-          <div><label>Sort order</label><input id="fSort" type="number" value="0" /></div>
-          <div><label>Languages</label><input id="fLangs" placeholder="en, ru, tr" /></div>
+          <div><label data-i18n="treatmentWorkflows.fieldSort">Sort order</label><input id="fSort" type="number" value="0" /></div>
+          <div><label data-i18n="treatmentWorkflows.fieldLangs">Languages</label><input id="fLangs" placeholder="en, ru, tr" /></div>
           <div style="grid-column:1/-1" id="wrapHealing"></div>
           <div style="grid-column:1/-1" id="wrapPostOp"></div>
           <div style="grid-column:1/-1" id="wrapAiNotes"></div>
         </div>
         <div class="check-row">
-          <label><input type="checkbox" id="fXray" /> X-ray / imaging usually required</label>
-          <label><input type="checkbox" id="fTemp" /> Temporary teeth possible</label>
-          <label><input type="checkbox" id="fActive" checked /> Active (visible to AI)</label>
+          <label><input type="checkbox" id="fXray" /> <span data-i18n="treatmentWorkflows.checkXray">X-ray / imaging usually required</span></label>
+          <label><input type="checkbox" id="fTemp" /> <span data-i18n="treatmentWorkflows.checkTemp">Temporary teeth possible</span></label>
+          <label><input type="checkbox" id="fActive" checked /> <span data-i18n="treatmentWorkflows.checkActive">Use in patient conversations</span></label>
         </div>
         <div style="display:flex;gap:8px;margin-top:12px">
-          <button type="submit" class="btn">Save protocol</button>
-          <button type="button" class="btn secondary" id="btnCancel">Cancel</button>
+          <button type="submit" class="btn" data-i18n="treatmentWorkflows.saveWorkflow">Save workflow</button>
+          <button type="button" class="btn secondary" id="btnCancel" data-i18n="treatmentWorkflows.cancel">Cancel</button>
         </div>
         <div id="formErr" class="err" style="display:none"></div>
       </form>
     </section>
 
-    <p class="future-note">Coming later: procedure stages, recovery milestones, appointment sequencing, coordinator checklists.</p>
+    <p class="future-note" data-i18n="treatmentWorkflows.futureNote">Coming later: procedure stages, recovery milestones, and coordinator checklists.</p>
   </div>
 
-  <script src="/admin-field-help.js?v=1"></script>
+  <script src="/admin-field-help.js?v=3"></script>
   <script>
+    function tw(key) {
+      if (window.i18n && typeof window.i18n.t === "function") {
+        return window.i18n.t("treatmentWorkflows." + key);
+      }
+      return key;
+    }
+
+    /** Never show Supabase / migration / schema jargon to clinic staff. */
+    function friendlyClinicMessage(raw) {
+      const s = String(raw || "").toLowerCase();
+      if (!s) return tw("errSave");
+      if (
+        s.includes("supabase") ||
+        s.includes("schema cache") ||
+        s.includes("migration") ||
+        s.includes("postgrest") ||
+        s.includes("pgrst") ||
+        s.includes("clinic_treatment_protocols") ||
+        s.includes("table is not") ||
+        s.includes("does not exist") ||
+        s.includes("vector db") ||
+        s.includes("protocols_table_missing")
+      ) {
+        return tw("setupNotReady");
+      }
+      if (s.includes("being prepared") || s.includes("hazırlanıyor") || s.includes("not fully ready")) {
+        return tw("setupPreparing");
+      }
+      return String(raw);
+    }
+
     function adminFetch(path, opts) {
       const url = typeof adminFetchUrl === "function" ? adminFetchUrl(path) : path;
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
@@ -161,6 +202,7 @@
     let protocols = [];
     let suggestedTypes = [];
     let journeyMeta = null;
+    let setupActive = false;
 
     function journeyPh(fieldId) {
       const d = journeyMeta && journeyMeta.fieldHelp && journeyMeta.fieldHelp[fieldId];
@@ -199,18 +241,22 @@
     function showErr(msg) {
       const el = document.getElementById("globalErr");
       el.style.display = "block";
-      el.textContent = msg;
+      el.textContent = friendlyClinicMessage(msg);
     }
 
-    function showMigrationBanner(msg) {
-      const el = document.getElementById("migrationBanner");
+    function showSetupBanner(msg) {
+      const el = document.getElementById("setupBanner");
       if (!msg) {
         el.style.display = "none";
         el.textContent = "";
+        setupActive = false;
+        document.getElementById("btnAdd").disabled = false;
         return;
       }
+      setupActive = true;
       el.style.display = "block";
-      el.textContent = msg;
+      el.textContent = friendlyClinicMessage(msg);
+      document.getElementById("btnAdd").disabled = true;
     }
 
     function fillTypeSelect(selected) {
@@ -218,40 +264,42 @@
       const opts = suggestedTypes.map(function (t) {
         return '<option value="' + esc(t.value) + '">' + esc(t.label) + "</option>";
       });
-      sel.innerHTML = opts.join("") + '<option value="custom">Custom slug…</option>';
+      sel.innerHTML =
+        opts.join("") + '<option value="custom">' + esc(tw("customTypeOption")) + "</option>";
       if (selected) sel.value = selected;
     }
 
     function renderList() {
       const el = document.getElementById("protoList");
       if (!protocols.length) {
-        el.innerHTML =
-          '<div class="empty">No protocols yet. Add implant, veneers, or other journeys for the AI to reference.</div>';
+        el.innerHTML = '<div class="empty">' + esc(tw("emptyList")) + "</div>";
         return;
       }
       el.innerHTML = protocols
         .map(function (p, idx) {
           const meta = [
-            p.typicalVisitCount != null ? p.typicalVisitCount + " visits" : null,
+            p.typicalVisitCount != null ? p.typicalVisitCount + " " + tw("visits") : null,
             p.estimatedStayDuration,
-            p.secondVisitAfter ? "2nd: " + p.secondVisitAfter : null,
+            p.secondVisitAfter ? tw("secondVisit") + " " + p.secondVisitAfter : null,
           ]
             .filter(Boolean)
             .join(" · ");
           return (
             '<div class="proto-card' +
-            (p.isActive ? '' : ' inactive') +
+            (p.isActive ? "" : " inactive") +
             '">' +
             '<div><div class="proto-title">' +
             esc(labelType(p.treatmentType)) +
             "</div>" +
             '<div class="proto-meta">' +
-            esc(meta || "No timeline configured") +
+            esc(meta || tw("noTimeline")) +
             "</div>" +
             '<div class="chips">' +
-            (p.isActive ? '<span class="chip on">Active</span>' : '<span class="chip">Inactive</span>') +
-            (p.xrayRequired ? '<span class="chip">X-ray</span>' : "") +
-            (p.temporaryTeethPossible ? '<span class="chip">Temp teeth</span>' : "") +
+            (p.isActive
+              ? '<span class="chip on">' + esc(tw("chipActive")) + "</span>"
+              : '<span class="chip">' + esc(tw("chipInactive")) + "</span>") +
+            (p.xrayRequired ? '<span class="chip">' + esc(tw("chipXray")) + "</span>" : "") +
+            (p.temporaryTeethPossible ? '<span class="chip">' + esc(tw("chipTemp")) + "</span>" : "") +
             "</div>" +
             '<div class="reorder-btns">' +
             '<button type="button" class="btn secondary" data-up="' +
@@ -268,10 +316,14 @@
             '<div class="proto-actions">' +
             '<button type="button" class="btn secondary" data-edit="' +
             esc(p.id) +
-            '">Edit</button>' +
+            '">' +
+            esc(tw("edit")) +
+            "</button>" +
             '<button type="button" class="btn danger" data-del="' +
             esc(p.id) +
-            '">Delete</button>' +
+            '">' +
+            esc(tw("delete")) +
+            "</button>" +
             "</div></div>"
           );
         })
@@ -284,7 +336,7 @@
       });
       el.querySelectorAll("[data-del]").forEach(function (btn) {
         btn.addEventListener("click", function () {
-          if (confirm("Delete this protocol?")) deleteProto(btn.getAttribute("data-del"));
+          if (confirm(tw("deleteConfirm"))) deleteProto(btn.getAttribute("data-del"));
         });
       });
       el.querySelectorAll("[data-up]").forEach(function (btn) {
@@ -320,15 +372,20 @@
           body: JSON.stringify({ items: items }),
         });
         const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Reorder failed");
+        if (!res.ok || !json.ok) {
+          console.warn("[treatmentWorkflows] reorder failed", json);
+          throw new Error(tw("errReorder"));
+        }
         protocols = json.protocols || copy;
         renderList();
       } catch (e) {
-        showErr(e.message);
+        console.warn("[treatmentWorkflows] reorder", e);
+        showErr(tw("errReorder"));
       }
     }
 
     function openEditor(id) {
+      if (setupActive) return;
       const panel = document.getElementById("editorPanel");
       panel.style.display = "block";
       document.getElementById("formErr").style.display = "none";
@@ -337,7 +394,7 @@
             return x.id === id;
           })
         : null;
-      document.getElementById("editorTitle").textContent = p ? "Edit protocol" : "Add protocol";
+      document.getElementById("editorTitle").textContent = p ? tw("editWorkflow") : tw("addWorkflowForm");
       document.getElementById("protoId").value = p ? p.id : "";
       fillTypeSelect(p ? p.treatmentType : "implant");
       document.getElementById("fVisits").value = p && p.typicalVisitCount != null ? p.typicalVisitCount : "";
@@ -374,17 +431,18 @@
 
     async function loadProtocols() {
       document.getElementById("globalErr").style.display = "none";
-      showMigrationBanner(null);
-      document.getElementById("protoList").innerHTML = '<div class="empty">Loading…</div>';
+      showSetupBanner(null);
+      document.getElementById("protoList").innerHTML =
+        '<div class="empty">' + esc(tw("loading")) + "</div>";
       try {
         const res = await adminFetch("/api/admin/clinic/journeys/protocols");
         const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load");
-        if (json.tableMissing) {
-          showMigrationBanner(
-            json.message ||
-              "Treatment protocols table is missing. Run migration 20260518160000_clinic_treatment_protocols_ensure.sql in Supabase, then wait ~1 minute.",
-          );
+        if (!res.ok || !json.ok) {
+          console.warn("[treatmentWorkflows] load failed", json);
+          throw new Error(tw("errLoad"));
+        }
+        if (json.tableMissing || json.setupState === "preparing") {
+          showSetupBanner(json.message || tw("setupPreparing"));
           protocols = [];
           renderList();
           return;
@@ -392,9 +450,10 @@
         protocols = json.protocols || [];
         renderList();
       } catch (e) {
-        showErr(e.message);
+        console.warn("[treatmentWorkflows] load", e);
+        showSetupBanner(tw("setupPreparing"));
         document.getElementById("protoList").innerHTML =
-          '<div class="empty">Could not load protocols. Apply the Supabase migration, then refresh.</div>';
+          '<div class="empty">' + esc(tw("emptyList")) + "</div>";
       }
     }
 
@@ -404,10 +463,14 @@
           method: "DELETE",
         });
         const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Delete failed");
+        if (!res.ok || !json.ok) {
+          console.warn("[treatmentWorkflows] delete failed", json);
+          throw new Error(tw("errDelete"));
+        }
         await loadProtocols();
       } catch (e) {
-        showErr(e.message);
+        console.warn("[treatmentWorkflows] delete", e);
+        showErr(tw("errDelete"));
       }
     }
 
@@ -418,12 +481,16 @@
 
     document.getElementById("protoForm").addEventListener("submit", async function (e) {
       e.preventDefault();
+      if (setupActive) {
+        showErr(tw("setupNotReady"));
+        return;
+      }
       const errEl = document.getElementById("formErr");
       errEl.style.display = "none";
       const id = document.getElementById("protoId").value.trim();
       let treatmentType = document.getElementById("fType").value;
       if (treatmentType === "custom") {
-        treatmentType = prompt("Treatment type slug (e.g. sinus_lift):") || "";
+        treatmentType = prompt(tw("customTypePrompt")) || "";
       }
       const body = {
         treatmentType: treatmentType,
@@ -450,27 +517,30 @@
         });
         const json = await res.json();
         if (!res.ok || !json.ok) {
-          const msg =
-            json.message ||
-            (json.error === "protocols_table_missing"
-              ? "Database table missing — apply migration 20260518160000_clinic_treatment_protocols_ensure.sql in Supabase SQL editor."
-              : json.error) ||
-            "Save failed";
-          throw new Error(msg);
+          console.warn("[treatmentWorkflows] save failed", json);
+          if (json.tableMissing || json.setupState === "preparing") {
+            showSetupBanner(json.message || tw("setupPreparing"));
+            throw new Error(tw("setupNotReady"));
+          }
+          throw new Error(tw("errSave"));
         }
         closeEditor();
         await loadProtocols();
       } catch (err) {
         errEl.style.display = "block";
-        errEl.textContent = err.message;
-        if (String(err.message || "").toLowerCase().includes("migration")) {
-          showMigrationBanner(err.message);
-        }
+        errEl.textContent = friendlyClinicMessage(err.message);
+      }
+    });
+
+    document.addEventListener("admin-language-changed", function () {
+      renderList();
+      if (window.i18n && typeof window.i18n.updatePage === "function") {
+        window.i18n.updatePage();
       }
     });
 
     loadMeta().then(loadProtocols);
   </script>
-  <script src="/admin-layout.js?v=202605171"></script>
+  <script src="/admin-layout.js?v=202605182"></script>
 </body>
 </html>

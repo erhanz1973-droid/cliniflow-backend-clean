@@ -1,5 +1,5 @@
 /**
- * Shared field help UI — Clinic AI Training + Treatment Journeys.
+ * Shared field help UI — Clinic AI Training + Treatment Workflows.
  * Requires meta.fieldHelp + meta.visibilityTypes from /api/admin/clinic/ops-profile/meta
  */
 (function (global) {
