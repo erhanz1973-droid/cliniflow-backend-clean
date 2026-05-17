@@ -58333,6 +58333,9 @@ app.get("/api/discovery/clinics", async (req, res) => {
 const { registerAiCoordinatorAdminRoutes } = require("./lib/aiCoordinatorAdminRoutes");
 registerAiCoordinatorAdminRoutes(app, { requireAdminAuth });
 
+const { registerAiCoordinatorDoctorRoutes } = require("./lib/aiCoordinatorDoctorRoutes");
+registerAiCoordinatorDoctorRoutes(app, { requireDoctorAuth });
+
 const { registerClinicTravelAdminRoutes } = require("./lib/clinicTravelAdminRoutes");
 registerClinicTravelAdminRoutes(app, { requireAdminAuth });
 

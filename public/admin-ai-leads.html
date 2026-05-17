@@ -883,22 +883,24 @@
       });
     }
 
+    let clinicPolicyGlobal = null;
+
     function renderDelegationBar(L) {
       const d = L.delegation || {};
+      const policy = L.clinicPolicy || clinicPolicyGlobal || {};
       const current =
-        d.aiMode ||
-        (L.coordinationMode === "human_active" ? "HUMAN_ONLY" : "AI_ASSISTED");
+        d.uiPreset ||
+        (d.aiMode === "AI_ACTIVE" ? "ACTIVE" : d.aiMode === "HUMAN_ONLY" ? "OFF" : "ASSIST");
       const escalated = !!(L.aiEscalationRequired || d.aiEscalationRequired);
       const modes = [
-        { id: "HUMAN_ONLY", label: "Human only" },
-        { id: "AI_DRAFT", label: "Draft only" },
-        { id: "AI_ASSISTED", label: "Assisting" },
-        { id: "AI_ACTIVE", label: "Active" },
+        { id: "OFF", label: "Off" },
+        { id: "ASSIST", label: "Assist" },
+        { id: "ACTIVE", label: "Active" },
       ];
       const statusClass = escalated ? " delegation-status escalation" : " delegation-status";
       let html =
         '<div class="delegation-bar" id="delegationBar">' +
-        '<div class="delegation-hd">AI coordination</div>' +
+        '<div class="delegation-hd">Live AI coordination <span style="font-weight:500;text-transform:none;color:var(--muted)">(this patient)</span></div>' +
         '<div class="' +
         statusClass.trim() +
         '">' +
@@ -907,11 +909,18 @@
         '<div class="delegation-tabs">';
       modes.forEach(function (m) {
         const active = current === m.id ? " active" : "";
-        const disabled = escalated && m.id !== "HUMAN_ONLY" ? " disabled" : "";
+        const disabled =
+          escalated && m.id !== "OFF"
+            ? " disabled"
+            : m.id === "ACTIVE" && policy.ceilingMode === "AI_DRAFT"
+              ? " disabled"
+              : m.id === "ACTIVE" && policy.ceilingMode === "HUMAN_ONLY"
+                ? " disabled"
+                : "";
         html +=
           '<button type="button" class="delegation-btn' +
           active +
-          '" data-ai-mode="' +
+          '" data-ui-preset="' +
           esc(m.id) +
           '"' +
           (disabled ? " disabled" : "") +
@@ -921,7 +930,13 @@
       });
       html +=
         "</div>" +
-        '<p class="delegation-note">Clinic policy sets the maximum AI scope. Coordinators choose per patient; doctors can override anytime. AI never takes over silently.</p>';
+        '<p class="delegation-note"><strong>Clinic-wide max:</strong> ' +
+        esc(policy.ceilingLabel || "—") +
+        ' — set in <a href="/admin-ops-profile.html">Clinic AI Training</a>. You choose what is active for this patient only.</p>' +
+        '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button type="button" class="refresh-btn" id="btnPauseAi" style="background:#64748b;font-size:0.75rem;padding:6px 10px">Pause AI</button>' +
+        '<button type="button" class="refresh-btn" id="btnDoctorReview" style="background:#b45309;font-size:0.75rem;padding:6px 10px">Require review</button>' +
+        "</div>";
       if (escalated) {
         html +=
           '<p class="delegation-note" style="color:#b91c1c"><strong>Human review required</strong> — auto-replies are paused. Resolve the issue, then resume assisting.</p>' +
@@ -953,6 +968,7 @@
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load");
 
+        if (json.clinicPolicy) clinicPolicyGlobal = json.clinicPolicy;
         const L = json.lead;
         document.getElementById("detailTitle").textContent =
           L.patientName || formatTreatmentInterest(L) || "Patient detail";
@@ -1041,14 +1057,22 @@
         body.querySelectorAll(".delegation-btn").forEach((btn) => {
           btn.addEventListener("click", async () => {
             if (btn.disabled) return;
-            const aiMode = btn.getAttribute("data-ai-mode");
-            if (aiMode) await setAiDelegation(id, aiMode);
+            const preset = btn.getAttribute("data-ui-preset");
+            if (preset) await setAiDelegation(id, { uiPreset: preset });
           });
         });
+        const btnPause = document.getElementById("btnPauseAi");
+        if (btnPause) {
+          btnPause.addEventListener("click", () => setAiDelegation(id, { pauseAi: true }));
+        }
+        const btnReview = document.getElementById("btnDoctorReview");
+        if (btnReview) {
+          btnReview.addEventListener("click", () => setAiDelegation(id, { requireDoctorReview: true }));
+        }
         const btnClearEsc = document.getElementById("btnClearEscalation");
         if (btnClearEsc) {
           btnClearEsc.addEventListener("click", async () => {
-            await setAiDelegation(id, "AI_ASSISTED", { clearEscalation: true });
+            await setAiDelegation(id, { uiPreset: "ASSIST", clearEscalation: true });
           });
         }
 
@@ -1085,10 +1109,9 @@
       }
     }
 
-    async function setAiDelegation(id, aiMode, opts) {
+    async function setAiDelegation(id, opts) {
       try {
-        const body = { aiMode: aiMode };
-        if (opts && opts.clearEscalation) body.clearEscalation = true;
+        const body = typeof opts === "object" && opts !== null ? { ...opts } : { uiPreset: opts };
         const res = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id) + "/coordination", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -1121,6 +1144,7 @@
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load leads");
         leads = json.leads || [];
+        if (json.clinicPolicy) clinicPolicyGlobal = json.clinicPolicy;
         if (json.intakeQueues && json.intakeQueues.length) {
           intakeQueueDefs = json.intakeQueues;
           renderIntakeQueueTabs();
