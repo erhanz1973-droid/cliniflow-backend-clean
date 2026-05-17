@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605171"></script>
+  <script src="/admin-i18n.js?v=37"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Treatment Journeys — Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
+  <script>
+    (function () {
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      const userStr = localStorage.getItem("user") || localStorage.getItem("adminUser");
+      if (!token || !userStr) {
+        window.location.href = "/admin-login.html";
+        return;
+      }
+      try {
+        const user = JSON.parse(userStr);
+        if (!user || user.role !== "ADMIN") window.location.href = "/admin-login.html";
+      } catch (e) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    .page-wrap { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
+    .page-header { margin-bottom: 20px; }
+    .page-header h1 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 800; }
+    .page-header p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.45; }
+    .breadcrumb { font-size: 0.8rem; margin-bottom: 8px; }
+    .breadcrumb a { color: var(--blue); text-decoration: none; font-weight: 600; }
+    .panel {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px;
+    }
+    .panel-hd { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .panel-hd h2 { margin: 0; font-size: 1rem; font-weight: 800; }
+    .btn {
+      border: none; background: var(--blue); color: #fff; padding: 8px 14px;
+      border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    }
+    .btn.secondary { background: #f1f5f9; color: var(--text); border: 1px solid var(--border); }
+    .btn.danger { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .proto-grid { display: grid; gap: 12px; }
+    .proto-card {
+      border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px;
+      display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
+    }
+    .proto-card.inactive { opacity: 0.55; }
+    .proto-title { font-weight: 800; font-size: 0.95rem; text-transform: capitalize; }
+    .proto-meta { font-size: 0.78rem; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip { font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; border: 1px solid var(--border); }
+    .chip.on { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+    .proto-actions { display: flex; flex-direction: column; gap: 6px; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } }
+    label { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    input, textarea, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.88rem; }
+    textarea { min-height: 72px; resize: vertical; }
+    .check-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; }
+    .check-row label { text-transform: none; font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+    .err { color: var(--red); font-size: 0.85rem; margin-top: 8px; }
+    .empty { text-align: center; color: var(--muted); padding: 24px; }
+    .future-note { font-size: 0.8rem; color: var(--muted); }
+    .reorder-btns { display: flex; gap: 4px; margin-top: 4px; }
+    .reorder-btns button { padding: 4px 8px; font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="breadcrumb"><a href="/admin-settings.html">Clinic Settings</a> / Treatment Journeys</div>
+    <div class="page-header">
+      <h1>Treatment Journeys</h1>
+      <p>Operational visit timelines for the AI coordinator — not medical diagnosis. Relevant active protocols are injected into patient chats (no vector DB).</p>
+    </div>
+
+    <div id="globalErr" class="err" style="display:none"></div>
+
+    <section class="panel">
+      <div class="panel-hd">
+        <h2>Treatment protocols</h2>
+        <button type="button" class="btn" id="btnAdd">+ Add protocol</button>
+      </div>
+      <div id="protoList" class="proto-grid"><div class="empty">Loading…</div></div>
+    </section>
+
+    <section class="panel" id="editorPanel" style="display:none">
+      <div class="panel-hd"><h2 id="editorTitle">Add protocol</h2></div>
+      <form id="protoForm">
+        <input type="hidden" id="protoId" />
+        <div class="form-grid">
+          <div>
+            <label>Treatment type *</label>
+            <select id="fType" required></select>
+          </div>
+          <div><label>Typical visit count</label><input id="fVisits" type="number" min="1" placeholder="2" /></div>
+          <div><label>Estimated stay (1st visit)</label><input id="fStay" placeholder="5–7 days" /></div>
+          <div><label>Second visit after</label><input id="fSecond" placeholder="3–6 months" /></div>
+          <div><label>Sort order</label><input id="fSort" type="number" value="0" /></div>
+          <div><label>Languages</label><input id="fLangs" placeholder="en, ru, tr" /></div>
+          <div style="grid-column:1/-1"><label>Healing notes (operational)</label><textarea id="fHealing" placeholder="Osseointegration period before final prosthetics…"></textarea></div>
+          <div style="grid-column:1/-1"><label>Post-op coordination notes</label><textarea id="fPostOp" placeholder="Follow-up messaging, soft diet reminders…"></textarea></div>
+          <div style="grid-column:1/-1"><label>AI coordinator notes</label><textarea id="fAiNotes" placeholder="Short guidance the AI should emphasize"></textarea></div>
+        </div>
+        <div class="check-row">
+          <label><input type="checkbox" id="fXray" /> X-ray / imaging usually required</label>
+          <label><input type="checkbox" id="fTemp" /> Temporary teeth possible</label>
+          <label><input type="checkbox" id="fActive" checked /> Active (visible to AI)</label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button type="submit" class="btn">Save protocol</button>
+          <button type="button" class="btn secondary" id="btnCancel">Cancel</button>
+        </div>
+        <div id="formErr" class="err" style="display:none"></div>
+      </form>
+    </section>
+
+    <p class="future-note">Coming later: procedure stages, recovery milestones, appointment sequencing, coordinator checklists.</p>
+  </div>
+
+  <script>
+    function adminFetch(path, opts) {
+      const url = typeof adminFetchUrl === "function" ? adminFetchUrl(path) : path;
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      const headers = Object.assign(
+        { Accept: "application/json", Authorization: "Bearer " + token },
+        (opts && opts.headers) || {},
+      );
+      return fetch(url, Object.assign({}, opts, { headers }));
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function labelType(slug) {
+      return String(slug || "").replace(/_/g, " ");
+    }
+
+    let protocols = [];
+    let suggestedTypes = [];
+
+    function showErr(msg) {
+      const el = document.getElementById("globalErr");
+      el.style.display = "block";
+      el.textContent = msg;
+    }
+
+    function fillTypeSelect(selected) {
+      const sel = document.getElementById("fType");
+      const opts = suggestedTypes.map(function (t) {
+        return '<option value="' + esc(t.value) + '">' + esc(t.label) + "</option>";
+      });
+      sel.innerHTML = opts.join("") + '<option value="custom">Custom slug…</option>';
+      if (selected) sel.value = selected;
+    }
+
+    function renderList() {
+      const el = document.getElementById("protoList");
+      if (!protocols.length) {
+        el.innerHTML =
+          '<div class="empty">No protocols yet. Add implant, veneers, or other journeys for the AI to reference.</div>';
+        return;
+      }
+      el.innerHTML = protocols
+        .map(function (p, idx) {
+          const meta = [
+            p.typicalVisitCount != null ? p.typicalVisitCount + " visits" : null,
+            p.estimatedStayDuration,
+            p.secondVisitAfter ? "2nd: " + p.secondVisitAfter : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            '<div class="proto-card' +
+            (p.isActive ? '' : ' inactive') +
+            '">' +
+            '<div><div class="proto-title">' +
+            esc(labelType(p.treatmentType)) +
+            "</div>" +
+            '<div class="proto-meta">' +
+            esc(meta || "No timeline configured") +
+            "</div>" +
+            '<div class="chips">' +
+            (p.isActive ? '<span class="chip on">Active</span>' : '<span class="chip">Inactive</span>') +
+            (p.xrayRequired ? '<span class="chip">X-ray</span>' : "") +
+            (p.temporaryTeethPossible ? '<span class="chip">Temp teeth</span>' : "") +
+            "</div>" +
+            '<div class="reorder-btns">' +
+            '<button type="button" class="btn secondary" data-up="' +
+            esc(p.id) +
+            '"' +
+            (idx === 0 ? " disabled" : "") +
+            ">↑</button>" +
+            '<button type="button" class="btn secondary" data-down="' +
+            esc(p.id) +
+            '"' +
+            (idx === protocols.length - 1 ? " disabled" : "") +
+            ">↓</button>" +
+            "</div></div>" +
+            '<div class="proto-actions">' +
+            '<button type="button" class="btn secondary" data-edit="' +
+            esc(p.id) +
+            '">Edit</button>' +
+            '<button type="button" class="btn danger" data-del="' +
+            esc(p.id) +
+            '">Delete</button>' +
+            "</div></div>"
+          );
+        })
+        .join("");
+
+      el.querySelectorAll("[data-edit]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          openEditor(btn.getAttribute("data-edit"));
+        });
+      });
+      el.querySelectorAll("[data-del]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          if (confirm("Delete this protocol?")) deleteProto(btn.getAttribute("data-del"));
+        });
+      });
+      el.querySelectorAll("[data-up]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          moveProto(btn.getAttribute("data-up"), -1);
+        });
+      });
+      el.querySelectorAll("[data-down]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          moveProto(btn.getAttribute("data-down"), 1);
+        });
+      });
+    }
+
+    async function moveProto(id, dir) {
+      const i = protocols.findIndex(function (p) {
+        return p.id === id;
+      });
+      if (i < 0) return;
+      const j = i + dir;
+      if (j < 0 || j >= protocols.length) return;
+      const copy = protocols.slice();
+      const tmp = copy[i];
+      copy[i] = copy[j];
+      copy[j] = tmp;
+      const items = copy.map(function (p, k) {
+        return { id: p.id, sortOrder: k * 10 };
+      });
+      try {
+        const res = await adminFetch("/api/admin/clinic/journeys/protocols/reorder", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: items }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Reorder failed");
+        protocols = json.protocols || copy;
+        renderList();
+      } catch (e) {
+        showErr(e.message);
+      }
+    }
+
+    function openEditor(id) {
+      const panel = document.getElementById("editorPanel");
+      panel.style.display = "block";
+      document.getElementById("formErr").style.display = "none";
+      const p = id
+        ? protocols.find(function (x) {
+            return x.id === id;
+          })
+        : null;
+      document.getElementById("editorTitle").textContent = p ? "Edit protocol" : "Add protocol";
+      document.getElementById("protoId").value = p ? p.id : "";
+      fillTypeSelect(p ? p.treatmentType : "implant");
+      document.getElementById("fVisits").value = p && p.typicalVisitCount != null ? p.typicalVisitCount : "";
+      document.getElementById("fStay").value = p ? p.estimatedStayDuration || "" : "";
+      document.getElementById("fSecond").value = p ? p.secondVisitAfter || "" : "";
+      document.getElementById("fSort").value = p ? p.sortOrder : 0;
+      document.getElementById("fLangs").value = p ? p.languages || "" : "";
+      document.getElementById("fHealing").value = p ? p.healingNotes || "" : "";
+      document.getElementById("fPostOp").value = p ? p.postOpNotes || "" : "";
+      document.getElementById("fAiNotes").value = p ? p.aiNotes || "" : "";
+      document.getElementById("fXray").checked = p ? p.xrayRequired : false;
+      document.getElementById("fTemp").checked = p ? p.temporaryTeethPossible : false;
+      document.getElementById("fActive").checked = p ? p.isActive : true;
+      panel.scrollIntoView({ behavior: "smooth" });
+    }
+
+    function closeEditor() {
+      document.getElementById("editorPanel").style.display = "none";
+      document.getElementById("protoForm").reset();
+      document.getElementById("protoId").value = "";
+    }
+
+    async function loadMeta() {
+      const res = await adminFetch("/api/admin/clinic/journeys/meta");
+      const json = await res.json();
+      if (json.ok && json.suggestedTreatmentTypes) {
+        suggestedTypes = json.suggestedTreatmentTypes;
+        fillTypeSelect("implant");
+      }
+    }
+
+    async function loadProtocols() {
+      document.getElementById("globalErr").style.display = "none";
+      document.getElementById("protoList").innerHTML = '<div class="empty">Loading…</div>';
+      try {
+        const res = await adminFetch("/api/admin/clinic/journeys/protocols");
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load");
+        protocols = json.protocols || [];
+        renderList();
+      } catch (e) {
+        showErr(e.message);
+        document.getElementById("protoList").innerHTML = "";
+      }
+    }
+
+    async function deleteProto(id) {
+      try {
+        const res = await adminFetch("/api/admin/clinic/journeys/protocols/" + encodeURIComponent(id), {
+          method: "DELETE",
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Delete failed");
+        await loadProtocols();
+      } catch (e) {
+        showErr(e.message);
+      }
+    }
+
+    document.getElementById("btnAdd").addEventListener("click", function () {
+      openEditor(null);
+    });
+    document.getElementById("btnCancel").addEventListener("click", closeEditor);
+
+    document.getElementById("protoForm").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const errEl = document.getElementById("formErr");
+      errEl.style.display = "none";
+      const id = document.getElementById("protoId").value.trim();
+      let treatmentType = document.getElementById("fType").value;
+      if (treatmentType === "custom") {
+        treatmentType = prompt("Treatment type slug (e.g. sinus_lift):") || "";
+      }
+      const body = {
+        treatmentType: treatmentType,
+        typicalVisitCount: document.getElementById("fVisits").value,
+        estimatedStayDuration: document.getElementById("fStay").value.trim(),
+        secondVisitAfter: document.getElementById("fSecond").value.trim(),
+        sortOrder: document.getElementById("fSort").value,
+        languages: document.getElementById("fLangs").value.trim(),
+        healingNotes: document.getElementById("fHealing").value.trim(),
+        postOpNotes: document.getElementById("fPostOp").value.trim(),
+        aiNotes: document.getElementById("fAiNotes").value.trim(),
+        xrayRequired: document.getElementById("fXray").checked,
+        temporaryTeethPossible: document.getElementById("fTemp").checked,
+        isActive: document.getElementById("fActive").checked,
+      };
+      try {
+        const path = id
+          ? "/api/admin/clinic/journeys/protocols/" + encodeURIComponent(id)
+          : "/api/admin/clinic/journeys/protocols";
+        const res = await adminFetch(path, {
+          method: id ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Save failed");
+        closeEditor();
+        await loadProtocols();
+      } catch (err) {
+        errEl.style.display = "block";
+        errEl.textContent = err.message;
+      }
+    });
+
+    loadMeta().then(loadProtocols);
+  </script>
+  <script src="/admin-layout.js?v=202605171"></script>
+</body>
+</html>

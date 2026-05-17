@@ -406,6 +406,7 @@ const {
   doctorVerifyOtpLimiter,
   opsObservabilityLimiter,
 } = require("./lib/httpRateLimits.cjs");
+const { registerAiCoordinatorChatRoutes } = require("./lib/aiCoordinatorChat");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -9091,6 +9092,15 @@ app.post("/api/lead-contact", async (req, res) => {
   }
 });
 
+registerAiCoordinatorChatRoutes(app);
+
+const { registerAiPatientDocumentRoutes } = require("./lib/aiPatientDocumentRoutes");
+registerAiPatientDocumentRoutes(app, {
+  requireToken,
+  requireAdminAuth,
+  chatUpload,
+  publicDir,
+});
 
 // ================== AUTH ==================
 function requireToken(req, res, next) {
@@ -57220,6 +57230,48 @@ app.get("/api/discovery/clinics", async (req, res) => {
       message: e?.message || "internal_error",
     });
   }
+});
+
+const { registerAiCoordinatorAdminRoutes } = require("./lib/aiCoordinatorAdminRoutes");
+registerAiCoordinatorAdminRoutes(app, { requireAdminAuth });
+
+const { registerClinicTravelAdminRoutes } = require("./lib/clinicTravelAdminRoutes");
+registerClinicTravelAdminRoutes(app, { requireAdminAuth });
+
+const { registerClinicJourneyAdminRoutes } = require("./lib/clinicJourneyAdminRoutes");
+registerClinicJourneyAdminRoutes(app, { requireAdminAuth });
+
+app.get("/admin-settings-journeys.html", (req, res) => {
+  const p = path.join(publicDir, "admin-settings-journeys.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-settings-journeys.html not found");
+});
+app.get("/admin/settings/journeys", (req, res) => {
+  const p = path.join(publicDir, "admin-settings-journeys.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-settings-journeys.html not found");
+});
+
+app.get("/admin-settings-travel.html", (req, res) => {
+  const p = path.join(publicDir, "admin-settings-travel.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-settings-travel.html not found");
+});
+app.get("/admin/settings/travel", (req, res) => {
+  const p = path.join(publicDir, "admin-settings-travel.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-settings-travel.html not found");
+});
+
+app.get("/admin-ai-leads.html", (req, res) => {
+  const p = path.join(publicDir, "admin-ai-leads.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-ai-leads.html not found");
+});
+app.get("/admin/ai-leads", (req, res) => {
+  const p = path.join(publicDir, "admin-ai-leads.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-ai-leads.html not found");
 });
 
 app.use(express.static(publicDir));

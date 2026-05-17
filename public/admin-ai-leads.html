@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605171"></script>
+  <script src="/admin-i18n.js?v=37"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Coordinator — Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
+  <script>
+    (function () {
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      const userStr = localStorage.getItem("user") || localStorage.getItem("adminUser");
+      if (!token || !userStr) {
+        window.location.href = "/admin-login.html";
+        return;
+      }
+      try {
+        const user = JSON.parse(userStr);
+        if (!user || user.role !== "ADMIN") window.location.href = "/admin-login.html";
+      } catch (e) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    .ai-wrap { padding: 20px 24px 32px; max-width: 1400px; margin: 0 auto; }
+    .ai-header { margin-bottom: 16px; }
+    .ai-header h1 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 800; color: var(--text); }
+    .ai-header p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.45; max-width: 720px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .filter-btn {
+      border: 1px solid var(--border); background: var(--card); color: var(--text);
+      padding: 6px 12px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    }
+    .filter-btn.active { background: var(--blue-l); border-color: #93c5fd; color: var(--blue-d); }
+    .layout { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 16px; min-height: 520px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column;
+    }
+    .panel-hd {
+      padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 700;
+      font-size: 0.85rem; color: var(--text); display: flex; justify-content: space-between; align-items: center;
+    }
+    .lead-list { overflow-y: auto; max-height: calc(100vh - 220px); }
+    .lead-item {
+      padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
+      transition: background 0.15s;
+    }
+    .lead-item:hover { background: #f8fafc; }
+    .lead-item.active { background: var(--blue-l); border-left: 3px solid var(--blue); }
+    .lead-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .lead-title { font-weight: 700; font-size: 0.88rem; color: var(--text); }
+    .lead-meta { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem;
+      font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .badge-hot { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .badge-human { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .badge-ai { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+    .score { font-size: 0.75rem; font-weight: 700; color: var(--blue); }
+    .detail-body { padding: 14px; overflow-y: auto; max-height: calc(100vh - 220px); }
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .field {
+      background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 8px 10px;
+    }
+    .field label { display: block; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 4px; }
+    .field div { font-size: 0.85rem; font-weight: 600; color: var(--text); word-break: break-word; }
+    .summary-box {
+      background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius-sm);
+      padding: 10px 12px; margin-bottom: 14px; font-size: 0.85rem; line-height: 1.45; color: #14532d;
+    }
+    .mode-toggle { display: flex; gap: 8px; margin-bottom: 14px; }
+    .mode-btn {
+      flex: 1; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+      background: var(--card); font-weight: 700; font-size: 0.8rem; cursor: pointer;
+    }
+    .mode-btn.active-ai { background: var(--blue-l); border-color: #93c5fd; color: var(--blue-d); }
+    .mode-btn.active-human { background: #fff7ed; border-color: #fdba74; color: #c2410c; }
+    .timeline { border-top: 1px solid var(--border); padding-top: 12px; }
+    .tl-item { margin-bottom: 12px; }
+    .tl-role { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .tl-bubble {
+      border-radius: 10px; padding: 8px 10px; font-size: 0.84rem; line-height: 1.4;
+      max-width: 92%;
+    }
+    .tl-patient { background: var(--blue-l); border: 1px solid #bfdbfe; margin-left: auto; }
+    .tl-ai { background: #f8fafc; border: 1px solid var(--border); }
+    .placeholder-reply {
+      margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+      color: var(--muted); font-size: 0.82rem;
+    }
+    .placeholder-reply textarea {
+      width: 100%; min-height: 72px; margin-top: 8px; border-radius: 8px; border: 1px solid var(--border);
+      padding: 8px; font-family: inherit; resize: vertical; background: #f1f5f9;
+    }
+    .err { color: var(--red); font-size: 0.85rem; margin-top: 8px; }
+    .empty { padding: 24px; text-align: center; color: var(--muted); font-size: 0.9rem; }
+    .refresh-btn {
+      border: none; background: var(--blue); color: #fff; padding: 6px 12px;
+      border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    }
+    .workspace-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .ws-btn {
+      border: 1px solid var(--border); background: #f8fafc; color: var(--text);
+      padding: 8px 14px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; cursor: pointer;
+    }
+    .ws-btn.active { background: var(--blue-l); border-color: #93c5fd; color: var(--blue-d); }
+    .signal-filters { opacity: 0.92; }
+    .signal-filters .filter-btn { font-size: 0.72rem; padding: 4px 10px; }
+    .badge-urgent-warn { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+    .badge-urgent-critical { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .badge-stale { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+    .badge-unresolved { background: #faf5ff; color: #7e22ce; border: 1px solid #e9d5ff; }
+    .badge-esc-emergency { background: #450a0a; color: #fecaca; }
+    .badge-esc-angry { background: #7f1d1d; color: #fee2e2; }
+    .badge-esc-refund { background: #78350f; color: #ffedd5; }
+    .badge-esc-repeat { background: #1e3a5f; color: #dbeafe; }
+    .sla-strip {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+      margin-bottom: 12px; padding: 10px; background: #f8fafc; border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+    }
+    .sla-cell label { display: block; font-size: 0.65rem; text-transform: uppercase; color: var(--muted); }
+    .sla-val.warn { color: #b45309; font-weight: 800; }
+    .sla-val.critical { color: #b91c1c; font-weight: 800; }
+    .section-hd { font-weight: 800; font-size: 0.8rem; margin: 14px 0 8px; color: var(--text); }
+    .tl-op { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
+    .tl-op-hd { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .tl-op-label { font-size: 0.75rem; font-weight: 800; color: var(--blue-d); }
+    .tl-op-time { font-size: 0.7rem; color: var(--muted); }
+    .tl-system { font-size: 0.82rem; color: var(--muted); font-style: italic; }
+    .task-list { margin: 0; padding-left: 18px; font-size: 0.84rem; }
+    .task-type, .task-status { font-size: 0.72rem; color: var(--muted); margin-left: 6px; }
+    .tasks-empty { font-size: 0.82rem; color: var(--muted); }
+    .suggest-box {
+      margin-top: 14px; padding: 12px; border: 1px solid #bfdbfe; border-radius: var(--radius-sm);
+      background: var(--blue-l);
+    }
+    .suggest-box textarea {
+      width: 100%; min-height: 100px; margin-top: 8px; border-radius: 8px;
+      border: 1px solid var(--border); padding: 8px; font-family: inherit; resize: vertical;
+    }
+    .badge-visit-plan { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
+    .visit-plan-box {
+      margin-bottom: 14px; padding: 12px; border: 1px solid #ddd6fe; border-radius: var(--radius-sm);
+      background: #faf5ff;
+    }
+    .visit-plan-box .disclaimer { font-size: 0.78rem; color: #6b21a8; margin-bottom: 10px; line-height: 1.4; }
+    .vp-day { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed #e9d5ff; font-size: 0.84rem; }
+    .vp-day:last-child { border-bottom: none; }
+    .vp-day-num { font-weight: 800; color: #7c3aed; min-width: 52px; }
+    .badge-doc-review { background: #fff1f2; color: #be123c; border: 1px solid #fecdd3; }
+    .badge-missing-intake { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+    .intake-flags-box {
+      margin-bottom: 14px; padding: 10px 12px; border-radius: var(--radius-sm);
+      background: #fffbeb; border: 1px solid #fde68a; font-size: 0.82rem;
+    }
+    .intake-flags-box ul { margin: 6px 0 0; padding-left: 18px; }
+    .docs-box { margin-bottom: 14px; }
+    .doc-row {
+      display: flex; gap: 10px; align-items: flex-start; padding: 8px 0;
+      border-bottom: 1px dashed var(--border); font-size: 0.84rem;
+    }
+    .doc-row:last-child { border-bottom: none; }
+    .doc-thumb {
+      width: 56px; height: 56px; object-fit: cover; border-radius: 6px;
+      border: 1px solid var(--border); background: #f1f5f9;
+    }
+    .doc-meta { flex: 1; min-width: 0; }
+    .readiness-box {
+      margin-bottom: 14px; padding: 12px; border-radius: var(--radius-sm);
+      background: #f0f9ff; border: 1px solid #bae6fd;
+    }
+    .readiness-bar-wrap {
+      height: 8px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin: 8px 0;
+    }
+    .readiness-bar { height: 100%; background: linear-gradient(90deg, #0ea5e9, #22c55e); border-radius: 999px; }
+    .tag-pill {
+      display: inline-block; padding: 2px 8px; margin: 2px 4px 2px 0; border-radius: 999px;
+      font-size: 0.68rem; font-weight: 700; background: #ede9fe; color: #5b21b6; border: 1px solid #ddd6fe;
+    }
+    .badge-journey { background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; }
+    .intake-pipeline {
+      margin-bottom: 16px; padding: 14px; border-radius: var(--radius-sm);
+      background: #f8fafc; border: 1px solid var(--border);
+    }
+    .intake-pipeline .pipe-hd {
+      font-size: 0.78rem; color: var(--muted); margin-bottom: 12px; line-height: 1.4;
+    }
+    .pipeline-step {
+      display: flex; gap: 12px; align-items: flex-start; padding: 10px 0;
+      border-left: 3px solid #e2e8f0; margin-left: 8px; padding-left: 14px;
+      position: relative;
+    }
+    .pipeline-step::before {
+      content: ""; position: absolute; left: -7px; top: 14px;
+      width: 11px; height: 11px; border-radius: 50%; background: #e2e8f0; border: 2px solid #fff;
+    }
+    .pipeline-step.complete { border-left-color: #22c55e; }
+    .pipeline-step.complete::before { background: #22c55e; }
+    .pipeline-step.current { border-left-color: #0ea5e9; background: #f0f9ff; border-radius: 0 8px 8px 0; }
+    .pipeline-step.current::before { background: #0ea5e9; box-shadow: 0 0 0 3px #bae6fd; }
+    .pipeline-step.skipped { opacity: 0.65; }
+    .pipeline-step.skipped .pipe-title { text-decoration: line-through; color: var(--muted); }
+    .pipe-title { font-weight: 800; font-size: 0.88rem; }
+    .pipe-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+    .pipe-status {
+      font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    }
+    .pipe-status.complete { background: #dcfce7; color: #166534; }
+    .pipe-status.current { background: #dbeafe; color: #1d4ed8; }
+    .pipe-status.pending { background: #f1f5f9; color: #64748b; }
+    .pipe-status.skipped { background: #f8fafc; color: #94a3b8; }
+    .sla-wait { font-weight: 700; color: #b45309; }
+    @media (max-width: 700px) { .sla-strip { grid-template-columns: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="ai-wrap">
+    <div class="ai-header">
+      <h1>Coordinator Workspace</h1>
+      <p>
+        Operational queues for AI-generated leads — SLA timers, human takeover, draft replies, tasks, and escalation signals.
+      </p>
+    </div>
+
+    <div class="workspace-tabs" id="workspaceTabs">
+      <button type="button" class="ws-btn" data-ws="assigned">Assigned leads</button>
+      <button type="button" class="ws-btn" data-ws="hot">Hot leads</button>
+      <button type="button" class="ws-btn active" data-ws="recent">All recent</button>
+      <button type="button" class="ws-btn" data-ws="waiting_human">Waiting for human reply</button>
+      <button type="button" class="ws-btn" data-ws="ai_unresolved">AI unresolved</button>
+      <button type="button" class="ws-btn" data-ws="inactive">Inactive 24h+</button>
+    </div>
+
+    <div class="filters signal-filters" id="filters">
+      <button type="button" class="filter-btn" data-filter="recent">Signals: recent</button>
+      <button type="button" class="filter-btn" data-filter="hot">Hot leads</button>
+      <button type="button" class="filter-btn" data-filter="implant">Implant</button>
+      <button type="button" class="filter-btn" data-filter="veneers">Veneers</button>
+      <button type="button" class="filter-btn" data-filter="high_booking">High booking</button>
+      <button type="button" class="filter-btn" data-filter="high_urgency">High urgency</button>
+      <button type="button" class="filter-btn" data-filter="human">Human active</button>
+      <button type="button" class="filter-btn" data-filter="tag_implant">Tag: implant</button>
+      <button type="button" class="filter-btn" data-filter="tag_cosmetic">Tag: cosmetic</button>
+      <button type="button" class="filter-btn" data-filter="readiness_ready">Ready &ge;70%</button>
+      <button type="button" class="filter-btn" data-filter="awaiting_xray">Awaiting X-ray</button>
+      <button type="button" class="filter-btn" data-filter="doctor_review">Doctor review</button>
+    </div>
+
+    <div id="globalErr" class="err" style="display:none"></div>
+
+    <div class="layout">
+      <section class="panel">
+        <div class="panel-hd">
+          <span>Leads</span>
+          <button type="button" class="refresh-btn" id="btnRefresh">Refresh</button>
+        </div>
+        <div class="lead-list" id="leadList">
+          <div class="empty">Loading…</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-hd"><span id="detailTitle">Select a lead</span></div>
+        <div class="detail-body" id="detailBody">
+          <div class="empty">Select a lead from the inbox to view conversation and coordination controls.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    function adminFetch(path, opts) {
+      const url = typeof adminFetchUrl === "function" ? adminFetchUrl(path) : path;
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      const headers = Object.assign(
+        { Accept: "application/json", Authorization: "Bearer " + token },
+        (opts && opts.headers) || {},
+      );
+      return fetch(url, Object.assign({}, opts, { headers }));
+    }
+
+    function esc(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "—";
+      try {
+        return new Date(iso).toLocaleString();
+      } catch (e) {
+        return iso;
+      }
+    }
+
+    let activeWorkspace = "recent";
+    let activeSignalFilter = null;
+    let leads = [];
+    let selectedId = null;
+
+    function slaBadge(L) {
+      const sla = L.sla || {};
+      const parts = [];
+      if (sla.isWaiting4h) parts.push('<span class="badge badge-urgent-critical">Wait 4h+</span>');
+      else if (sla.isWaiting1h) parts.push('<span class="badge badge-urgent-warn">Wait 1h+</span>');
+      if (sla.isInactive24h) parts.push('<span class="badge badge-stale">Inactive 24h+</span>');
+      return parts.join("");
+    }
+
+    function escalationBadges(flags) {
+      if (!flags || typeof flags !== "object") return "";
+      const out = [];
+      if (flags.emergency) out.push('<span class="badge badge-esc-emergency">Emergency</span>');
+      if (flags.angry) out.push('<span class="badge badge-esc-angry">Angry</span>');
+      if (flags.complaintRefund) out.push('<span class="badge badge-esc-refund">Refund</span>');
+      if (flags.repeatedQuestions) out.push('<span class="badge badge-esc-repeat">Repeated Q</span>');
+      return out.join("");
+    }
+
+    function slaStrip(L) {
+      const sla = L.sla || {};
+      const waitClass = sla.isWaiting4h ? 'critical' : sla.isWaiting1h ? 'warn' : '';
+      return (
+        '<div class="sla-strip">' +
+        '<div class="sla-cell"><label>Last patient msg</label><div>' + esc(fmtTime(sla.lastPatientMessageAt)) + '</div></div>' +
+        '<div class="sla-cell"><label>Waiting</label><div class="sla-val ' + waitClass + '">' + esc(sla.waitingDurationLabel || '—') + '</div></div>' +
+        '<div class="sla-cell"><label>Since human reply</label><div>' + esc(sla.sinceLastHumanReplyLabel || '—') + '</div></div>' +
+        '<div class="sla-cell"><label>Mode</label><div>' + esc(L.coordinationMode === 'human_active' ? 'Human active' : 'AI active') + '</div></div>' +
+        '</div>'
+      );
+    }
+
+    function renderOperationalTimeline(events) {
+      return (events || []).map(function (ev) {
+        const label = ev.label || ev.eventType || 'Event';
+        const meta = ev.eventMetadata || {};
+        let body = '';
+        if (ev.patientMessage) body += '<div class="tl-bubble tl-patient">' + esc(ev.patientMessage) + '</div>';
+        if (ev.aiReply) body += '<div class="tl-bubble tl-ai">' + esc(ev.aiReply) + '</div>';
+        if (!body && meta.title) body = '<div class="tl-system">' + esc(meta.title) + '</div>';
+        if (!body && meta.mode) body = '<div class="tl-system">Mode: ' + esc(meta.mode) + '</div>';
+        if (!body && meta.angry !== undefined) body = '<div class="tl-system">Escalation detected</div>';
+        if (!body && meta.documentType) body = '<div class="tl-system">' + esc(meta.documentType) + "</div>";
+        if (!body && meta.flags) body = '<div class="tl-system">Intake gaps updated</div>';
+        return '<div class="tl-op"><div class="tl-op-hd"><span class="tl-op-label">' + esc(label) + '</span><span class="tl-op-time">' + esc(fmtTime(ev.createdAt)) + '</span></div>' + body + '</div>';
+      }).join('');
+    }
+
+    function renderVisitPlan(vp) {
+      if (!vp) return "";
+      const days = (vp.draftTimeline || [])
+        .map(function (d) {
+          return (
+            '<div class="vp-day"><span class="vp-day-num">Day ' +
+            esc(d.day) +
+            '</span><span><strong>' +
+            esc(d.label) +
+            "</strong>" +
+            (d.detail ? " — " + esc(d.detail) : "") +
+            "</span></div>"
+          );
+        })
+        .join("");
+      return (
+        '<div class="visit-plan-box" data-vp-id="' +
+        esc(vp.id) +
+        '">' +
+        '<div class="disclaimer"><strong>Operational estimate only</strong> — not confirmed appointments. Final planning is confirmed by the clinic after doctor evaluation.</div>' +
+        "<div><strong>" +
+        esc((vp.treatmentType || "Treatment").replace(/_/g, " ")) +
+        (vp.proposedVisitCount != null ? " · " + esc(vp.proposedVisitCount + " visits (est.)") : "") +
+        (vp.estimatedStayDuration ? " · stay " + esc(vp.estimatedStayDuration) : "") +
+        '</strong> <span class="badge badge-visit-plan">' +
+        esc(vp.status || "draft") +
+        "</span></div>" +
+        (vp.aiSummary ? '<p style="font-size:0.84rem;margin:8px 0">' + esc(vp.aiSummary) + "</p>" : "") +
+        days +
+        '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
+        (vp.status === "draft"
+          ? '<button type="button" class="refresh-btn" id="btnVpReviewed">Mark reviewed</button>'
+          : "") +
+        '<button type="button" class="refresh-btn" id="btnVpSaveNotes" style="background:#64748b">Save notes</button>' +
+        "</div>" +
+        '<textarea id="vpNotes" placeholder="Coordinator notes (internal)…" style="width:100%;min-height:56px;margin-top:8px;border-radius:8px;border:1px solid #ddd6fe;padding:8px;font-family:inherit">' +
+        esc(vp.coordinatorNotes || "") +
+        "</textarea>" +
+        "</div>"
+      );
+    }
+
+    async function patchVisitPlan(profileId, body) {
+      const res = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(profileId) + "/visit-plan", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Update failed");
+      return json.visitPlanDraft;
+    }
+
+    function wireVisitPlanHandlers(profileId, draftId) {
+      const btnReview = document.getElementById("btnVpReviewed");
+      if (btnReview) {
+        btnReview.addEventListener("click", async function () {
+          btnReview.disabled = true;
+          try {
+            await patchVisitPlan(profileId, { draftId: draftId, status: "reviewed" });
+            await loadDetail(profileId);
+          } catch (e) {
+            alert(e.message);
+            btnReview.disabled = false;
+          }
+        });
+      }
+      const btnNotes = document.getElementById("btnVpSaveNotes");
+      if (btnNotes) {
+        btnNotes.addEventListener("click", async function () {
+          const notes = document.getElementById("vpNotes");
+          btnNotes.disabled = true;
+          try {
+            await patchVisitPlan(profileId, {
+              draftId: draftId,
+              coordinatorNotes: notes ? notes.value : "",
+            });
+            btnNotes.textContent = "Saved";
+            setTimeout(function () {
+              btnNotes.textContent = "Save notes";
+              btnNotes.disabled = false;
+            }, 1200);
+          } catch (e) {
+            alert(e.message);
+            btnNotes.disabled = false;
+          }
+        });
+      }
+    }
+
+    function renderReadiness(readiness, flags) {
+      const r = readiness || {};
+      const f = flags || {};
+      const pct = r.percent != null ? r.percent : f.readinessPercent;
+      if (pct == null && !f.journeyStageLabel) return "";
+      const missing = r.missing || f.readinessMissing || [];
+      const barW = Math.min(100, Math.max(0, Number(pct) || 0));
+      let html =
+        '<div class="readiness-box"><strong>Operational readiness</strong> <span style="font-size:0.75rem;color:var(--muted)">(not clinical eligibility)</span>';
+      if (f.journeyStageLabel) {
+        html +=
+          ' <span class="badge badge-journey">' + esc(f.journeyStageLabel) + "</span>";
+      }
+      if (pct != null) {
+        html +=
+          '<div style="margin-top:8px;font-size:1.1rem;font-weight:800">' +
+          esc(pct) +
+          '%</div><div class="readiness-bar-wrap"><div class="readiness-bar" style="width:' +
+          barW +
+          '%"></div></div>';
+      }
+      if (missing.length) {
+        html +=
+          '<div style="font-size:0.8rem;margin-top:6px"><strong>Still needed:</strong><ul style="margin:4px 0 0;padding-left:18px">' +
+          missing.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") +
+          "</ul></div>";
+      }
+      const tags = f.patientReportedTags || [];
+      if (tags.length) {
+        html +=
+          '<div style="margin-top:8px;font-size:0.75rem"><strong>Patient-reported:</strong> ' +
+          tags.map(function (t) {
+            return '<span class="tag-pill">' + esc(t.replace(/_/g, " ")) + "</span>";
+          }).join("") +
+          "</div>";
+      }
+      return html + "</div>";
+    }
+
+    function renderIntakePipeline(journey) {
+      const j = journey || {};
+      if (!j.steps || !j.steps.length) return "";
+      const pct = j.readinessPercent != null ? j.readinessPercent : null;
+      let hd =
+        '<strong>Intake pipeline</strong> — operational workflow (not clinical diagnosis).';
+      if (pct != null) hd += " Readiness: <strong>" + esc(pct) + "%</strong>.";
+      if (j.journeyStageLabel) {
+        hd += ' Stage: <span class="badge badge-journey">' + esc(j.journeyStageLabel) + "</span>.";
+      }
+      const stepsHtml = j.steps
+        .map(function (step) {
+          return (
+            '<div class="pipeline-step ' +
+            esc(step.status) +
+            '"><div style="flex:1"><div class="pipe-title">' +
+            esc(step.title) +
+            '</div><div class="pipe-sub">' +
+            esc(step.subtitle) +
+            '</div></div><span class="pipe-status ' +
+            esc(step.status) +
+            '">' +
+            esc(step.statusLabel) +
+            "</span></div>"
+          );
+        })
+        .join("");
+      return '<div class="intake-pipeline"><div class="pipe-hd">' + hd + "</div>" + stepsHtml + "</div>";
+    }
+
+    function renderIntakeFlags(flags) {
+      const f = flags || {};
+      const missing = [];
+      if (f.missingXray) missing.push("Panoramic X-ray / imaging");
+      if (f.missingSmilePhotos) missing.push("Smile / intraoral photos");
+      if (f.missingTravelTimeline) missing.push("Travel timeline");
+      if (f.missingTreatmentPreference) missing.push("Treatment goals");
+      if (!missing.length && !f.doctorReviewNeeded && !(f.patientReportedTags || []).length) return "";
+      let html =
+        '<div class="intake-flags-box"><strong>Intake gaps</strong> — patient-reported / operational only.';
+      if (missing.length) {
+        html += "<ul>" + missing.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") + "</ul>";
+      }
+      if (f.doctorReviewNeeded) {
+        html += '<p style="margin:8px 0 0"><span class="badge badge-doc-review">Doctor review needed</span></p>';
+      }
+      const tags = f.patientReportedTags || [];
+      if (tags.length) {
+        html +=
+          '<p style="margin:8px 0 0;font-size:0.78rem"><strong>Patient-reported tags</strong> ' +
+          tags.map(function (t) { return '<span class="tag-pill">' + esc(t) + "</span>"; }).join("") +
+          "</p>";
+      }
+      return html + "</div>";
+    }
+
+    function renderDocuments(docs) {
+      if (!docs || !docs.length) {
+        return '<div style="font-size:0.82rem;color:var(--muted)">No patient documents uploaded yet.</div>';
+      }
+      return (
+        '<div class="docs-box">' +
+        docs
+          .map(function (d) {
+            const thumb = d.thumbnailUrl
+              ? '<img class="doc-thumb" src="' + esc(d.thumbnailUrl) + '" alt="" />'
+              : '<div class="doc-thumb" style="display:flex;align-items:center;justify-content:center;font-size:0.65rem;color:var(--muted)">FILE</div>';
+            return (
+              '<div class="doc-row">' +
+              thumb +
+              '<div class="doc-meta"><strong>' +
+              esc(d.documentTypeLabel || d.documentType) +
+              '</strong> <span class="badge" style="background:#f1f5f9">' +
+              esc(d.reviewStatus) +
+              "</span>" +
+              (d.requiresDoctorReview && d.reviewStatus === "pending"
+                ? ' <span class="badge badge-doc-review">Doctor review</span>'
+                : "") +
+              '<div style="margin-top:4px;font-size:0.75rem;color:var(--muted)">' +
+              esc(fmtTime(d.uploadedAt)) +
+              " · " +
+              esc(d.uploadedByType || "patient") +
+              (d.patientConfirmedUploadConsent ? " · consent ✓" : "") +
+              "</div>" +
+              (d.aiSummary ? '<div style="margin-top:4px;font-size:0.8rem">' + esc(d.aiSummary) + "</div>" : "") +
+              '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' +
+              '<a href="' +
+              esc(d.fileUrl) +
+              '" target="_blank" rel="noopener" style="font-size:0.75rem;font-weight:700">View file</a>' +
+              (d.reviewStatus === "pending"
+                ? '<button type="button" class="refresh-btn doc-reviewed-btn" data-doc-id="' +
+                  esc(d.id) +
+                  '" style="font-size:0.75rem;padding:4px 10px">Mark reviewed</button>'
+                : "") +
+              "</div></div></div>"
+            );
+          })
+          .join("") +
+        "</div>"
+      );
+    }
+
+    async function patchDocument(profileId, documentId, body) {
+      const res = await adminFetch(
+        "/api/admin/ai-leads/" + encodeURIComponent(profileId) + "/documents/" + encodeURIComponent(documentId),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Update failed");
+      return json.document;
+    }
+
+    function wireDocumentHandlers(profileId) {
+      document.querySelectorAll(".doc-reviewed-btn").forEach(function (btn) {
+        btn.addEventListener("click", async function () {
+          const docId = btn.getAttribute("data-doc-id");
+          btn.disabled = true;
+          try {
+            await patchDocument(profileId, docId, { reviewStatus: "reviewed" });
+            await loadDetail(profileId);
+          } catch (e) {
+            alert(e.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+
+    function renderTasks(tasks) {
+      if (!tasks || !tasks.length) {
+        return '<div class="tasks-empty">No operational tasks yet.</div>';
+      }
+      return '<ul class="task-list">' + tasks.map(function (t) {
+        return "<li><strong>" + esc(t.title) + '</strong> <span class="task-type">' + esc(t.taskType) +
+          '</span> <span class="task-status">' + esc(t.status) + "</span></li>";
+      }).join("") + "</ul>";
+    }
+
+    function renderLeadList() {
+      const el = document.getElementById("leadList");
+      if (!leads.length) {
+        el.innerHTML = '<div class="empty">No AI leads yet. Patient chats will appear here.</div>';
+        return;
+      }
+      el.innerHTML = leads
+        .map((L) => {
+          const hot = L.isHot ? '<span class="badge badge-hot">Hot</span>' : "";
+          const mode =
+            L.coordinationMode === "human_active"
+              ? '<span class="badge badge-human">Human</span>'
+              : '<span class="badge badge-ai">AI</span>';
+          const title = L.patientName || L.treatmentInterest || L.country || "Lead";
+          const sub = [L.treatmentInterest, L.country, L.urgency ? "urgency: " + L.urgency : ""]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            '<div class="lead-item' +
+            (L.id === selectedId ? " active" : "") +
+            '" data-id="' +
+            esc(L.id) +
+            '">' +
+            '<div class="lead-top">' +
+            '<div class="lead-title">' +
+            esc(title) +
+            "</div>" +
+            '<span class="score">' +
+            (L.leadScore != null ? L.leadScore : "—") +
+            "</span>" +
+            "</div>" +
+            '<div class="lead-meta">' +
+            esc(sub || "No signals yet") +
+            "</div>" +
+            '<div class="lead-meta" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+            hot +
+            mode +
+            (L.aiUnresolved ? '<span class="badge badge-unresolved">AI unresolved</span>' : "") +
+            (L.hasVisitPlanDraft ? '<span class="badge badge-visit-plan">Visit plan</span>' : "") +
+            (L.needsDoctorDocumentReview ? '<span class="badge badge-doc-review">Doc review</span>' : "") +
+            (L.hasMissingIntake ? '<span class="badge badge-missing-intake">Missing intake</span>' : "") +
+            (L.journeyStageLabel ? '<span class="badge badge-journey">' + esc(L.journeyStageLabel) + "</span>" : "") +
+            (L.readinessPercent != null ? '<span class="badge" style="background:#e0f2fe;color:#0369a1">' + esc(L.readinessPercent) + "% ready</span>" : "") +
+            slaBadge(L) +
+            escalationBadges(L.escalationFlags) +
+            "</div>" +
+            '<div class="lead-meta">' +
+            (L.sla && L.sla.waitingDurationLabel ? "⏱ " + esc(L.sla.waitingDurationLabel) + " · " : "") +
+            esc(L.sla && L.sla.lastPatientMessageAt ? L.sla.lastPatientMessageAt : L.updatedAt) +
+            "</div>" +
+            "</div>"
+          );
+        })
+        .join("");
+
+      el.querySelectorAll(".lead-item").forEach((node) => {
+        node.addEventListener("click", () => {
+          const id = node.getAttribute("data-id");
+          if (id) loadDetail(id);
+        });
+      });
+    }
+
+    function fieldHtml(label, value) {
+      return (
+        '<div class="field"><label>' +
+        esc(label) +
+        '</label><div>' +
+        esc(value || "—") +
+        "</div></div>"
+      );
+    }
+
+    async function loadDetail(id) {
+      selectedId = id;
+      renderLeadList();
+      const body = document.getElementById("detailBody");
+      body.innerHTML = '<div class="empty">Loading conversation…</div>';
+      document.getElementById("detailTitle").textContent = "Lead detail";
+
+      try {
+        const res = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id));
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load");
+
+        const L = json.lead;
+        document.getElementById("detailTitle").textContent =
+          L.patientName || L.treatmentInterest || "Lead detail";
+
+        const isHuman = L.coordinationMode === "human_active";
+        const modeHtml =
+          '<div class="mode-toggle">' +
+          '<button type="button" class="mode-btn' +
+          (!isHuman ? " active-ai" : "") +
+          '" data-mode="ai_active">AI Active</button>' +
+          '<button type="button" class="mode-btn' +
+          (isHuman ? " active-human" : "") +
+          '" data-mode="human_active">Human Active</button>' +
+          "</div>";
+
+        const grid =
+          '<div class="grid2">' +
+          fieldHtml("Treatment", L.treatmentInterest) +
+          fieldHtml("Country", L.country) +
+          fieldHtml("Language", L.preferredLanguage) +
+          fieldHtml("Travel", L.travelTimeline) +
+          fieldHtml("Urgency", L.urgency) +
+          fieldHtml("Booking intent", L.bookingIntent) +
+          fieldHtml("Budget", L.budgetSignal) +
+          fieldHtml("Channel", L.primaryChannel) +
+          fieldHtml("Messages", L.messageCount) +
+          "</div>";
+
+        const summary = L.conversationSummary
+          ? '<div class="summary-box"><strong>AI summary</strong><br/>' +
+            esc(L.conversationSummary) +
+            "</div>"
+          : "";
+
+        const escRow =
+          '<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">' +
+          escalationBadges(L.escalationFlags) +
+          (L.aiUnresolved ? '<span class="badge badge-unresolved">AI unresolved</span>' : "") +
+          (L.hasVisitPlanDraft ? '<span class="badge badge-visit-plan">Visit plan draft</span>' : "") +
+          (L.needsDoctorDocumentReview ? '<span class="badge badge-doc-review">Doctor review</span>' : "") +
+          (L.hasMissingIntake ? '<span class="badge badge-missing-intake">Missing intake</span>' : "") +
+          "</div>";
+
+        const suggestHtml = isHuman
+          ? '<div class="suggest-box">' +
+            "<strong>AI draft assistant</strong> (does not auto-send)" +
+            '<button type="button" class="refresh-btn" id="btnSuggest">Suggest Reply</button>' +
+            '<textarea id="suggestDraft" placeholder="Click Suggest Reply to generate a draft…"></textarea>' +
+            '<div id="suggestErr" class="err" style="display:none"></div>' +
+            "</div>"
+          : '<div class="placeholder-reply"><strong>Human mode off</strong> — switch to Human Active to draft coordinator replies.</div>';
+
+        body.innerHTML =
+          slaStrip(L) +
+          escRow +
+          modeHtml +
+          grid +
+          summary +
+          (json.visitPlanDraft
+            ? '<div class="section-hd">AI visit plan (operational estimate)</div>' + renderVisitPlan(json.visitPlanDraft)
+            : "") +
+          renderIntakePipeline(json.intakeJourney) +
+          renderReadiness(json.readiness, json.operationalIntakeFlags) +
+          renderIntakeFlags(json.operationalIntakeFlags) +
+          '<div class="section-hd">Patient documents</div>' +
+          renderDocuments(json.documents) +
+          '<div class="section-hd">Operational tasks</div>' +
+          renderTasks(json.tasks) +
+          '<div class="section-hd">Timeline</div>' +
+          '<div class="timeline">' +
+          (renderOperationalTimeline(json.operationalTimeline || json.events) ||
+            '<div class="empty">No events yet.</div>') +
+          "</div>" +
+          suggestHtml;
+
+        if (json.visitPlanDraft && json.visitPlanDraft.id) {
+          wireVisitPlanHandlers(id, json.visitPlanDraft.id);
+        }
+        wireDocumentHandlers(id);
+
+        body.querySelectorAll(".mode-btn").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const mode = btn.getAttribute("data-mode");
+            await setCoordination(id, mode);
+          });
+        });
+
+        const btnSuggest = document.getElementById("btnSuggest");
+        if (btnSuggest) {
+          btnSuggest.addEventListener("click", async function () {
+            const errEl = document.getElementById("suggestErr");
+            const ta = document.getElementById("suggestDraft");
+            if (errEl) errEl.style.display = "none";
+            btnSuggest.disabled = true;
+            btnSuggest.textContent = "Generating…";
+            try {
+              const sRes = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id) + "/suggest-reply", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+              });
+              const sJson = await sRes.json();
+              if (!sRes.ok || !sJson.ok) throw new Error(sJson.message || sJson.error || "Suggest failed");
+              if (ta) ta.value = sJson.suggestedReply || "";
+            } catch (err) {
+              if (errEl) {
+                errEl.style.display = "block";
+                errEl.textContent = err.message;
+              }
+            } finally {
+              btnSuggest.disabled = false;
+              btnSuggest.textContent = "Suggest Reply";
+            }
+          });
+        });
+      } catch (e) {
+        body.innerHTML = '<div class="err">' + esc(e.message) + "</div>";
+      }
+    }
+
+    async function setCoordination(id, mode) {
+      try {
+        const res = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id) + "/coordination", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Update failed");
+        await loadLeads();
+        await loadDetail(id);
+      } catch (e) {
+        document.getElementById("globalErr").style.display = "block";
+        document.getElementById("globalErr").textContent = e.message;
+      }
+    }
+
+    async function loadLeads() {
+      const errEl = document.getElementById("globalErr");
+      errEl.style.display = "none";
+      document.getElementById("leadList").innerHTML = '<div class="empty">Loading…</div>';
+      try {
+        let url = "/api/admin/ai-leads?limit=80";
+        if (activeWorkspace && activeWorkspace !== "recent") {
+          url += "&workspace=" + encodeURIComponent(activeWorkspace);
+        } else if (activeSignalFilter) {
+          url += "&filter=" + encodeURIComponent(activeSignalFilter);
+        }
+        const res = await adminFetch(url);
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load leads");
+        leads = json.leads || [];
+        if (
+          activeSignalFilter &&
+          ["tag_implant", "tag_cosmetic", "readiness_ready", "awaiting_xray", "doctor_review", "awaiting_photos"].indexOf(
+            activeSignalFilter,
+          ) >= 0
+        ) {
+          leads = leads.slice().sort(function (a, b) {
+            const ra = a.readinessPercent != null ? a.readinessPercent : -1;
+            const rb = b.readinessPercent != null ? b.readinessPercent : -1;
+            if (rb !== ra) return rb - ra;
+            return (b.leadScore != null ? b.leadScore : 0) - (a.leadScore != null ? a.leadScore : 0);
+          });
+        }
+        renderLeadList();
+        if (selectedId && leads.some((l) => l.id === selectedId)) {
+          loadDetail(selectedId);
+        }
+      } catch (e) {
+        document.getElementById("leadList").innerHTML =
+          '<div class="err">' + esc(e.message) + "</div>";
+      }
+    }
+
+    document.getElementById("workspaceTabs").addEventListener("click", (e) => {
+      const btn = e.target.closest(".ws-btn");
+      if (!btn) return;
+      activeWorkspace = btn.getAttribute("data-ws") || "recent";
+      activeSignalFilter = null;
+      document.querySelectorAll(".ws-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      loadLeads();
+    });
+
+    document.getElementById("filters").addEventListener("click", (e) => {
+      const btn = e.target.closest(".filter-btn");
+      if (!btn) return;
+      activeSignalFilter = btn.getAttribute("data-filter") || "recent";
+      activeWorkspace = "recent";
+      document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".ws-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelector('[data-ws="recent"]')?.classList.add("active");
+      loadLeads();
+    });
+
+    document.getElementById("btnRefresh").addEventListener("click", loadLeads);
+    loadLeads();
+  </script>
+  <script src="/admin-layout.js?v=202605171"></script>
+</body>
+</html>

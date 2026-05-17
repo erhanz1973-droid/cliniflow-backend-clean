@@ -52,6 +52,7 @@
   const NAV2 = [
     { href: '/admin-doctor-applications-v2.html', icon: iconDoctor(), key: 'doctors', badge: 'sbDoctors' },
     { href: '/admin-leads.html',    icon: iconLeads(),    key: 'leads' },
+    { href: '/admin-ai-leads.html', icon: iconAi(),       key: 'aiLeads' },
     { href: '/admin-chat.html',     icon: iconChat(),     key: 'chat',    badge: 'sbChat' },
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
     { href: '/admin-referrals.html', icon: iconReferrals(), key: 'referrals', badge: 'sbReferrals' },
@@ -66,6 +67,7 @@
       'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Lead inbox',
+      'dashboard.nav.aiLeads': 'Coordinator workspace',
       'dashboard.nav.chat': 'Messages',
       'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.settings': 'Settings',
       'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
@@ -88,6 +90,9 @@
   /** Leads / inbox / assignment queue */
   function iconLeads() {
     return svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>');
+  }
+  function iconAi() {
+    return svg('<path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v1a3 3 0 0 1-3 3h-1v1a4 4 0 0 1-8 0v-1H7a3 3 0 0 1-3-3v-1a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/>');
   }
   function iconSettings() { return svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'); }
   function iconFiles()    { return svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'); }

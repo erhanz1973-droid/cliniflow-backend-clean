@@ -14,7 +14,10 @@ Set these in Railway (or `.env` locally). Names only — **no secrets in git**.
 
 | Variable | Notes |
 |----------|--------|
-| `OPENAI_API_KEY` | GPT vision / chat analysis |
+| `OPENAI_API_KEY` | GPT vision / chat analysis; **required** for `POST /ai/chat` (coordinator + lead extraction JSON, model `gpt-4.1-mini`) |
+| `AI_COORDINATOR_MAX_TOKENS` | Optional; default `800` (reply + `leadData` + `conversationSummary`) |
+| `AI_COORDINATOR_MAX_RECENT_TURNS` | Optional; default `8` (only last N turns sent to OpenAI) |
+| `AI_COORDINATOR_MAX_SUMMARY_CHARS` | Optional; default `1200` (rolling summary cap) |
 | `REPLICATE_API_TOKEN` | Smile / teeth pipelines where Replicate is used |
 
 ## Optional feature flags (defaults usually work)
