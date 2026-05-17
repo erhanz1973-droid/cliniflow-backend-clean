@@ -13117,6 +13117,78 @@ function isActiveEnrolledClinicPatient(patient, clinicId) {
   return true;
 }
 
+function isThreadLifecycleArchived(thread) {
+  if (!thread || typeof thread !== "object") return false;
+  const life = String(thread.lifecycle_status || "").trim().toLowerCase();
+  if (life === "archived") return true;
+  const at = thread.archived_at;
+  return at != null && String(at).trim() !== "";
+}
+
+/** Patient row + clinic thread — true only when doctor may open/send on enrolled chat. */
+function isPatientActiveForDoctorMessaging(patient, clinicId, threadMeta) {
+  if (!isActiveEnrolledClinicPatient(patient, clinicId)) return false;
+  if (isThreadLifecycleArchived(threadMeta)) return false;
+  return true;
+}
+
+/** Batch thread lifecycle for doctor patient roster (chunked). */
+async function loadClinicPatientThreadLifecycleMap(patientUuids, clinicId) {
+  const map = new Map();
+  const cid = clinicId ? String(clinicId).trim() : "";
+  if (!cid || !UUID_RE.test(cid) || !isSupabaseEnabled()) return map;
+  const ids = [
+    ...new Set(
+      (patientUuids || [])
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter((x) => PATIENT_ROW_UUID_RE.test(x))
+    ),
+  ];
+  if (!ids.length) return map;
+
+  const selectAttempts = [
+    "patient_id, lifecycle_status, archived_at, is_lead, updated_at",
+    "patient_id, is_lead, updated_at",
+  ];
+
+  outerSelect: for (const sel of selectAttempts) {
+    for (let i = 0; i < ids.length; i += 80) {
+      const chunk = ids.slice(i, i + 80);
+      const { data, error } = await supabase
+        .from("patient_chat_threads")
+        .select(sel)
+        .eq("clinic_id", cid)
+        .in("patient_id", chunk);
+      if (error) {
+        const code = String(error.code || "");
+        if (["42703", "PGRST204"].includes(code)) continue outerSelect;
+        console.warn("[loadClinicPatientThreadLifecycleMap]", error.message || error);
+        return map;
+      }
+      for (const row of data || []) {
+        const pid = String(row.patient_id || "").trim().toLowerCase();
+        if (!pid) continue;
+        const prev = map.get(pid);
+        if (!prev) {
+          map.set(pid, row);
+          continue;
+        }
+        const prevArch = isThreadLifecycleArchived(prev);
+        const nextArch = isThreadLifecycleArchived(row);
+        if (nextArch && !prevArch) {
+          map.set(pid, row);
+          continue;
+        }
+        const pu = Date.parse(String(prev.updated_at || 0));
+        const nu = Date.parse(String(row.updated_at || 0));
+        if (Number.isFinite(nu) && (!Number.isFinite(pu) || nu >= pu)) map.set(pid, row);
+      }
+    }
+    break;
+  }
+  return map;
+}
+
 /**
  * Patient left clinic: clear membership, mark lead again, archive thread(s), invalidate doctor caches.
  */
@@ -46556,10 +46628,25 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       });
     }
 
-    // Active roster only: enrolled at this clinic (not lead, not archived / unlinked).
-    const finalPatients = (patients || []).filter((patient) =>
-      isActiveEnrolledClinicPatient(patient, clinicId)
-    );
+    const scope = String(req.query.scope || "active").trim().toLowerCase();
+    const patientDbIds = (patients || [])
+      .map((p) => String(p.id || "").trim().toLowerCase())
+      .filter((x) => PATIENT_ROW_UUID_RE.test(x));
+    const threadByPatient = await loadClinicPatientThreadLifecycleMap(patientDbIds, clinicId);
+
+    const classified = (patients || []).map((patient) => {
+      const pid = String(patient.id || "").trim().toLowerCase();
+      const thread = threadByPatient.get(pid) || null;
+      const messagingActive = isPatientActiveForDoctorMessaging(patient, clinicId, thread);
+      return { patient, thread, messagingActive };
+    });
+
+    let roster = classified;
+    if (scope === "active") {
+      roster = classified.filter((r) => r.messagingActive);
+    } else if (scope === "archived" || scope === "inactive") {
+      roster = classified.filter((r) => !r.messagingActive);
+    }
 
     // Helper to compute risk flags from health formData (patients endpoint)
     function computePatientRiskFlags(formData) {
@@ -46583,16 +46670,17 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       return flags;
     }
 
-    const formattedPatients = finalPatients.map(patient => {
+    const formattedPatients = roster.map(({ patient, thread, messagingActive }) => {
       const healthData =
         includeHealth && patient.health && typeof patient.health === "object" ? patient.health : {};
       const formData = healthData.formData || {};
       const riskFlags = includeHealth ? computePatientRiskFlags(formData) : [];
-      const messagingActive = isActiveEnrolledClinicPatient(patient, clinicId);
       const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
+      const threadLife = thread ? String(thread.lifecycle_status || "").trim() : "";
+      const threadArchived = isThreadLifecycleArchived(thread);
       const conversationArchived =
         !messagingActive &&
-        (Boolean(patient.archived_at) || patient.is_lead === true || !pc);
+        (threadArchived || Boolean(patient.archived_at) || patient.is_lead === true || !pc);
       const leftClinic = !pc || patient.is_lead === true || Boolean(patient.archived_at);
       return {
         id: patient.id || patient.patient_id,
@@ -46604,6 +46692,8 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         department: patient.department,
         clinicId: pc || null,
         isLead: patient.is_lead === true,
+        archivedAt: patient.archived_at || thread?.archived_at || null,
+        threadLifecycleStatus: threadLife || null,
         messagingActive,
         conversationArchived,
         leftClinic,
@@ -47217,7 +47307,7 @@ async function handleDoctorInboxSummary(req, res) {
       if (ids.length > 0) {
         let pQ = supabase
           .from('patients')
-          .select('id, name, created_at, health, clinic_id')
+          .select('id, name, created_at, health, clinic_id, is_lead, archived_at')
           .in('id', ids)
           .order('created_at', { ascending: false });
         if (clinicId) pQ = pQ.eq("clinic_id", clinicId);
@@ -47225,13 +47315,21 @@ async function handleDoctorInboxSummary(req, res) {
         if (pResult.error && (String(pResult.error.code || '') === '42703' || String(pResult.error.code || '') === 'PGRST204')) {
           let pQ2 = supabase
             .from('patients')
-            .select('id, name, created_at, clinic_id')
+            .select('id, name, created_at, clinic_id, is_lead')
             .in('id', ids)
             .order('created_at', { ascending: false });
           if (clinicId) pQ2 = pQ2.eq("clinic_id", clinicId);
           pResult = await pQ2;
         }
-        patients = (pResult.data || []).filter((row) => rowBelongsToClinic(row, clinicId));
+        let dashPatients = (pResult.data || []).filter((row) => rowBelongsToClinic(row, clinicId));
+        const dashThreadMap = await loadClinicPatientThreadLifecycleMap(
+          dashPatients.map((p) => p.id),
+          clinicId
+        );
+        patients = dashPatients.filter((row) => {
+          const pid = String(row.id || "").trim().toLowerCase();
+          return isPatientActiveForDoctorMessaging(row, clinicId, dashThreadMap.get(pid) || null);
+        });
       }
     }
 
