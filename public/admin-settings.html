@@ -180,6 +180,11 @@
   }
   body.al-ready .al-main .wrap,
   body.al-ready .al-main .wrap .card,
+  .price-variant-panel { background: rgba(15, 23, 42, 0.35); padding: 10px 12px; border-top: 1px dashed var(--b); }
+  .price-variant-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; padding: 8px; border: 1px dashed rgba(148,163,184,0.35); border-radius: 6px; }
+  .price-variant-row label { font-size: 11px; color: #94a3b8; display: block; margin-bottom: 2px; }
+  .price-variant-row input, .price-variant-row select { width: 100%; padding: 5px 6px; font-size: 13px; }
+  .btn-variants { font-size: 12px; padding: 4px 8px; background: #1e293b; border: 1px solid var(--b); color: #e2e8f0; border-radius: 4px; cursor: pointer; }
   body.al-ready .al-main #priceListContainer {
     color: #e6eaf2;
   }
@@ -212,6 +217,7 @@
         Operational brain for AI responses, offers, travel coordination, SLA automation, and coordinator workflows.
         Structured clinic knowledge — not generic chatbot settings.
       </p>
+      <p class="muted" style="margin:0 0 12px;font-size:0.85rem">Pricing &amp; brand variants are configured in the <strong>Treatment Price List</strong> below (one source for appointments + AI).</p>
       <a href="/admin-ops-profile.html" style="display:inline-block;padding:12px 20px;background:#0d9488;color:#fff;border-radius:8px;font-weight:700;text-decoration:none;font-size:15px;">
         Open Operations Profile →
       </a>
@@ -344,7 +350,7 @@
     <div class="card">
       <h2 data-i18n="settings.treatmentPriceList">💰 Treatment Price List</h2>
       <div class="muted" style="margin-bottom: 16px;" data-i18n="settings.treatmentPriceListHelp">
-        Define your clinic's treatment prices. These prices will be used when creating patient treatment plans.
+        Single source of truth for appointment pricing and AI coordinator replies. Add optional brand/material variants per treatment. AI uses estimate language only — not guaranteed quotes.
       </div>
       
       <label style="margin-bottom: 8px;" data-i18n="settings.currency">Currency</label>
@@ -1068,7 +1074,104 @@
   };
 
   let prices = {};
+  let priceVariants = {};
+  let variantMeta = { tiers: [], materials: [] };
   let defaultCurrency = "EUR";
+
+  const VARIANT_TIERS_FALLBACK = [
+    { value: "premium", label: "Premium" },
+    { value: "standard", label: "Standard" },
+    { value: "mid_range", label: "Mid-range" },
+    { value: "budget", label: "Budget" },
+  ];
+
+  function tierOptionsHtml(selected) {
+    const tiers = variantMeta.tiers.length ? variantMeta.tiers : VARIANT_TIERS_FALLBACK;
+    return tiers.map((t) => `<option value="${t.value}"${selected === t.value ? " selected" : ""}>${escapeHtml(t.label)}</option>`).join("");
+  }
+
+  function renderVariantRow(procType, idx, v) {
+    v = v || {};
+    return `<div class="price-variant-row" data-vrow="${procType}_${idx}">
+      <div><label>Brand *</label><input data-vf="brand" value="${escapeHtml(v.brand_name || "")}" placeholder="Straumann" /></div>
+      <div><label>Country</label><input data-vf="country" value="${escapeHtml(v.origin_country || "")}" placeholder="Switzerland" /></div>
+      <div><label>Tier</label><select data-vf="tier"><option value="">—</option>${tierOptionsHtml(v.tier || "")}</select></div>
+      <div><label>Material</label><input data-vf="material" value="${escapeHtml(v.material_type || "")}" placeholder="Implant system" /></div>
+      <div><label>From (min)</label><input data-vf="min" type="number" step="0.01" value="${v.price_min != null ? v.price_min : ""}" /></div>
+      <div><label>Currency</label><input data-vf="currency" value="${escapeHtml(v.currency || defaultCurrency)}" style="max-width:64px" /></div>
+      <div style="display:flex;align-items:flex-end;gap:8px"><label><input type="checkbox" data-vf="default" ${v.is_default ? "checked" : ""}/> Default</label>
+      <button type="button" class="btn-variants" data-remove-vrow="${procType}_${idx}">Remove</button></div>
+    </div>`;
+  }
+
+  function variantPanelHtml(procType) {
+    const list = priceVariants[procType] || [];
+    const rows = list.length ? list.map((v, i) => renderVariantRow(procType, i, v)).join("") : "";
+    return `<div id="variants_panel_${procType}" class="price-variant-panel" style="display:none">
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Brand / material variants (optional) — AI compares options using estimate language only.</div>
+      <div id="variants_rows_${procType}">${rows}</div>
+      <button type="button" class="btn-variants" data-add-variant="${procType}" style="margin-top:8px">+ Add variant</button>
+    </div>`;
+  }
+
+  function collectVariantsFromPanel(procType) {
+    const wrap = document.getElementById("variants_rows_" + procType);
+    if (!wrap) return [];
+    return Array.from(wrap.querySelectorAll(".price-variant-row")).map((row) => {
+      const brand = row.querySelector('[data-vf="brand"]')?.value?.trim();
+      if (!brand) return null;
+      return {
+        brand_name: brand,
+        origin_country: row.querySelector('[data-vf="country"]')?.value?.trim() || null,
+        material_type: row.querySelector('[data-vf="material"]')?.value?.trim() || null,
+        tier: row.querySelector('[data-vf="tier"]')?.value?.trim() || null,
+        price_min: row.querySelector('[data-vf="min"]')?.value ? Number(row.querySelector('[data-vf="min"]').value) : null,
+        price_max: null,
+        currency: row.querySelector('[data-vf="currency"]')?.value?.trim() || defaultCurrency,
+        is_default: row.querySelector('[data-vf="default"]')?.checked === true,
+      };
+    }).filter(Boolean);
+  }
+
+  function snapshotAllVariants() {
+    const snap = {};
+    PROCEDURE_TYPES.forEach((proc) => {
+      const panel = document.getElementById("variants_panel_" + proc.type);
+      if (panel && panel.style.display !== "none") {
+        snap[proc.type] = collectVariantsFromPanel(proc.type);
+      } else if ((priceVariants[proc.type] || []).length) {
+        snap[proc.type] = priceVariants[proc.type];
+      }
+    });
+    return snap;
+  }
+
+  function bindVariantUi() {
+    document.querySelectorAll("[data-toggle-variants]").forEach((btn) => {
+      btn.onclick = () => {
+        const t = btn.getAttribute("data-toggle-variants");
+        const panel = document.getElementById("variants_panel_" + t);
+        if (!panel) return;
+        const open = panel.style.display === "none";
+        panel.style.display = open ? "block" : "none";
+        btn.textContent = open ? "Hide variants" : "Variants";
+      };
+    });
+    document.querySelectorAll("[data-add-variant]").forEach((btn) => {
+      btn.onclick = () => {
+        const t = btn.getAttribute("data-add-variant");
+        const wrap = document.getElementById("variants_rows_" + t);
+        const idx = wrap.querySelectorAll(".price-variant-row").length;
+        wrap.insertAdjacentHTML("beforeend", renderVariantRow(t, idx, {}));
+        bindVariantUi();
+      };
+    });
+    document.querySelectorAll("[data-remove-vrow]").forEach((btn) => {
+      btn.onclick = () => {
+        btn.closest(".price-variant-row")?.remove();
+      };
+    });
+  }
 
   async function loadPrices() {
     console.log("🔄 loadPrices() started");
@@ -1107,10 +1210,19 @@
       const priceList = data.prices || [];
       console.log("📊 Price list length:", priceList.length);
       
+      if (data.meta) {
+        variantMeta = {
+          tiers: data.meta.variantTiers || [],
+          materials: data.meta.materialTypePresets || [],
+        };
+      }
+
       // Convert array to object keyed by treatment_name
       prices = {};
+      priceVariants = {};
       priceList.forEach(price => {
         prices[price.treatment_name] = price;
+        priceVariants[price.treatment_name] = price.variants || [];
         if (price.currency) defaultCurrency = price.currency;
       });
 
@@ -1161,6 +1273,7 @@
       html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 130px;">${_t('settings.tableHeaders.duration')}</th>`;
       html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 120px;">${_t('settings.tableHeaders.breakMin')}</th>`;
       html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 100px;">${_t('settings.tableHeaders.active')}</th>`;
+      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 90px;">Variants</th>`;
       html += `</tr></thead><tbody>`;
       
       byCategory[category].forEach(proc => {
@@ -1195,7 +1308,10 @@
         html += `<td style="padding: 12px; text-align: center;">`;
         html += `<input type="checkbox" id="active_${proc.type}" ${isActive ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;" />`;
         html += `</td>`;
+        const vCount = (priceVariants[proc.type] || []).length;
+        html += `<td style="padding: 12px; text-align: center;"><button type="button" class="btn-variants" data-toggle-variants="${proc.type}">Variants${vCount ? " (" + vCount + ")" : ""}</button></td>`;
         html += `</tr>`;
+        html += `<tr><td colspan="7">${variantPanelHtml(proc.type)}</td></tr>`;
       });
       
       html += `</tbody></table>`;
@@ -1206,6 +1322,7 @@
       container.innerHTML = '<div style="color:var(--muted,#888);padding:16px;">Fiyat listesi bulunamadı. Henüz kayıt edilmemiş olabilir.</div>';
     } else {
       container.innerHTML = html;
+      bindVariantUi();
     }
   }
 
@@ -1224,6 +1341,7 @@
       }
 
       const currency = $("defaultCurrency") ? $("defaultCurrency").value : "EUR";
+      const variantSnapshot = snapshotAllVariants();
       const saveBtn = $("saveAllPricesBtn");
       if (saveBtn) {
         saveBtn.disabled = true;
@@ -1300,6 +1418,27 @@
       }, 5000);
       
       // Reload prices to show saved values
+      await loadPrices();
+
+      const token2 = localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      for (const proc of PROCEDURE_TYPES) {
+        const row = prices[proc.type];
+        const variants = variantSnapshot[proc.type];
+        if (!row?.id || !variants?.length) continue;
+        try {
+          await fetch(`${API_BASE}/api/admin/treatment-prices/${row.id}/variants/sync`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token2}`,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({ variants }),
+          });
+        } catch (syncErr) {
+          console.warn('Variant sync failed for', proc.type, syncErr);
+        }
+      }
       await loadPrices();
     } catch (error) {
       console.error("Save all prices error:", error);

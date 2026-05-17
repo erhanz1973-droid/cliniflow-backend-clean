@@ -58,107 +58,6 @@ function ph(id) {
   return d && d.placeholder ? ` placeholder="${esc(d.placeholder)}"` : "";
 }
 
-function tierOptions(selected) {
-  return (meta.variantTiers || [])
-    .map(
-      (o) =>
-        `<option value="${esc(o.value)}"${selected === o.value ? " selected" : ""}>${esc(o.label)}</option>`,
-    )
-    .join("");
-}
-
-function materialOptions(selected) {
-  const presets = meta.materialTypePresets || [];
-  const opts = presets
-    .map(
-      (o) =>
-        `<option value="${esc(o.value)}"${selected === o.value ? " selected" : ""}>${esc(o.label)}</option>`,
-    )
-    .join("");
-  const custom =
-    selected && !presets.some((p) => p.value === selected)
-      ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>`
-      : "";
-  return `<option value="">—</option>${opts}${custom}`;
-}
-
-function formatCatalogMeta(t) {
-  const parts = [];
-  if (t.category) parts.push(t.category);
-  if (t.durationLabel) parts.push(t.durationLabel);
-  const variants = t.variants || [];
-  if (variants.length) {
-    const preview = variants
-      .slice(0, 2)
-      .map((v) => {
-        const tier = v.tier ? " · " + v.tier.replace(/_/g, " ") : "";
-        const from = v.priceMin != null ? ` from ${v.priceMin} ${v.currency || "EUR"}` : "";
-        return (v.brandName || "Brand") + tier + from;
-      })
-      .join(" | ");
-    parts.push(
-      variants.length + " variant" + (variants.length > 1 ? "s" : "") + (preview ? ": " + preview : ""),
-    );
-  } else if (t.priceMin != null || t.priceMax != null) {
-    parts.push(
-      [t.priceMin != null ? t.priceMin : "?", t.priceMax != null ? t.priceMax : "?"].join("–") +
-        " " +
-        (t.currency || "EUR"),
-    );
-  }
-  return parts.filter(Boolean).join(" · ") || "No pricing configured";
-}
-
-function renderVariantRow(v, index) {
-  v = v || {};
-  const idx = index;
-  return `<div class="variant-row" data-variant-index="${idx}">
-    <div class="variant-row-hd"><span>Variant ${idx + 1}</span>
-      <button type="button" class="btn secondary" data-remove-variant="${idx}" style="padding:4px 8px;font-size:0.75rem">Remove</button>
-    </div>
-    <div class="variant-grid">
-      <div><label>Brand *</label><input name="variant_brand_${idx}" value="${esc(v.brandName || "")}" required${ph("variant.brandName")} /></div>
-      <div><label>Country</label><input name="variant_country_${idx}" value="${esc(v.originCountry || "")}"${ph("variant.originCountry")} /></div>
-      <div><label>Material type</label><select name="variant_material_${idx}">${materialOptions(v.materialType || "")}</select></div>
-      <div><label>Tier</label><select name="variant_tier_${idx}"><option value="">—</option>${tierOptions(v.tier || "")}</select></div>
-      <div><label>From (min price)</label><input name="variant_priceMin_${idx}" type="number" value="${esc(v.priceMin != null ? v.priceMin : "")}"${ph("variant.priceRange")} /></div>
-      <div><label>To (max, optional)</label><input name="variant_priceMax_${idx}" type="number" value="${esc(v.priceMax != null ? v.priceMax : "")}" /></div>
-      <div><label>Currency</label><input name="variant_currency_${idx}" value="${esc(v.currency || "EUR")}" style="max-width:72px" /></div>
-      <div class="check-row" style="align-items:flex-end"><label><input type="checkbox" name="variant_default_${idx}" ${v.isDefault ? "checked" : ""}/> Default option</label></div>
-      <div style="grid-column:1/-1"><label>Variant label (optional)</label><input name="variant_name_${idx}" value="${esc(v.variantName || "")}" placeholder="e.g. Premium implant package" /></div>
-      <div style="grid-column:1/-1"><label>AI notes</label><textarea name="variant_aiNotes_${idx}" rows="2"${ph("variant.aiNotes")}>${esc(v.aiNotes || "")}</textarea></div>
-    </div>
-    <input type="hidden" name="variant_id_${idx}" value="${esc(v.id || "")}" />
-  </div>`;
-}
-
-function collectVariantsFromForm(form) {
-  return Array.from(form.querySelectorAll(".variant-row"))
-    .map((row, i) => {
-      const q = (sel) => row.querySelector(sel);
-      const brand = String(q('[name^="variant_brand_"]')?.value || "").trim();
-      if (!brand) return null;
-      const priceMinRaw = q('[name^="variant_priceMin_"]')?.value;
-      const priceMaxRaw = q('[name^="variant_priceMax_"]')?.value;
-      const id = String(q('[name^="variant_id_"]')?.value || "").trim();
-      return {
-        id: id || undefined,
-        brandName: brand,
-        originCountry: String(q('[name^="variant_country_"]')?.value || "").trim() || null,
-        materialType: String(q('[name^="variant_material_"]')?.value || "").trim() || null,
-        tier: String(q('[name^="variant_tier_"]')?.value || "").trim() || null,
-        priceMin: priceMinRaw ? Number(priceMinRaw) : null,
-        priceMax: priceMaxRaw ? Number(priceMaxRaw) : null,
-        currency: String(q('[name^="variant_currency_"]')?.value || "EUR").trim() || "EUR",
-        variantName: String(q('[name^="variant_name_"]')?.value || "").trim() || null,
-        aiNotes: String(q('[name^="variant_aiNotes_"]')?.value || "").trim() || null,
-        isDefault: q('[name^="variant_default_"]')?.checked === true,
-        sortOrder: i * 10,
-      };
-    })
-    .filter(Boolean);
-}
-
 function setStatus(msg, ok) {
   const el = document.getElementById("globalStatus");
   el.textContent = msg || "";
@@ -214,7 +113,8 @@ function renderAllSections() {
     "ai-profile",
     "Clinic AI Profile",
     "How the AI communicates — assigned doctor/coordinator remains primary owner.",
-    `<form class="ops-form" data-form="ai-profile"><div class="form-grid">
+    `<p class="link-out" style="margin-bottom:12px"><a href="/admin-settings.html">→ Treatment Price List</a> (operational + AI pricing — single source of truth)</p>
+    <form class="ops-form" data-form="ai-profile"><div class="form-grid">
       ${fld("displayName", `<input name="displayName" value="${esc(s.aiProfile?.displayName)}"${ph("displayName")} />`)}
       ${fld("toneStyle", `<select name="toneStyle">${(meta.toneStyles || []).map((o) => `<option value="${esc(o.value)}"${s.aiProfile?.toneStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
       ${fld("supportedLanguages", `<input name="supportedLanguages" value="${esc(joinList(s.aiProfile?.supportedLanguages))}"${ph("supportedLanguages")} />`)}
@@ -223,20 +123,6 @@ function renderAllSections() {
     </div></form>`,
   );
 
-  const catalog = s.treatmentsPricing || [];
-  renderSectionShell(
-    "treatments-pricing",
-    "Treatments & Pricing",
-    "Price ranges for AI — not binding quotes. Add catalog items below.",
-    `<div class="catalog-grid" id="catalogList">${
-      catalog.length
-        ? catalog.map((t) => `<div class="catalog-card"><div><h3>${esc(t.name)}</h3><div class="meta">${esc(formatCatalogMeta(t))}</div></div><div><button type="button" class="btn secondary" data-edit-catalog="${esc(t.id)}">Edit</button></div></div>`).join("")
-        : '<p class="hint">No treatments yet. Click “+ Add treatment” to create your first catalog entry.</p>'
-    }</div>
-    <div id="catalogEditor" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"></div>
-    <button type="button" class="btn secondary" id="btnAddCatalog">+ Add treatment</button>`,
-    "Save catalog item",
-  );
 
   const m = s.materials || {};
   renderSectionShell(
@@ -347,118 +233,9 @@ function renderAllSections() {
     btn.addEventListener("click", () => saveSection(btn.getAttribute("data-save")));
   });
 
-  wireCatalogUi();
   if (fh()) fh().wireHelpToggles(document);
 }
 
-function wireCatalogUi() {
-  const editor = document.getElementById("catalogEditor");
-  if (!editor) return;
-
-  function showEditor(item) {
-    const t = item || {
-      name: "",
-      category: "general",
-      priceMin: "",
-      priceMax: "",
-      currency: "EUR",
-      durationLabel: "",
-      visitCount: "",
-      includedServices: [],
-      excludedServices: [],
-      aiNotes: "",
-      variants: [],
-    };
-    const variants = t.variants && t.variants.length ? t.variants : [];
-    const variantRowsHtml = variants.map((v, i) => renderVariantRow(v, i)).join("");
-    editor.innerHTML = `<form id="catalogForm"><input type="hidden" name="id" value="${esc(t.id || "")}" />
-      <div class="form-grid">
-        ${fld("catalog.name", `<input name="name" value="${esc(t.name)}" required${ph("catalog.name")} />`)}
-        ${fld("catalog.priceRange", `<div style="display:flex;gap:8px"><input name="priceMin" type="number" placeholder="Min (base)" value="${esc(t.priceMin)}" /><input name="priceMax" type="number" placeholder="Max" value="${esc(t.priceMax)}" /><input name="currency" value="${esc(t.currency || "EUR")}" style="max-width:72px" /></div>`)}
-        ${fld("catalog.durationLabel", `<input name="durationLabel" value="${esc(t.durationLabel)}"${ph("catalog.durationLabel")} />`)}
-        ${fld("catalog.includedServices", `<input name="includedServices" value="${esc(joinList(t.includedServices))}"${ph("catalog.includedServices")} />`, true)}
-        ${fld("catalog.excludedServices", `<input name="excludedServices" value="${esc(joinList(t.excludedServices))}"${ph("catalog.excludedServices")} />`, true)}
-        ${fld("catalog.aiNotes", `<textarea name="aiNotes"${ph("catalog.aiNotes")}>${esc(t.aiNotes)}</textarea>`, true)}
-        <div><label>Category</label><select name="category">${(meta.treatmentCategories || []).map((o) => `<option value="${esc(o.value)}"${t.category === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select></div>
-        <details class="variants-panel"${variants.length ? " open" : ""}>
-          <summary>Brand / material variants (optional)</summary>
-          <p class="pricing-hint">AI uses “typically starts from”, “approximately”, and “depending on case complexity” — never exact guarantees.</p>
-          <div id="variantRows">${variantRowsHtml}</div>
-          <button type="button" class="btn secondary" id="btnAddVariant" style="margin-top:8px">+ Add brand / material variant</button>
-        </details>
-      </div>
-      <button type="submit" class="btn">Save treatment</button></form>`;
-
-    const form = document.getElementById("catalogForm");
-    const variantRows = document.getElementById("variantRows");
-
-    function reindexVariantRows() {
-      variantRows.querySelectorAll(".variant-row").forEach((row, i) => {
-        row.setAttribute("data-variant-index", String(i));
-        const label = row.querySelector(".variant-row-hd span");
-        if (label) label.textContent = "Variant " + (i + 1);
-      });
-    }
-
-    document.getElementById("btnAddVariant")?.addEventListener("click", () => {
-      const idx = variantRows.querySelectorAll(".variant-row").length;
-      variantRows.insertAdjacentHTML("beforeend", renderVariantRow({}, idx));
-      wireVariantRowButtons();
-      if (fh()) fh().wireHelpToggles(form);
-    });
-
-    function wireVariantRowButtons() {
-      form.querySelectorAll("[data-remove-variant]").forEach((btn) => {
-        btn.onclick = () => {
-          btn.closest(".variant-row")?.remove();
-          reindexVariantRows();
-        };
-      });
-    }
-    wireVariantRowButtons();
-    if (fh()) fh().wireHelpToggles(form);
-
-    form.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      const body = {
-        name: fd.get("name"),
-        category: fd.get("category"),
-        priceMin: fd.get("priceMin") ? Number(fd.get("priceMin")) : null,
-        priceMax: fd.get("priceMax") ? Number(fd.get("priceMax")) : null,
-        currency: fd.get("currency"),
-        durationLabel: fd.get("durationLabel"),
-        visitCount: fd.get("visitCount") ? Number(fd.get("visitCount")) : null,
-        includedServices: parseList(String(fd.get("includedServices"))),
-        excludedServices: parseList(String(fd.get("excludedServices"))),
-        aiNotes: fd.get("aiNotes"),
-        variants: collectVariantsFromForm(form),
-      };
-      const id = String(fd.get("id") || "").trim();
-      const path = id
-        ? "/api/admin/clinic/ops-profile/catalog/" + id
-        : "/api/admin/clinic/ops-profile/catalog";
-      const res = await adminFetch(path, {
-        method: id ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        await loadProfile();
-        setStatus("Catalog saved.", true);
-      } else setStatus("Catalog save failed.", false);
-    });
-  }
-
-  document.getElementById("btnAddCatalog")?.addEventListener("click", () => showEditor(null));
-  document.querySelectorAll("[data-edit-catalog]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-edit-catalog");
-      const item = (profile.sections.treatmentsPricing || []).find((x) => x.id === id);
-      showEditor(item);
-    });
-  });
-}
 
 function collectSectionPayload(sectionId) {
   const form = document.querySelector('[data-form="' + sectionId + '"]');
@@ -579,7 +356,7 @@ async function loadProfile() {
   profile = json;
   const c = json.counts || {};
   document.getElementById("opsCounts").textContent =
-    "Catalog: " + (c.catalog || 0) + " · Hotels: " + (c.hotels || 0) + " · Workflow protocols: " + (c.protocols || 0);
+    "Hotels: " + (c.hotels || 0) + " · Workflow protocols: " + (c.protocols || 0);
   renderAllSections();
 }
 

@@ -42330,14 +42330,90 @@ app.get("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
       };
     });
 
+    const { listVariantsByPriceIds } = require("./lib/clinicTreatmentPriceVariants");
+    const { VARIANT_TIERS, MATERIAL_TYPE_PRESETS } = require("./lib/clinicOpsProfileTypes");
+    const variantMap = await listVariantsByPriceIds(prices.map((p) => p.id).filter(Boolean));
+    const pricesOut = prices.map((p) => ({
+      ...p,
+      variants: (variantMap[p.id] || []).map((v) => ({
+        id: v.id,
+        brand_name: v.brandName,
+        origin_country: v.originCountry,
+        material_type: v.materialType,
+        tier: v.tier,
+        price_min: v.priceMin,
+        price_max: v.priceMax,
+        currency: v.currency,
+        ai_notes: v.aiNotes,
+        is_default: v.isDefault,
+      })),
+    }));
+
     res.json({
       ok: true,
-      prices,
+      prices: pricesOut,
+      meta: {
+        variantTiers: VARIANT_TIERS,
+        materialTypePresets: MATERIAL_TYPE_PRESETS,
+        pricingNote:
+          "AI uses non-binding language: typically starts from, approximately, depending on case complexity.",
+      },
       clinicCode: req.clinicCode,
     });
   } catch (error) {
 
     res.status(500).json({ ok: false, error: "internal_error", message: error?.message || "Internal server error" });
+  }
+});
+
+// POST /api/admin/treatment-prices/:id/variants/sync
+app.post("/api/admin/treatment-prices/:id/variants/sync", requireAdminAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(500).json(supabaseDisabledPayload("treatment_price_variants"));
+    }
+    const clinicId = req.clinicId || req.clinic?.id;
+    const priceId = String(req.params.id || "").trim();
+    if (!clinicId || !priceId) {
+      return res.status(400).json({ ok: false, error: "invalid_id" });
+    }
+    const { syncVariantsForPrice } = require("./lib/clinicTreatmentPriceVariants");
+    const incoming = (req.body?.variants || []).map((v) => ({
+      id: v.id,
+      brandName: v.brand_name || v.brandName,
+      originCountry: v.origin_country || v.originCountry,
+      materialType: v.material_type || v.materialType,
+      tier: v.tier,
+      priceMin: v.price_min != null ? v.price_min : v.priceMin,
+      priceMax: v.price_max != null ? v.price_max : v.priceMax,
+      currency: v.currency,
+      aiNotes: v.ai_notes || v.aiNotes,
+      isDefault: v.is_default === true || v.isDefault === true,
+      sortOrder: v.sort_order != null ? v.sort_order : v.sortOrder,
+    }));
+    const result = await syncVariantsForPrice(clinicId, priceId, incoming);
+    if (!result.ok) {
+      const status =
+        result.error === "price_not_found" ? 404 : result.error === "variants_table_missing" ? 503 : 400;
+      return res.status(status).json(result);
+    }
+    return res.json({
+      ok: true,
+      variants: result.variants.map((v) => ({
+        id: v.id,
+        brand_name: v.brandName,
+        origin_country: v.originCountry,
+        material_type: v.materialType,
+        tier: v.tier,
+        price_min: v.priceMin,
+        price_max: v.priceMax,
+        currency: v.currency,
+        ai_notes: v.aiNotes,
+        is_default: v.isDefault,
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "internal_error", message: error?.message || "Internal server error" });
   }
 });
 
