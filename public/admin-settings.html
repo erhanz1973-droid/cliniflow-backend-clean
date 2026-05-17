@@ -180,11 +180,22 @@
   }
   body.al-ready .al-main .wrap,
   body.al-ready .al-main .wrap .card,
-  .price-variant-panel { background: rgba(15, 23, 42, 0.35); padding: 10px 12px; border-top: 1px dashed var(--b); }
-  .price-variant-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; padding: 8px; border: 1px dashed rgba(148,163,184,0.35); border-radius: 6px; }
-  .price-variant-row label { font-size: 11px; color: #94a3b8; display: block; margin-bottom: 2px; }
-  .price-variant-row input, .price-variant-row select { width: 100%; padding: 5px 6px; font-size: 13px; }
-  .btn-variants { font-size: 12px; padding: 4px 8px; background: #1e293b; border: 1px solid var(--b); color: #e2e8f0; border-radius: 4px; cursor: pointer; }
+  .price-variant-panel, .price-label-panel { background: rgba(15, 23, 42, 0.35); padding: 10px 12px; border-top: 1px dashed var(--b); margin-top: 4px; }
+  .price-label-panel { background: rgba(30, 41, 59, 0.45); border-top-color: rgba(56, 189, 248, 0.35); }
+  .panel-title { font-size: 13px; font-weight: 700; color: #e2e8f0; margin: 0 0 4px; }
+  .panel-hint { font-size: 11px; color: #94a3b8; margin: 0 0 10px; line-height: 1.4; }
+  .price-variant-card { margin-top: 10px; padding: 10px; border: 1px solid rgba(148,163,184,0.35); border-radius: 8px; background: rgba(15,23,42,0.5); }
+  .variant-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .variant-card-header strong { font-size: 12px; color: #cbd5e1; }
+  .variant-card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .variant-card-grid label, .variant-card-notes label, .label-i18n-grid label { font-size: 11px; color: #94a3b8; display: block; margin-bottom: 2px; }
+  .variant-card-grid input, .variant-card-grid select, .variant-card-notes textarea, .label-i18n-grid input { width: 100%; padding: 5px 6px; font-size: 13px; box-sizing: border-box; }
+  .variant-card-notes { margin-top: 8px; }
+  .variant-default-check { display: block; margin-top: 8px; font-size: 12px; color: #cbd5e1; }
+  .label-i18n-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .btn-variants { font-size: 12px; padding: 4px 8px; background: #1e293b; border: 1px solid var(--b); color: #e2e8f0; border-radius: 4px; cursor: pointer; margin-right: 4px; }
+  .btn-add-variant { margin-top: 8px; }
+  .price-row-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
   body.al-ready .al-main #priceListContainer {
     color: #e6eaf2;
   }
@@ -350,7 +361,7 @@
     <div class="card">
       <h2 data-i18n="settings.treatmentPriceList">💰 Treatment Price List</h2>
       <div class="muted" style="margin-bottom: 16px;" data-i18n="settings.treatmentPriceListHelp">
-        Single source of truth for appointment pricing and AI coordinator replies. Add optional brand/material variants per treatment. AI uses estimate language only — not guaranteed quotes.
+        Single source of truth for appointment pricing and AI coordinator replies. Use <strong>Variants</strong> for brand/material/pricing options (e.g. Straumann, Megagen). Use <strong>AI names</strong> only for optional multilingual treatment display labels — not for brands.
       </div>
       
       <label style="margin-bottom: 8px;" data-i18n="settings.currency">Currency</label>
@@ -1092,19 +1103,26 @@
 
   function renderVariantRow(procType, idx, v) {
     v = v || {};
-    return `<div class="price-variant-row" data-vrow="${procType}_${idx}">
-      <div><label>Brand *</label><input data-vf="brand" value="${escapeHtml(v.brand_name || "")}" placeholder="Straumann" /></div>
-      <div><label>Country</label><input data-vf="country" value="${escapeHtml(v.origin_country || "")}" placeholder="Switzerland" /></div>
-      <div><label>Tier</label><select data-vf="tier"><option value="">—</option>${tierOptionsHtml(v.tier || "")}</select></div>
-      <div><label>Material</label><input data-vf="material" value="${escapeHtml(v.material_type || "")}" placeholder="Implant system" /></div>
-      <div><label>From (min)</label><input data-vf="min" type="number" step="0.01" value="${v.price_min != null ? v.price_min : ""}" /></div>
-      <div><label>Currency</label><input data-vf="currency" value="${escapeHtml(v.currency || defaultCurrency)}" style="max-width:64px" /></div>
-      <div style="display:flex;align-items:flex-end;gap:8px"><label><input type="checkbox" data-vf="default" ${v.is_default ? "checked" : ""}/> Default</label>
-      <button type="button" class="btn-variants" data-remove-vrow="${procType}_${idx}">Remove</button></div>
+    const n = idx + 1;
+    return `<div class="price-variant-card" data-vrow="${procType}_${idx}">
+      <div class="variant-card-header">
+        <strong>Brand variant ${n}</strong>
+        <button type="button" class="btn-variants" data-remove-vrow="${procType}_${idx}">Remove</button>
+      </div>
+      <div class="variant-card-grid">
+        <div><label>Brand *</label><input data-vf="brand" value="${escapeHtml(v.brand_name || "")}" placeholder="Straumann" /></div>
+        <div><label>Country of origin</label><input data-vf="country" value="${escapeHtml(v.origin_country || "")}" placeholder="Switzerland" /></div>
+        <div><label>Segment / tier</label><select data-vf="tier"><option value="">—</option>${tierOptionsHtml(v.tier || "")}</select></div>
+        <div><label>Price from</label><input data-vf="min" type="number" step="0.01" value="${v.price_min != null ? v.price_min : ""}" placeholder="900" /></div>
+        <div><label>Price to</label><input data-vf="max" type="number" step="0.01" value="${v.price_max != null ? v.price_max : ""}" placeholder="1200" /></div>
+        <div><label>Currency</label><input data-vf="currency" value="${escapeHtml(v.currency || defaultCurrency)}" /></div>
+      </div>
+      <div class="variant-card-notes"><label>AI notes</label><textarea data-vf="notes" rows="2" placeholder="e.g. Swiss premium implant system with strong international recognition.">${escapeHtml(v.ai_notes || "")}</textarea></div>
+      <label class="variant-default-check"><input type="checkbox" data-vf="default" ${v.is_default ? "checked" : ""}/> Default option for this treatment</label>
     </div>`;
   }
 
-  function labelI18nHtml(procType) {
+  function localizationPanelHtml(procType) {
     const row = prices[procType] || {};
     const proc = PROCEDURE_TYPES.find((p) => p.type === procType);
     const defaults = (proc && proc.name) || {};
@@ -1113,10 +1131,14 @@
     const inputs = langs
       .map((code) => {
         const val = labels[code] || defaults[code] || "";
-        return `<div><label style="font-size:11px">${code.toUpperCase()}</label><input data-label-i18n="${procType}_${code}" value="${escapeHtml(val)}" placeholder="AI display name" style="width:100%;padding:4px 6px;font-size:12px" /></div>`;
+        return `<div><label>${code.toUpperCase()}</label><input data-label-i18n="${procType}_${code}" value="${escapeHtml(val)}" placeholder="Optional AI display name" /></div>`;
       })
       .join("");
-    return `<div style="margin-bottom:10px;padding:8px;border:1px dashed rgba(148,163,184,0.4);border-radius:6px"><div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Treatment name labels (optional overrides for AI)</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${inputs}</div></div>`;
+    return `<div id="labels_panel_${procType}" class="price-label-panel" style="display:none">
+      <div class="panel-title">AI display names (optional translations)</div>
+      <p class="panel-hint">Localized treatment names for multilingual AI replies — not brand or pricing variants.</p>
+      <div class="label-i18n-grid">${inputs}</div>
+    </div>`;
   }
 
   function collectLabelI18n(procType) {
@@ -1132,28 +1154,32 @@
   function variantPanelHtml(procType) {
     const list = priceVariants[procType] || [];
     const rows = list.length ? list.map((v, i) => renderVariantRow(procType, i, v)).join("") : "";
+    const proc = PROCEDURE_TYPES.find((p) => p.type === procType);
+    const procLabel = proc ? safeLang(proc.name || { en: procType }, currentLanguage()) : procType;
     return `<div id="variants_panel_${procType}" class="price-variant-panel" style="display:none">
-      ${labelI18nHtml(procType)}
-      <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Brand / material variants (optional) — AI compares options using estimate language only.</div>
+      <div class="panel-title">${escapeHtml(procLabel)} — brand / material variants</div>
+      <p class="panel-hint">Each variant is a brand + origin + segment + price range (e.g. Straumann / Switzerland / Premium / 900–1200 EUR). AI uses estimate language only.</p>
       <div id="variants_rows_${procType}">${rows}</div>
-      <button type="button" class="btn-variants" data-add-variant="${procType}" style="margin-top:8px">+ Add variant</button>
+      <button type="button" class="btn-variants btn-add-variant" data-add-variant="${procType}">+ Add variant</button>
     </div>`;
   }
 
   function collectVariantsFromPanel(procType) {
     const wrap = document.getElementById("variants_rows_" + procType);
     if (!wrap) return [];
-    return Array.from(wrap.querySelectorAll(".price-variant-row")).map((row) => {
+    return Array.from(wrap.querySelectorAll(".price-variant-card")).map((row) => {
       const brand = row.querySelector('[data-vf="brand"]')?.value?.trim();
       if (!brand) return null;
+      const minRaw = row.querySelector('[data-vf="min"]')?.value;
+      const maxRaw = row.querySelector('[data-vf="max"]')?.value;
       return {
         brand_name: brand,
         origin_country: row.querySelector('[data-vf="country"]')?.value?.trim() || null,
-        material_type: row.querySelector('[data-vf="material"]')?.value?.trim() || null,
         tier: row.querySelector('[data-vf="tier"]')?.value?.trim() || null,
-        price_min: row.querySelector('[data-vf="min"]')?.value ? Number(row.querySelector('[data-vf="min"]').value) : null,
-        price_max: null,
+        price_min: minRaw ? Number(minRaw) : null,
+        price_max: maxRaw ? Number(maxRaw) : null,
         currency: row.querySelector('[data-vf="currency"]')?.value?.trim() || defaultCurrency,
+        ai_notes: row.querySelector('[data-vf="notes"]')?.value?.trim() || null,
         is_default: row.querySelector('[data-vf="default"]')?.checked === true,
       };
     }).filter(Boolean);
@@ -1162,43 +1188,54 @@
   function snapshotAllVariants() {
     const snap = {};
     PROCEDURE_TYPES.forEach((proc) => {
-      const panel = document.getElementById("variants_panel_" + proc.type);
-      if (panel && panel.style.display !== "none") {
+      if (document.getElementById("variants_rows_" + proc.type)) {
         snap[proc.type] = collectVariantsFromPanel(proc.type);
-      } else if ((priceVariants[proc.type] || []).length) {
-        snap[proc.type] = priceVariants[proc.type];
       }
     });
     return snap;
   }
 
-  function bindVariantUi() {
+  function bindPriceRowUi() {
     document.querySelectorAll("[data-toggle-variants]").forEach((btn) => {
       btn.onclick = () => {
         const t = btn.getAttribute("data-toggle-variants");
         const panel = document.getElementById("variants_panel_" + t);
+        const labels = document.getElementById("labels_panel_" + t);
         if (!panel) return;
         const open = panel.style.display === "none";
         panel.style.display = open ? "block" : "none";
-        btn.textContent = open ? "Hide variants" : "Variants";
+        if (open && labels) labels.style.display = "none";
+        const n = (document.getElementById("variants_rows_" + t)?.querySelectorAll(".price-variant-card").length) || 0;
+        btn.textContent = open ? "Hide variants" + (n ? " (" + n + ")" : "") : "Variants" + (n ? " (" + n + ")" : "");
+      };
+    });
+    document.querySelectorAll("[data-toggle-labels]").forEach((btn) => {
+      btn.onclick = () => {
+        const t = btn.getAttribute("data-toggle-labels");
+        const panel = document.getElementById("labels_panel_" + t);
+        const variants = document.getElementById("variants_panel_" + t);
+        if (!panel) return;
+        const open = panel.style.display === "none";
+        panel.style.display = open ? "block" : "none";
+        if (open && variants) variants.style.display = "none";
+        btn.textContent = open ? "Hide names" : "AI names";
       };
     });
     document.querySelectorAll("[data-add-variant]").forEach((btn) => {
       btn.onclick = () => {
         const t = btn.getAttribute("data-add-variant");
         const wrap = document.getElementById("variants_rows_" + t);
-        const idx = wrap.querySelectorAll(".price-variant-row").length;
+        const idx = wrap.querySelectorAll(".price-variant-card").length;
         wrap.insertAdjacentHTML("beforeend", renderVariantRow(t, idx, {}));
-        bindVariantUi();
+        bindPriceRowUi();
       };
     });
     document.querySelectorAll("[data-remove-vrow]").forEach((btn) => {
       btn.onclick = () => {
-        btn.closest(".price-variant-row")?.remove();
+        btn.closest(".price-variant-card")?.remove();
       };
     });
   }
-
   async function loadPrices() {
     console.log("🔄 loadPrices() started");
     try {
@@ -1299,7 +1336,7 @@
       html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 130px;">${_t('settings.tableHeaders.duration')}</th>`;
       html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 120px;">${_t('settings.tableHeaders.breakMin')}</th>`;
       html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 100px;">${_t('settings.tableHeaders.active')}</th>`;
-      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 90px;">Variants</th>`;
+      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 140px;">Options</th>`;
       html += `</tr></thead><tbody>`;
       
       byCategory[category].forEach(proc => {
@@ -1335,9 +1372,12 @@
         html += `<input type="checkbox" id="active_${proc.type}" ${isActive ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;" />`;
         html += `</td>`;
         const vCount = (priceVariants[proc.type] || []).length;
-        html += `<td style="padding: 12px; text-align: center;"><button type="button" class="btn-variants" data-toggle-variants="${proc.type}">Variants${vCount ? " (" + vCount + ")" : ""}</button></td>`;
+        html += `<td style="padding: 12px; text-align: center;"><div class="price-row-actions">`;
+        html += `<button type="button" class="btn-variants" data-toggle-variants="${proc.type}">Variants${vCount ? " (" + vCount + ")" : ""}</button>`;
+        html += `<button type="button" class="btn-variants" data-toggle-labels="${proc.type}">AI names</button>`;
+        html += `</div></td>`;
         html += `</tr>`;
-        html += `<tr><td colspan="7">${variantPanelHtml(proc.type)}</td></tr>`;
+        html += `<tr><td colspan="7">${variantPanelHtml(proc.type)}${localizationPanelHtml(proc.type)}</td></tr>`;
       });
       
       html += `</tbody></table>`;
@@ -1348,7 +1388,7 @@
       container.innerHTML = '<div style="color:var(--muted,#888);padding:16px;">Fiyat listesi bulunamadı. Henüz kayıt edilmemiş olabilir.</div>';
     } else {
       container.innerHTML = html;
-      bindVariantUi();
+      bindPriceRowUi();
     }
   }
 
@@ -1452,7 +1492,7 @@
       for (const proc of PROCEDURE_TYPES) {
         const row = prices[proc.type];
         const variants = variantSnapshot[proc.type];
-        if (!row?.id || !variants?.length) continue;
+        if (!row?.id || variants === undefined) continue;
         try {
           await fetch(`${API_BASE}/api/admin/treatment-prices/${row.id}/variants/sync`, {
             method: 'POST',
