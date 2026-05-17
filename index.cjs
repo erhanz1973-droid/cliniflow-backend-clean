@@ -9409,6 +9409,7 @@ const {
   probeStorageObjectReadable,
   parseSupabaseStorageRefFromUrl,
 } = require("./lib/aiAnalyzeImageLoad");
+const { persistTreatmentGuideWorkspaceAfterAnalyze } = require("./lib/treatmentGuideWorkspace");
 registerAiPatientDocumentRoutes(app, {
   requireToken,
   requireAdminAuth,
@@ -23695,18 +23696,30 @@ async function postPatientMeMessagesHandler(req, res) {
       }
     }
     const photoUrlsBody = collectHttpsPhotoUrlsFromMessageBody(body);
-    if (
+    let followUpPhotoUrls = [];
+    let text = String(body.text || body.message || body.content || "").trim();
+    const multiInquiryBundle = text.length > 0 && photoUrlsBody.length > 1;
+
+    if (multiInquiryBundle) {
+      attachments = null;
+      followUpPhotoUrls = [...photoUrlsBody];
+    } else if (
       (!attachments || !hasInboundAttachments(attachments)) &&
       photoUrlsBody.length > 0
     ) {
       attachments = attachmentObjectFromPhotoUrl(photoUrlsBody[0]);
+      if (photoUrlsBody.length > 1) followUpPhotoUrls = photoUrlsBody.slice(1);
+    } else if (photoUrlsBody.length > 1) {
+      followUpPhotoUrls = photoUrlsBody.slice(1);
     }
-    let text = String(body.text || body.message || body.content || "").trim();
+
     const msgType =
       attachments && hasInboundAttachments(attachments)
         ? "image"
         : String(body.type || "text").trim() || "text";
-    if (!text && !attachments) return res.status(400).json({ ok: false, error: "text_or_attachment_required" });
+    if (!text && !attachments && followUpPhotoUrls.length === 0) {
+      return res.status(400).json({ ok: false, error: "text_or_attachment_required" });
+    }
     if (!text && attachments) text = "📷";
 
     if (!isSupabaseEnabled()) {
@@ -23776,10 +23789,32 @@ async function postPatientMeMessagesHandler(req, res) {
       return res.status(500).json({ ok: false, error: "messages_save_failed", supabase: supabasePublic });
     }
     const leg = legacyMessageFromInsertedRow(data, insertedTable);
+    const ctxInsert = {
+      ...(ctxCode != null && String(ctxCode).trim()
+        ? { contextClinicCode: String(ctxCode).trim() }
+        : {}),
+      ...(ctxId != null && String(ctxId).trim() ? { contextClinicId: String(ctxId).trim() } : {}),
+    };
+    for (const extraUrl of followUpPhotoUrls) {
+      const extraAtt = attachmentObjectFromPhotoUrl(extraUrl);
+      if (!extraAtt) continue;
+      const { error: extraErr } = await insertMessageToSupabase({
+        patientId,
+        sender: "patient",
+        message: "📎",
+        attachments: extraAtt,
+        type: "image",
+        ...ctxInsert,
+      });
+      if (extraErr) {
+        console.warn("[MESSAGES] follow-up attachment insert failed", extraErr?.message || extraErr);
+      }
+    }
     return res.json({
       ok: true,
       message: data,
       legacyMessage: leg || { text: text || "[attachment]", from: "PATIENT", createdAt: now(), patientId },
+      followUpAttachmentCount: followUpPhotoUrls.length,
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
@@ -33058,6 +33093,18 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       ...(treatmentPlan.missingTooth ? { missingTooth: treatmentPlan.missingTooth } : {}),
     };
     setInMemoryDentalAnalysisResponse(patientId, imageUrl, analyzeResponsePayload);
+
+    const tgSessionId = String(req.body?.sessionId || req.body?.session_id || "").trim();
+    if (tgSessionId) {
+      void persistTreatmentGuideWorkspaceAfterAnalyze({
+        sessionId: tgSessionId,
+        patientId,
+        imageUrl,
+        contentHash: requestContentHash,
+        analysisSnapshot: analyzeResponsePayload,
+      });
+    }
+
     return res.json(analyzeResponsePayload);
 
   } catch (err) {
