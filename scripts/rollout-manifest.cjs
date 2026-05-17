@@ -20,6 +20,7 @@ const REQUIRED_MIGRATIONS = [
   "20260518130000_clinic_ai_settings.sql",
   "20260518150000_clinic_operations_profile_v2.sql",
   "20260518160000_clinic_treatment_protocols_ensure.sql",
+  "20260518170000_clinic_operations_profile_v2_repair.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */

@@ -1,5 +1,6 @@
 -- Clinic Operations Profile v2 — idempotent; safe on fresh / partial / production DBs.
 -- Does not assume 20260517160000 (travel) or 20260518130000 (ai settings) already ran.
+-- Re-run safe after a partial failure.
 
 -- ─── clinic_ai_settings (bootstrap + v2 columns) ─────────────────────────────
 CREATE TABLE IF NOT EXISTS public.clinic_ai_settings (
@@ -15,9 +16,15 @@ CREATE TABLE IF NOT EXISTS public.clinic_ai_settings (
 );
 
 ALTER TABLE public.clinic_ai_settings
-  ADD COLUMN IF NOT EXISTS materials_config jsonb NOT NULL DEFAULT '{}'::jsonb,
-  ADD COLUMN IF NOT EXISTS logistics_config jsonb NOT NULL DEFAULT '{}'::jsonb,
-  ADD COLUMN IF NOT EXISTS payment_policy_config jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS materials_config jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE public.clinic_ai_settings
+  ADD COLUMN IF NOT EXISTS logistics_config jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE public.clinic_ai_settings
+  ADD COLUMN IF NOT EXISTS payment_policy_config jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE public.clinic_ai_settings
   ADD COLUMN IF NOT EXISTS internal_notes_config jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 COMMENT ON TABLE public.clinic_ai_settings IS
@@ -38,7 +45,7 @@ COMMENT ON COLUMN public.clinic_ai_settings.internal_notes_config IS
 CREATE INDEX IF NOT EXISTS clinic_ai_settings_updated_idx
   ON public.clinic_ai_settings (updated_at DESC);
 
--- ─── clinic_treatment_catalog ──────────────────────────────────────────────────
+-- ─── clinic_treatment_catalog ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.clinic_treatment_catalog (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   clinic_id uuid NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
@@ -70,27 +77,33 @@ CREATE INDEX IF NOT EXISTS clinic_treatment_catalog_clinic_active_idx
 COMMENT ON TABLE public.clinic_treatment_catalog IS
   'Structured treatment + pricing ranges for AI offers and patient Q&A (not binding quotes).';
 
--- ─── clinic_partner_hotels (bootstrap + full extension) ─────────────────────────
--- Minimal bootstrap when travel migration never ran. Column "name" = hotel display name.
+-- ─── clinic_partner_hotels (bootstrap + full extension) ─────────────────────
 CREATE TABLE IF NOT EXISTS public.clinic_partner_hotels (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   clinic_id uuid NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-  name text NOT NULL,
+  name text NOT NULL DEFAULT '',
   distance_label text,
   notes text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Legacy alias: if an old stub used hotel_name only, backfill name once.
+-- Legacy: table may have hotel_name but no name (or empty name).
+ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS name text;
+ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS distance_label text;
+
 DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'clinic_partner_hotels' AND column_name = 'hotel_name'
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'hotel_name'
   ) AND EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'clinic_partner_hotels' AND column_name = 'name'
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'name'
   ) THEN
     EXECUTE $q$
       UPDATE public.clinic_partner_hotels
@@ -113,13 +126,12 @@ ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS is_preferred b
 ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
 ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0;
 
--- Ops profile v2 + user-requested travel fields.
+-- Ops profile v2 + travel fields.
 ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS price_per_night numeric;
 ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS vip_transfer boolean DEFAULT false;
 ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS currency text DEFAULT 'EUR';
 ALTER TABLE public.clinic_partner_hotels ADD COLUMN IF NOT EXISTS transfer_included boolean DEFAULT false;
 
--- Ensure NOT NULL defaults where safe (no-op if already constrained).
 ALTER TABLE public.clinic_partner_hotels
   ALTER COLUMN vip_transfer SET DEFAULT false;
 
@@ -129,7 +141,6 @@ ALTER TABLE public.clinic_partner_hotels
 ALTER TABLE public.clinic_partner_hotels
   ALTER COLUMN currency SET DEFAULT 'EUR';
 
--- Distance constraint (ignore if already present).
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -145,26 +156,74 @@ END $$;
 CREATE INDEX IF NOT EXISTS clinic_partner_hotels_clinic_idx
   ON public.clinic_partner_hotels (clinic_id);
 
-CREATE INDEX IF NOT EXISTS clinic_partner_hotels_clinic_active_idx
-  ON public.clinic_partner_hotels (
-    clinic_id,
-    is_active,
-    is_preferred DESC,
-    sort_order ASC,
-    distance_minutes ASC NULLS LAST
-  );
+-- Only create composite index when index columns exist (partial-failure safe).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'is_active'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'is_preferred'
+  ) THEN
+    EXECUTE $q$
+      CREATE INDEX IF NOT EXISTS clinic_partner_hotels_clinic_active_idx
+      ON public.clinic_partner_hotels (
+        clinic_id,
+        is_active,
+        is_preferred DESC,
+        sort_order ASC,
+        distance_minutes ASC NULLS LAST
+      )
+    $q$;
+  END IF;
+END $$;
 
 COMMENT ON TABLE public.clinic_partner_hotels IS
   'Clinic-curated partner hotels for AI medical travel coordinator recommendations.';
 
-COMMENT ON COLUMN public.clinic_partner_hotels.name IS
-  'Hotel display name (e.g. Grand Vita Hotel).';
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'name'
+  ) THEN
+    EXECUTE $c$COMMENT ON COLUMN public.clinic_partner_hotels.name IS
+      'Hotel display name (e.g. Grand Vita Hotel).'$c$;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'distance_label'
+  ) THEN
+    EXECUTE $c$COMMENT ON COLUMN public.clinic_partner_hotels.distance_label IS
+      'Human-readable distance label when distance_minutes is unknown (e.g. 5 min walk).'$c$;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'price_per_night'
+  ) THEN
+    EXECUTE $c$COMMENT ON COLUMN public.clinic_partner_hotels.price_per_night IS
+      'Typical nightly rate for AI travel replies.'$c$;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'clinic_partner_hotels'
+      AND column_name = 'currency'
+  ) THEN
+    EXECUTE $c$COMMENT ON COLUMN public.clinic_partner_hotels.currency IS
+      'Currency for price_per_night (default EUR).'$c$;
+  END IF;
+END $$;
 
-COMMENT ON COLUMN public.clinic_partner_hotels.distance_label IS
-  'Human-readable distance label when distance_minutes is unknown (e.g. 5 min walk).';
-
-COMMENT ON COLUMN public.clinic_partner_hotels.price_per_night IS
-  'Typical nightly rate for AI travel replies.';
-
-COMMENT ON COLUMN public.clinic_partner_hotels.currency IS
-  'Currency for price_per_night (default EUR).';
+NOTIFY pgrst, 'reload schema';

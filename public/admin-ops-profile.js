@@ -32,6 +32,32 @@ function joinList(a) {
   return (a || []).join(", ");
 }
 
+function fh() {
+  return window.ClinicFieldHelp;
+}
+
+function fieldDef(id) {
+  return meta && meta.fieldHelp ? meta.fieldHelp[id] : null;
+}
+
+function fld(id, inner, gridSpan) {
+  if (!fh()) return `<div class="field-block"${gridSpan ? ' style="grid-column:1/-1"' : ""}>${inner}</div>`;
+  return fh().renderFieldBlock(fieldDef(id), inner, {
+    visibilityTypes: meta.visibilityTypes,
+    gridSpan,
+  });
+}
+
+function secIntro(sectionId) {
+  if (!fh() || !meta.sectionHelp) return "";
+  return fh().renderSectionHeader(meta.sectionHelp[sectionId], sectionId);
+}
+
+function ph(id) {
+  const d = fieldDef(id);
+  return d && d.placeholder ? ` placeholder="${esc(d.placeholder)}"` : "";
+}
+
 function setStatus(msg, ok) {
   const el = document.getElementById("globalStatus");
   el.textContent = msg || "";
@@ -72,6 +98,7 @@ function renderSectionShell(id, title, hint, bodyHtml, saveLabel) {
   if (!el) return;
   el.innerHTML =
     `<h2>${esc(title)}</h2><p class="hint">${esc(hint)}</p>` +
+    secIntro(id) +
     bodyHtml +
     `<div style="margin-top:12px"><button type="button" class="btn" data-save="${esc(id)}">${esc(
       saveLabel || "Save section",
@@ -87,25 +114,11 @@ function renderAllSections() {
     "Clinic AI Profile",
     "How the AI communicates — assigned doctor/coordinator remains primary owner.",
     `<form class="ops-form" data-form="ai-profile"><div class="form-grid">
-      <div><label>Assistant name</label><input name="displayName" value="${esc(s.aiProfile?.displayName)}" /></div>
-      <div><label>Tone / style</label><select name="toneStyle">${(meta.toneStyles || [])
-        .map(
-          (o) =>
-            `<option value="${esc(o.value)}"${s.aiProfile?.toneStyle === o.value ? " selected" : ""}>${esc(
-              o.label,
-            )}</option>`,
-        )
-        .join("")}</select></div>
-      <div><label>Languages</label><input name="supportedLanguages" value="${esc(joinList(s.aiProfile?.supportedLanguages))}" /></div>
-      <div><label>Signature</label><select name="signatureStyle">${(meta.signatureStyles || [])
-        .map(
-          (o) =>
-            `<option value="${esc(o.value)}"${s.aiProfile?.signatureStyle === o.value ? " selected" : ""}>${esc(
-              o.label,
-            )}</option>`,
-        )
-        .join("")}</select></div>
-      <div style="grid-column:1/-1"><label>Profile tags</label><input name="profileTags" value="${esc(joinList(s.aiProfile?.profileTags))}" placeholder="luxury, friendly, premium" /></div>
+      ${fld("displayName", `<input name="displayName" value="${esc(s.aiProfile?.displayName)}"${ph("displayName")} />`)}
+      ${fld("toneStyle", `<select name="toneStyle">${(meta.toneStyles || []).map((o) => `<option value="${esc(o.value)}"${s.aiProfile?.toneStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
+      ${fld("supportedLanguages", `<input name="supportedLanguages" value="${esc(joinList(s.aiProfile?.supportedLanguages))}"${ph("supportedLanguages")} />`)}
+      ${fld("signatureStyle", `<select name="signatureStyle">${(meta.signatureStyles || []).map((o) => `<option value="${esc(o.value)}"${s.aiProfile?.signatureStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
+      ${fld("profileTags", `<input name="profileTags" value="${esc(joinList(s.aiProfile?.profileTags))}"${ph("profileTags")} />`, true)}
     </div></form>`,
   );
 
@@ -113,22 +126,11 @@ function renderAllSections() {
   renderSectionShell(
     "treatments-pricing",
     "Treatments & Pricing",
-    "Price ranges for AI — not binding quotes. Uses catalog items below.",
+    "Price ranges for AI — not binding quotes. Add catalog items below.",
     `<div class="catalog-grid" id="catalogList">${
       catalog.length
-        ? catalog
-            .map(
-              (t) =>
-                `<div class="catalog-card" data-id="${esc(t.id)}"><div><h3>${esc(t.name)}</h3><div class="meta">${esc(
-                  [t.category, t.priceMin != null ? t.priceMin + "–" + t.priceMax + " " + t.currency : null, t.durationLabel]
-                    .filter(Boolean)
-                    .join(" · "),
-                )}</div></div><div><button type="button" class="btn secondary" data-edit-catalog="${esc(
-                  t.id,
-                )}">Edit</button></div></div>`,
-            )
-            .join("")
-        : '<p class="hint">No treatments yet.</p>'
+        ? catalog.map((t) => `<div class="catalog-card"><div><h3>${esc(t.name)}</h3><div class="meta">${esc([t.category, t.priceMin != null ? t.priceMin + "–" + t.priceMax + " " + t.currency : null, t.durationLabel].filter(Boolean).join(" · "))}</div></div><div><button type="button" class="btn secondary" data-edit-catalog="${esc(t.id)}">Edit</button></div></div>`).join("")
+        : '<p class="hint">No treatments yet. Click “+ Add treatment” to create your first catalog entry.</p>'
     }</div>
     <div id="catalogEditor" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"></div>
     <button type="button" class="btn secondary" id="btnAddCatalog">+ Add treatment</button>`,
@@ -141,12 +143,12 @@ function renderAllSections() {
     "Implant Brands & Materials",
     "Brands, labs, warranty — for explanatory AI replies.",
     `<form data-form="materials"><div class="form-grid">
-      <div><label>Implant brands</label><input name="implantBrands" value="${esc(joinList(m.implantBrands))}" /></div>
-      <div><label>Premium brands</label><input name="premiumBrands" value="${esc(joinList(m.premiumBrands))}" /></div>
-      <div><label>Zirconium types</label><input name="zirconiumTypes" value="${esc(joinList(m.zirconiumTypes))}" /></div>
-      <div><label>Lab partners</label><input name="labPartners" value="${esc(joinList(m.labPartners))}" /></div>
-      <div style="grid-column:1/-1"><label>Warranty</label><textarea name="warrantyInformation">${esc(m.warrantyInformation)}</textarea></div>
-      <div class="check-row"><label><input type="checkbox" name="sedationAvailability" ${m.sedationAvailability ? "checked" : ""}/> Sedation available</label></div>
+      ${fld("implantBrands", `<input name="implantBrands" value="${esc(joinList(m.implantBrands))}"${ph("implantBrands")} />`)}
+      ${fld("premiumBrands", `<input name="premiumBrands" value="${esc(joinList(m.premiumBrands))}"${ph("premiumBrands")} />`)}
+      ${fld("zirconiumTypes", `<input name="zirconiumTypes" value="${esc(joinList(m.zirconiumTypes))}"${ph("zirconiumTypes")} />`)}
+      ${fld("labPartners", `<input name="labPartners" value="${esc(joinList(m.labPartners))}"${ph("labPartners")} />`)}
+      ${fld("warrantyInformation", `<textarea name="warrantyInformation"${ph("warrantyInformation")}>${esc(m.warrantyInformation)}</textarea>`, true)}
+      <div class="check-row" style="grid-column:1/-1"><label><input type="checkbox" name="sedationAvailability" ${m.sedationAvailability ? "checked" : ""}/> Sedation available</label></div>
     </div></form>`,
   );
 
@@ -156,21 +158,7 @@ function renderAllSections() {
     "Travel & Accommodation",
     "Partner hotels for dental tourism coordination.",
     `<p class="link-out"><a href="/admin-settings-travel.html">Open full hotel manager →</a> (${c.hotels || 0} hotels)</p>
-    <div class="catalog-grid">${hotels
-      .slice(0, 6)
-      .map(
-        (h) =>
-          `<div class="catalog-card"><div><h3>${esc(h.name)}</h3><div class="meta">${esc(
-            [
-              h.pricePerNight != null ? h.pricePerNight + "/night" : h.priceRange,
-              h.distanceMinutes != null ? h.distanceMinutes + " min" : null,
-              h.transferIncluded ? "transfer included" : null,
-            ]
-              .filter(Boolean)
-              .join(" · "),
-          )}</div></div></div>`,
-      )
-      .join("")}</div>`,
+    <div class="catalog-grid">${hotels.slice(0, 6).map((h) => `<div class="catalog-card"><div><h3>${esc(h.name)}</h3><div class="meta">${esc([h.pricePerNight != null ? h.pricePerNight + "/night" : h.priceRange, h.distanceMinutes != null ? h.distanceMinutes + " min" : null, h.transferIncluded ? "transfer included" : null].filter(Boolean).join(" · "))}</div></div></div>`).join("")}</div>`,
     "Refresh",
   );
 
@@ -182,17 +170,16 @@ function renderAllSections() {
     "Clinic Logistics",
     "Hours, SLA, emergency contact, same-day treatment.",
     `<form data-form="logistics"><div class="form-grid">
-      <div><label>Timezone</label><input name="timezone" value="${esc(wh.timezone)}" /></div>
-      <div><label>Weekday hours</label><input name="weekdays" value="${esc((wd.start || "") + " – " + (wd.end || ""))}" placeholder="09:00 – 18:00" /></div>
-      <div><label>Response SLA (min)</label><input name="averageResponseSlaMinutes" type="number" value="${esc(lg.averageResponseSlaMinutes)}" /></div>
-      <div><label>Emergency contact</label><input name="emergencyContact" value="${esc(lg.emergencyContact)}" /></div>
-      <div><label>Languages spoken</label><input name="languagesSpoken" value="${esc(joinList(lg.languagesSpoken))}" /></div>
+      ${fld("weekdayHours", `<input name="weekdays" value="${esc((wd.start || "") + " – " + (wd.end || ""))}"${ph("weekdayHours")} />`)}
+      ${fld("timezone", `<input name="timezone" value="${esc(wh.timezone || "")}" placeholder="Europe/Istanbul" />`)}
+      ${fld("averageResponseSlaMinutes", `<input name="averageResponseSlaMinutes" type="number" value="${esc(lg.averageResponseSlaMinutes)}"${ph("averageResponseSlaMinutes")} />`)}
+      ${fld("emergencyContact", `<input name="emergencyContact" value="${esc(lg.emergencyContact)}"${ph("emergencyContact")} />`)}
+      ${fld("transportationNotes", `<textarea name="transportationNotes"${ph("transportationNotes")}>${esc(lg.transportationNotes)}</textarea>`, true)}
       <div class="check-row" style="grid-column:1/-1">
         <label><input type="checkbox" name="weekendAvailability" ${lg.weekendAvailability ? "checked" : ""}/> Weekend availability</label>
         <label><input type="checkbox" name="sameDayTreatmentAvailable" ${lg.sameDayTreatmentAvailable ? "checked" : ""}/> Same-day treatment</label>
         <label><input type="checkbox" name="airportTransferAvailable" ${lg.airportTransferAvailable ? "checked" : ""}/> Airport transfer</label>
       </div>
-      <div style="grid-column:1/-1"><label>Transport notes</label><textarea name="transportationNotes">${esc(lg.transportationNotes)}</textarea></div>
     </div></form>`,
   );
 
@@ -202,21 +189,24 @@ function renderAllSections() {
     "Payment & Financial Policies",
     "Deposits, financing, refunds — AI uses policy text, not guarantees.",
     `<form data-form="payment"><div class="form-grid">
-      <div class="check-row"><label><input type="checkbox" name="depositRequired" ${pay.depositRequired ? "checked" : ""}/> Deposit required</label>
-      <label><input type="checkbox" name="installmentAvailable" ${pay.installmentAvailable ? "checked" : ""}/> Installments</label>
-      <label><input type="checkbox" name="financingSupport" ${pay.financingSupport ? "checked" : ""}/> Financing</label></div>
-      <div><label>Accepted currencies</label><input name="acceptedCurrencies" value="${esc(joinList(pay.acceptedCurrencies))}" /></div>
-      <div style="grid-column:1/-1"><label>Refund policy</label><textarea name="refundPolicy">${esc(pay.refundPolicy)}</textarea></div>
-      <div style="grid-column:1/-1"><label>Cancellation policy</label><textarea name="cancellationPolicy">${esc(pay.cancellationPolicy)}</textarea></div>
+      <div class="check-row" style="grid-column:1/-1">
+        <label><input type="checkbox" name="depositRequired" ${pay.depositRequired ? "checked" : ""}/> Deposit required</label>
+        <label><input type="checkbox" name="installmentAvailable" ${pay.installmentAvailable ? "checked" : ""}/> Installments</label>
+        <label><input type="checkbox" name="financingSupport" ${pay.financingSupport ? "checked" : ""}/> Financing</label>
+      </div>
+      ${fld("refundPolicy", `<textarea name="refundPolicy"${ph("refundPolicy")}>${esc(pay.refundPolicy)}</textarea>`, true)}
+      ${fld("cancellationPolicy", `<textarea name="cancellationPolicy"${ph("cancellationPolicy")}>${esc(pay.cancellationPolicy)}</textarea>`, true)}
     </div></form>`,
   );
 
+  const postOpHelp = fieldDef("protocol.postOpNotes");
   renderSectionShell(
     "workflow",
     "Treatment Workflow Knowledge",
     "Visit timelines, healing, temp teeth — operational not clinical diagnosis.",
     `<p class="link-out"><a href="/admin-settings-journeys.html">Manage treatment journey protocols →</a> (${c.protocols || 0} protocols)</p>
-    <p class="hint">Workflow entries are stored as treatment protocols and injected into AI coordinator chats.</p>`,
+    ${postOpHelp ? `<div class="section-intro" style="margin-top:12px"><p class="section-intro-text"><strong>Example field — Post-op coordination notes:</strong> ${esc(postOpHelp.helper)}</p><p class="example-text" style="margin:8px 0 0">${esc(postOpHelp.example || postOpHelp.placeholder || "")}</p></div>` : ""}
+    <p class="hint">Configure per-treatment healing, post-op, and AI notes in Treatment Journeys.</p>`,
     "Open journeys",
   );
 
@@ -225,29 +215,11 @@ function renderAllSections() {
   renderSectionShell(
     "ai-safety",
     "AI Safety & Human Review",
-    "Autonomy per category; pricing capped at SUGGEST_ONLY.",
-    `<table class="autonomy"><thead><tr><th>Category</th><th>Level</th></tr></thead><tbody>${(
-      meta.autonomyCategories || []
-    )
-      .map((cat) => {
-        const opts = (meta.autonomyLevels || [])
-          .map(
-            (lv) =>
-              `<option value="${esc(lv)}"${autonomy[cat.key] === lv ? " selected" : ""}>${esc(lv)}</option>`,
-          )
-          .join("");
-        return `<tr><td>${esc(cat.label)}</td><td><select data-autonomy="${esc(cat.key)}">${opts}</select></td></tr>`;
-      })
-      .join("")}</tbody></table>
-    <p class="hint" style="margin-top:12px">Always require human review:</p>
-    <div class="check-row" id="safetyChecks">${(meta.hardHumanReviewKeys || [])
-      .map(
-        (h) =>
-          `<label><input type="checkbox" data-safety="${esc(h.key)}" ${safety[h.key] !== false ? "checked" : ""}/> ${esc(
-            h.label,
-          )}</label>`,
-      )
-      .join("")}</div>`,
+    "Autonomy per category; pricing capped at SUGGEST_ONLY. Not medical diagnosis.",
+    `<p class="field-helper">Choose how independently the AI may respond. Medical topics always require a human.</p>
+    <table class="autonomy"><thead><tr><th>Category</th><th>Level</th></tr></thead><tbody>${(meta.autonomyCategories || []).map((cat) => `<tr><td>${esc(cat.label)}</td><td><select data-autonomy="${esc(cat.key)}">${(meta.autonomyLevels || []).map((lv) => `<option value="${esc(lv)}"${autonomy[cat.key] === lv ? " selected" : ""}>${esc(lv)}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>
+    <p class="hint" style="margin-top:12px">Always require human review (never auto-sent for medical advice):</p>
+    <div class="check-row" id="safetyChecks">${(meta.hardHumanReviewKeys || []).map((h) => `<label><input type="checkbox" data-safety="${esc(h.key)}" ${safety[h.key] !== false ? "checked" : ""}/> ${esc(h.label)}</label>`).join("")}</div>`,
   );
 
   const handoff = s.handoff || {};
@@ -255,26 +227,18 @@ function renderAllSections() {
     "handoff",
     "Human Handoff Rules",
     "Escalate to coordinator when these triggers are detected.",
-    `<div class="check-row" id="handoffChecks">${(meta.handoffTriggers || [])
-      .map(
-        (h) =>
-          `<label><input type="checkbox" data-handoff="${esc(h.key)}" ${handoff[h.key] !== false ? "checked" : ""}/> ${esc(
-            h.label,
-          )}</label>`,
-      )
-      .join("")}</div>`,
+    `<p class="field-helper">When checked, the AI stops auto-replying and alerts your team.</p>
+    <div class="check-row" id="handoffChecks">${(meta.handoffTriggers || []).map((h) => `<label><input type="checkbox" data-handoff="${esc(h.key)}" ${handoff[h.key] !== false ? "checked" : ""}/> ${esc(h.label)}</label>`).join("")}</div>`,
   );
 
   const notes = s.internalNotes || {};
   renderSectionShell(
     "internal-notes",
     "Internal AI Knowledge Notes",
-    "Clinic positioning — e.g. natural aesthetics, conservative planning, typical stay length.",
+    "Clinic positioning — not shown verbatim to patients.",
     `<form data-form="internal-notes">
-      <label>Positioning bullets (one per line)</label>
-      <textarea name="positioningNotes" rows="5">${esc((notes.positioningNotes || []).join("\n"))}</textarea>
-      <label>Additional notes</label>
-      <textarea name="freeformNotes">${esc(notes.freeformNotes)}</textarea>
+      ${fld("positioningNotes", `<textarea name="positioningNotes" rows="5"${ph("positioningNotes")}>${esc((notes.positioningNotes || []).join("\n"))}</textarea>`, true)}
+      ${fld("freeformNotes", `<textarea name="freeformNotes"${ph("freeformNotes")}>${esc(notes.freeformNotes)}</textarea>`, true)}
     </form>`,
   );
 
@@ -283,6 +247,7 @@ function renderAllSections() {
   });
 
   wireCatalogUi();
+  if (fh()) fh().wireHelpToggles(document);
 }
 
 function wireCatalogUi() {
@@ -304,20 +269,13 @@ function wireCatalogUi() {
     };
     editor.innerHTML = `<form id="catalogForm"><input type="hidden" name="id" value="${esc(t.id || "")}" />
       <div class="form-grid">
-        <div><label>Name *</label><input name="name" value="${esc(t.name)}" required /></div>
-        <div><label>Category</label><select name="category">${(meta.treatmentCategories || [])
-          .map(
-            (o) =>
-              `<option value="${esc(o.value)}"${t.category === o.value ? " selected" : ""}>${esc(o.label)}</option>`,
-          )
-          .join("")}</select></div>
-        <div><label>Min price</label><input name="priceMin" type="number" value="${esc(t.priceMin)}" /></div>
-        <div><label>Max price</label><input name="priceMax" type="number" value="${esc(t.priceMax)}" /></div>
-        <div><label>Currency</label><input name="currency" value="${esc(t.currency || "EUR")}" /></div>
-        <div><label>Duration</label><input name="durationLabel" value="${esc(t.durationLabel)}" placeholder="2 visits / 3 months" /></div>
-        <div style="grid-column:1/-1"><label>Included (comma)</label><input name="includedServices" value="${esc(joinList(t.includedServices))}" /></div>
-        <div style="grid-column:1/-1"><label>Excluded (comma)</label><input name="excludedServices" value="${esc(joinList(t.excludedServices))}" /></div>
-        <div style="grid-column:1/-1"><label>AI notes</label><textarea name="aiNotes">${esc(t.aiNotes)}</textarea></div>
+        ${fld("catalog.name", `<input name="name" value="${esc(t.name)}" required${ph("catalog.name")} />`)}
+        ${fld("catalog.priceRange", `<div style="display:flex;gap:8px"><input name="priceMin" type="number" placeholder="Min" value="${esc(t.priceMin)}" /><input name="priceMax" type="number" placeholder="Max" value="${esc(t.priceMax)}" /><input name="currency" value="${esc(t.currency || "EUR")}" style="max-width:72px" /></div>`)}
+        ${fld("catalog.durationLabel", `<input name="durationLabel" value="${esc(t.durationLabel)}"${ph("catalog.durationLabel")} />`)}
+        ${fld("catalog.includedServices", `<input name="includedServices" value="${esc(joinList(t.includedServices))}"${ph("catalog.includedServices")} />`, true)}
+        ${fld("catalog.excludedServices", `<input name="excludedServices" value="${esc(joinList(t.excludedServices))}"${ph("catalog.excludedServices")} />`, true)}
+        ${fld("catalog.aiNotes", `<textarea name="aiNotes"${ph("catalog.aiNotes")}>${esc(t.aiNotes)}</textarea>`, true)}
+        <div><label>Category</label><select name="category">${(meta.treatmentCategories || []).map((o) => `<option value="${esc(o.value)}"${t.category === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select></div>
       </div>
       <button type="submit" class="btn">Save treatment</button></form>`;
     document.getElementById("catalogForm").addEventListener("submit", async (ev) => {
