@@ -413,6 +413,7 @@ const {
   markProposalQuoteSent,
   setupProposalSlaSweep,
 } = require("./lib/treatmentProposalWorkflow");
+const { resolveOperationalClinicId } = require("./lib/clinicOperationalContext");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -2129,6 +2130,13 @@ async function resolveClinicIdForInbound(resolvedPatientId, contextOpt) {
   if (fromHistory) return fromHistory;
   const fromSibling = await resolveClinicIdFromSiblingPatientSameContact(resolvedPatientId);
   if (fromSibling) return fromSibling;
+
+  const operational = await resolveOperationalClinicId(resolvedPatientId, {
+    contextClinicId: ctxIdRaw,
+    contextClinicCode: ctxCodeRaw,
+    logLabel: "resolveClinicIdForInbound",
+  });
+  if (operational?.clinicId) return operational.clinicId;
   return null;
 }
 
@@ -13248,6 +13256,35 @@ async function archivePatientClinicMembershipOnLeave(resolvedPatientId, formerCl
       if (!col || !(col in threadPatch)) break;
       delete threadPatch[col];
     }
+
+    const { data: leadProfiles } = await supabase
+      .from("ai_coordinator_lead_profiles")
+      .select("id, operational_intake_flags")
+      .eq("patient_id", resolvedPatientId)
+      .eq("clinic_id", clinicId);
+    for (const lp of leadProfiles || []) {
+      const prev =
+        lp.operational_intake_flags && typeof lp.operational_intake_flags === "object"
+          ? lp.operational_intake_flags
+          : {};
+      await supabase
+        .from("ai_coordinator_lead_profiles")
+        .update({
+          operational_intake_flags: {
+            ...prev,
+            workspaceClinicId: clinicId,
+            patientUnlinkedAt: nowIso,
+            patientUnlinkReason: "patient_left_clinic",
+          },
+          updated_at: nowIso,
+        })
+        .eq("id", lp.id);
+    }
+    console.log("[archivePatientClinicMembershipOnLeave] preserved workspace clinic context", {
+      patient_id: String(resolvedPatientId).slice(0, 8),
+      clinic_id: clinicId.slice(0, 8),
+      lead_profiles: (leadProfiles || []).length,
+    });
   }
 
   bumpUnreadCountsCache(clinicId);
@@ -23970,13 +24007,25 @@ async function postPatientMeMessagesHandler(req, res) {
       }
     }
 
-    const mirrorClinicId =
+    const mirrorOfferHint = body.offer_id ?? body.offerId ?? null;
+    let mirrorClinicId =
       ctxId != null && String(ctxId).trim()
         ? String(ctxId).trim()
         : data?.clinic_id != null
           ? String(data.clinic_id).trim()
           : "";
-    const mirrorOfferHint = body.offer_id ?? body.offerId ?? null;
+    if (!mirrorClinicId || !UUID_RE.test(mirrorClinicId)) {
+      const resolvedPidForClinic = await resolveMessagesPatientDbId(patientId);
+      if (resolvedPidForClinic) {
+        const operational = await resolveOperationalClinicId(resolvedPidForClinic, {
+          contextClinicId: ctxId,
+          contextClinicCode: ctxCode,
+          offerId: mirrorOfferHint,
+          logLabel: "postPatientMeMessages",
+        });
+        if (operational?.clinicId) mirrorClinicId = operational.clinicId;
+      }
+    }
     let mirrorAttachmentUrl = null;
     let mirrorAttachmentType = null;
     if (attachments && hasInboundAttachments(attachments)) {
@@ -24014,6 +24063,7 @@ async function postPatientMeMessagesHandler(req, res) {
           patientMessage: text || (attachments ? "📷" : ""),
           source: "chat",
           contextMode: "coordinator",
+          offerId: mirrorOfferHint,
         });
       })().catch((e) => console.warn("[aiSlaContinuity] inbound hook:", e?.message || e));
     }
