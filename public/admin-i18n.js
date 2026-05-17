@@ -707,16 +707,16 @@
         },
         recommendedDuration: "~{minutes} dk",
         minutes: "dk",
-        opsProfileCardTitle: "Klinik Operasyon Profili",
-        opsProfileCardDesc: "Yapay zeka yanıtları, teklifler, seyahat koordinasyonu, SLA otomasyonu ve koordinatör iş akışları için operasyonel beyin. Yapılandırılmış klinik bilgisi — genel chatbot ayarları değil.",
+        opsProfileCardTitle: "Klinik YZ Eğitimi",
+        opsProfileCardDesc: "Yapay zekanın kliniğinizi nasıl temsil edeceğini, hangi bilgileri kullanacağını ve hastalara nasıl yanıt vereceğini yapılandırın.",
         opsProfileCardPricing: "Fiyatlandırma ve marka varyantları aşağıdaki <strong>Tedavi Fiyat Listesi</strong>nde yapılandırılır (randevu + YZ için tek kaynak).",
-        opsProfileOpen: "Operasyon Profilini Aç →",
+        opsProfileOpen: "YZ Eğitim Merkezi →",
       },
 
       opsProfile: {
-        pageTitle: "Klinik Operasyon Profili — Clinifly Admin",
-        title: "Klinik Operasyon Profili",
-        lead: "Yapay zeka yanıtları, teklifler, seyahat koordinasyonu, SLA otomasyonu ve koordinatör iş akışları için tek kaynak.",
+        pageTitle: "Klinik YZ Eğitimi — Clinifly Admin",
+        title: "Klinik YZ Eğitimi",
+        lead: "Yapay zekanın kliniğinizi nasıl temsil edeceğini, hangi bilgileri kullanacağını ve hastalara nasıl yanıt vereceğini yapılandırın.",
         backSettings: "← Hesap ayarları",
         counts: "Oteller: {hotels} · İş akışı protokolleri: {protocols}",
         loading: "Yükleniyor…",
@@ -733,7 +733,7 @@
         priceListLink: "→ Tedavi fiyat listesi",
         priceListHint: "(operasyonel + yapay zeka fiyatlandırması)",
         multilingualNoteTitle: "Tek klinik bilgisi, birçok dil.",
-        multilingualNoteBody: "Aşağıdan dilleri etkinleştirin. Markalar, fiyatlar, lojistik ve iş akışı tek yapılandırmada kalır — yapay zeka her dilde doğal yanıt verir, operasyonel kurulumu tekrarlamanız gerekmez.",
+        multilingualNoteBody: "Aşağıdan dilleri etkinleştirin. Markalar, fiyatlar, lojistik ve süreç bilgisi tek yerde kalır — yapay zeka her dilde doğal yanıt verir, her dil için ayrı kurulum gerekmez.",
         langFuture: "(yakında)",
         langColLanguage: "Dil",
         langColAi: "YZ etkin",
@@ -744,15 +744,15 @@
         transferIncluded: "transfer dahil",
         perNight: "/gece",
         sections: {
-          aiProfile: { title: "Klinik YZ Profili", hint: "Çok dilli YZ orkestrasyonu — tek bilgi kaynağı; operasyonel veriler yanıt sırasında yerelleştirilir." },
-          materials: { title: "İmplant Markaları ve Malzemeler", hint: "Markalar, laboratuvarlar, garanti — açıklayıcı YZ yanıtları için." },
-          travel: { title: "Seyahat ve Konaklama", hint: "Diş turizmi koordinasyonu için partner oteller." },
-          logistics: { title: "Klinik Lojistiği", hint: "Çalışma saatleri, SLA, acil iletişim, aynı gün tedavi." },
-          payment: { title: "Ödeme ve Mali Politikalar", hint: "Depozito, taksit, iade — YZ politika metnini kullanır, garanti vermez." },
-          workflow: { title: "Tedavi İş Akışı Bilgisi", hint: "Ziyaret süreleri, iyileşme — operasyonel, klinik tanı değil." },
-          aiSafety: { title: "YZ Güvenliği ve İnsan İncelemesi", hint: "Kategori bazlı özerklik; fiyatlandırma en fazla SUGGEST_ONLY." },
-          handoff: { title: "İnsana Devir Kuralları", hint: "Bu tetikleyicilerde YZ koordinatöre veya doktora yönlendirir." },
-          internalNotes: { title: "Dahili YZ Bilgi Notları", hint: "Klinik konumlandırma — hastaya aynen gösterilmez." }
+          aiProfile: { title: "YZ nasıl konuşsun?", hint: "Diller, ton ve karşılama — asistanınıza kliniğinizin sesini öğretin." },
+          materials: { title: "Markalar ve malzemeler", hint: "İmplant markaları, laboratuvar, garanti — doğru bilgi için." },
+          travel: { title: "Seyahat ve konaklama", hint: "Diş turizmi soruları için partner oteller." },
+          logistics: { title: "Saatler ve koordinasyon", hint: "Çalışma saatleri, yanıt süresi, acil iletişim." },
+          payment: { title: "Ödeme politikaları", hint: "Depozito, taksit, iade — YZ açıklar, anlaşmazlıkta insan devreye girer." },
+          workflow: { title: "Tedavi süreci bilgisi", hint: "Ziyaret süreleri, iyileşme — rehberlik, tanı değil." },
+          aiSafety: { title: "Ne zaman insan gerekir?", hint: "YZ tek başına ne yanıtlayabilir, neyi önerebilir, neyi devreder." },
+          handoff: { title: "Yükseltme kuralları", hint: "YZ ne zaman koordinatör veya doktoru uyarır." },
+          internalNotes: { title: "Klinik hikâyesi (dahili)", hint: "Konumlandırma ve öncelikler — tona yön verir, hastaya aynen gösterilmez." }
         },
         sedationAvailable: "Sedasyon mevcut",
         weekendAvailability: "Hafta sonu müsaitlik",
@@ -793,7 +793,7 @@
         langs: { en: "İngilizce", tr: "Türkçe", ru: "Rusça", ka: "Gürcüce", ar: "Arapça", de: "Almanca", fr: "Fransızca" },
         ui: {
           usedByAi: "YZ yanıtlarında kullanılır",
-          usedByAiTitle: "Bu alan yapay zeka orkestrasyon katmanına beslenir",
+          usedByAiTitle: "Bu bilgi yapay zeka asistanınızı eğitir",
           usedByAiSection: "YZ kullanır",
           seeExample: "Örnek gör",
           aiPrefix: "YZ:"
@@ -818,16 +818,16 @@
         },
         sectionHelp: {
           aiProfile: {
-            intro: "Çok dilli YZ orkestrasyonu — dilleri etkinleştirin ve isteğe bağlı yerelleştirilmiş hasta metinleri ekleyin. Operasyonel bilgi (markalar, fiyatlar, iş akışı) tek kaynakta kalır; YZ yanıt sırasında yerelleştirir.",
-            aiUsageSummary: "Dil yönlendirme, yerelleştirilmiş karşılama/imzalar ve koordinatör istemleri için çalışma zamanı yerelleştirme rehberi."
+            intro: "Hangi dillerde yanıt verileceğini ve asistanınızın nasıl konuşacağını ayarlayın. Marka, fiyat ve süreç bilgisi tek yerde kalır — YZ her dilde doğal yanıt verir.",
+            aiUsageSummary: "Dil seçimi, karşılama, imza ve hasta iletişim tonu."
           },
           materials: {
             intro: "Kliniğinizin çalıştığı marka ve malzemeler. YZ marka uydurmadan seçenekleri açıklar.",
             aiUsageSummary: "İmplant, zirkonyum, laboratuvar ve garanti hakkında bilgilendirici yanıtlar."
           },
           logistics: {
-            intro: "Çalışma saatleri, yanıt süreleri ve pratik klinik operasyonları.",
-            aiUsageSummary: "Randevu, müsaitlik, acil yönlendirme ve SLA yedekleme."
+            intro: "Çalışma saatleri, yanıt süreleri ve pratik klinik koordinasyonu.",
+            aiUsageSummary: "Randevu, müsaitlik ve acil durumlarda yönlendirme."
           },
           payment: {
             intro: "Depozito, finansman, iade. YZ politikaları açıklar — istisna vaat etmez.",
@@ -838,20 +838,20 @@
             aiUsageSummary: "Tedavi süreci, iyileşme, takip ve operasyon sonrası hasta soruları."
           },
           aiSafety: {
-            intro: "YZ ne kadar bağımsız hareket edebilir. Tıbbi konular her zaman insan incelemesi gerektirir.",
-            aiUsageSummary: "Konu başına otomatik yanıt, öneri veya kapalı mod."
+            intro: "YZ ne kadar bağımsız yanıt verebilir. Tıbbi konular her zaman insan incelemesi gerektirir.",
+            aiUsageSummary: "Konuya göre otomatik yanıt, öneri veya kapalı mod."
           },
           handoff: {
             intro: "YZ ne zaman durmalı ve koordinatörünüzü veya doktorunuzu uyarmalı.",
-            aiUsageSummary: "Görüşmede otomatik yükseltme tetikleyicileri."
+            aiUsageSummary: "Görüşmede insan devrine geçiş tetikleyicileri."
           },
           internalNotes: {
             intro: "Klinik konumlandırma ve strateji. YZ markanızla uyum sağlar — hastaya aynen gösterilmez.",
-            aiUsageSummary: "Ton, öncelikler ve vurgulanacaklar için istem bağlamı."
+            aiUsageSummary: "Ton, öncelikler ve vurgulanacaklar için dahili bağlam."
           },
           travel: {
-            intro: "Partner oteller yapay zeka tıbbi seyahat koordinatörünü besler — görüşme başına en fazla 3 aktif tesis YZ ile paylaşılır (vektör veritabanı yok).",
-            aiUsageSummary: "Tıbbi seyahat koordinasyonu, otel önerileri ve transfer soruları."
+            intro: "Partner oteller — tıbbi seyahat sorularında YZ en fazla 3 aktif oteli önerebilir.",
+            aiUsageSummary: "Konaklama, transfer ve seyahat planlama soruları."
           }
         },
         autonomyLevels: {
@@ -863,7 +863,7 @@
         fieldHelp: {
           supportedLanguages: {
             label: "Çok dilli YZ desteği",
-            helper: "YZ orkestrasyonu için dilleri etkinleştirin. Operasyonel veriler tek yerde kalır — YZ markaları, fiyatları ve lojistiği yanıt sırasında yerelleştirir.",
+            helper: "Hasta sohbetlerinde hangi dillerin kullanılacağını seçin. Klinik bilgisi tek yerde kalır — YZ her dilde yanıt verir.",
             aiUsage: "Hasta dili algılama, yanıt dili ve insan personel yönlendirme ipuçları.",
             example: "Birincil İngilizce; diş turizmi için Türkçe, Rusça, Gürcüce."
           },
@@ -938,14 +938,14 @@
           },
           timezone: {
             label: "Klinik saat dilimi",
-            helper: "Randevu ve SLA için IANA saat dilimi.",
+            helper: "Randevu ve yanıt süreleri için IANA saat dilimi.",
             aiUsage: "Uluslararası hastalar için saat ve yanıt penceresi dönüşümü.",
             placeholder: "Europe/Istanbul"
           },
           averageResponseSlaMinutes: {
-            label: "Yanıt SLA (dakika)",
-            helper: "İnsan personel hedef yanıt süresi. YZ yedek zamanlaması için — hastaya gösterilmez.",
-            aiUsage: "SLA otomasyonu ve koordinatör yükseltme.",
+            label: "Hedef yanıt süresi (dakika)",
+            helper: "YZ devrettiğinde ekibinizin ne kadar sürede yanıt vermesini beklediğiniz. Hastaya gösterilmez.",
+            aiUsage: "İnsan yanıtı gecikirse koordinatöre hatırlatma.",
             placeholder: "120"
           },
           emergencyContact: {
@@ -979,8 +979,8 @@
           },
           freeformNotes: {
             label: "Ek dahili notlar",
-            helper: "YZ lead koordine ederken personelin bilmesi gereken diğer bilgiler.",
-            aiUsage: "Ek orkestrasyon bağlamı."
+            helper: "YZ hasta koordine ederken ekibinizin bilmesi gereken diğer bilgiler.",
+            aiUsage: "Hasta koordinasyonu için ek bağlam."
           },
           protocol_postOpNotes: {
             label: "Operasyon sonrası koordinasyon notları",
@@ -1957,16 +1957,16 @@
         },
         recommendedDuration: "~{minutes} min",
         minutes: "min",
-        opsProfileCardTitle: "Clinic Operations Profile",
-        opsProfileCardDesc: "Operational brain for AI responses, offers, travel coordination, SLA automation, and coordinator workflows. Structured clinic knowledge — not generic chatbot settings.",
+        opsProfileCardTitle: "Clinic AI Training",
+        opsProfileCardDesc: "Teach your AI how your clinic works — what it should know, how it should talk to patients, and when to bring in your team.",
         opsProfileCardPricing: "Pricing & brand variants are configured in the <strong>Treatment Price List</strong> below (one source for appointments + AI).",
-        opsProfileOpen: "Open Operations Profile →",
+        opsProfileOpen: "Open AI Training Center →",
       },
 
       opsProfile: {
-        pageTitle: "Clinic Operations Profile — Clinifly Admin",
-        title: "Clinic Operations Profile",
-        lead: "Source of truth for AI responses, offers, travel coordination, SLA automation, and coordinator workflows.",
+        pageTitle: "Clinic AI Training — Clinifly Admin",
+        title: "Clinic AI Training",
+        lead: "Teach your AI assistant how your clinic works — what it knows, how it responds to patients, and when to escalate to your team.",
         backSettings: "← Account settings",
         counts: "Hotels: {hotels} · Workflow protocols: {protocols}",
         loading: "Loading…",
@@ -1983,7 +1983,7 @@
         priceListLink: "→ Treatment Price List",
         priceListHint: "(operational + AI pricing)",
         multilingualNoteTitle: "One clinic knowledge, many languages.",
-        multilingualNoteBody: "Enable languages below. Brands, pricing, logistics, and workflow stay in one structured source — the AI responds naturally without duplicating operational setup per language.",
+        multilingualNoteBody: "Enable languages below. Brands, pricing, logistics, and process knowledge stay in one place — the AI responds naturally in each language without re-entering everything.",
         langFuture: "(future)",
         langColLanguage: "Language",
         langColAi: "AI enabled",
@@ -1994,15 +1994,15 @@
         transferIncluded: "transfer included",
         perNight: "/night",
         sections: {
-          aiProfile: { title: "Clinic AI Profile", hint: "Multilingual AI orchestration — one knowledge source; AI localizes ops data at reply time." },
-          materials: { title: "Implant Brands & Materials", hint: "Brands, labs, warranty — for explanatory AI replies." },
-          travel: { title: "Travel & Accommodation", hint: "Partner hotels for dental tourism coordination." },
-          logistics: { title: "Clinic Logistics", hint: "Hours, SLA, emergency contact, same-day treatment." },
-          payment: { title: "Payment & Financial Policies", hint: "Deposits, financing, refunds — AI uses policy text, not guarantees." },
-          workflow: { title: "Treatment Workflow Knowledge", hint: "Visit timelines, healing — operational not clinical diagnosis." },
-          aiSafety: { title: "AI Safety & Human Review", hint: "Autonomy per category; pricing capped at SUGGEST_ONLY." },
-          handoff: { title: "Human Handoff Rules", hint: "When AI escalates to coordinator or doctor." },
-          internalNotes: { title: "Internal AI Knowledge Notes", hint: "Clinic positioning — not shown verbatim to patients." }
+          aiProfile: { title: "How your AI speaks", hint: "Languages, tone, and greetings — teach your clinic voice." },
+          materials: { title: "Brands & materials", hint: "Implant brands, labs, warranty — so replies stay accurate." },
+          travel: { title: "Travel & stays", hint: "Partner hotels for medical travel questions." },
+          logistics: { title: "Hours & coordination", hint: "Opening hours, response targets, emergency contact." },
+          payment: { title: "Payment policies", hint: "Deposits, financing, refunds — AI explains; humans handle disputes." },
+          workflow: { title: "Treatment journey knowledge", hint: "Visit length, recovery — guidance, not diagnosis." },
+          aiSafety: { title: "When AI needs a human", hint: "What the AI can answer alone vs suggest vs hand off." },
+          handoff: { title: "Escalation rules", hint: "When the AI alerts your coordinator or doctor." },
+          internalNotes: { title: "Clinic story (internal)", hint: "Positioning and priorities — shapes tone, not shown verbatim to patients." }
         },
         sedationAvailable: "Sedation available",
         weekendAvailability: "Weekend availability",
@@ -2043,7 +2043,7 @@
         langs: { en: "English", tr: "Turkish", ru: "Russian", ka: "Georgian", ar: "Arabic", de: "German", fr: "French" },
         ui: {
           usedByAi: "Used by AI replies",
-          usedByAiTitle: "This field feeds the AI orchestration layer",
+          usedByAiTitle: "This teaches your AI assistant",
           usedByAiSection: "Used by AI",
           seeExample: "See example",
           aiPrefix: "AI:"
@@ -2068,16 +2068,16 @@
         },
         sectionHelp: {
           aiProfile: {
-            intro: "Multilingual AI orchestration — enable languages and optional localized patient-facing text. Operational knowledge (brands, pricing, workflow) stays single-source; the AI localizes at reply time.",
-            aiUsageSummary: "Language routing, localized greetings/signatures, and runtime localization guidance for coordinator prompts."
+            intro: "Choose which languages patients can use and how your assistant should sound. Clinic knowledge stays in one place — the AI responds naturally in each language.",
+            aiUsageSummary: "Language choice, greetings, signatures, and communication tone."
           },
           materials: {
             intro: "Which brands and materials your clinic works with. Helps AI explain options without inventing brands.",
             aiUsageSummary: "Educational replies about implants, zirconium, labs, warranty."
           },
           logistics: {
-            intro: "Hours, response times, and practical clinic operations.",
-            aiUsageSummary: "Scheduling, availability, emergency routing, SLA fallback."
+            intro: "Hours, response times, and day-to-day clinic coordination.",
+            aiUsageSummary: "Scheduling, availability, and emergency routing."
           },
           payment: {
             intro: "Deposits, financing, refunds. AI explains policies — does not negotiate or promise exceptions.",
@@ -2089,19 +2089,19 @@
           },
           aiSafety: {
             intro: "How much the AI can act alone vs suggest drafts. Medical topics always stay human-reviewed.",
-            aiUsageSummary: "Orchestration: auto-reply, suggest-only, or off per topic."
+            aiUsageSummary: "Per topic: auto-reply, suggest-only, or off."
           },
           handoff: {
             intro: "When the AI must stop and alert your coordinator or doctor.",
-            aiUsageSummary: "Automatic escalation triggers in conversation."
+            aiUsageSummary: "Triggers that move a conversation to your team."
           },
           internalNotes: {
             intro: "Clinic positioning and strategy. Helps AI align with your brand — not shown verbatim to patients.",
-            aiUsageSummary: "Prompt context for tone, priorities, and what to emphasize."
+            aiUsageSummary: "Internal context for tone, priorities, and what to emphasize."
           },
           travel: {
-            intro: "Partner hotels power the AI medical travel coordinator — up to 3 active properties are shared with the AI per conversation (no vector DB).",
-            aiUsageSummary: "Medical travel coordination, hotel suggestions, and transfer questions."
+            intro: "Partner hotels — the AI can suggest up to 3 active properties for medical travel questions.",
+            aiUsageSummary: "Stays, transfers, and travel planning questions."
           }
         },
         autonomyLevels: {
@@ -2113,7 +2113,7 @@
         fieldHelp: {
           supportedLanguages: {
             label: "Multilingual AI support",
-            helper: "Enable languages for AI orchestration. Operational data stays in one place — the AI localizes brands, pricing, and logistics at reply time.",
+            helper: "Choose languages for patient chats. Clinic knowledge stays in one place — the AI responds in each enabled language.",
             aiUsage: "Patient language detection, reply language, and human-staff routing hints.",
             example: "English (primary), Turkish, Russian, Georgian for dental tourism."
           },
@@ -2159,14 +2159,14 @@
           warrantyInformation: { label: "Warranty policy", helper: "Summary of warranty terms. Keep factual; AI will not invent legal guarantees.", aiUsage: "Warranty and guarantee questions.", placeholder: "10-year implant warranty with annual check-up" },
           sedationAvailability: { label: "Sedation available", helper: "Whether sedation is offered for anxious patients.", aiUsage: "Comfort and anxiety-related questions." },
           weekdayHours: { label: "Weekday hours", helper: "When the clinic is normally open for appointments and replies.", aiUsage: "Scheduling and “when are you open?” questions.", placeholder: "09:00 – 18:00" },
-          timezone: { label: "Clinic timezone", helper: "IANA timezone for scheduling and SLA calculations.", aiUsage: "Converts appointment times and response windows for international patients.", placeholder: "Europe/Istanbul" },
-          averageResponseSlaMinutes: { label: "Response SLA (minutes)", helper: "Target time for human staff to respond. Used for AI fallback timing — not shown to patients.", aiUsage: "SLA automation and coordinator escalation.", placeholder: "120" },
+          timezone: { label: "Clinic timezone", helper: "IANA timezone for scheduling and response-time calculations.", aiUsage: "Converts appointment times and response windows for international patients.", placeholder: "Europe/Istanbul" },
+          averageResponseSlaMinutes: { label: "Target reply time (minutes)", helper: "How quickly your team should respond when the AI hands off. Not shown to patients.", aiUsage: "When to nudge coordinators if no human reply yet.", placeholder: "120" },
           emergencyContact: { label: "Emergency contact", helper: "Phone or instruction for urgent cases. AI directs emergencies here — does not give medical advice.", aiUsage: "Urgent / severe pain routing (with human handoff)." },
           transportationNotes: { label: "Transport notes", helper: "Airport pickup, VIP transfer, shuttle details.", aiUsage: "Travel and arrival coordination." },
           refundPolicy: { label: "Refund policy", helper: "Your standard refund rules. AI summarizes — escalates disputes to humans.", aiUsage: "Refund questions (with handoff for conflicts)." },
           cancellationPolicy: { label: "Cancellation policy", helper: "Cancellation terms for appointments or packages.", aiUsage: "Scheduling and cancellation questions." },
           positioningNotes: { label: "Positioning bullets", helper: "How you want the clinic positioned. One point per line.", aiUsage: "Shapes AI emphasis — not quoted directly." },
-          freeformNotes: { label: "Additional internal notes", helper: "Anything else staff should know when AI coordinates leads.", aiUsage: "Extra orchestration context." },
+          freeformNotes: { label: "Additional internal notes", helper: "Anything else your team should know when the AI coordinates patients.", aiUsage: "Extra context for patient coordination." },
           protocol_postOpNotes: {
             label: "Post-op coordination notes",
             helper: "Describe how your clinic usually guides patients after treatment.",
@@ -2984,16 +2984,16 @@
         },
         recommendedDuration: "~{minutes} мин",
         minutes: "мин",
-        opsProfileCardTitle: "Профиль операций клиники",
-        opsProfileCardDesc: "Операционная база для ответов ИИ, предложений, travel и workflow координатора.",
+        opsProfileCardTitle: "Обучение ИИ клиники",
+        opsProfileCardDesc: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пациентам.",
         opsProfileCardPricing: "Цены и варианты брендов — в <strong>прайс-листе лечения</strong> ниже.",
-        opsProfileOpen: "Открыть профиль операций →",
+        opsProfileOpen: "Центр обучения ИИ →",
       },
 
       opsProfile: {
-        pageTitle: "Профиль операций клиники — Clinifly Admin",
-        title: "Профиль операций клиники",
-        lead: "Единый источник для ответов ИИ, предложений, travel-координации, SLA и рабочих процессов координатора.",
+        pageTitle: "Обучение ИИ клиники — Clinifly Admin",
+        title: "Обучение ИИ клиники",
+        lead: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пациентам.",
         backSettings: "← Настройки аккаунта",
         counts: "Отели: {hotels} · Протоколы workflow: {protocols}",
         loading: "Загрузка…",
@@ -3980,16 +3980,16 @@
         },
         recommendedDuration: "~{minutes} წთ",
         minutes: "წთ",
-        opsProfileCardTitle: "კლინიკის ოპერაციების პროფილი",
-        opsProfileCardDesc: "ოპერაციული ცოდნა AI პასუხებისა და კოორდინატორის workflow-ისთვის.",
+        opsProfileCardTitle: "კლინიკის AI სწავლება",
+        opsProfileCardDesc: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს პაციენტებს.",
         opsProfileCardPricing: "ფასები და ბრენდის ვარიანტები — ქვემოთ <strong>ფასების სიაში</strong>.",
-        opsProfileOpen: "ოპერაციების პროფილის გახსნა →",
+        opsProfileOpen: "AI სწავლების ცენტრი →",
       },
 
       opsProfile: {
-        pageTitle: "კლინიკის ოპერაციების პროფილი — Clinifly Admin",
-        title: "კლინიკის ოპერაციების პროფილი",
-        lead: "ერთი წყარო AI პასუხების, შეთავაზებების, მოგზაურობის, SLA და კოორდინატორის workflow-ისთვის.",
+        pageTitle: "კლინიკის AI სწავლება — Clinifly Admin",
+        title: "კლინიკის AI სწავლება",
+        lead: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს პაციენტებს.",
         backSettings: "← ანგარიშის პარამეტრები",
         counts: "სასტუმროები: {hotels} · workflow პროტოკოლები: {protocols}",
         loading: "იტვირთება…",

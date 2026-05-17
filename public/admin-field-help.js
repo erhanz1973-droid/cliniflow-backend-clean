@@ -1,5 +1,5 @@
 /**
- * Shared field help UI — Operations Profile + Treatment Journeys.
+ * Shared field help UI — Clinic AI Training + Treatment Journeys.
  * Requires meta.fieldHelp + meta.visibilityTypes from /api/admin/clinic/ops-profile/meta
  */
 (function (global) {
@@ -28,7 +28,7 @@
   function aiUsedBadge() {
     return (
       '<span class="ai-used-badge" title="' +
-      esc(opUi("usedByAiTitle", "This field feeds the AI orchestration layer")) +
+      esc(opUi("usedByAiTitle", "This teaches your AI assistant")) +
       '">' +
       esc(opUi("usedByAi", "Used by AI replies")) +
       "</span>"

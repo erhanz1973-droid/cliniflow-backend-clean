@@ -1,4 +1,4 @@
-/* Clinic Operations Profile — modular admin hub */
+/* Clinic AI Training — modular admin hub */
 
 function adminFetch(path, opts) {
   const url = typeof adminFetchUrl === "function" ? adminFetchUrl(path) : path;
