@@ -12984,6 +12984,8 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
       clinic_code: codeStored,
       updated_at: joinAt,
       is_lead: false,
+      archived_at: null,
+      archive_reason: null,
       ...(patientStatus === "PENDING" || patientStatus === "" ? { status: "ACTIVE" } : {}),
     });
 
@@ -13103,6 +13105,77 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
   }
 });
 
+/** Active enrolled roster member at a clinic — excludes leads, unlinked, and archived patients. */
+function isActiveEnrolledClinicPatient(patient, clinicId) {
+  const statusRaw = String(patient?.status || "").toUpperCase();
+  if (statusRaw === "ARCHIVED" || statusRaw === "INACTIVE" || statusRaw === "CANCELLED") return false;
+  const cid = clinicId ? String(clinicId).trim() : "";
+  const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
+  if (!cid || !pc || pc !== cid) return false;
+  if (patient.is_lead === true) return false;
+  if (patient.archived_at != null && String(patient.archived_at).trim() !== "") return false;
+  return true;
+}
+
+/**
+ * Patient left clinic: clear membership, mark lead again, archive thread(s), invalidate doctor caches.
+ */
+async function archivePatientClinicMembershipOnLeave(resolvedPatientId, formerClinicId) {
+  if (!resolvedPatientId || !isSupabaseEnabled()) return { ok: false };
+  const nowIso = new Date().toISOString();
+  const clinicId =
+    formerClinicId && UUID_RE.test(String(formerClinicId).trim()) ? String(formerClinicId).trim() : null;
+
+  const patientPatch = {
+    clinic_id: null,
+    clinic_code: null,
+    is_lead: true,
+    archived_at: nowIso,
+    archive_reason: "patient_left_clinic",
+    updated_at: nowIso,
+  };
+  const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patientPatch);
+  if (!up.ok) {
+    await supabase
+      .from("patients")
+      .update({ clinic_id: null, clinic_code: null, updated_at: nowIso })
+      .eq("id", resolvedPatientId);
+    await updatePatientRowWithColumnPruning(resolvedPatientId, {
+      is_lead: true,
+      archived_at: nowIso,
+      archive_reason: "patient_left_clinic",
+    });
+  }
+
+  if (clinicId) {
+    let threadPatch = {
+      lifecycle_status: "archived",
+      archived_at: nowIso,
+      archive_reason: "patient_left_clinic",
+      is_lead: true,
+      updated_at: nowIso,
+    };
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      const { error } = await supabase
+        .from("patient_chat_threads")
+        .update(threadPatch)
+        .eq("patient_id", resolvedPatientId)
+        .eq("clinic_id", clinicId);
+      if (!error) break;
+      if (!isMissingColumnError(error)) {
+        console.warn("[archivePatientClinicMembershipOnLeave] thread:", error.message || error);
+        break;
+      }
+      const col = getMissingColumnName(error);
+      if (!col || !(col in threadPatch)) break;
+      delete threadPatch[col];
+    }
+  }
+
+  bumpUnreadCountsCache(clinicId);
+  return { ok: true };
+}
+
 // DELETE /api/patient/clinic — leave current clinic (mobile profile: "Klinikten Ayrıl")
 app.delete("/api/patient/clinic", requireToken, async (req, res) => {
   try {
@@ -13136,18 +13209,26 @@ app.delete("/api/patient/clinic", requireToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: "patient_not_found" });
     }
 
-    const { error: upErr } = await supabase
-      .from("patients")
-      .update({
-        clinic_id: null,
-        clinic_code: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", patientRow.id);
+    let formerClinicId = null;
+    for (const sel of ["id, clinic_id", "id, patient_id, clinic_id"]) {
+      const { data: prow } = await supabase
+        .from("patients")
+        .select(sel)
+        .eq("id", patientRow.id)
+        .maybeSingle();
+      if (prow?.clinic_id) {
+        formerClinicId = String(prow.clinic_id).trim();
+        break;
+      }
+    }
 
-    if (upErr) {
-      console.error("[DELETE /api/patient/clinic] update failed:", upErr.message || upErr);
-      return res.status(500).json({ ok: false, error: "update_failed", message: upErr.message || "Güncelleme başarısız." });
+    const arch = await archivePatientClinicMembershipOnLeave(patientRow.id, formerClinicId);
+    if (!arch.ok) {
+      return res.status(500).json({
+        ok: false,
+        error: "update_failed",
+        message: "Klinik ayrılma kaydedilemedi.",
+      });
     }
 
     const patientStatus = String(patientRow.status || "PENDING").toUpperCase();
@@ -43238,7 +43319,7 @@ async function loadPatientMessagingEnrollmentRow(internalPatientUuid) {
   try {
     const { data } = await supabase
       .from("patients")
-      .select("status, is_lead, clinic_id")
+      .select("status, is_lead, clinic_id, archived_at")
       .eq("id", id)
       .maybeSingle();
     return data || null;
@@ -43279,11 +43360,24 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
     return { ok: false, status: 404, error: "patient_not_found" };
   }
 
+  if (forSend) {
+    const prow = await loadPatientMessagingEnrollmentRow(resolvedPatientId);
+    if (!isActiveEnrolledClinicPatient(prow, clinicId)) {
+      return {
+        ok: false,
+        status: 403,
+        error: "patient_left_clinic",
+        message:
+          "Bu hasta klinikten ayrıldı veya sohbet arşivlendi. Yeni mesaj gönderilemez; geçmiş kayıtlar görüntülenebilir.",
+      };
+    }
+  }
+
   let thread = null;
   try {
     let q = supabase
       .from("patient_chat_threads")
-      .select("id, is_lead, assigned_doctor_id, status, clinic_id")
+      .select("id, is_lead, assigned_doctor_id, status, clinic_id, lifecycle_status, archived_at")
       .eq("patient_id", resolvedPatientId);
     if (clinicId && UUID_RE.test(clinicId)) {
       q = q.eq("clinic_id", clinicId);
@@ -43292,6 +43386,18 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
     if (!error && data) thread = data;
   } catch (_) {
     thread = null;
+  }
+
+  if (forSend && thread) {
+    const life = String(thread.lifecycle_status || "").trim().toLowerCase();
+    if (life === "archived" || thread.archived_at != null) {
+      return {
+        ok: false,
+        status: 403,
+        error: "conversation_archived",
+        message: "Bu sohbet arşivlendi; yeni mesaj gönderilemez.",
+      };
+    }
   }
 
   if (thread?.assigned_doctor_id) {
@@ -43513,12 +43619,17 @@ async function collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw) {
   const keys = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
   if (!keys.length || !isSupabaseEnabled()) return out;
   try {
-    const { data, error } = await supabase
-      .from("patient_chat_threads")
-      .select("patient_id")
-      .not("assigned_doctor_id", "is", null)
-      .in("assigned_doctor_id", keys)
-      .limit(800);
+    const baseLeadThreadQ = () =>
+      supabase
+        .from("patient_chat_threads")
+        .select("patient_id")
+        .not("assigned_doctor_id", "is", null)
+        .in("assigned_doctor_id", keys)
+        .limit(800);
+    let { data, error } = await baseLeadThreadQ().is("archived_at", null);
+    if (error && isMissingColumnError(error)) {
+      ({ data, error } = await baseLeadThreadQ());
+    }
     if (error) {
       const c = String(error.code || "");
       if (!["42P01", "42703", "PGRST204", "PGRST205"].includes(c))
@@ -46360,11 +46471,15 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
 
     const patientSelectAttempts = includeHealth
       ? [
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,is_lead,archived_at,created_at,health",
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,is_lead,created_at,health",
           "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at,health",
           "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at",
           "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,created_at",
         ]
       : [
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,is_lead,archived_at,created_at",
+          "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,is_lead,created_at",
           "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,department,created_at",
           "id,patient_id,clinic_id,clinic_code,name,full_name,phone,email,status,created_at",
         ];
@@ -46441,13 +46556,10 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       });
     }
 
-    // Visibility is already from treatment_doctors → … → patient; do not drop team patients
-    // when patients.clinic_id/code is missing or out of sync with the doctor row.
-    const finalPatients = (patients || []).filter((patient) => {
-      const statusRaw = String(patient?.status || "").toUpperCase();
-      if (statusRaw === "ARCHIVED" || statusRaw === "INACTIVE" || statusRaw === "CANCELLED") return false;
-      return true;
-    });
+    // Active roster only: enrolled at this clinic (not lead, not archived / unlinked).
+    const finalPatients = (patients || []).filter((patient) =>
+      isActiveEnrolledClinicPatient(patient, clinicId)
+    );
 
     // Helper to compute risk flags from health formData (patients endpoint)
     function computePatientRiskFlags(formData) {
@@ -46476,6 +46588,12 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         includeHealth && patient.health && typeof patient.health === "object" ? patient.health : {};
       const formData = healthData.formData || {};
       const riskFlags = includeHealth ? computePatientRiskFlags(formData) : [];
+      const messagingActive = isActiveEnrolledClinicPatient(patient, clinicId);
+      const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
+      const conversationArchived =
+        !messagingActive &&
+        (Boolean(patient.archived_at) || patient.is_lead === true || !pc);
+      const leftClinic = !pc || patient.is_lead === true || Boolean(patient.archived_at);
       return {
         id: patient.id || patient.patient_id,
         patientId: patient.patient_id || patient.id,
@@ -46484,6 +46602,11 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         email: patient.email,
         status: patient.status,
         department: patient.department,
+        clinicId: pc || null,
+        isLead: patient.is_lead === true,
+        messagingActive,
+        conversationArchived,
+        leftClinic,
         createdAt: patient.created_at ? new Date(patient.created_at).getTime() : null,
         hasRisk: riskFlags.length > 0,
         riskFlags,
