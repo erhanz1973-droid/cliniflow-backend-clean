@@ -5,7 +5,7 @@
   <script src="/api-base.js?v=202605171"></script>
   <script src="/admin-i18n.js?v=37"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Coordinator — Clinifly Admin</title>
+  <title>Coordination Center — Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
   <script>
     (function () {
@@ -54,7 +54,9 @@
     .lead-item.active { background: var(--blue-l); border-left: 3px solid var(--blue); }
     .lead-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
     .lead-title { font-weight: 700; font-size: 0.88rem; color: var(--text); }
+    .lead-interest { font-size: 0.78rem; color: #334155; margin-top: 3px; font-weight: 600; }
     .lead-meta { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+    .lead-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .badge {
       display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem;
       font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em;
@@ -268,47 +270,47 @@
 <body>
   <div class="ai-wrap">
     <div class="ai-header">
-      <h1>Coordinator Workspace</h1>
+      <h1>Coordination Center</h1>
       <p>
-        Who needs attention, what is blocking, who we are waiting on — at a glance.
+        See which patients need attention, what is blocking progress, and where action is required.
       </p>
       <a class="ops-test-link" href="/admin-ops-rollout.html" target="_blank" rel="noopener">Workflow stress test →</a>
     </div>
 
     <p class="scan-hint">
-      <strong>3-second scan:</strong> name → waiting on patient/clinic → blocker → next step. Open a lead for full detail.
+      <strong>Quick scan:</strong> patient → treatment interest → blocker → who is waiting → next step.
     </p>
 
     <div class="queue-section">
-      <div class="queue-section-hd">Today&apos;s queues</div>
+      <div class="queue-section-hd">Priority queues</div>
       <div class="intake-queue-tabs" id="intakeQueueTabsPrimary"></div>
       <details class="queue-more">
-        <summary>More queues (ready, implant, cosmetic…)</summary>
+        <summary>Treatment categories</summary>
         <div class="intake-queue-tabs" id="intakeQueueTabsMore" style="margin-top:8px"></div>
       </details>
     </div>
 
     <details class="workspace-section" style="margin-bottom:12px">
-      <summary class="queue-section-hd" style="cursor:pointer">Response &amp; follow-up (SLA)</summary>
+      <summary class="queue-section-hd" style="cursor:pointer">Follow-up &amp; response times</summary>
       <div class="workspace-tabs" id="workspaceTabs" style="margin-top:8px">
-        <button type="button" class="ws-btn active" data-ws="recent">All recent</button>
-        <button type="button" class="ws-btn" data-ws="waiting_human">Needs reply</button>
-        <button type="button" class="ws-btn" data-ws="inactive">Inactive 24h+</button>
-        <button type="button" class="ws-btn" data-ws="assigned">Assigned</button>
-        <button type="button" class="ws-btn" data-ws="hot">Hot</button>
-        <button type="button" class="ws-btn" data-ws="ai_unresolved">AI unresolved</button>
+        <button type="button" class="ws-btn active" data-ws="recent" title="All active conversations">All active</button>
+        <button type="button" class="ws-btn" data-ws="waiting_human" title="Patient wrote; clinic has not replied">Waiting for clinic reply</button>
+        <button type="button" class="ws-btn" data-ws="inactive" title="No messages in 24 hours">No response for 24h</button>
+        <button type="button" class="ws-btn" data-ws="assigned" title="Assigned to a coordinator">Assigned to coordinator</button>
+        <button type="button" class="ws-btn" data-ws="hot" title="Strong booking signals">High booking intent</button>
+        <button type="button" class="ws-btn" data-ws="ai_unresolved" title="Cases that need coordinator review">Needs human review</button>
       </div>
     </details>
 
     <details class="legacy-filters" style="margin-bottom:12px">
-      <summary>Legacy signal filters</summary>
+      <summary>More filters</summary>
       <div class="filters signal-filters" id="filters" style="margin-top:8px">
-        <button type="button" class="filter-btn" data-filter="hot">Hot</button>
-        <button type="button" class="filter-btn" data-filter="implant">Implant text</button>
-        <button type="button" class="filter-btn" data-filter="veneers">Veneers text</button>
-        <button type="button" class="filter-btn" data-filter="high_booking">High booking</button>
-        <button type="button" class="filter-btn" data-filter="high_urgency">High urgency</button>
-        <button type="button" class="filter-btn" data-filter="human">Human active</button>
+        <button type="button" class="filter-btn" data-filter="hot">High booking intent</button>
+        <button type="button" class="filter-btn" data-filter="implant">Implant inquiries</button>
+        <button type="button" class="filter-btn" data-filter="veneers">Veneer inquiries</button>
+        <button type="button" class="filter-btn" data-filter="high_booking">Ready to book</button>
+        <button type="button" class="filter-btn" data-filter="high_urgency">Urgent cases</button>
+        <button type="button" class="filter-btn" data-filter="human">Coordinator engaged</button>
       </div>
     </details>
 
@@ -317,7 +319,7 @@
     <div class="layout">
       <section class="panel">
         <div class="panel-hd">
-          <span>Leads</span>
+          <span>Attention queue</span>
           <button type="button" class="refresh-btn" id="btnRefresh">Refresh</button>
         </div>
         <div class="lead-list" id="leadList">
@@ -326,9 +328,9 @@
       </section>
 
       <section class="panel">
-        <div class="panel-hd"><span id="detailTitle">Select a lead</span></div>
+        <div class="panel-hd"><span id="detailTitle">Select a patient</span></div>
         <div class="detail-body" id="detailBody">
-          <div class="empty">Select a lead from the inbox to view conversation and coordination controls.</div>
+          <div class="empty">Select a patient from the queue to see what is blocking, who is waiting, and the next step.</div>
         </div>
       </section>
     </div>
@@ -389,7 +391,7 @@
       const allBtn =
         '<button type="button" class="queue-btn' +
         (!activeIntakeQueue ? " active" : "") +
-        '" data-queue="">All recent</button>';
+        '" data-queue="">All patients</button>';
       function btnFor(id) {
         const def = intakeQueueDefs.find(function (q) {
           return q.id === id;
@@ -448,10 +450,40 @@
     function slaBadge(L) {
       const sla = L.sla || {};
       const parts = [];
-      if (sla.isWaiting4h) parts.push('<span class="badge badge-urgent-critical">Wait 4h+</span>');
-      else if (sla.isWaiting1h) parts.push('<span class="badge badge-urgent-warn">Wait 1h+</span>');
-      if (sla.isInactive24h) parts.push('<span class="badge badge-stale">Inactive 24h+</span>');
+      if (sla.isWaiting4h) parts.push('<span class="badge badge-urgent-critical">No clinic reply 4h+</span>');
+      else if (sla.isWaiting1h) parts.push('<span class="badge badge-urgent-warn">No clinic reply 1h+</span>');
+      if (sla.isInactive24h) parts.push('<span class="badge badge-stale">No activity 24h+</span>');
+      if (L.needsReview || L.aiUnresolved) parts.push('<span class="badge badge-unresolved">Needs review</span>');
+      if (L.isHot) parts.push('<span class="badge badge-hot">High intent</span>');
       return parts.join("");
+    }
+
+    function formatTreatmentInterest(L) {
+      const raw = String(L.treatmentInterest || "").trim();
+      const tags = (L.operationalIntakeFlags && L.operationalIntakeFlags.patientReportedTags) || [];
+      if (/implant/i.test(raw) || tags.includes("implant_interest")) return "Interested in implants";
+      if (/veneer|cosmetic|smile|whitening/i.test(raw) || tags.some(function (t) {
+        return ["veneer_interest", "cosmetic_goal", "whitening_interest", "orthodontic_interest"].indexOf(t) >= 0;
+      })) return "Interested in veneers / cosmetic";
+      if (raw) return "Interested in " + raw.replace(/_/g, " ");
+      if (L.country) return "Inquiry from " + L.country;
+      return "Treatment inquiry";
+    }
+
+    function leadTimingLabel(L) {
+      const sla = L.sla || {};
+      if (sla.isWaiting4h) return "No clinic reply for 4h+";
+      if (sla.isWaiting1h && sla.waitingDurationLabel) return "No clinic reply for " + sla.waitingDurationLabel;
+      if (sla.isWaiting1h) return "No clinic reply for 1h+";
+      if (sla.isInactive24h) return "No activity for 24h+";
+      if (L.waitingParty === "clinic" && sla.waitingDurationLabel) {
+        return "Waiting on clinic · " + sla.waitingDurationLabel;
+      }
+      if (L.waitingParty === "patient" && sla.inactiveLabel) {
+        return "Waiting on patient · " + sla.inactiveLabel;
+      }
+      if (sla.waitingDurationLabel) return "Waiting " + sla.waitingDurationLabel;
+      return "Updated " + fmtTime(L.updatedAt);
     }
 
     function escalationBadges(flags) {
@@ -469,10 +501,10 @@
       const waitClass = sla.isWaiting4h ? 'critical' : sla.isWaiting1h ? 'warn' : '';
       return (
         '<div class="sla-strip">' +
-        '<div class="sla-cell"><label>Last patient msg</label><div>' + esc(fmtTime(sla.lastPatientMessageAt)) + '</div></div>' +
-        '<div class="sla-cell"><label>Waiting</label><div class="sla-val ' + waitClass + '">' + esc(sla.waitingDurationLabel || '—') + '</div></div>' +
-        '<div class="sla-cell"><label>Since human reply</label><div>' + esc(sla.sinceLastHumanReplyLabel || '—') + '</div></div>' +
-        '<div class="sla-cell"><label>Mode</label><div>' + esc(L.coordinationMode === 'human_active' ? 'Human active' : 'AI active') + '</div></div>' +
+        '<div class="sla-cell"><label>Last patient message</label><div>' + esc(fmtTime(sla.lastPatientMessageAt)) + '</div></div>' +
+        '<div class="sla-cell"><label>Response wait</label><div class="sla-val ' + waitClass + '">' + esc(sla.waitingDurationLabel || '—') + '</div></div>' +
+        '<div class="sla-cell"><label>Since coordinator reply</label><div>' + esc(sla.sinceLastHumanReplyLabel || '—') + '</div></div>' +
+        '<div class="sla-cell"><label>Handoff</label><div>' + esc(L.coordinationMode === 'human_active' ? 'Coordinator engaged' : 'Automated replies') + '</div></div>' +
         '</div>'
       );
     }
@@ -767,12 +799,13 @@
     function renderLeadList() {
       const el = document.getElementById("leadList");
       if (!leads.length) {
-        el.innerHTML = '<div class="empty">No AI leads yet. Patient chats will appear here.</div>';
+        el.innerHTML = '<div class="empty">No patients in this queue yet. New conversations from the patient app will appear here.</div>';
         return;
       }
       el.innerHTML = leads
         .map((L) => {
-          const title = L.patientName || L.treatmentInterest || L.country || "Lead";
+          const title = L.patientName || "Patient";
+          const interest = formatTreatmentInterest(L);
           const blockUrgent =
             L.operationalIntakeFlags?.doctorReviewNeeded || (L.sla && L.sla.isWaiting4h);
           const ownership =
@@ -785,15 +818,10 @@
             ? '<div class="lead-block' + (blockUrgent ? " urgent" : "") + '">' + esc(L.blockingReason) + "</div>"
             : "";
           const nextHtml = L.nextAction
-            ? '<div class="lead-next">Next: ' + esc(L.nextAction) + "</div>"
+            ? '<div class="lead-next">' + esc(L.nextAction) + "</div>"
             : "";
-          const sla = L.sla || {};
-          let timing = "";
-          if (sla.isWaiting4h) timing = "Reply overdue (4h+)";
-          else if (sla.isWaiting1h) timing = "Waiting " + (sla.waitingDurationLabel || "1h+");
-          else if (sla.isInactive24h) timing = "Inactive 24h+";
-          else if (sla.waitingDurationLabel) timing = sla.waitingDurationLabel;
-          else timing = "Updated " + fmtTime(L.updatedAt);
+          const timing = leadTimingLabel(L);
+          const badges = slaBadge(L);
           const emergency =
             L.escalationFlags && L.escalationFlags.emergency
               ? ' <span class="badge badge-esc-emergency">Urgent</span>'
@@ -809,13 +837,15 @@
             esc(title) +
             emergency +
             "</div>" +
-            '<span class="score">' +
+            '<span class="score" title="Intake readiness">' +
             (L.readinessPercent != null ? L.readinessPercent + "%" : "—") +
             "</span>" +
             "</div>" +
+            '<div class="lead-interest">' + esc(interest) + "</div>" +
             ownership +
             blockHtml +
             nextHtml +
+            (badges ? '<div class="lead-badges">' + badges + "</div>" : "") +
             '<div class="lead-timing">' +
             esc(timing) +
             "</div>" +
@@ -847,7 +877,7 @@
       renderLeadList();
       const body = document.getElementById("detailBody");
       body.innerHTML = '<div class="empty">Loading conversation…</div>';
-      document.getElementById("detailTitle").textContent = "Lead detail";
+      document.getElementById("detailTitle").textContent = "Patient detail";
 
       try {
         const res = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id));
@@ -856,17 +886,17 @@
 
         const L = json.lead;
         document.getElementById("detailTitle").textContent =
-          L.patientName || L.treatmentInterest || "Lead detail";
+          L.patientName || formatTreatmentInterest(L) || "Patient detail";
 
         const isHuman = L.coordinationMode === "human_active";
         const modeHtml =
           '<div class="mode-toggle">' +
           '<button type="button" class="mode-btn' +
           (!isHuman ? " active-ai" : "") +
-          '" data-mode="ai_active">AI Active</button>' +
+          '" data-mode="ai_active">Automated replies</button>' +
           '<button type="button" class="mode-btn' +
           (isHuman ? " active-human" : "") +
-          '" data-mode="human_active">Human Active</button>' +
+          '" data-mode="human_active">Coordinator engaged</button>' +
           "</div>";
 
         const grid =
@@ -876,20 +906,20 @@
           fieldHtml("Language", L.preferredLanguage) +
           fieldHtml("Travel", L.travelTimeline) +
           fieldHtml("Urgency", L.urgency) +
-          fieldHtml("Booking intent", L.bookingIntent) +
+          fieldHtml("Booking readiness", L.bookingIntent) +
           fieldHtml("Budget", L.budgetSignal) +
           fieldHtml("Channel", L.primaryChannel) +
           fieldHtml("Messages", L.messageCount) +
           "</div>";
 
         const summary = L.conversationSummary
-          ? '<div class="summary-box"><strong>AI summary</strong><br/>' +
+          ? '<div class="summary-box"><strong>Conversation summary</strong><br/>' +
             esc(L.conversationSummary) +
             "</div>"
           : "";
 
         const blockDetail = L.blockingReason
-          ? '<div class="intake-flags-box" style="background:#f8fafc;border-color:#cbd5e1"><strong>What is blocking</strong><br/>' +
+          ? '<div class="intake-flags-box" style="background:#f8fafc;border-color:#cbd5e1"><strong>Current blocker</strong><br/>' +
             esc(L.blockingReason) +
             (L.waitingPartyLabel ? "<br/><em>" + esc(L.waitingPartyLabel) + "</em>" : "") +
             (L.nextAction ? "<br/><strong>Next:</strong> " + esc(L.nextAction) : "") +
@@ -899,7 +929,7 @@
         const escRow =
           '<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">' +
           escalationBadges(L.escalationFlags) +
-          (L.aiUnresolved ? '<span class="badge badge-unresolved">AI unresolved</span>' : "") +
+          (L.aiUnresolved ? '<span class="badge badge-unresolved">Needs review</span>' : "") +
           (L.hasVisitPlanDraft ? '<span class="badge badge-visit-plan">Visit plan draft</span>' : "") +
           (L.needsDoctorDocumentReview ? '<span class="badge badge-doc-review">Doctor review</span>' : "") +
           (L.hasMissingIntake ? '<span class="badge badge-missing-intake">Missing intake</span>' : "") +
@@ -907,12 +937,12 @@
 
         const suggestHtml = isHuman
           ? '<div class="suggest-box">' +
-            "<strong>AI draft assistant</strong> (does not auto-send)" +
-            '<button type="button" class="refresh-btn" id="btnSuggest">Suggest Reply</button>' +
-            '<textarea id="suggestDraft" placeholder="Click Suggest Reply to generate a draft…"></textarea>' +
+            "<strong>Reply draft assistant</strong> (does not auto-send)" +
+            '<button type="button" class="refresh-btn" id="btnSuggest">Draft reply</button>' +
+            '<textarea id="suggestDraft" placeholder="Click Draft reply to generate a starting message…"></textarea>' +
             '<div id="suggestErr" class="err" style="display:none"></div>' +
             "</div>"
-          : '<div class="placeholder-reply"><strong>Human mode off</strong> — switch to Human Active to draft coordinator replies.</div>';
+          : '<div class="placeholder-reply"><strong>Coordinator not engaged</strong> — switch to Coordinator engaged to draft and send personal replies.</div>';
 
         body.innerHTML =
           slaStrip(L) +
@@ -922,7 +952,7 @@
           grid +
           summary +
           (json.visitPlanDraft
-            ? '<div class="section-hd">AI visit plan (operational estimate)</div>' + renderVisitPlan(json.visitPlanDraft)
+            ? '<div class="section-hd">Visit plan estimate (operational)</div>' + renderVisitPlan(json.visitPlanDraft)
             : "") +
           renderIntakePipeline(json.intakeJourney) +
           renderReadiness(json.readiness, json.operationalIntakeFlags) +
@@ -974,7 +1004,7 @@
               }
             } finally {
               btnSuggest.disabled = false;
-              btnSuggest.textContent = "Suggest Reply";
+              btnSuggest.textContent = "Draft reply";
             }
           });
         });
@@ -1067,6 +1097,6 @@
     loadQueueCounts();
     loadLeads();
   </script>
-  <script src="/admin-layout.js?v=202605171"></script>
+  <script src="/admin-layout.js?v=202605172"></script>
 </body>
 </html>

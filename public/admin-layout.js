@@ -67,7 +67,7 @@
       'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Lead inbox',
-      'dashboard.nav.aiLeads': 'Coordinator workspace',
+      'dashboard.nav.aiLeads': 'Coordination Center',
       'dashboard.nav.chat': 'Messages',
       'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.settings': 'Settings',
       'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',

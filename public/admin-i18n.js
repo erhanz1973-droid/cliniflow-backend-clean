@@ -215,6 +215,7 @@
           doctors: "Doktorlar",
           chat: "Mesajlar",
           leads: "Lead gelen kutusu",
+          aiLeads: "Koordinasyon Merkezi",
           files: "Dosyalar",
           referrals: "Referanslar",
           health: "Sağlık",
@@ -1461,6 +1462,7 @@
           doctors: "Doctors",
           chat: "Chat",
           leads: "Lead inbox",
+          aiLeads: "Coordination Center",
           files: "Files",
           referrals: "Referrals",
           health: "Health",
@@ -2599,7 +2601,7 @@
           logout: "Выход",
           clinic: "Клиника"
         },
-        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Поездки", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
+        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Поездки", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", aiLeads: "Центр координации", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
         charts: {
           metricTitleMonthlyPatients: "Количество зарегистрированных пациентов по месяцам",
           metricTitleMonthlyProcedures: "Количество процедур по месяцам",
@@ -3595,7 +3597,7 @@
           logout: "გასვლა",
           clinic: "კლინიკა"
         },
-        nav: { dashboard: "პანელი", patients: "პაციენტები", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "განრიგი", doctors: "ექიმები", chat: "ჩათი", leads: "ლიდები", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები" },
+        nav: { dashboard: "პანელი", patients: "პაციენტები", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "განრიგი", doctors: "ექიმები", chat: "ჩათი", leads: "ლიდები", aiLeads: "კოორდინაციის ცენტრი", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები" },
         charts: {
           metricTitleMonthlyPatients: "ყოველთვიული რეგისტრაციის რაოდენობა",
           metricTitleMonthlyProcedures: "ყოველთვიული პროცედურების რაოდენობა",
