@@ -75,6 +75,14 @@
     .variant-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
     @media (max-width: 640px) { .variant-grid { grid-template-columns: 1fr; } }
     .pricing-hint { font-size: 0.75rem; color: var(--muted); margin: 8px 0 0; line-height: 1.4; }
+    .lang-matrix { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 12px; }
+    .lang-matrix th, .lang-matrix td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; }
+    .lang-matrix th { font-size: 0.68rem; text-transform: uppercase; color: var(--muted); }
+    .lang-matrix input[type="radio"] { margin: 0; }
+    .i18n-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    @media (max-width: 640px) { .i18n-grid { grid-template-columns: 1fr; } }
+    .i18n-row label { font-size: 0.68rem; }
+    .multilingual-note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 12px; font-size: 0.8rem; line-height: 1.45; margin-bottom: 12px; color: #1e3a5f; }
   </style>
 </head>
 <body>
@@ -99,6 +107,6 @@
     </main>
   </div>
   <script src="/admin-field-help.js?v=1"></script>
-  <script src="/admin-ops-profile.js?v=5"></script>
+  <script src="/admin-ops-profile.js?v=6"></script>
 </body>
 </html>

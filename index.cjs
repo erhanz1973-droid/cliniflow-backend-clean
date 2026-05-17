@@ -42314,9 +42314,15 @@ app.get("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
       const rowTiming = extractTimingFromRow(row);
       const fallbackTiming = clinicTimingSettings[treatmentKey] || { duration_minutes: 0, break_minutes: 0 };
 
+      const labelI18n =
+        row.label_i18n && typeof row.label_i18n === "object" && !Array.isArray(row.label_i18n)
+          ? row.label_i18n
+          : {};
+
       return {
         id: row.id,
         treatment_name: treatmentName,
+        label_i18n: labelI18n,
         default_price:
           row.price !== undefined && row.price !== null
             ? Number(row.price)
@@ -42434,7 +42440,15 @@ app.post("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "clinic_id_missing" });
     }
 
-    const { treatment_name, default_price, currency, is_active, duration_minutes, break_minutes } = req.body || {};
+    const {
+      treatment_name,
+      default_price,
+      currency,
+      is_active,
+      duration_minutes,
+      break_minutes,
+      label_i18n,
+    } = req.body || {};
     const name = String(treatment_name || "").trim();
     const priceValue = Number(default_price);
     const currencyValue = String(currency || "").trim().toUpperCase();
@@ -42463,6 +42477,9 @@ app.post("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
     const upsertPayload = {
       ...basePayload,
       ...(is_active !== undefined ? { is_active: is_active !== false } : {}),
+      ...(label_i18n && typeof label_i18n === "object" && !Array.isArray(label_i18n)
+        ? { label_i18n }
+        : {}),
     };
 
     let result = null;
@@ -42523,6 +42540,12 @@ app.post("/api/admin/treatment-prices", requireAdminAuth, async (req, res) => {
         const { rest_minutes: _ignored, ...nextPayload } = payloadToUse;
         payloadToUse = nextPayload;
         timingColumnsUnavailable = true;
+        continue;
+      }
+
+      if (isMissingColumnError(result.error, "label_i18n")) {
+        const { label_i18n: _ignored, ...nextPayload } = payloadToUse;
+        payloadToUse = nextPayload;
         continue;
       }
 

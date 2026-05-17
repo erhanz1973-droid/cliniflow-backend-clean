@@ -1104,10 +1104,36 @@
     </div>`;
   }
 
+  function labelI18nHtml(procType) {
+    const row = prices[procType] || {};
+    const proc = PROCEDURE_TYPES.find((p) => p.type === procType);
+    const defaults = (proc && proc.name) || {};
+    const labels = row.label_i18n && typeof row.label_i18n === "object" ? row.label_i18n : {};
+    const langs = ["en", "tr", "ru", "ka"];
+    const inputs = langs
+      .map((code) => {
+        const val = labels[code] || defaults[code] || "";
+        return `<div><label style="font-size:11px">${code.toUpperCase()}</label><input data-label-i18n="${procType}_${code}" value="${escapeHtml(val)}" placeholder="AI display name" style="width:100%;padding:4px 6px;font-size:12px" /></div>`;
+      })
+      .join("");
+    return `<div style="margin-bottom:10px;padding:8px;border:1px dashed rgba(148,163,184,0.4);border-radius:6px"><div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Treatment name labels (optional overrides for AI)</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${inputs}</div></div>`;
+  }
+
+  function collectLabelI18n(procType) {
+    const out = {};
+    ["en", "tr", "ru", "ka"].forEach((code) => {
+      const el = document.querySelector('[data-label-i18n="' + procType + "_" + code + '"]');
+      const v = el ? String(el.value || "").trim() : "";
+      if (v) out[code] = v;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
   function variantPanelHtml(procType) {
     const list = priceVariants[procType] || [];
     const rows = list.length ? list.map((v, i) => renderVariantRow(procType, i, v)).join("") : "";
     return `<div id="variants_panel_${procType}" class="price-variant-panel" style="display:none">
+      ${labelI18nHtml(procType)}
       <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">Brand / material variants (optional) — AI compares options using estimate language only.</div>
       <div id="variants_rows_${procType}">${rows}</div>
       <button type="button" class="btn-variants" data-add-variant="${procType}" style="margin-top:8px">+ Add variant</button>
@@ -1372,9 +1398,11 @@
         
         // Save row when there is an explicit price, existing row, timing customizations, or inactive toggle
         if (hasPrice || existingRow || isTimingCustomized || !isActive) {
+          const labelI18n = collectLabelI18n(proc.type);
           const payload = {
             id: prices[proc.type]?.id, // Keep existing ID if updating
             treatment_name: proc.type,
+            ...(labelI18n ? { label_i18n: labelI18n } : {}),
             default_price: hasPrice ? priceValue : (existingRow?.default_price || 0),
             currency: currency,
             is_active: isActive,

@@ -32,6 +32,100 @@ function joinList(a) {
   return (a || []).join(", ");
 }
 
+function normalizeLangRows(raw) {
+  if (!Array.isArray(raw) || !raw.length) {
+    return [
+      { code: "en", enabled: true, primary: true, humanSupport: true },
+      { code: "tr", enabled: true, primary: false, humanSupport: true },
+      { code: "ru", enabled: true, primary: false, humanSupport: true },
+      { code: "ka", enabled: true, primary: false, humanSupport: true },
+    ];
+  }
+  return raw.map((item) => {
+    if (typeof item === "string") {
+      return { code: item, enabled: true, primary: false, humanSupport: true };
+    }
+    return {
+      code: item.code,
+      enabled: item.enabled !== false,
+      primary: item.primary === true,
+      humanSupport: item.human_support !== false && item.humanSupport !== false,
+    };
+  });
+}
+
+function renderLanguageMatrix(rows) {
+  const presets = meta.languagePresets || [];
+  const byCode = {};
+  normalizeLangRows(rows).forEach((r) => {
+    byCode[r.code] = r;
+  });
+  const list = presets.length
+    ? presets
+    : [
+        { code: "en", label: "English" },
+        { code: "tr", label: "Turkish" },
+        { code: "ru", label: "Russian" },
+        { code: "ka", label: "Georgian" },
+      ];
+  const body = list
+    .map((p) => {
+      const r = byCode[p.code] || { code: p.code, enabled: false, primary: false, humanSupport: true };
+      return `<tr data-lang-row="${esc(p.code)}">
+        <td><strong>${esc(p.label || p.code)}</strong>${p.priority === "future" ? ' <span style="font-size:0.65rem;color:var(--muted)">(future)</span>' : ""}</td>
+        <td><input type="checkbox" data-lang-enabled="${esc(p.code)}" ${r.enabled ? "checked" : ""} /></td>
+        <td><input type="radio" name="primaryLanguage" data-lang-primary="${esc(p.code)}" ${r.primary ? "checked" : ""} /></td>
+        <td><input type="checkbox" data-lang-human="${esc(p.code)}" ${r.humanSupport ? "checked" : ""} /></td>
+      </tr>`;
+    })
+    .join("");
+  return `<table class="lang-matrix"><thead><tr><th>Language</th><th>AI enabled</th><th>Primary</th><th>Human staff</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderLocalizedInputs(prefix, map, enabledCodes) {
+  const codes = (enabledCodes && enabledCodes.length ? enabledCodes : ["en", "tr", "ru", "ka"]).slice(0, 6);
+  const rows = codes
+    .map((code) => {
+      const val = (map && map[code]) || "";
+      return (
+        '<div class="i18n-row"><label>' +
+        esc(code.toUpperCase()) +
+        '</label><input name="' +
+        esc(prefix) +
+        "_" +
+        esc(code) +
+        '" value="' +
+        esc(val) +
+        '" placeholder="Optional — AI can localize if empty" /></div>'
+      );
+    })
+    .join("");
+  return '<div class="i18n-grid">' + rows + "</div>";
+}
+
+function collectLocalizedMap(form, prefix, enabledCodes) {
+  const out = {};
+  (enabledCodes || []).forEach((code) => {
+    const v = String(form.querySelector('[name="' + prefix + "_" + code + '"]')?.value || "").trim();
+    if (v) out[code] = v;
+  });
+  return out;
+}
+
+function collectSupportedLanguages(form) {
+  const presets = meta.languagePresets || [];
+  const codes = presets.length
+    ? presets.map((p) => p.code)
+    : ["en", "tr", "ru", "ka", "ar", "de", "fr"];
+  const primary = form.querySelector('input[name="primaryLanguage"]:checked')?.getAttribute("data-lang-primary");
+  return codes.map((code) => ({
+    code,
+    enabled: form.querySelector('[data-lang-enabled="' + code + '"]')?.checked === true,
+    primary: code === primary,
+    human_support: form.querySelector('[data-lang-human="' + code + '"]')?.checked !== false,
+  }));
+}
+
 function fh() {
   return window.ClinicFieldHelp;
 }
@@ -109,18 +203,26 @@ function renderAllSections() {
   const s = profile.sections || {};
   const c = profile.counts || {};
 
+  const ai = s.aiProfile || {};
+  const langRows = normalizeLangRows(ai.supportedLanguages);
+  const enabledCodes = langRows.filter((r) => r.enabled).map((r) => r.code);
+
   renderSectionShell(
     "ai-profile",
     "Clinic AI Profile",
-    "How the AI communicates — assigned doctor/coordinator remains primary owner.",
-    `<p class="link-out" style="margin-bottom:12px"><a href="/admin-settings.html">→ Treatment Price List</a> (operational + AI pricing — single source of truth)</p>
-    <form class="ops-form" data-form="ai-profile"><div class="form-grid">
-      ${fld("displayName", `<input name="displayName" value="${esc(s.aiProfile?.displayName)}"${ph("displayName")} />`)}
-      ${fld("toneStyle", `<select name="toneStyle">${(meta.toneStyles || []).map((o) => `<option value="${esc(o.value)}"${s.aiProfile?.toneStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
-      ${fld("supportedLanguages", `<input name="supportedLanguages" value="${esc(joinList(s.aiProfile?.supportedLanguages))}"${ph("supportedLanguages")} />`)}
-      ${fld("signatureStyle", `<select name="signatureStyle">${(meta.signatureStyles || []).map((o) => `<option value="${esc(o.value)}"${s.aiProfile?.signatureStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
-      ${fld("profileTags", `<input name="profileTags" value="${esc(joinList(s.aiProfile?.profileTags))}"${ph("profileTags")} />`, true)}
-    </div></form>`,
+    "Multilingual AI orchestration — one knowledge source; AI localizes ops data at reply time.",
+    `<p class="link-out" style="margin-bottom:12px"><a href="/admin-settings.html">→ Treatment Price List</a> (operational + AI pricing)</p>
+    <div class="multilingual-note"><strong>One clinic knowledge, many languages.</strong> Enable languages below. Brands, pricing, logistics, and workflow stay in a single structured source — the AI responds naturally without duplicating operational setup per language.</div>
+    <form class="ops-form" data-form="ai-profile">
+      ${fld("supportedLanguages", renderLanguageMatrix(langRows), true)}
+      ${fld("displayNameLocalized", renderLocalizedInputs("displayNameLoc", ai.displayNameLocalized || {}, enabledCodes), true)}
+      ${fld("welcomeMessageLocalized", renderLocalizedInputs("welcomeLoc", ai.welcomeMessageLocalized || {}, enabledCodes), true)}
+      <div class="form-grid">
+        ${fld("toneStyle", `<select name="toneStyle">${(meta.toneStyles || []).map((o) => `<option value="${esc(o.value)}"${ai.toneStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
+        ${fld("signatureStyle", `<select name="signatureStyle">${(meta.signatureStyles || []).map((o) => `<option value="${esc(o.value)}"${ai.signatureStyle === o.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`)}
+        ${fld("profileTags", `<input name="profileTags" value="${esc(joinList(ai.profileTags))}"${ph("profileTags")} />`, true)}
+      </div>
+    </form>`,
   );
 
 
@@ -244,14 +346,32 @@ function collectSectionPayload(sectionId) {
   const chk = (name) => form.querySelector('[name="' + name + '"]')?.checked === true;
 
   switch (sectionId) {
-    case "ai-profile":
+    case "ai-profile": {
+      const supportedLanguages = collectSupportedLanguages(form);
+      const enabledCodes = supportedLanguages.filter((l) => l.enabled).map((l) => l.code);
+      const displayNameLocalized = collectLocalizedMap(form, "displayNameLoc", enabledCodes);
+      const welcomeMessageLocalized = collectLocalizedMap(form, "welcomeLoc", enabledCodes);
+      const primaryLanguage =
+        supportedLanguages.find((l) => l.primary && l.enabled)?.code ||
+        enabledCodes[0] ||
+        "en";
+      const displayName =
+        displayNameLocalized[primaryLanguage] ||
+        displayNameLocalized.en ||
+        Object.values(displayNameLocalized)[0] ||
+        "Clinic Assistant";
       return {
-        displayName: String(fd.get("displayName") || "").trim(),
+        version: 3,
+        displayName,
+        primaryLanguage,
+        supportedLanguages,
+        displayNameLocalized,
+        welcomeMessageLocalized,
         toneStyle: fd.get("toneStyle"),
-        supportedLanguages: parseList(String(fd.get("supportedLanguages"))),
         signatureStyle: fd.get("signatureStyle"),
         profileTags: parseList(String(fd.get("profileTags"))),
       };
+    }
     case "materials":
       return {
         implantBrands: parseList(String(fd.get("implantBrands"))),
