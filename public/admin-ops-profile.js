@@ -14,6 +14,64 @@ let meta = null;
 let profile = null;
 let activeSection = "ai-profile";
 
+const SECTION_I18N_ID = {
+  "ai-profile": "aiProfile",
+  materials: "materials",
+  travel: "travel",
+  logistics: "logistics",
+  payment: "payment",
+  workflow: "workflow",
+  "ai-safety": "aiSafety",
+  handoff: "handoff",
+  "internal-notes": "internalNotes",
+};
+
+function op(key, params) {
+  if (window.i18n && typeof window.i18n.t === "function") {
+    return window.i18n.t("opsProfile." + key, params);
+  }
+  return key;
+}
+
+function secTitle(sectionId) {
+  const sid = SECTION_I18N_ID[sectionId] || sectionId;
+  return op("sections." + sid + ".title");
+}
+
+function secHint(sectionId) {
+  const sid = SECTION_I18N_ID[sectionId] || sectionId;
+  return op("sections." + sid + ".hint");
+}
+
+function metaLabel(group, key, fallback) {
+  const v = op(group + "." + key);
+  if (!v || String(v).indexOf("opsProfile.") === 0) return fallback;
+  return v;
+}
+
+function applyPageI18n() {
+  if (typeof window.applyI18n === "function") window.applyI18n();
+  if (window.i18n && typeof window.i18n.t === "function") {
+    document.title = window.i18n.t("opsProfile.pageTitle");
+  }
+}
+
+function updateCounts() {
+  if (!profile) return;
+  const c = profile.counts || {};
+  const el = document.getElementById("opsCounts");
+  if (el) el.textContent = op("counts", { hotels: c.hotels || 0, protocols: c.protocols || 0 });
+}
+
+window.rerenderOpsProfile = function rerenderOpsProfile() {
+  if (!meta || !profile) return;
+  applyPageI18n();
+  buildNav();
+  renderAllSections();
+  updateCounts();
+};
+
+
 function esc(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -71,15 +129,16 @@ function renderLanguageMatrix(rows) {
   const body = list
     .map((p) => {
       const r = byCode[p.code] || { code: p.code, enabled: false, primary: false, humanSupport: true };
+      const label = metaLabel("langs", p.code, p.label || p.code);
       return `<tr data-lang-row="${esc(p.code)}">
-        <td><strong>${esc(p.label || p.code)}</strong>${p.priority === "future" ? ' <span style="font-size:0.65rem;color:var(--muted)">(future)</span>' : ""}</td>
+        <td><strong>${esc(label)}</strong>${p.priority === "future" ? ' <span style="font-size:0.65rem;color:var(--muted)">' + esc(op("langFuture")) + "</span>" : ""}</td>
         <td><input type="checkbox" data-lang-enabled="${esc(p.code)}" ${r.enabled ? "checked" : ""} /></td>
         <td><input type="radio" name="primaryLanguage" data-lang-primary="${esc(p.code)}" ${r.primary ? "checked" : ""} /></td>
         <td><input type="checkbox" data-lang-human="${esc(p.code)}" ${r.humanSupport ? "checked" : ""} /></td>
       </tr>`;
     })
     .join("");
-  return `<table class="lang-matrix"><thead><tr><th>Language</th><th>AI enabled</th><th>Primary</th><th>Human staff</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<table class="lang-matrix"><thead><tr><th>${esc(op("langColLanguage"))}</th><th>${esc(op("langColAi"))}</th><th>${esc(op("langColPrimary"))}</th><th>${esc(op("langColHuman"))}</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function renderLocalizedInputs(prefix, map, enabledCodes) {
@@ -96,7 +155,7 @@ function renderLocalizedInputs(prefix, map, enabledCodes) {
         esc(code) +
         '" value="' +
         esc(val) +
-        '" placeholder="Optional — AI can localize if empty" /></div>'
+        '" placeholder="' + esc(op("localizedPlaceholder")) + '" /></div>'
       );
     })
     .join("");
@@ -175,7 +234,7 @@ function buildNav() {
     .map(
       (s, i) =>
         `<a href="#${esc(s.id)}" data-id="${esc(s.id)}" class="${i === 0 ? "active" : ""}">${esc(
-          i + 1 + ". " + s.title,
+          i + 1 + ". " + secTitle(s.id),
         )}</a>`,
     )
     .join("");
@@ -195,7 +254,7 @@ function renderSectionShell(id, title, hint, bodyHtml, saveLabel) {
     secIntro(id) +
     bodyHtml +
     `<div style="margin-top:12px"><button type="button" class="btn" data-save="${esc(id)}">${esc(
-      saveLabel || "Save section",
+      saveLabel || op("saveSection"),
     )}</button><span class="status" data-status="${esc(id)}"></span></div>`;
 }
 
@@ -209,10 +268,10 @@ function renderAllSections() {
 
   renderSectionShell(
     "ai-profile",
-    "Clinic AI Profile",
-    "Multilingual AI orchestration — one knowledge source; AI localizes ops data at reply time.",
-    `<p class="link-out" style="margin-bottom:12px"><a href="/admin-settings.html">→ Treatment Price List</a> (operational + AI pricing)</p>
-    <div class="multilingual-note"><strong>One clinic knowledge, many languages.</strong> Enable languages below. Brands, pricing, logistics, and workflow stay in a single structured source — the AI responds naturally without duplicating operational setup per language.</div>
+    secTitle("ai-profile"),
+    secHint("ai-profile"),
+    `<p class="link-out" style="margin-bottom:12px"><a href="/admin-settings.html">${op("priceListLink")}</a> ${esc(op("priceListHint"))}</p>
+    <div class="multilingual-note"><strong>${esc(op("multilingualNoteTitle"))}</strong> ${esc(op("multilingualNoteBody"))}</div>
     <form class="ops-form" data-form="ai-profile">
       ${fld("supportedLanguages", renderLanguageMatrix(langRows), true)}
       ${fld("displayNameLocalized", renderLocalizedInputs("displayNameLoc", ai.displayNameLocalized || {}, enabledCodes), true)}
@@ -229,26 +288,26 @@ function renderAllSections() {
   const m = s.materials || {};
   renderSectionShell(
     "materials",
-    "Implant Brands & Materials",
-    "Brands, labs, warranty — for explanatory AI replies.",
+    secTitle("materials"),
+    secHint("materials"),
     `<form data-form="materials"><div class="form-grid">
       ${fld("implantBrands", `<input name="implantBrands" value="${esc(joinList(m.implantBrands))}"${ph("implantBrands")} />`)}
       ${fld("premiumBrands", `<input name="premiumBrands" value="${esc(joinList(m.premiumBrands))}"${ph("premiumBrands")} />`)}
       ${fld("zirconiumTypes", `<input name="zirconiumTypes" value="${esc(joinList(m.zirconiumTypes))}"${ph("zirconiumTypes")} />`)}
       ${fld("labPartners", `<input name="labPartners" value="${esc(joinList(m.labPartners))}"${ph("labPartners")} />`)}
       ${fld("warrantyInformation", `<textarea name="warrantyInformation"${ph("warrantyInformation")}>${esc(m.warrantyInformation)}</textarea>`, true)}
-      <div class="check-row" style="grid-column:1/-1"><label><input type="checkbox" name="sedationAvailability" ${m.sedationAvailability ? "checked" : ""}/> Sedation available</label></div>
+      <div class="check-row" style="grid-column:1/-1"><label><input type="checkbox" name="sedationAvailability" ${m.sedationAvailability ? "checked" : ""}/> ${esc(op("sedationAvailable"))}</label></div>
     </div></form>`,
   );
 
   const hotels = (s.travel && s.travel.hotels) || [];
   renderSectionShell(
     "travel",
-    "Travel & Accommodation",
-    "Partner hotels for dental tourism coordination.",
-    `<p class="link-out"><a href="/admin-settings-travel.html">Open full hotel manager →</a> (${c.hotels || 0} hotels)</p>
-    <div class="catalog-grid">${hotels.slice(0, 6).map((h) => `<div class="catalog-card"><div><h3>${esc(h.name)}</h3><div class="meta">${esc([h.pricePerNight != null ? h.pricePerNight + "/night" : h.priceRange, h.distanceMinutes != null ? h.distanceMinutes + " min" : null, h.transferIncluded ? "transfer included" : null].filter(Boolean).join(" · "))}</div></div></div>`).join("")}</div>`,
-    "Refresh",
+    secTitle("travel"),
+    secHint("travel"),
+    `<p class="link-out"><a href="/admin-settings-travel.html">${esc(op("openHotelManager"))}</a> (${op("hotelsCount", { count: c.hotels || 0 })})</p>
+    <div class="catalog-grid">${hotels.slice(0, 6).map((h) => `<div class="catalog-card"><div><h3>${esc(h.name)}</h3><div class="meta">${esc([h.pricePerNight != null ? h.pricePerNight + esc(op("perNight")) : h.priceRange, h.distanceMinutes != null ? h.distanceMinutes + " min" : null, h.transferIncluded ? op("transferIncluded") : null].filter(Boolean).join(" · "))}</div></div></div>`).join("")}</div>`,
+    op("refresh"),
   );
 
   const lg = s.logistics || {};
@@ -256,8 +315,8 @@ function renderAllSections() {
   const wd = wh.weekdays || {};
   renderSectionShell(
     "logistics",
-    "Clinic Logistics",
-    "Hours, SLA, emergency contact, same-day treatment.",
+    secTitle("logistics"),
+    secHint("logistics"),
     `<form data-form="logistics"><div class="form-grid">
       ${fld("weekdayHours", `<input name="weekdays" value="${esc((wd.start || "") + " – " + (wd.end || ""))}"${ph("weekdayHours")} />`)}
       ${fld("timezone", `<input name="timezone" value="${esc(wh.timezone || "")}" placeholder="Europe/Istanbul" />`)}
@@ -265,9 +324,9 @@ function renderAllSections() {
       ${fld("emergencyContact", `<input name="emergencyContact" value="${esc(lg.emergencyContact)}"${ph("emergencyContact")} />`)}
       ${fld("transportationNotes", `<textarea name="transportationNotes"${ph("transportationNotes")}>${esc(lg.transportationNotes)}</textarea>`, true)}
       <div class="check-row" style="grid-column:1/-1">
-        <label><input type="checkbox" name="weekendAvailability" ${lg.weekendAvailability ? "checked" : ""}/> Weekend availability</label>
-        <label><input type="checkbox" name="sameDayTreatmentAvailable" ${lg.sameDayTreatmentAvailable ? "checked" : ""}/> Same-day treatment</label>
-        <label><input type="checkbox" name="airportTransferAvailable" ${lg.airportTransferAvailable ? "checked" : ""}/> Airport transfer</label>
+        <label><input type="checkbox" name="weekendAvailability" ${lg.weekendAvailability ? "checked" : ""}/> ${esc(op("weekendAvailability"))}</label>
+        <label><input type="checkbox" name="sameDayTreatmentAvailable" ${lg.sameDayTreatmentAvailable ? "checked" : ""}/> ${esc(op("sameDayTreatment"))}</label>
+        <label><input type="checkbox" name="airportTransferAvailable" ${lg.airportTransferAvailable ? "checked" : ""}/> ${esc(op("airportTransfer"))}</label>
       </div>
     </div></form>`,
   );
@@ -275,13 +334,13 @@ function renderAllSections() {
   const pay = s.payment || {};
   renderSectionShell(
     "payment",
-    "Payment & Financial Policies",
-    "Deposits, financing, refunds — AI uses policy text, not guarantees.",
+    secTitle("payment"),
+    secHint("payment"),
     `<form data-form="payment"><div class="form-grid">
       <div class="check-row" style="grid-column:1/-1">
-        <label><input type="checkbox" name="depositRequired" ${pay.depositRequired ? "checked" : ""}/> Deposit required</label>
-        <label><input type="checkbox" name="installmentAvailable" ${pay.installmentAvailable ? "checked" : ""}/> Installments</label>
-        <label><input type="checkbox" name="financingSupport" ${pay.financingSupport ? "checked" : ""}/> Financing</label>
+        <label><input type="checkbox" name="depositRequired" ${pay.depositRequired ? "checked" : ""}/> ${esc(op("depositRequired"))}</label>
+        <label><input type="checkbox" name="installmentAvailable" ${pay.installmentAvailable ? "checked" : ""}/> ${esc(op("installments"))}</label>
+        <label><input type="checkbox" name="financingSupport" ${pay.financingSupport ? "checked" : ""}/> ${esc(op("financing"))}</label>
       </div>
       ${fld("refundPolicy", `<textarea name="refundPolicy"${ph("refundPolicy")}>${esc(pay.refundPolicy)}</textarea>`, true)}
       ${fld("cancellationPolicy", `<textarea name="cancellationPolicy"${ph("cancellationPolicy")}>${esc(pay.cancellationPolicy)}</textarea>`, true)}
@@ -291,40 +350,40 @@ function renderAllSections() {
   const postOpHelp = fieldDef("protocol.postOpNotes");
   renderSectionShell(
     "workflow",
-    "Treatment Workflow Knowledge",
-    "Visit timelines, healing, temp teeth — operational not clinical diagnosis.",
-    `<p class="link-out"><a href="/admin-settings-journeys.html">Manage treatment journey protocols →</a> (${c.protocols || 0} protocols)</p>
-    ${postOpHelp ? `<div class="section-intro" style="margin-top:12px"><p class="section-intro-text"><strong>Example field — Post-op coordination notes:</strong> ${esc(postOpHelp.helper)}</p><p class="example-text" style="margin:8px 0 0">${esc(postOpHelp.example || postOpHelp.placeholder || "")}</p></div>` : ""}
-    <p class="hint">Configure per-treatment healing, post-op, and AI notes in Treatment Journeys.</p>`,
-    "Open journeys",
+    secTitle("workflow"),
+    secHint("workflow"),
+    `<p class="link-out"><a href="/admin-settings-journeys.html">${esc(op("openJourneys"))}</a> (${c.protocols || 0} protocols)</p>
+    ${postOpHelp ? `<div class="section-intro" style="margin-top:12px"><p class="section-intro-text"><strong>${esc(op("postOpExample"))}</strong> ${esc(postOpHelp.helper)}</p><p class="example-text" style="margin:8px 0 0">${esc(postOpHelp.example || postOpHelp.placeholder || "")}</p></div>` : ""}
+    <p class="hint">${esc(op("workflowJourneysHint"))}</p>`,
+    op("openJourneys"),
   );
 
   const autonomy = (s.aiSafety && s.aiSafety.autonomy && s.aiSafety.autonomy.categories) || {};
   const safety = (s.aiSafety && s.aiSafety.safetyRules && s.aiSafety.safetyRules.requireHumanReview) || {};
   renderSectionShell(
     "ai-safety",
-    "AI Safety & Human Review",
-    "Autonomy per category; pricing capped at SUGGEST_ONLY. Not medical diagnosis.",
-    `<p class="field-helper">Choose how independently the AI may respond. Medical topics always require a human.</p>
-    <table class="autonomy"><thead><tr><th>Category</th><th>Level</th></tr></thead><tbody>${(meta.autonomyCategories || []).map((cat) => `<tr><td>${esc(cat.label)}</td><td><select data-autonomy="${esc(cat.key)}">${(meta.autonomyLevels || []).map((lv) => `<option value="${esc(lv)}"${autonomy[cat.key] === lv ? " selected" : ""}>${esc(lv)}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>
-    <p class="hint" style="margin-top:12px">Always require human review (never auto-sent for medical advice):</p>
-    <div class="check-row" id="safetyChecks">${(meta.hardHumanReviewKeys || []).map((h) => `<label><input type="checkbox" data-safety="${esc(h.key)}" ${safety[h.key] !== false ? "checked" : ""}/> ${esc(h.label)}</label>`).join("")}</div>`,
+    secTitle("ai-safety"),
+    secHint("ai-safety"),
+    `<p class="field-helper">${esc(op("autonomyIntro"))}</p>
+    <table class="autonomy"><thead><tr><th>${esc(op("autonomyCategory"))}</th><th>${esc(op("autonomyLevel"))}</th></tr></thead><tbody>${(meta.autonomyCategories || []).map((cat) => `<tr><td>${esc(metaLabel("autonomy", cat.key, cat.label))}</td><td><select data-autonomy="${esc(cat.key)}">${(meta.autonomyLevels || []).map((lv) => `<option value="${esc(lv)}"${autonomy[cat.key] === lv ? " selected" : ""}>${esc(lv)}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>
+    <p class="hint" style="margin-top:12px">${esc(op("safetyIntro"))}</p>
+    <div class="check-row" id="safetyChecks">${(meta.hardHumanReviewKeys || []).map((h) => `<label><input type="checkbox" data-safety="${esc(h.key)}" ${safety[h.key] !== false ? "checked" : ""}/> ${esc(metaLabel("safety", h.key, h.label))}</label>`).join("")}</div>`,
   );
 
   const handoff = s.handoff || {};
   renderSectionShell(
     "handoff",
-    "Human Handoff Rules",
-    "Escalate to coordinator when these triggers are detected.",
-    `<p class="field-helper">When checked, the AI stops auto-replying and alerts your team.</p>
-    <div class="check-row" id="handoffChecks">${(meta.handoffTriggers || []).map((h) => `<label><input type="checkbox" data-handoff="${esc(h.key)}" ${handoff[h.key] !== false ? "checked" : ""}/> ${esc(h.label)}</label>`).join("")}</div>`,
+    secTitle("handoff"),
+    secHint("handoff"),
+    `<p class="field-helper">${esc(op("handoffIntro"))}</p>
+    <div class="check-row" id="handoffChecks">${(meta.handoffTriggers || []).map((h) => `<label><input type="checkbox" data-handoff="${esc(h.key)}" ${handoff[h.key] !== false ? "checked" : ""}/> ${esc(metaLabel("handoff", h.key, h.label))}</label>`).join("")}</div>`,
   );
 
   const notes = s.internalNotes || {};
   renderSectionShell(
     "internal-notes",
-    "Internal AI Knowledge Notes",
-    "Clinic positioning — not shown verbatim to patients.",
+    secTitle("internal-notes"),
+    secHint("internal-notes"),
     `<form data-form="internal-notes">
       ${fld("positioningNotes", `<textarea name="positioningNotes" rows="5"${ph("positioningNotes")}>${esc((notes.positioningNotes || []).join("\n"))}</textarea>`, true)}
       ${fld("freeformNotes", `<textarea name="freeformNotes"${ph("freeformNotes")}>${esc(notes.freeformNotes)}</textarea>`, true)}
@@ -439,7 +498,7 @@ function collectSectionPayload(sectionId) {
 
 async function saveSection(sectionId) {
   const statusEl = document.querySelector('[data-status="' + sectionId + '"]');
-  if (statusEl) statusEl.textContent = "Saving…";
+  if (statusEl) statusEl.textContent = op("saving");
   const payload = collectSectionPayload(sectionId);
   if (!payload) {
     if (sectionId === "travel") location.href = "/admin-settings-travel.html";
@@ -456,44 +515,56 @@ async function saveSection(sectionId) {
     profile = json.profile;
     renderAllSections();
     if (statusEl) {
-      statusEl.textContent = "Saved";
+      statusEl.textContent = op("saved");
       statusEl.className = "status ok";
     }
     setStatus("", true);
   } else {
     if (statusEl) {
-      statusEl.textContent = json.error || "Failed";
+      statusEl.textContent = json.error || op("failed");
       statusEl.className = "status err";
     }
-    setStatus(json.error || "Save failed", false);
+    setStatus(json.error || op("saveFailed"), false);
   }
 }
 
 async function loadProfile() {
   const res = await adminFetch("/api/admin/clinic/ops-profile");
   const json = await res.json();
-  if (!res.ok || !json.ok) throw new Error(json.error || "load_failed");
+  if (!res.ok || !json.ok) throw new Error(json.error || op("loadFailed"));
   profile = json;
   const c = json.counts || {};
-  document.getElementById("opsCounts").textContent =
-    "Hotels: " + (c.hotels || 0) + " · Workflow protocols: " + (c.protocols || 0);
+  updateCounts();
   renderAllSections();
 }
 
 async function init() {
-  setStatus("Loading…");
+  const bootI18n = () => {
+    if (window.i18n && typeof window.i18n.init === "function") window.i18n.init();
+    applyPageI18n();
+  };
+  if (window.i18n) bootI18n();
+  else document.addEventListener("i18n:ready", bootI18n, { once: true });
+
+  setStatus(op("loading"));
   const metaRes = await adminFetch("/api/admin/clinic/ops-profile/meta");
   meta = await metaRes.json();
   if (!metaRes.ok) {
-    setStatus("Failed to load meta", false);
+    setStatus(op("loadMetaFailed"), false);
     return;
   }
   buildNav();
   await loadProfile();
+  applyPageI18n();
   setStatus("");
   const hash = (location.hash || "#ai-profile").replace("#", "");
   if (document.getElementById("sec-" + hash)) showSection(hash);
   else showSection("ai-profile");
 }
 
+document.addEventListener("admin-language-changed", () => {
+  if (typeof window.rerenderOpsProfile === "function") window.rerenderOpsProfile();
+});
+
 init().catch((e) => setStatus(String(e.message || e), false));
+
