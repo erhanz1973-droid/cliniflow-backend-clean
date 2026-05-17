@@ -1,0 +1,99 @@
+/**
+ * Single source of truth for staged rollout verification.
+ * Coordinator / Treatment Guide stack (May 2026).
+ */
+
+/** Apply in Supabase SQL editor or CLI — filename order. */
+const REQUIRED_MIGRATIONS = [
+  "20260516120000_messages_sender_type_allow_clinic.sql",
+  "20260517100000_ai_coordinator_lead_pipeline.sql",
+  "20260517120000_ai_coordinator_coordination.sql",
+  "20260517140000_ai_coordinator_workspace.sql",
+  "20260517160000_clinic_partner_hotels.sql",
+  "20260517180000_clinic_treatment_protocols.sql",
+  "20260517200000_ai_visit_plan_drafts.sql",
+  "20260517220000_ai_patient_documents.sql",
+  "20260517240000_ai_patient_documents_consent_attribution.sql",
+  "20260517260000_intake_journey_event_type.sql",
+  "20260517300000_upload_content_hash_dedupe.sql",
+];
+
+/** Probe tables/columns via Supabase REST (limit 0). */
+const SCHEMA_PROBES = [
+  {
+    id: "lead_pipeline",
+    table: "ai_coordinator_lead_profiles",
+    columns: [
+      "id",
+      "session_id",
+      "clinic_id",
+      "operational_intake_flags",
+      "lead_score",
+      "is_hot",
+    ],
+  },
+  {
+    id: "coordination",
+    table: "ai_coordinator_lead_profiles",
+    columns: [
+      "coordination_mode",
+      "last_patient_message_at",
+      "last_human_reply_at",
+      "escalation_flags",
+      "ai_unresolved",
+    ],
+  },
+  {
+    id: "lead_events",
+    table: "ai_coordinator_lead_events",
+    columns: ["profile_id", "event_type", "event_metadata", "patient_message", "ai_reply"],
+  },
+  {
+    id: "patient_documents",
+    table: "ai_patient_documents",
+    columns: [
+      "lead_profile_id",
+      "document_type",
+      "review_status",
+      "requires_doctor_review",
+      "patient_confirmed_upload_consent",
+    ],
+  },
+  {
+    id: "operational_tasks",
+    table: "ai_coordinator_operational_tasks",
+    columns: ["profile_id", "task_type", "status"],
+  },
+  {
+    id: "visit_plans",
+    table: "ai_visit_plan_drafts",
+    columns: ["lead_profile_id", "status", "plan_json"],
+  },
+];
+
+/** HTTP routes that must exist (status may be 401 without auth — not 404). */
+const HTTP_ROUTE_PROBES = [
+  { method: "GET", path: "/api/health", expectStatuses: [200] },
+  { method: "GET", path: "/api/health?deep=1", expectStatuses: [200] },
+  { method: "POST", path: "/ai/intake-tags", expectStatuses: [400, 401, 403, 422], body: {} },
+  { method: "GET", path: "/api/patient/me/intake-journey", expectStatuses: [401, 403] },
+  { method: "GET", path: "/api/admin/ai-leads/queues", expectStatuses: [401, 403] },
+];
+
+/** Paths that must NOT exist in production API surface. */
+const FORBIDDEN_HTTP_PATHS = [
+  "/api/admin/simulation",
+  "/api/simulation",
+  "/api/dev/seed-coordinator",
+];
+
+/** Files that must not register simulation HTTP routes in the live server. */
+const SERVER_ENTRY_FILES = ["index.cjs"];
+
+module.exports = {
+  REQUIRED_MIGRATIONS,
+  SCHEMA_PROBES,
+  HTTP_ROUTE_PROBES,
+  FORBIDDEN_HTTP_PATHS,
+  SERVER_ENTRY_FILES,
+};

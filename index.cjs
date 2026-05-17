@@ -1591,6 +1591,7 @@ async function getDoctorChatUnreadForPushBadge(doctorUuid) {
 
 async function bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTableHint) {
   try {
+    if (!shouldEnqueueChatPushForInsertedMessage(opts, insertedRow)) return;
     const fromPatient = String(opts?.sender || "").toLowerCase() === "patient";
     const pidSrc = insertedRow?.patient_id || opts?.patientId;
     const resolved = pidSrc ? await resolveMessagesPatientDbId(String(pidSrc)) : null;
@@ -4117,6 +4118,276 @@ function truncateChatPreview(txt) {
   return s.length > 220 ? `${s.slice(0, 217)}...` : s;
 }
 
+/** Message types that must never trigger Expo/web chat push (internal / AI inbox rows). */
+const CHAT_PUSH_SUPPRESSED_MESSAGE_TYPES = new Set([
+  "ai_result",
+  "ai_preview",
+  "ai_analysis",
+  "system",
+  "workflow",
+  "intake_sync",
+  "intake_update",
+]);
+
+const AI_PREVIEW_INBOX_PLACEHOLDERS = new Set([
+  "ai önizleme",
+  "ai preview",
+  "ai გადახედვა",
+  "превью ии",
+]);
+
+function normalizeMessageTypeForPush(typeHint, attachments, opts) {
+  const explicit = String(opts?.type || typeHint || "").trim().toLowerCase();
+  if (explicit) return explicit;
+  const att = attachments ?? opts?.attachments;
+  if (att && typeof att === "object" && (att.aiResult || att.ai_result)) return "ai_result";
+  return "";
+}
+
+function isAiPreviewPlaceholderText(text) {
+  const s = String(text || "").trim().toLowerCase();
+  if (!s) return false;
+  if (AI_PREVIEW_INBOX_PLACEHOLDERS.has(s)) return true;
+  return /^ai\s*(önizleme|preview|гид)?$/i.test(s) || s === "ai-гид по лечению";
+}
+
+function messageRowHasAiResultAttachment(row, opts) {
+  const att = opts?.attachments ?? row?.attachments ?? row?.attachment;
+  if (att == null) return false;
+  try {
+    const o = typeof att === "string" ? JSON.parse(att) : att;
+    return !!(o && typeof o === "object" && (o.aiResult || o.ai_result));
+  } catch (_) {
+    return false;
+  }
+}
+
+function shouldEnqueueChatPushForInsertedMessage(opts, insertedRow) {
+  if (opts?.suppressChatSideEffects === true) return false;
+  const msgType = normalizeMessageTypeForPush(
+    insertedRow?.type ?? opts?.type,
+    insertedRow?.attachments ?? opts?.attachments,
+    opts,
+  );
+  if (msgType && CHAT_PUSH_SUPPRESSED_MESSAGE_TYPES.has(msgType)) return false;
+  if (messageRowHasAiResultAttachment(insertedRow, opts)) return false;
+  const text = String(
+    opts?.message ?? insertedRow?.message ?? insertedRow?.text ?? "",
+  ).trim();
+  if (isAiPreviewPlaceholderText(text)) return false;
+  return true;
+}
+
+/** Same rules as push — unread, socket emit, and push must stay aligned. */
+function isConversationalChatMessage(opts, insertedRow) {
+  return shouldEnqueueChatPushForInsertedMessage(opts, insertedRow);
+}
+
+/** In-memory reuse for POST /api/chat/ai-analyze (same patient + image path). */
+const dentalAnalysisResponseCache = new Map();
+const DENTAL_ANALYSIS_RESPONSE_CACHE_MS = 24 * 60 * 60 * 1000;
+
+function normalizeDentalImageKey(url) {
+  const s = String(url || "").trim();
+  if (!s) return "";
+  if (s.startsWith("http://") || s.startsWith("https://")) {
+    try {
+      const u = new URL(s);
+      return decodeURIComponent(u.pathname || s).split("?")[0];
+    } catch (_) {
+      return s.split("?")[0];
+    }
+  }
+  return s.split("?")[0];
+}
+
+function dentalAnalysisCacheKey(patientId, imageUrl) {
+  return `${String(patientId || "").trim()}|${normalizeDentalImageKey(imageUrl)}`;
+}
+
+function getInMemoryDentalAnalysisResponse(patientId, imageUrl) {
+  const key = dentalAnalysisCacheKey(patientId, imageUrl);
+  const row = dentalAnalysisResponseCache.get(key);
+  if (!row) return null;
+  if (Date.now() - row.at > DENTAL_ANALYSIS_RESPONSE_CACHE_MS) {
+    dentalAnalysisResponseCache.delete(key);
+    return null;
+  }
+  return row.payload;
+}
+
+function setInMemoryDentalAnalysisResponse(patientId, imageUrl, payload) {
+  const key = dentalAnalysisCacheKey(patientId, imageUrl);
+  dentalAnalysisResponseCache.set(key, { at: Date.now(), payload });
+  if (dentalAnalysisResponseCache.size > 8000) {
+    const now = Date.now();
+    for (const [k, v] of dentalAnalysisResponseCache) {
+      if (now - v.at > DENTAL_ANALYSIS_RESPONSE_CACHE_MS) dentalAnalysisResponseCache.delete(k);
+    }
+  }
+}
+
+function parseMessageAttachmentsForAi(row) {
+  const raw = row?.attachments ?? row?.attachment;
+  if (!raw) return null;
+  try {
+    const o = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!o || typeof o !== "object") return null;
+    return o.aiResult || o.ai_result || (o.insights ? o : null);
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildDentalAnalyzeResponseFromAiResult(ai, lang, imageUrl) {
+  if (!ai || typeof ai !== "object") return null;
+  const insights = Array.isArray(ai.insights) ? ai.insights : [];
+  return {
+    ok: true,
+    reused: true,
+    cached: true,
+    lang: normalizeAiDentalLang(ai.language || lang),
+    language: ai.language || lang,
+    analysis: ai.analysis || ai.summary || "",
+    analysis_en: ai.analysis_en || ai.analysisEn || "",
+    insights,
+    confidence: ai.confidence || "medium",
+    summary: ai.summary || "",
+    recommendation: ai.recommendation || "",
+    translated: !!ai.translated,
+    allTranslations: ai.allTranslations || null,
+    patientFriendly: ai.patientFriendly || null,
+    simulatedImageUrl: ai.simulatedImageUrl || null,
+    simulationProvider: null,
+    disclaimer: ai.disclaimer || getAiAnalysisDisclaimer(lang),
+    clinics: Array.isArray(ai.clinics) ? ai.clinics : [],
+    issues: Array.isArray(ai.issues) ? ai.issues : [],
+    treatments: Array.isArray(ai.treatments) ? ai.treatments : [],
+    priceEstimate: ai.priceEstimate && typeof ai.priceEstimate === "object" ? ai.priceEstimate : {},
+    missingToothDetected: !!ai.missingToothDetected,
+    missingToothConfidence: ai.missingToothConfidence ?? null,
+    dentalCondition: ai.dentalCondition || null,
+    missingTooth: ai.missingTooth || null,
+    originalImageUrl: ai.originalImageUrl || imageUrl,
+  };
+}
+
+async function findStoredDentalAnalysisForImage(patientId, imageUrl, lang) {
+  const pid = String(patientId || "").trim();
+  const imgKey = normalizeDentalImageKey(imageUrl);
+  if (!pid || !imgKey || !isSupabaseEnabled()) return null;
+  try {
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, type, message, attachments, attachment, created_at")
+      .eq("patient_id", pid)
+      .order("created_at", { ascending: false })
+      .limit(48);
+    if (error || !Array.isArray(data)) return null;
+    for (const row of data) {
+      const type = String(row.type || "").toLowerCase();
+      const ai = parseMessageAttachmentsForAi(row);
+      if (!ai) continue;
+      if (type && type !== "ai_result" && !ai.insights?.length) continue;
+      const origKey = normalizeDentalImageKey(ai.originalImageUrl || "");
+      if (!origKey || origKey !== imgKey) continue;
+      const payload = buildDentalAnalyzeResponseFromAiResult(ai, lang, imageUrl);
+      if (payload) return payload;
+    }
+  } catch (e) {
+    logAI("warn", "analyze_cache_lookup_failed", { patientId: pid, message: e?.message || e });
+  }
+  return null;
+}
+
+async function findStoredDentalAnalysisByContentHash(patientId, contentHash, lang, imageUrl) {
+  const pid = String(patientId || "").trim();
+  const hash = String(contentHash || "")
+    .trim()
+    .toLowerCase();
+  if (!pid || !/^[a-f0-9]{64}$/.test(hash) || !isSupabaseEnabled()) return null;
+  try {
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, type, message, attachments, attachment, created_at")
+      .eq("patient_id", pid)
+      .order("created_at", { ascending: false })
+      .limit(64);
+    if (error || !Array.isArray(data)) return null;
+    for (const row of data) {
+      const ai = parseMessageAttachmentsForAi(row);
+      if (!ai) continue;
+      const rowHash = String(ai.contentHash || ai.content_hash || "")
+        .trim()
+        .toLowerCase();
+      if (rowHash !== hash) continue;
+      const payload = buildDentalAnalyzeResponseFromAiResult(ai, lang, imageUrl || ai.originalImageUrl);
+      if (payload) return payload;
+    }
+  } catch (e) {
+    logAI("warn", "analyze_hash_lookup_failed", { patientId: pid, message: e?.message || e });
+  }
+  return null;
+}
+
+/** Prevent analyze-photo from spamming duplicate ai_result inbox rows (push/realtime loops). */
+const aiInboxInsertDedupeCache = new Map();
+const AI_INBOX_INSERT_DEDUPE_MS = 15 * 60 * 1000;
+
+function shouldSkipDuplicateAiInboxInsertMemory(patientId, imageUrl) {
+  const pid = String(patientId || "").trim();
+  const img = String(imageUrl || "").trim().split("?")[0];
+  if (!pid || !img) return false;
+  const key = `${pid}|${img}`;
+  const now = Date.now();
+  const last = aiInboxInsertDedupeCache.get(key) || 0;
+  if (now - last < AI_INBOX_INSERT_DEDUPE_MS) return true;
+  aiInboxInsertDedupeCache.set(key, now);
+  if (aiInboxInsertDedupeCache.size > 5000) {
+    for (const [k, ts] of aiInboxInsertDedupeCache) {
+      if (now - ts > AI_INBOX_INSERT_DEDUPE_MS) aiInboxInsertDedupeCache.delete(k);
+    }
+  }
+  return false;
+}
+
+async function shouldSkipDuplicateAiInboxInsert(patientId, imageUrl, contentHash) {
+  if (shouldSkipDuplicateAiInboxInsertMemory(patientId, imageUrl)) return true;
+  const stored =
+    (await findStoredDentalAnalysisForImage(patientId, imageUrl, "en")) ||
+    (contentHash
+      ? await findStoredDentalAnalysisByContentHash(patientId, contentHash, "en", imageUrl)
+      : null);
+  return Boolean(stored);
+}
+
+/** Human-visible preview for push body — never internal AI/workflow labels. */
+function resolveHumanChatPushPreview(opts, insertedRow) {
+  const text = String(
+    opts?.message ??
+      insertedRow?.message ??
+      insertedRow?.text ??
+      extractMessageTextFromDbRow(insertedRow || {}) ??
+      "",
+  ).trim();
+  if (text && !isAiPreviewPlaceholderText(text)) return truncateChatPreview(text);
+
+  const att = opts?.attachments ?? insertedRow?.attachments ?? insertedRow?.attachment;
+  if (att && typeof att === "object") {
+    const fileType = String(att.fileType || "").toLowerCase();
+    const mime = String(att.mimeType || att.mime || "").toLowerCase();
+    const name = String(att.name || "").trim();
+    if (fileType === "image" || mime.startsWith("image/")) {
+      return name ? truncateChatPreview(`📷 ${name}`) : "📷 Photo";
+    }
+    if (fileType === "pdf" || mime.includes("pdf")) {
+      return name ? truncateChatPreview(`📄 ${name}`) : "📄 Document";
+    }
+    if (att.url) return "📎 Attachment";
+  }
+  return "";
+}
+
 async function fetchPatientDisplayNameForPush(resolvedPatientId) {
   const pid = String(resolvedPatientId || "").trim();
   if (!UUID_RE.test(pid) || !isSupabaseEnabled()) return "Hasta";
@@ -4233,7 +4504,13 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
     clinicUuid = null,
     senderHint = null,
     skipDispatchClaim = false,
+    messageType = null,
   } = extra || {};
+  const msgType = String(messageType || "").trim().toLowerCase();
+  if (msgType && CHAT_PUSH_SUPPRESSED_MESSAGE_TYPES.has(msgType)) return;
+  const pvCheck = truncateChatPreview(previewRaw || "");
+  if (isAiPreviewPlaceholderText(pvCheck)) return;
+  if (!pvCheck) return;
   if (!skipDispatchClaim && !(await tryClaimChatPushDispatch(messageStableId))) return;
   await deliverClinicInboundPatientNotifications({
     patientLookupId,
@@ -4380,12 +4657,26 @@ async function resolveClinicIdForChatPush(opts, insertedRow) {
 function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHint) {
   void (async () => {
     try {
+      if (!shouldEnqueueChatPushForInsertedMessage(opts, insertedRow)) {
+        if (isChatPushPipelineLogEnabled()) {
+          pushLog.info("chat_push.skipped_non_conversation_message", {
+            type: normalizeMessageTypeForPush(
+              insertedRow?.type ?? opts?.type,
+              insertedRow?.attachments ?? opts?.attachments,
+              opts,
+            ),
+            hasAiAttachment: messageRowHasAiResultAttachment(insertedRow, opts),
+          });
+        }
+        return;
+      }
       const fromPatient = String(opts?.sender || "").toLowerCase() === "patient";
       const senderRole = fromPatient ? "patient" : "clinic";
       const pidSrc = insertedRow?.patient_id || opts?.patientId;
       const resolved = pidSrc ? await resolveMessagesPatientDbId(String(pidSrc)) : null;
       if (!resolved) return;
-      const clip = truncateChatPreview(opts?.message ?? insertedRow?.message ?? insertedRow?.text ?? "");
+      const clip = resolveHumanChatPushPreview(opts, insertedRow);
+      if (!clip) return;
       const stableId = extractStableMessageIdForChatPush(insertedRow, insertedTableHint);
       if (!(await tryClaimChatPushDispatch(stableId))) return;
       const clinicUuid = await resolveClinicIdForChatPush(opts, insertedRow || {});
@@ -4559,6 +4850,19 @@ async function insertMessageToSupabase(opts) {
   const result = await _insertMessageToSupabaseCore(opts);
   try {
     if (!result?.error && result?.data) {
+      if (!isConversationalChatMessage(opts, result.data)) {
+        if (isChatPushPipelineLogEnabled()) {
+          pushLog.info("chat_side_effects.skipped_non_conversation_message", {
+            type: normalizeMessageTypeForPush(
+              result.data?.type ?? opts?.type,
+              result.data?.attachments ?? opts?.attachments,
+              opts,
+            ),
+            suppressFlag: opts?.suppressChatSideEffects === true,
+          });
+        }
+        return result;
+      }
       // Unread counters must settle before push reads `chat_unread_from_*` for Expo `badge`;
       // otherwise badge/unreadBadge stay 0 (race with increment RPC / column update).
       try {
@@ -9095,6 +9399,11 @@ app.post("/api/lead-contact", async (req, res) => {
 registerAiCoordinatorChatRoutes(app);
 
 const { registerAiPatientDocumentRoutes } = require("./lib/aiPatientDocumentRoutes");
+const {
+  computeBufferSha256,
+  normalizeContentHash,
+  findExistingAiPhotoUpload,
+} = require("./lib/dentalUploadDedupe");
 registerAiPatientDocumentRoutes(app, {
   requireToken,
   requireAdminAuth,
@@ -31394,6 +31703,40 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       return res.status(503).json({ ok: false, error: 'supabase_required', message: 'AI upload requires Supabase storage' });
     }
 
+    const contentHash = normalizeContentHash(
+      req.body?.contentHash || req.body?.content_hash,
+    ) || computeBufferSha256(file.buffer);
+
+    const existingUpload =
+      contentHash && patientId ? await findExistingAiPhotoUpload(patientId, contentHash) : null;
+    if (existingUpload?.fileUrl) {
+      let signedUrl = existingUpload.fileUrl;
+      if (existingUpload.storagePath && isSupabaseEnabled()) {
+        try {
+          const parts = String(existingUpload.storagePath).split("/");
+          const bucket = parts[0];
+          const objPath = parts.slice(1).join("/");
+          if (bucket && objPath) {
+            const { data: signed, error: signErr } = await supabase.storage
+              .from(bucket)
+              .createSignedUrl(objPath, 365 * 24 * 3600);
+            if (!signErr && signed?.signedUrl) signedUrl = signed.signedUrl;
+          }
+        } catch (_) {
+          /* use stored url */
+        }
+      }
+      logAI("info", "ai_upload_deduped", { patientId, contentHash: contentHash.slice(0, 12) });
+      return res.json({
+        ok: true,
+        reused: true,
+        imageUrl: signedUrl,
+        url: signedUrl,
+        contentHash,
+        patientFileId: existingUpload.patientFileId,
+      });
+    }
+
     const { data: patient, error: patientLookupErr } = await supabase
       .from("patients")
       .select("language")
@@ -31456,7 +31799,8 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       mime_type: "image/jpeg",
       file_size: size,
       from_role: "patient",
-      source: "ai_upload",
+      source: contentHash ? `ai_upload:hash:${contentHash}` : "ai_upload",
+      ...(contentHash ? { content_hash: contentHash } : {}),
     };
     let pfIns = await supabase.from("patient_files").insert(pfInsert).select("id").maybeSingle();
     if (pfIns.error && isMissingColumnError(pfIns.error, "image_url")) {
@@ -31504,6 +31848,7 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       url: signed.signedUrl,
       publicUrl: publicUrl || null,
       path: storagePath,
+      contentHash: contentHash || null,
       language: languageOut,
       patientFileId: pfIns.data?.id ?? null,
       dbRecordOk: !pfIns.error,
@@ -32377,7 +32722,38 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       }
     }
 
-    logAI('info', 'analyze_start', { patientId, imageUrl, lang });
+    const forceReanalyze = req.body?.forceReanalyze === true;
+    const requestContentHash = normalizeContentHash(
+      req.body?.contentHash || req.body?.content_hash,
+    );
+    if (!forceReanalyze) {
+      const memCached = getInMemoryDentalAnalysisResponse(patientId, imageUrl);
+      if (memCached) {
+        logAI("info", "analyze_cache_hit_memory", { patientId, imageUrl: String(imageUrl).slice(0, 96) });
+        return res.json(memCached);
+      }
+      if (requestContentHash) {
+        const hashCached = await findStoredDentalAnalysisByContentHash(
+          patientId,
+          requestContentHash,
+          lang,
+          imageUrl,
+        );
+        if (hashCached) {
+          setInMemoryDentalAnalysisResponse(patientId, imageUrl, hashCached);
+          logAI("info", "analyze_cache_hit_hash", { patientId, contentHash: requestContentHash.slice(0, 12) });
+          return res.json(hashCached);
+        }
+      }
+      const storedCached = await findStoredDentalAnalysisForImage(patientId, imageUrl, lang);
+      if (storedCached) {
+        setInMemoryDentalAnalysisResponse(patientId, imageUrl, storedCached);
+        logAI("info", "analyze_cache_hit_db", { patientId, imageUrl: String(imageUrl).slice(0, 96) });
+        return res.json(storedCached);
+      }
+    }
+
+    logAI('info', 'analyze_start', { patientId, imageUrl, lang, forceReanalyze });
 
     // ── Load image — from remote URL (Supabase) or local disk ───────────
     let imageBuffer;
@@ -32611,11 +32987,19 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       userCountry,
     });
 
-    // ── Save AI result as CLINIC message ──────────────────────────────
+    // ── Save AI result as CLINIC inbox row (no push / unread / socket — not a chat message) ──
+    if (await shouldSkipDuplicateAiInboxInsert(patientId, imageUrl, requestContentHash)) {
+      logAI("info", "analyze_inbox_deduped", { patientId, imageUrl: String(imageUrl || "").slice(0, 80) });
+    } else {
+    const inboxPreviewText =
+      summary && String(summary).trim()
+        ? truncateChatPreview(String(summary).trim())
+        : getAiPreviewInboxMessage(lang);
     await insertMessageToSupabase({
       patientId,
       sender: 'clinic',
-      message: getAiPreviewInboxMessage(lang),
+      message: inboxPreviewText,
+      suppressChatSideEffects: true,
       attachments: {
         aiResult: {
           insights,
@@ -32630,6 +33014,7 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
           translated: Boolean(_translated),
           allTranslations: _allTranslations || null,
           originalImageUrl: imageUrl,
+          ...(requestContentHash ? { contentHash: requestContentHash } : {}),
           issues: treatmentPlan.issues,
           treatments: treatmentPlan.treatments,
           priceEstimate: treatmentPlan.priceEstimate,
@@ -32643,6 +33028,7 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       },
       type: 'ai_result',
     });
+    }
 
     logAI('info', 'analyze_complete', {
       patientId,
@@ -32658,7 +33044,7 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       await aiCostRecord(patientId);
     }
 
-    return res.json({
+    const analyzeResponsePayload = {
       ok: true,
       lang,
       language: responseLanguage,
@@ -32682,7 +33068,9 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       missingToothConfidence,
       ...(treatmentPlan.dentalCondition ? { dentalCondition: treatmentPlan.dentalCondition } : {}),
       ...(treatmentPlan.missingTooth ? { missingTooth: treatmentPlan.missingTooth } : {}),
-    });
+    };
+    setInMemoryDentalAnalysisResponse(patientId, imageUrl, analyzeResponsePayload);
+    return res.json(analyzeResponsePayload);
 
   } catch (err) {
     const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
