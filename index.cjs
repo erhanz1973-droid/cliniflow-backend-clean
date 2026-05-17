@@ -23810,6 +23810,41 @@ async function postPatientMeMessagesHandler(req, res) {
         console.warn("[MESSAGES] follow-up attachment insert failed", extraErr?.message || extraErr);
       }
     }
+
+    const mirrorClinicId =
+      ctxId != null && String(ctxId).trim()
+        ? String(ctxId).trim()
+        : data?.clinic_id != null
+          ? String(data.clinic_id).trim()
+          : "";
+    const mirrorOfferHint = body.offer_id ?? body.offerId ?? null;
+    let mirrorAttachmentUrl = null;
+    let mirrorAttachmentType = null;
+    if (attachments && hasInboundAttachments(attachments)) {
+      const attObj =
+        typeof attachments === "object" && !Array.isArray(attachments) ? attachments : null;
+      const attUrl =
+        attObj?.url != null
+          ? String(attObj.url).trim()
+          : Array.isArray(attachments) && attachments[0]?.url
+            ? String(attachments[0].url).trim()
+            : photoUrlsBody[0] || null;
+      if (attUrl) {
+        mirrorAttachmentUrl = attUrl;
+        const mime = String(attObj?.mime || attObj?.mimeType || "").toLowerCase();
+        mirrorAttachmentType = mime.startsWith("image/") ? "image" : "document";
+      }
+    }
+    void mirrorPatientClinicMessageToOfferThread({
+      patientId,
+      clinicId: mirrorClinicId,
+      text: text || (mirrorAttachmentUrl ? "📎" : ""),
+      attachmentUrl: mirrorAttachmentUrl,
+      attachmentType: mirrorAttachmentType,
+      senderName: String(req.patientName || req.name || "").trim() || undefined,
+      offerIdHint: mirrorOfferHint,
+    }).catch((e) => console.warn("[offer-mirror-patient] exception:", e?.message || e));
+
     return res.json({
       ok: true,
       message: data,
@@ -45606,6 +45641,223 @@ async function fetchLatestOfferMessageByOfferIds(offerIds) {
   return map;
 }
 
+/** Unread doctor→patient rows in offer threads (patient badge on offer cards). */
+async function countUnreadDoctorMessagesByOfferIds(offerIds) {
+  const ids = [
+    ...new Set(
+      (offerIds || [])
+        .map((x) => String(x || "").trim())
+        .filter((id) => UUID_RE.test(id)),
+    ),
+  ];
+  const tally = Object.fromEntries(ids.map((id) => [id, 0]));
+  if (!ids.length || !isSupabaseEnabled()) return tally;
+
+  const chunkSize = 80;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const part = ids.slice(i, i + chunkSize);
+    let q = supabase
+      .from("offer_messages")
+      .select("offer_id")
+      .in("offer_id", part)
+      .eq("sender_role", "doctor")
+      .is("read_at", null);
+    let { data, error } = await q;
+    if (error && isOfferMessagesReadAtColumnMissingError(error)) {
+      ({ data, error } = await supabase
+        .from("offer_messages")
+        .select("offer_id")
+        .in("offer_id", part)
+        .eq("sender_role", "doctor"));
+    }
+    if (error) {
+      if (!isOfferMessagesTableUnavailableError(error)) {
+        console.warn("[countUnreadDoctorMessagesByOfferIds]", error.message);
+      }
+      continue;
+    }
+    for (const row of data || []) {
+      const oid = String(row.offer_id || "").trim();
+      if (Object.prototype.hasOwnProperty.call(tally, oid)) tally[oid] += 1;
+    }
+  }
+  return tally;
+}
+
+/**
+ * Active lead-phase offer for patient clinic chat mirror (latest offer on matching request).
+ */
+async function resolveLeadOfferIdForPatientClinicMessage(patientIdRaw, clinicIdRaw, offerIdHint) {
+  if (!isSupabaseEnabled()) return null;
+  const hint = String(offerIdHint || "").trim();
+  const resolvedPid = await resolveMessagesPatientDbId(String(patientIdRaw || "").trim());
+  const patientFilters = treatmentRequestPatientIdFilters(
+    String(patientIdRaw || "").trim(),
+    resolvedPid,
+  );
+  if (!patientFilters.length) return null;
+
+  if (UUID_RE.test(hint)) {
+    const ctx = await loadOfferMessagingContext(hint);
+    if (ctx) {
+      const trPid = String(ctx.tr?.patient_id || "").trim();
+      const matchesPatient = patientFilters.some((f) => String(f).trim() === trPid);
+      if (matchesPatient) {
+        const clinicId = String(clinicIdRaw || ctx.tr?.clinic_id || "").trim();
+        const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
+        if (!enrolled) return hint;
+      }
+    }
+  }
+
+  const clinicId = String(clinicIdRaw || "").trim();
+  let reqQ = supabase.from("treatment_requests").select("id, clinic_id").order("created_at", {
+    ascending: false,
+  });
+  reqQ =
+    patientFilters.length === 1
+      ? reqQ.eq("patient_id", patientFilters[0])
+      : reqQ.in("patient_id", patientFilters);
+  const { data: trRows } = await reqQ.limit(80);
+  const requestIds = (trRows || [])
+    .map((r) => {
+      if (clinicId && UUID_RE.test(clinicId)) {
+        const rc = String(r.clinic_id || "").trim();
+        if (rc && rc !== clinicId) return null;
+      }
+      return String(r.id || "").trim();
+    })
+    .filter((id) => UUID_RE.test(id));
+  if (!requestIds.length) return null;
+
+  let offerQ = supabase
+    .from("treatment_offers")
+    .select("id, request_id")
+    .in("request_id", requestIds)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (clinicId && UUID_RE.test(clinicId)) {
+    offerQ = offerQ.or(`clinic_id.eq.${clinicId},clinic_id.is.null`);
+  }
+  const { data: offerRow } = await offerQ.maybeSingle();
+  const oid = offerRow?.id ? String(offerRow.id).trim() : null;
+  if (!oid || !UUID_RE.test(oid)) return null;
+
+  const ctx = await loadOfferMessagingContext(oid);
+  if (!ctx) return null;
+  const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(
+    ctx.tr,
+    clinicId || ctx.tr?.clinic_id,
+  );
+  return enrolled ? null : oid;
+}
+
+/** Mirror patient clinic-tab message into offer_messages (symmetric to doctor→patient_messages). */
+async function mirrorPatientClinicMessageToOfferThread(opts) {
+  const patientId = String(opts?.patientId || "").trim();
+  const clinicId = String(opts?.clinicId || "").trim();
+  const text = String(opts?.text || "").trim();
+  const attachmentUrl = opts?.attachmentUrl ? String(opts.attachmentUrl).trim() : null;
+  const attachmentType = opts?.attachmentType || null;
+  const senderName = String(opts?.senderName || "").trim() || "Patient";
+  const offerIdHint = opts?.offerIdHint || null;
+
+  if (!patientId || (!text && !attachmentUrl)) return null;
+
+  const offerId = await resolveLeadOfferIdForPatientClinicMessage(
+    patientId,
+    clinicId,
+    offerIdHint,
+  );
+  if (!offerId) return null;
+
+  const ctx = await loadOfferMessagingContext(offerId);
+  if (!ctx?.tr?.patient_id) return null;
+
+  const insertRow = {
+    offer_id: offerId,
+    sender_id: String(ctx.tr.patient_id),
+    sender_role: "patient",
+    sender_name: senderName,
+    text: text || (attachmentUrl ? "📎" : null),
+    attachment_url: attachmentUrl || null,
+    attachment_type: attachmentType || null,
+  };
+
+  const { data: inserted, error: insErr } = await insertIntoTableWithColumnPruning(
+    "offer_messages",
+    insertRow,
+    "*",
+  );
+  if (insErr || !inserted) {
+    console.warn("[offer-mirror-patient] insert failed:", insErr?.message || insErr);
+    return null;
+  }
+
+  const message = {
+    id: String(inserted.id),
+    offer_id: offerId,
+    sender_id: String(inserted.sender_id || ctx.tr.patient_id),
+    sender_role: "patient",
+    sender_name: String(inserted.sender_name || senderName),
+    text: inserted.text,
+    attachment_url: inserted.attachment_url,
+    attachment_type: inserted.attachment_type,
+    created_at: inserted.created_at,
+  };
+
+  try {
+    if (chatSocketIo) {
+      chatSocketIo.to(`offer:${offerId}`).emit("offer_new_message", message);
+    }
+  } catch (_) {
+    /* non-fatal */
+  }
+
+  void getOfferNotificationsApi()
+    .enqueueOfferMessagePush({
+      actor: { kind: "patient", patientId: String(ctx.tr.patient_id), name: senderName },
+      offerId,
+      tr: ctx.tr,
+      messageRow: message,
+      doctorRow: ctx.offer,
+    })
+    .catch((e) => console.warn("[offer-mirror-patient] push:", e?.message || e));
+
+  return message;
+}
+
+/** First row in offer thread — offer payload as a system bubble. */
+async function seedOfferThreadSystemMessage(offerId, doctorId, doctorName, offerFields) {
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(offerId || ""))) return;
+  const lines = ["📋 Treatment offer"];
+  const tt = offerFields?.treatment_type != null ? String(offerFields.treatment_type).trim() : "";
+  if (tt) lines.push(`🦷 ${tt}`);
+  const price =
+    offerFields?.price_text != null
+      ? String(offerFields.price_text).trim()
+      : offerFields?.price_range != null
+        ? String(offerFields.price_range).trim()
+        : "";
+  if (price) lines.push(`💰 ${price}`);
+  const dur = offerFields?.duration != null ? String(offerFields.duration).trim() : "";
+  if (dur) lines.push(`📅 ${dur}`);
+  const note = offerFields?.note != null ? String(offerFields.note).trim() : "";
+  if (note) lines.push(`📝 ${note}`);
+
+  const insertRow = {
+    offer_id: String(offerId),
+    sender_id: String(doctorId || "").trim() || "doctor",
+    sender_role: "system",
+    sender_name: String(doctorName || "Doctor").trim() || "Doctor",
+    text: lines.join("\n"),
+  };
+  const { error } = await insertIntoTableWithColumnPruning("offer_messages", insertRow);
+  if (error && !isOfferMessagesTableUnavailableError(error)) {
+    console.warn("[offer-seed] system message failed:", error.message || error);
+  }
+}
+
 /**
  * Lead-phase offer threads for doctor Leads Inbox — same universe as unread-counts.offerUnread.
  * Foreign leads often have offer_messages but no patient_chat_threads row yet.
@@ -52108,12 +52360,23 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       }
     }
 
+    const allOfferIds = (offers || [])
+      .map((o) => String(o.id || "").trim())
+      .filter((id) => UUID_RE.test(id));
+    const latestMsgByOffer = await fetchLatestOfferMessageByOfferIds(allOfferIds);
+    const unreadDoctorByOffer = await countUnreadDoctorMessagesByOfferIds(allOfferIds);
+
     const offersByRequest = {};
     for (const offer of offers || []) {
       const rId = offer.request_id;
       if (!offersByRequest[rId]) offersByRequest[rId] = [];
       const docId = offer.doctor_id ? String(offer.doctor_id) : '';
       const cid = offer.clinic_id ? String(offer.clinic_id) : '';
+      const oid = String(offer.id || "").trim();
+      const latestRow = oid ? latestMsgByOffer.get(oid) : null;
+      const lastText = latestRow
+        ? String(latestRow.text ?? latestRow.message_text ?? "").trim()
+        : null;
       offersByRequest[rId].push({
         id: offer.id,
         clinic_id: offer.clinic_id || null,
@@ -52129,6 +52392,10 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
           offer.disclaimer ||
           'This is a preliminary estimate. Final diagnosis requires clinical examination.',
         created_at: offer.created_at,
+        last_message: lastText || null,
+        last_message_at: latestRow?.created_at || null,
+        last_message_role: latestRow?.sender_role || null,
+        unread_count: oid ? unreadDoctorByOffer[oid] || 0 : 0,
       });
     }
 
@@ -53529,7 +53796,42 @@ app.get("/api/offer-messages", async (req, res, next) => {
       created_at: m.created_at,
     }));
 
-    const payload = { ok: true, messages };
+    let offerSummary = null;
+    const ctx = await loadOfferMessagingContext(offerId);
+    if (ctx?.offer) {
+      const { data: offerRow } = await supabase
+        .from("treatment_offers")
+        .select(
+          "id, treatment_type, price_text, price_range, duration, note, disclaimer, created_at, doctor_id, clinic_id",
+        )
+        .eq("id", offerId)
+        .maybeSingle();
+      if (offerRow) {
+        const docId = offerRow.doctor_id ? String(offerRow.doctor_id) : "";
+        let doctor_name = null;
+        if (docId) {
+          const { data: docRow } = await supabase
+            .from("doctors")
+            .select("full_name, name")
+            .eq("id", docId)
+            .maybeSingle();
+          doctor_name = String(docRow?.full_name || docRow?.name || "").trim() || null;
+        }
+        offerSummary = {
+          id: String(offerRow.id),
+          treatment_type: offerRow.treatment_type,
+          price_text: offerRow.price_text || offerRow.price_range || null,
+          price_range: offerRow.price_range || null,
+          duration: offerRow.duration || null,
+          note: offerRow.note || null,
+          disclaimer: offerRow.disclaimer || null,
+          created_at: offerRow.created_at,
+          doctor_name,
+        };
+      }
+    }
+
+    const payload = { ok: true, messages, offer: offerSummary };
     console.log("[GET RAW SOURCE]", payload);
     return res.json(payload);
   } catch (e) {
@@ -53726,6 +54028,49 @@ app.post("/api/offer-messages", async (req, res) => {
         }
       } catch (mirrorEx) {
         console.warn("[offer-mirror] exception (non-fatal):", mirrorEx?.message || mirrorEx);
+      }
+    }
+
+    // Patient offer-thread reply → patient_messages (Mesajlar sekmesi ile aynı thread).
+    if (actor.kind === "patient" && isSupabaseEnabled()) {
+      const patientUuid = String(tr.patient_id || "").trim();
+      const clinicUuid = String(tr.clinic_id || access.offer?.clinic_id || "").trim();
+      if (patientUuid && UUID_RE.test(patientUuid)) {
+        const mirrorRow = {
+          patient_id: patientUuid,
+          chat_id: patientUuid,
+          from_role: "patient",
+          message_text: inserted.text || "[attachment]",
+          message_id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+          ...(clinicUuid && UUID_RE.test(clinicUuid) ? { clinic_id: clinicUuid } : {}),
+          offer_id: offerId,
+          offer_message_id: inserted.id,
+        };
+        (async () => {
+          const fromRoles = ["patient", "PATIENT"];
+          for (const from_role of fromRoles) {
+            const { error: mirrorErr } = await insertIntoTableWithColumnPruning("patient_messages", {
+              ...mirrorRow,
+              from_role,
+            });
+            if (!mirrorErr) {
+              console.log("[offer-mirror-patient-tab] mirrored to patient_messages", patientUuid);
+              break;
+            }
+            const msg = String(mirrorErr?.message || "").toLowerCase();
+            const code = String(mirrorErr?.code || "");
+            const isConstraint =
+              code === "23514" ||
+              code === "22P02" ||
+              msg.includes("check constraint") ||
+              msg.includes("enum") ||
+              msg.includes("invalid input");
+            if (!isConstraint) {
+              console.warn("[offer-mirror-patient-tab] failed:", mirrorErr.message);
+              break;
+            }
+          }
+        })().catch((ex) => console.warn("[offer-mirror-patient-tab] exception:", ex?.message || ex));
       }
     }
 
@@ -54517,6 +54862,7 @@ app.post("/api/doctor/treatment-requests/:requestId/offer", requireDoctorAuth, a
         );
       }
       const doctorName = String(req.doctor?.full_name || req.doctor?.name || "Doctor").trim();
+      void seedOfferThreadSystemMessage(offerIdStr, doctorKey, doctorName, insert);
       void getOfferNotificationsApi().enqueueNewOfferPush({
         offerId: offerIdStr,
         requestId,

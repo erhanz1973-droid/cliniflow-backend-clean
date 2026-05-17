@@ -64,3 +64,17 @@ Mobile / Expo may use `EXPO_PUBLIC_SUPABASE_ANON_KEY` (or similar) in the app on
 
 **Quick grep** (when updating this list):  
 `git show HEAD:index.cjs | grep -oE 'process.env.[A-Z0-9_]+' | sort -u`
+
+## Operations rollout (Phase 3+)
+
+See **`OPERATIONS_ROLLOUT.md`** for staging strategy, migration checklist, backend/app compatibility, deploy verification, and coordinator workflow test scenarios. Admin printable checklist: `/admin-ops-rollout.html`.
+
+### Coordinator simulation (staging scripts only)
+
+| Variable | Notes |
+|----------|--------|
+| `COORDINATOR_SIM_ALLOW=1` | Required to run `scripts/seed-coordinator-simulation.cjs` |
+| `COORDINATOR_SIM_FORCE=1` | Override production URL guard (avoid on real prod) |
+| `COORDINATOR_SIM_ASSIGNED_ADMIN_ID` | Optional UUID — assigns one sim lead for “Assigned” workspace testing |
+
+Guide: **`scripts/COORDINATOR_SIMULATION.md`**

@@ -28,6 +28,7 @@
     .ai-header { margin-bottom: 16px; }
     .ai-header h1 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 800; color: var(--text); }
     .ai-header p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.45; max-width: 720px; }
+    .ai-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
     .filter-btn {
       border: 1px solid var(--border); background: var(--card); color: var(--text);
@@ -219,6 +220,49 @@
     .pipe-status.skipped { background: #f8fafc; color: #94a3b8; }
     .sla-wait { font-weight: 700; color: #b45309; }
     @media (max-width: 700px) { .sla-strip { grid-template-columns: 1fr 1fr; } }
+    .queue-section { margin-bottom: 14px; }
+    .queue-section-hd {
+      font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); margin-bottom: 8px;
+    }
+    .intake-queue-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+    .queue-btn {
+      border: 1px solid var(--border); background: var(--card); color: var(--text);
+      padding: 8px 12px; border-radius: 10px; font-size: 0.78rem; font-weight: 700; cursor: pointer;
+      text-align: left; max-width: 200px; line-height: 1.25;
+    }
+    .queue-btn.active { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+    .queue-btn .q-count {
+      display: inline-block; min-width: 1.4em; padding: 1px 6px; margin-left: 4px;
+      border-radius: 999px; background: #f1f5f9; font-size: 0.7rem; font-weight: 800;
+    }
+    .queue-btn.active .q-count { background: #d1fae5; color: #065f46; }
+    .workspace-section { margin-top: 4px; padding-top: 12px; border-top: 1px dashed var(--border); }
+    .lead-ownership {
+      font-size: 0.8rem; font-weight: 800; margin-top: 6px; color: #334155;
+    }
+    .lead-ownership.wait-patient { color: #1d4ed8; }
+    .lead-ownership.wait-clinic { color: #c2410c; }
+    .lead-next {
+      font-size: 0.75rem; color: #64748b; margin-top: 4px; line-height: 1.35;
+    }
+    .lead-block {
+      font-size: 0.75rem; color: #475569; margin-top: 4px; line-height: 1.35;
+    }
+    .lead-block.urgent { color: #b91c1c; font-weight: 700; }
+    .lead-timing { font-size: 0.7rem; color: var(--muted); margin-top: 6px; }
+    .badge-wait-patient { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .badge-wait-clinic { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .queue-more { margin-top: 8px; }
+    .queue-more summary { cursor: pointer; font-size: 0.75rem; color: var(--muted); font-weight: 700; }
+    .scan-hint {
+      font-size: 0.78rem; color: var(--muted); margin: 0 0 12px; padding: 8px 10px;
+      background: #f8fafc; border-radius: 8px; border: 1px solid var(--border);
+    }
+    .ops-test-link {
+      font-size: 0.78rem; color: var(--blue); font-weight: 700; margin-left: auto;
+    }
+    details.legacy-filters summary { cursor: pointer; font-size: 0.75rem; color: var(--muted); font-weight: 700; }
   </style>
 </head>
 <body>
@@ -226,33 +270,47 @@
     <div class="ai-header">
       <h1>Coordinator Workspace</h1>
       <p>
-        Operational queues for AI-generated leads — SLA timers, human takeover, draft replies, tasks, and escalation signals.
+        Who needs attention, what is blocking, who we are waiting on — at a glance.
       </p>
+      <a class="ops-test-link" href="/admin-ops-rollout.html" target="_blank" rel="noopener">Workflow stress test →</a>
     </div>
 
-    <div class="workspace-tabs" id="workspaceTabs">
-      <button type="button" class="ws-btn" data-ws="assigned">Assigned leads</button>
-      <button type="button" class="ws-btn" data-ws="hot">Hot leads</button>
-      <button type="button" class="ws-btn active" data-ws="recent">All recent</button>
-      <button type="button" class="ws-btn" data-ws="waiting_human">Waiting for human reply</button>
-      <button type="button" class="ws-btn" data-ws="ai_unresolved">AI unresolved</button>
-      <button type="button" class="ws-btn" data-ws="inactive">Inactive 24h+</button>
+    <p class="scan-hint">
+      <strong>3-second scan:</strong> name → waiting on patient/clinic → blocker → next step. Open a lead for full detail.
+    </p>
+
+    <div class="queue-section">
+      <div class="queue-section-hd">Today&apos;s queues</div>
+      <div class="intake-queue-tabs" id="intakeQueueTabsPrimary"></div>
+      <details class="queue-more">
+        <summary>More queues (ready, implant, cosmetic…)</summary>
+        <div class="intake-queue-tabs" id="intakeQueueTabsMore" style="margin-top:8px"></div>
+      </details>
     </div>
 
-    <div class="filters signal-filters" id="filters">
-      <button type="button" class="filter-btn" data-filter="recent">Signals: recent</button>
-      <button type="button" class="filter-btn" data-filter="hot">Hot leads</button>
-      <button type="button" class="filter-btn" data-filter="implant">Implant</button>
-      <button type="button" class="filter-btn" data-filter="veneers">Veneers</button>
-      <button type="button" class="filter-btn" data-filter="high_booking">High booking</button>
-      <button type="button" class="filter-btn" data-filter="high_urgency">High urgency</button>
-      <button type="button" class="filter-btn" data-filter="human">Human active</button>
-      <button type="button" class="filter-btn" data-filter="tag_implant">Tag: implant</button>
-      <button type="button" class="filter-btn" data-filter="tag_cosmetic">Tag: cosmetic</button>
-      <button type="button" class="filter-btn" data-filter="readiness_ready">Ready &ge;70%</button>
-      <button type="button" class="filter-btn" data-filter="awaiting_xray">Awaiting X-ray</button>
-      <button type="button" class="filter-btn" data-filter="doctor_review">Doctor review</button>
-    </div>
+    <details class="workspace-section" style="margin-bottom:12px">
+      <summary class="queue-section-hd" style="cursor:pointer">Response &amp; follow-up (SLA)</summary>
+      <div class="workspace-tabs" id="workspaceTabs" style="margin-top:8px">
+        <button type="button" class="ws-btn active" data-ws="recent">All recent</button>
+        <button type="button" class="ws-btn" data-ws="waiting_human">Needs reply</button>
+        <button type="button" class="ws-btn" data-ws="inactive">Inactive 24h+</button>
+        <button type="button" class="ws-btn" data-ws="assigned">Assigned</button>
+        <button type="button" class="ws-btn" data-ws="hot">Hot</button>
+        <button type="button" class="ws-btn" data-ws="ai_unresolved">AI unresolved</button>
+      </div>
+    </details>
+
+    <details class="legacy-filters" style="margin-bottom:12px">
+      <summary>Legacy signal filters</summary>
+      <div class="filters signal-filters" id="filters" style="margin-top:8px">
+        <button type="button" class="filter-btn" data-filter="hot">Hot</button>
+        <button type="button" class="filter-btn" data-filter="implant">Implant text</button>
+        <button type="button" class="filter-btn" data-filter="veneers">Veneers text</button>
+        <button type="button" class="filter-btn" data-filter="high_booking">High booking</button>
+        <button type="button" class="filter-btn" data-filter="high_urgency">High urgency</button>
+        <button type="button" class="filter-btn" data-filter="human">Human active</button>
+      </div>
+    </details>
 
     <div id="globalErr" class="err" style="display:none"></div>
 
@@ -306,8 +364,86 @@
 
     let activeWorkspace = "recent";
     let activeSignalFilter = null;
+    let activeIntakeQueue = "";
+    let intakeQueueDefs = [];
     let leads = [];
     let selectedId = null;
+
+    const PRIMARY_QUEUE_IDS = [
+      "doctor_review",
+      "human_followup",
+      "awaiting_xray",
+      "awaiting_photos",
+    ];
+    const SECONDARY_QUEUE_IDS = [
+      "consultation_ready",
+      "high_readiness",
+      "tag_implant",
+      "tag_cosmetic",
+    ];
+
+    function renderIntakeQueueTabs() {
+      const primaryEl = document.getElementById("intakeQueueTabsPrimary");
+      const moreEl = document.getElementById("intakeQueueTabsMore");
+      if (!primaryEl) return;
+      const allBtn =
+        '<button type="button" class="queue-btn' +
+        (!activeIntakeQueue ? " active" : "") +
+        '" data-queue="">All recent</button>';
+      function btnFor(id) {
+        const def = intakeQueueDefs.find(function (q) {
+          return q.id === id;
+        });
+        if (!def) return "";
+        const active = activeIntakeQueue === id ? " active" : "";
+        const count = def.count != null && def.count > 0 ? def.count : "";
+        return (
+          '<button type="button" class="queue-btn' +
+          active +
+          '" data-queue="' +
+          esc(id) +
+          '" title="' +
+          esc(def.description || "") +
+          '">' +
+          esc(def.label) +
+          (count !== "" ? ' <span class="q-count">' + count + "</span>" : "") +
+          "</button>"
+        );
+      }
+      primaryEl.innerHTML =
+        allBtn + PRIMARY_QUEUE_IDS.map(btnFor).join("");
+      if (moreEl) moreEl.innerHTML = SECONDARY_QUEUE_IDS.map(btnFor).join("");
+      [primaryEl, moreEl].filter(Boolean).forEach(function (root) {
+        root.querySelectorAll(".queue-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeIntakeQueue = btn.getAttribute("data-queue") || "";
+          activeWorkspace = "recent";
+          activeSignalFilter = null;
+          document.querySelectorAll(".ws-btn").forEach(function (b) {
+            b.classList.toggle("active", b.getAttribute("data-ws") === "recent");
+          });
+          document.querySelectorAll(".filter-btn").forEach(function (b) {
+            b.classList.remove("active");
+          });
+          renderIntakeQueueTabs();
+          loadLeads();
+        });
+        });
+      });
+    }
+
+    async function loadQueueCounts() {
+      try {
+        const res = await adminFetch("/api/admin/ai-leads/queues?limit=200");
+        const json = await res.json();
+        if (res.ok && json.ok && json.intakeQueues) {
+          intakeQueueDefs = json.intakeQueues;
+          renderIntakeQueueTabs();
+        }
+      } catch (e) {
+        console.warn("queue counts", e);
+      }
+    }
 
     function slaBadge(L) {
       const sla = L.sla || {};
@@ -636,15 +772,32 @@
       }
       el.innerHTML = leads
         .map((L) => {
-          const hot = L.isHot ? '<span class="badge badge-hot">Hot</span>' : "";
-          const mode =
-            L.coordinationMode === "human_active"
-              ? '<span class="badge badge-human">Human</span>'
-              : '<span class="badge badge-ai">AI</span>';
           const title = L.patientName || L.treatmentInterest || L.country || "Lead";
-          const sub = [L.treatmentInterest, L.country, L.urgency ? "urgency: " + L.urgency : ""]
-            .filter(Boolean)
-            .join(" · ");
+          const blockUrgent =
+            L.operationalIntakeFlags?.doctorReviewNeeded || (L.sla && L.sla.isWaiting4h);
+          const ownership =
+            L.waitingParty === "patient"
+              ? '<div class="lead-ownership wait-patient">Waiting on patient</div>'
+              : L.waitingParty === "clinic"
+                ? '<div class="lead-ownership wait-clinic">Waiting on clinic</div>'
+                : "";
+          const blockHtml = L.blockingReason
+            ? '<div class="lead-block' + (blockUrgent ? " urgent" : "") + '">' + esc(L.blockingReason) + "</div>"
+            : "";
+          const nextHtml = L.nextAction
+            ? '<div class="lead-next">Next: ' + esc(L.nextAction) + "</div>"
+            : "";
+          const sla = L.sla || {};
+          let timing = "";
+          if (sla.isWaiting4h) timing = "Reply overdue (4h+)";
+          else if (sla.isWaiting1h) timing = "Waiting " + (sla.waitingDurationLabel || "1h+");
+          else if (sla.isInactive24h) timing = "Inactive 24h+";
+          else if (sla.waitingDurationLabel) timing = sla.waitingDurationLabel;
+          else timing = "Updated " + fmtTime(L.updatedAt);
+          const emergency =
+            L.escalationFlags && L.escalationFlags.emergency
+              ? ' <span class="badge badge-esc-emergency">Urgent</span>'
+              : "";
           return (
             '<div class="lead-item' +
             (L.id === selectedId ? " active" : "") +
@@ -654,29 +807,17 @@
             '<div class="lead-top">' +
             '<div class="lead-title">' +
             esc(title) +
+            emergency +
             "</div>" +
             '<span class="score">' +
-            (L.leadScore != null ? L.leadScore : "—") +
+            (L.readinessPercent != null ? L.readinessPercent + "%" : "—") +
             "</span>" +
             "</div>" +
-            '<div class="lead-meta">' +
-            esc(sub || "No signals yet") +
-            "</div>" +
-            '<div class="lead-meta" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
-            hot +
-            mode +
-            (L.aiUnresolved ? '<span class="badge badge-unresolved">AI unresolved</span>' : "") +
-            (L.hasVisitPlanDraft ? '<span class="badge badge-visit-plan">Visit plan</span>' : "") +
-            (L.needsDoctorDocumentReview ? '<span class="badge badge-doc-review">Doc review</span>' : "") +
-            (L.hasMissingIntake ? '<span class="badge badge-missing-intake">Missing intake</span>' : "") +
-            (L.journeyStageLabel ? '<span class="badge badge-journey">' + esc(L.journeyStageLabel) + "</span>" : "") +
-            (L.readinessPercent != null ? '<span class="badge" style="background:#e0f2fe;color:#0369a1">' + esc(L.readinessPercent) + "% ready</span>" : "") +
-            slaBadge(L) +
-            escalationBadges(L.escalationFlags) +
-            "</div>" +
-            '<div class="lead-meta">' +
-            (L.sla && L.sla.waitingDurationLabel ? "⏱ " + esc(L.sla.waitingDurationLabel) + " · " : "") +
-            esc(L.sla && L.sla.lastPatientMessageAt ? L.sla.lastPatientMessageAt : L.updatedAt) +
+            ownership +
+            blockHtml +
+            nextHtml +
+            '<div class="lead-timing">' +
+            esc(timing) +
             "</div>" +
             "</div>"
           );
@@ -747,6 +888,14 @@
             "</div>"
           : "";
 
+        const blockDetail = L.blockingReason
+          ? '<div class="intake-flags-box" style="background:#f8fafc;border-color:#cbd5e1"><strong>What is blocking</strong><br/>' +
+            esc(L.blockingReason) +
+            (L.waitingPartyLabel ? "<br/><em>" + esc(L.waitingPartyLabel) + "</em>" : "") +
+            (L.nextAction ? "<br/><strong>Next:</strong> " + esc(L.nextAction) : "") +
+            "</div>"
+          : "";
+
         const escRow =
           '<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">' +
           escalationBadges(L.escalationFlags) +
@@ -767,6 +916,7 @@
 
         body.innerHTML =
           slaStrip(L) +
+          blockDetail +
           escRow +
           modeHtml +
           grid +
@@ -855,8 +1005,10 @@
       errEl.style.display = "none";
       document.getElementById("leadList").innerHTML = '<div class="empty">Loading…</div>';
       try {
-        let url = "/api/admin/ai-leads?limit=80";
-        if (activeWorkspace && activeWorkspace !== "recent") {
+        let url = "/api/admin/ai-leads?limit=100";
+        if (activeIntakeQueue) {
+          url += "&queue=" + encodeURIComponent(activeIntakeQueue);
+        } else if (activeWorkspace && activeWorkspace !== "recent") {
           url += "&workspace=" + encodeURIComponent(activeWorkspace);
         } else if (activeSignalFilter) {
           url += "&filter=" + encodeURIComponent(activeSignalFilter);
@@ -865,18 +1017,9 @@
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load leads");
         leads = json.leads || [];
-        if (
-          activeSignalFilter &&
-          ["tag_implant", "tag_cosmetic", "readiness_ready", "awaiting_xray", "doctor_review", "awaiting_photos"].indexOf(
-            activeSignalFilter,
-          ) >= 0
-        ) {
-          leads = leads.slice().sort(function (a, b) {
-            const ra = a.readinessPercent != null ? a.readinessPercent : -1;
-            const rb = b.readinessPercent != null ? b.readinessPercent : -1;
-            if (rb !== ra) return rb - ra;
-            return (b.leadScore != null ? b.leadScore : 0) - (a.leadScore != null ? a.leadScore : 0);
-          });
+        if (json.intakeQueues && json.intakeQueues.length) {
+          intakeQueueDefs = json.intakeQueues;
+          renderIntakeQueueTabs();
         }
         renderLeadList();
         if (selectedId && leads.some((l) => l.id === selectedId)) {
@@ -893,9 +1036,12 @@
       if (!btn) return;
       activeWorkspace = btn.getAttribute("data-ws") || "recent";
       activeSignalFilter = null;
+      activeIntakeQueue = "";
       document.querySelectorAll(".ws-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".queue-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelector('.queue-btn[data-queue=""]')?.classList.add("active");
       loadLeads();
     });
 
@@ -904,14 +1050,21 @@
       if (!btn) return;
       activeSignalFilter = btn.getAttribute("data-filter") || "recent";
       activeWorkspace = "recent";
+      activeIntakeQueue = "";
       document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       document.querySelectorAll(".ws-btn").forEach((b) => b.classList.remove("active"));
       document.querySelector('[data-ws="recent"]')?.classList.add("active");
+      document.querySelectorAll(".queue-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelector('.queue-btn[data-queue=""]')?.classList.add("active");
       loadLeads();
     });
 
-    document.getElementById("btnRefresh").addEventListener("click", loadLeads);
+    document.getElementById("btnRefresh").addEventListener("click", function () {
+      loadQueueCounts();
+      loadLeads();
+    });
+    loadQueueCounts();
     loadLeads();
   </script>
   <script src="/admin-layout.js?v=202605171"></script>

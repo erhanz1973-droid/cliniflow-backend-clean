@@ -9,6 +9,12 @@
     "dev": "node index.cjs",
     "migrate:clinic-coords": "node scripts/migrate-clinic-coordinates.cjs",
     "migrate:clinic-coords:dry": "node scripts/migrate-clinic-coordinates.cjs --dry-run",
+    "sim:coordinator:seed": "node scripts/seed-coordinator-simulation.cjs",
+    "sim:coordinator:clear": "node scripts/clear-coordinator-simulation.cjs",
+    "verify:schema": "node scripts/verify-supabase-schema.cjs --strict",
+    "verify:rollout:http": "node scripts/verify-rollout-http.cjs",
+    "verify:sim-guards": "node scripts/verify-simulation-guards.cjs",
+    "verify:pre-rollout": "node scripts/verify-pre-rollout.cjs",
     "netlify:deploy": "netlify deploy --dir=public --prod"
   },
   "engines": {
