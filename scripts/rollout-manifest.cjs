@@ -16,6 +16,8 @@ const REQUIRED_MIGRATIONS = [
   "20260517240000_ai_patient_documents_consent_attribution.sql",
   "20260517260000_intake_journey_event_type.sql",
   "20260517300000_upload_content_hash_dedupe.sql",
+  "20260518120000_patient_clinic_membership_archive.sql",
+  "20260518130000_clinic_ai_settings.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
@@ -69,6 +71,19 @@ const SCHEMA_PROBES = [
     table: "ai_visit_plan_drafts",
     columns: ["lead_profile_id", "status", "plan_json"],
   },
+  {
+    id: "clinic_ai_settings",
+    table: "clinic_ai_settings",
+    columns: [
+      "clinic_id",
+      "autonomy_config",
+      "escalation_config",
+      "tone_config",
+      "knowledge_base_config",
+      "safety_rules",
+      "communication_policy",
+    ],
+  },
 ];
 
 /** HTTP routes that must exist (status may be 401 without auth — not 404). */
@@ -78,6 +93,8 @@ const HTTP_ROUTE_PROBES = [
   { method: "POST", path: "/ai/intake-tags", expectStatuses: [400, 401, 403, 422], body: {} },
   { method: "GET", path: "/api/patient/me/intake-journey", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/ai-leads/queues", expectStatuses: [401, 403] },
+  { method: "GET", path: "/api/admin/clinic/ai-ops/meta", expectStatuses: [401, 403] },
+  { method: "GET", path: "/api/admin/clinic/ai-ops/settings", expectStatuses: [401, 403] },
 ];
 
 /** Paths that must NOT exist in production API surface. */

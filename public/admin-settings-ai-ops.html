@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605181"></script>
+  <script src="/admin-i18n.js?v=37"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinic Operations AI — Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605181" />
+  <script>
+    (function () {
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      const userStr = localStorage.getItem("user") || localStorage.getItem("adminUser");
+      if (!token || !userStr) { window.location.href = "/admin-login.html"; return; }
+      try {
+        const user = JSON.parse(userStr);
+        if (!user || user.role !== "ADMIN") window.location.href = "/admin-login.html";
+      } catch (e) { window.location.href = "/admin-login.html"; }
+    })();
+  </script>
+  <style>
+    .page-wrap { padding: 20px 24px 48px; max-width: 960px; margin: 0 auto; }
+    .page-header { margin-bottom: 20px; }
+    .page-header h1 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 800; }
+    .page-header p { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.45; }
+    .breadcrumb { font-size: 0.8rem; margin-bottom: 8px; }
+    .breadcrumb a { color: var(--blue); text-decoration: none; font-weight: 600; }
+    .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px; }
+    .panel h2 { margin: 0 0 4px; font-size: 1rem; font-weight: 800; }
+    .panel .hint { margin: 0 0 12px; font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } }
+    label { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    input, textarea, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.88rem; }
+    textarea { min-height: 64px; resize: vertical; }
+    .check-row { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 8px 0; }
+    .check-row label { text-transform: none; font-size: 0.85rem; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+    .autonomy-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .autonomy-table th, .autonomy-table td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; }
+    .autonomy-table th { font-size: 0.7rem; text-transform: uppercase; color: var(--muted); }
+    .floor-tag { font-size: 0.65rem; color: #b45309; font-weight: 700; margin-left: 6px; }
+    .btn { border: none; background: var(--blue); color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status { margin-top: 12px; font-size: 0.85rem; }
+    .status.ok { color: #047857; }
+    .status.err { color: var(--red); }
+    .badge { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; border: 1px solid var(--border); margin-left: 8px; }
+    .badge.configured { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="breadcrumb"><a href="/admin-settings.html">Clinic Settings</a> / Clinic Operations AI</div>
+    <div class="page-header">
+      <h1>Clinic Operations AI Profile <span id="configuredBadge" class="badge">defaults</span></h1>
+      <p>Configure how the clinic AI assistant behaves — autonomy per topic, SLA fallback, operational knowledge, and safety.</p>
+    </div>
+    <form id="aiOpsForm">
+      <section class="panel"><h2>1. AI identity</h2><p class="hint">Display name and tone; assigned doctor/coordinator remains primary owner.</p>
+        <div class="form-grid">
+          <div><label>Assistant display name</label><input id="toneDisplayName" placeholder="Clinic Assistant" /></div>
+          <div><label>Supported languages</label><input id="toneLanguages" placeholder="en, tr, ru" /></div>
+          <div><label>Personality</label><select id="tonePersonality"></select></div>
+          <div><label>Signature style</label><select id="toneSignature"></select></div>
+        </div>
+      </section>
+      <section class="panel"><h2>2. Autonomy levels</h2><p class="hint">Pricing &amp; treatment recommendations capped at SUGGEST_ONLY.</p>
+        <table class="autonomy-table"><thead><tr><th>Category</th><th>Level</th></tr></thead><tbody id="autonomyBody"></tbody></table>
+      </section>
+      <section class="panel"><h2>3. SLA &amp; escalation</h2>
+        <div class="form-grid">
+          <div><label>Doctor SLA (min)</label><input id="slaDoctor" type="number" min="5" /></div>
+          <div><label>AI fallback (min)</label><input id="slaAiFallback" type="number" min="1" /></div>
+          <div><label>Coordinator escalation (min)</label><input id="slaCoordinator" type="number" min="1" /></div>
+          <div><label>Timezone</label><input id="bhTimezone" placeholder="Europe/Istanbul" /></div>
+          <div><label>Weekday start</label><input id="bhStart" placeholder="09:00" /></div>
+          <div><label>Weekday end</label><input id="bhEnd" placeholder="18:00" /></div>
+          <div><label>Weekend handling</label><select id="bhWeekend"></select></div>
+        </div>
+      </section>
+      <section class="panel"><h2>4. Clinic knowledge base</h2>
+        <div class="form-grid">
+          <div><label>Implant brands</label><input id="kbBrands" placeholder="Straumann, Nobel" /></div>
+          <div><label>Working languages</label><input id="kbLanguages" placeholder="en, tr" /></div>
+          <div style="grid-column:1/-1"><label>Transfer availability</label><input id="kbTransfer" /></div>
+          <div style="grid-column:1/-1"><label>Warranty policy</label><textarea id="kbWarranty"></textarea></div>
+          <div style="grid-column:1/-1"><label>Operational notes</label><textarea id="kbNotes"></textarea></div>
+        </div>
+        <div class="check-row">
+          <label><input type="checkbox" id="kbSedation" /> Sedation</label>
+          <label><input type="checkbox" id="kbAirport" /> Airport pickup</label>
+          <label><input type="checkbox" id="kbFinancing" /> Financing</label>
+        </div>
+      </section>
+      <section class="panel"><h2>5. Communication policy</h2>
+        <div class="check-row">
+          <label><input type="checkbox" id="commPricing" /> Discuss pricing</label>
+          <label><input type="checkbox" id="commDiscounts" /> Negotiate discounts</label>
+          <label><input type="checkbox" id="commBooking" /> Auto-book appointments</label>
+          <label><input type="checkbox" id="commPayment" /> Send payment links</label>
+          <label><input type="checkbox" id="commMedicalRisk" /> Medical-risk answers</label>
+        </div>
+      </section>
+      <section class="panel"><h2>6. Safety rules</h2><div class="check-row" id="safetyChecks"></div></section>
+      <section class="panel"><h2>7. Human handoff triggers</h2><div class="check-row" id="handoffChecks"></div></section>
+      <button type="submit" class="btn" id="btnSave">Save AI profile</button>
+      <div id="saveStatus" class="status"></div>
+    </form>
+  </div>
+  <script src="/admin-settings-ai-ops-inline.js?v=1"></script>
+</body>
+</html>
