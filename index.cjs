@@ -23998,6 +23998,20 @@ async function postPatientMeMessagesHandler(req, res) {
       offerIdHint: mirrorOfferHint,
     }).catch((e) => console.warn("[offer-mirror-patient] exception:", e?.message || e));
 
+    if (mirrorClinicId && UUID_RE.test(mirrorClinicId)) {
+      void (async () => {
+        const resolvedPid = await resolveMessagesPatientDbId(patientId);
+        if (!resolvedPid) return;
+        return afterPatientInboundMessage({
+          patientId: resolvedPid,
+          clinicId: mirrorClinicId,
+          patientMessage: text || (attachments ? "📷" : ""),
+          source: "chat",
+          contextMode: "coordinator",
+        });
+      })().catch((e) => console.warn("[aiSlaContinuity] inbound hook:", e?.message || e));
+    }
+
     return res.json({
       ok: true,
       message: data,
@@ -52876,6 +52890,18 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
         const rowMc = insertedMc || {};
         if (rowMc.id != null) requestIdsMc.push(String(rowMc.id));
 
+        void (async () => {
+          const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
+          if (!resolvedPid) return;
+          return afterPatientInboundMessage({
+            patientId: resolvedPid,
+            clinicId: cidMc,
+            patientMessage: descriptionMc,
+            source: "quote_request",
+            contextMode: "coordinator",
+          });
+        })().catch((e) => console.warn("[aiSlaContinuity] treatment-request multi:", e?.message || e));
+
         if (primaryPhoto) {
           const photoAttachMc = attachmentObjectFromPhotoUrl(primaryPhoto);
           const msgInsMc = await insertMessageToSupabase({
@@ -53003,6 +53029,22 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       patient_id: String(resolvedPatientId).slice(0, 8),
       clinic_id: String(clinicId).slice(0, 8),
     });
+
+    void (async () => {
+      const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
+      if (!resolvedPid) return;
+      const quoteText =
+        description ||
+        [preferred, budget].filter(Boolean).join(" — ") ||
+        "Treatment quote request";
+      return afterPatientInboundMessage({
+        patientId: resolvedPid,
+        clinicId,
+        patientMessage: quoteText,
+        source: "quote_request",
+        contextMode: "coordinator",
+      });
+    })().catch((e) => console.warn("[aiSlaContinuity] treatment-request:", e?.message || e));
 
     return res.status(201).json({
       ok: true,
@@ -58335,6 +58377,19 @@ registerAiCoordinatorAdminRoutes(app, { requireAdminAuth });
 
 const { registerAiCoordinatorDoctorRoutes } = require("./lib/aiCoordinatorDoctorRoutes");
 registerAiCoordinatorDoctorRoutes(app, { requireDoctorAuth });
+
+const { setupAiSlaContinuity, afterPatientInboundMessage } = require("./lib/aiSlaContinuity");
+const { setupAiPatientInboundReply } = require("./lib/aiPatientInboundReply");
+const inboundClinicMessageInsert = (params) =>
+  insertMessageToSupabase({
+    patientId: params.patientId,
+    sender: "clinic",
+    message: params.message,
+    type: params.type || "text",
+    contextClinicId: params.contextClinicId,
+  });
+setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
+setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
 
 const { registerClinicTravelAdminRoutes } = require("./lib/clinicTravelAdminRoutes");
 registerClinicTravelAdminRoutes(app, { requireAdminAuth });
