@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605171"></script>
+  <script src="/admin-layout.js?v=202605173"></script>
   <script src="/admin-i18n.js?v=37"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Coordination Center — Clinifly Admin</title>
@@ -327,6 +328,20 @@
       font-size: 0.78rem; color: var(--blue); font-weight: 700; margin-left: auto;
     }
     details.legacy-filters summary { cursor: pointer; font-size: 0.75rem; color: var(--muted); font-weight: 700; }
+    .ops-filter-section { margin-bottom: 14px; }
+    .ops-filter-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .ops-filter-btn {
+      padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--card); font-size: 0.72rem; font-weight: 700; cursor: pointer; color: #475569;
+    }
+    .ops-filter-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+    .lead-meta-row {
+      font-size: 0.72rem; color: #64748b; margin-top: 5px; line-height: 1.4;
+    }
+    .lead-meta-row strong { color: #334155; font-weight: 700; }
+    .lead-status-line {
+      font-size: 0.75rem; font-weight: 700; color: #0369a1; margin-top: 6px;
+    }
   </style>
 </head>
 <body>
@@ -340,6 +355,11 @@
     </div>
 
     <div id="opsStatusStrip" class="ops-status-strip" style="display:none"></div>
+
+    <div class="ops-filter-section">
+      <div class="queue-section-hd">Operational status</div>
+      <div class="ops-filter-tabs" id="operationalFilterTabs"></div>
+    </div>
 
     <p class="scan-hint">
       <strong>Quick scan:</strong> patient → treatment interest → blocker → who is waiting → next step.
@@ -401,8 +421,19 @@
   </div>
 
   <script>
+    function resolveAdminApiUrl(path) {
+      const p = String(path || "");
+      if (typeof adminFetchUrl === "function") return adminFetchUrl(p);
+      if (typeof apiUrl === "function") return apiUrl(p);
+      if (typeof window.cliniflowAdminApiOrigin === "function") {
+        const o = window.cliniflowAdminApiOrigin();
+        if (o) return String(o).replace(/\/+$/, "") + (p.charAt(0) === "/" ? p : "/" + p);
+      }
+      return p;
+    }
+
     function adminFetch(path, opts) {
-      const url = typeof adminFetchUrl === "function" ? adminFetchUrl(path) : path;
+      const url = resolveAdminApiUrl(path);
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
       const headers = Object.assign(
         { Accept: "application/json", Authorization: "Bearer " + token },
@@ -431,6 +462,8 @@
     let activeWorkspace = "recent";
     let activeSignalFilter = null;
     let activeIntakeQueue = "";
+    let activeOperationalFilter = "";
+    let operationalFilterDefs = [];
     let intakeQueueDefs = [];
     let leads = [];
     let selectedId = null;
@@ -494,6 +527,48 @@
           renderIntakeQueueTabs();
           loadLeads();
         });
+        });
+      });
+    }
+
+    function renderOperationalFilterTabs() {
+      const el = document.getElementById("operationalFilterTabs");
+      if (!el) return;
+      const defs = operationalFilterDefs.length
+        ? operationalFilterDefs
+        : [{ id: "", label: "All active", count: leads.length }];
+      el.innerHTML = defs
+        .map(function (f) {
+          const active = activeOperationalFilter === (f.id || "") ? " active" : "";
+          const count = f.count != null && f.count > 0 ? ' <span class="q-count">' + f.count + "</span>" : "";
+          return (
+            '<button type="button" class="ops-filter-btn' +
+            active +
+            '" data-ops="' +
+            esc(f.id || "") +
+            '" title="' +
+            esc(f.description || "") +
+            '">' +
+            esc(f.label || f.id || "All") +
+            count +
+            "</button>"
+          );
+        })
+        .join("");
+      el.querySelectorAll(".ops-filter-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeOperationalFilter = btn.getAttribute("data-ops") || "";
+          activeIntakeQueue = "";
+          activeWorkspace = "recent";
+          activeSignalFilter = null;
+          document.querySelectorAll(".ops-filter-btn").forEach(function (b) {
+            b.classList.toggle("active", b === btn);
+          });
+          document.querySelectorAll(".queue-btn").forEach(function (b) {
+            b.classList.remove("active");
+          });
+          document.querySelector('.queue-btn[data-queue=""]')?.classList.add("active");
+          loadLeads();
         });
       });
     }
@@ -1001,12 +1076,30 @@
         .join("");
     }
 
+    function ownershipAssignLabel(L) {
+      if (L.coordinationMode === "human_active") return "Coordinator (human)";
+      if (L.delegation && L.delegation.statusLabel) return L.delegation.statusLabel;
+      return "AI assisting";
+    }
+
+    function lastActivityLabel(L) {
+      const sla = L.sla || {};
+      const aiAt = sla.lastAiReplyAt ? new Date(sla.lastAiReplyAt).getTime() : 0;
+      const humanAt = sla.lastHumanReplyAt ? new Date(sla.lastHumanReplyAt).getTime() : 0;
+      if (aiAt && aiAt >= humanAt) {
+        return "AI replied" + (sla.waitingDurationLabel ? " · waiting " + sla.waitingDurationLabel : "");
+      }
+      if (humanAt) return "Coordinator replied";
+      if (sla.lastPatientMessageAt) return "Patient wrote" + (sla.waitingDurationLabel ? " · " + sla.waitingDurationLabel + " ago" : "");
+      return "Updated " + fmtTime(L.updatedAt);
+    }
+
     function renderLeadList() {
       const el = document.getElementById("leadList");
       renderOpsStatusStrip();
       if (!leads.length) {
         el.innerHTML =
-          '<div class="empty">No patients in this queue yet. New conversations from the patient app will appear here.</div>';
+          '<div class="empty">No cases match this filter. Try All active or click Refresh to sync treatment requests and offer chats.</div>';
         return;
       }
       el.innerHTML = leads
@@ -1065,6 +1158,9 @@
             "</span>" +
             "</div>" +
             '<div class="lead-interest">' + esc(interest) + "</div>" +
+            '<div class="lead-status-line">' + esc(L.operationalStatusLabel || "Active") + '</div>' +
+            '<div class="lead-meta-row"><strong>Blocker:</strong> ' + esc(L.blockingReason || "None") + ' · <strong>Next:</strong> ' + esc(L.nextAction || "—") + '</div>' +
+            '<div class="lead-meta-row"><strong>Owner:</strong> ' + esc(ownershipAssignLabel(L)) + ' · ' + esc(lastActivityLabel(L)) + (L.appointmentStatus === "scheduled" ? ' · <strong>Appointment</strong>' : '') + '</div>' +
             (opsBadge ? '<div class="lead-badges">' + opsBadge + "</div>" : "") +
             latestPreview +
             waHint +
@@ -1338,7 +1434,10 @@
       errEl.style.display = "none";
       document.getElementById("leadList").innerHTML = '<div class="empty">Loading…</div>';
       try {
-        let url = "/api/admin/ai-leads?limit=100";
+        let url = "/api/admin/ai-leads?limit=120&sync=1";
+        if (activeOperationalFilter) {
+          url += "&ops=" + encodeURIComponent(activeOperationalFilter);
+        }
         if (activeIntakeQueue) {
           url += "&queue=" + encodeURIComponent(activeIntakeQueue);
         } else if (activeWorkspace && activeWorkspace !== "recent") {
@@ -1351,6 +1450,10 @@
         if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load leads");
         leads = json.leads || [];
         if (json.clinicPolicy) clinicPolicyGlobal = json.clinicPolicy;
+        if (json.operationalFilters && json.operationalFilters.length) {
+          operationalFilterDefs = json.operationalFilters;
+          renderOperationalFilterTabs();
+        }
         if (json.intakeQueues && json.intakeQueues.length) {
           intakeQueueDefs = json.intakeQueues;
           renderIntakeQueueTabs();
@@ -1410,6 +1513,5 @@
     loadQueueCounts();
     loadLeads();
   </script>
-  <script src="/admin-layout.js?v=202605172"></script>
 </body>
 </html>
