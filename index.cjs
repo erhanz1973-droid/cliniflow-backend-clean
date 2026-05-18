@@ -419,6 +419,10 @@ const {
   ensureLeadWorkspaceForClinic,
   markLeadConvertedToClinicPatient,
 } = require("./lib/patientLeadLifecycle");
+const {
+  isCoordinationPlaceholderOffer,
+  ensureCoordinationOfferForRequest,
+} = require("./lib/patientCoordinationChat");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -46078,7 +46082,11 @@ async function resolveLeadOfferIdForPatientClinicMessage(patientIdRaw, clinicIdR
   if (clinicId && UUID_RE.test(clinicId)) {
     offerQ = offerQ.or(`clinic_id.eq.${clinicId},clinic_id.is.null`);
   }
-  const { data: offerRow } = await offerQ.maybeSingle();
+  const { data: offerRows } = await offerQ.limit(20);
+  const offerRow =
+    (offerRows || []).find((o) => !isCoordinationPlaceholderOffer(o)) ||
+    (offerRows || [])[0] ||
+    null;
   const oid = offerRow?.id ? String(offerRow.id).trim() : null;
   if (!oid || !UUID_RE.test(oid)) return null;
 
@@ -52746,8 +52754,15 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
     const unreadDoctorByOffer = await countUnreadDoctorMessagesByOfferIds(allOfferIds);
 
     const offersByRequest = {};
+    const coordinationOfferByRequest = {};
     for (const offer of offers || []) {
       const rId = offer.request_id;
+      if (isCoordinationPlaceholderOffer(offer)) {
+        if (rId && !coordinationOfferByRequest[rId]) {
+          coordinationOfferByRequest[rId] = offer;
+        }
+        continue;
+      }
       if (!offersByRequest[rId]) offersByRequest[rId] = [];
       const docId = offer.doctor_id ? String(offer.doctor_id) : '';
       const cid = offer.clinic_id ? String(offer.clinic_id) : '';
@@ -52783,6 +52798,12 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       const photos = treatmentRequestRowPhotos(r);
       const image_url = firstTreatmentRequestPhotoUrl(photos);
       const reqOffers = offersByRequest[r.id] || [];
+      const coordOffer = coordinationOfferByRequest[r.id] || null;
+      const coordOfferId = coordOffer?.id ? String(coordOffer.id).trim() : null;
+      const coordLatest = coordOfferId ? latestMsgByOffer.get(coordOfferId) : null;
+      const coordLastText = coordLatest
+        ? String(coordLatest.text ?? coordLatest.message_text ?? "").trim()
+        : null;
       const proposal = enrichRequestProposalFields(r, { offerCount: reqOffers.length });
       return {
         id: r.id,
@@ -52797,6 +52818,12 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         status: r.status,
         created_at: r.created_at,
         offers: reqOffers,
+        coordination_offer_id: coordOfferId || null,
+        can_open_chat: !!(coordOfferId || reqOffers.length || cid),
+        coordination_last_message: coordLastText || null,
+        coordination_last_message_at: coordLatest?.created_at || null,
+        coordination_last_message_role: coordLatest?.sender_role || null,
+        coordination_unread_count: coordOfferId ? unreadDoctorByOffer[coordOfferId] || 0 : 0,
         proposal_status: proposal.proposal_status,
         proposal_status_label: proposal.proposal_status_label,
         proposal_waiting_minutes: proposal.proposal_waiting_minutes,
@@ -52948,17 +52975,28 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
           }).catch((e) =>
             console.warn("[treatmentProposalWorkflow] init multi:", e?.message || e),
           );
+          void ensureCoordinationOfferForRequest(String(rowMc.id)).catch((e) =>
+            console.warn("[patientCoordinationChat] init multi:", e?.message || e),
+          );
         }
 
         void (async () => {
           const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
           if (!resolvedPid) return;
+          const requestIdMc = rowMc.id != null ? String(rowMc.id) : "";
+          let offerIdMc = null;
+          if (requestIdMc) {
+            const coordMc = await ensureCoordinationOfferForRequest(requestIdMc);
+            if (coordMc.ok && coordMc.offerId) offerIdMc = coordMc.offerId;
+          }
           return afterPatientInboundMessage({
             patientId: resolvedPid,
             clinicId: cidMc,
             patientMessage: descriptionMc,
             source: "quote_request",
             contextMode: "coordinator",
+            offerId: offerIdMc,
+            treatmentRequestId: requestIdMc || null,
           });
         })().catch((e) => console.warn("[aiSlaContinuity] treatment-request multi:", e?.message || e));
 
@@ -53098,11 +53136,20 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       }).catch((e) =>
         console.warn("[treatmentProposalWorkflow] init:", e?.message || e),
       );
+      void ensureCoordinationOfferForRequest(String(row.id)).catch((e) =>
+        console.warn("[patientCoordinationChat] init:", e?.message || e),
+      );
     }
 
     void (async () => {
       const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
       if (!resolvedPid) return;
+      const requestIdStr = row.id != null ? String(row.id) : "";
+      let coordinationOfferId = null;
+      if (requestIdStr) {
+        const coord = await ensureCoordinationOfferForRequest(requestIdStr);
+        if (coord.ok && coord.offerId) coordinationOfferId = coord.offerId;
+      }
       const quoteText =
         description ||
         [preferred, budget].filter(Boolean).join(" — ") ||
@@ -53113,6 +53160,8 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
         patientMessage: quoteText,
         source: "quote_request",
         contextMode: "coordinator",
+        offerId: coordinationOfferId,
+        treatmentRequestId: requestIdStr || null,
       });
     })().catch((e) => console.warn("[aiSlaContinuity] treatment-request:", e?.message || e));
 
@@ -53133,6 +53182,69 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
     return res.status(500).json({ ok: false, error: 'internal_error' });
   }
 });
+
+// POST /api/patient/treatment-requests/:requestId/ensure-coordination-chat
+// Opens offer_messages workspace before a formal clinic proposal exists.
+app.post(
+  "/api/patient/treatment-requests/:requestId/ensure-coordination-chat",
+  requireToken,
+  async (req, res) => {
+    try {
+      if (!isSupabaseEnabled()) {
+        return res.status(503).json({ ok: false, error: "supabase_disabled" });
+      }
+      const tokenPatientId = String(req.patientId || "").trim();
+      if (!tokenPatientId) {
+        return res.status(400).json({ ok: false, error: "patientId_required" });
+      }
+      const requestId = String(req.params.requestId || "").trim();
+      if (!UUID_RE.test(requestId)) {
+        return res.status(400).json({ ok: false, error: "invalid_request_id" });
+      }
+
+      const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+      const patientIdFilters = treatmentRequestPatientIdFilters(tokenPatientId, resolvedUuid);
+      if (!patientIdFilters.length) {
+        return res.status(404).json({ ok: false, error: "patient_not_found" });
+      }
+
+      let trQ = supabase
+        .from("treatment_requests")
+        .select("id, patient_id, clinic_id, preferred_treatment, status, lead_status")
+        .eq("id", requestId);
+      trQ =
+        patientIdFilters.length === 1
+          ? trQ.eq("patient_id", patientIdFilters[0])
+          : trQ.in("patient_id", patientIdFilters);
+      const { data: tr, error: trErr } = await trQ.maybeSingle();
+      if (trErr || !tr?.id) {
+        return res.status(404).json({ ok: false, error: "request_not_found" });
+      }
+
+      const result = await ensureCoordinationOfferForRequest(requestId, { createIfMissing: true });
+      if (!result.ok || !result.offerId) {
+        return res.status(422).json({
+          ok: false,
+          error: result.reason || "coordination_unavailable",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        route: "offer_chat",
+        offer_id: result.offerId,
+        coordination_offer_id: result.offerId,
+        has_formal_offer: result.hasFormalOffer === true,
+        offer_created: result.offerCreated === true,
+        clinic_id: result.clinicId || tr.clinic_id || null,
+        request_id: requestId,
+      });
+    } catch (e) {
+      console.error("[ensure-coordination-chat]", e);
+      return res.status(500).json({ ok: false, error: "internal_error" });
+    }
+  },
+);
 
 // POST /api/patient/treatment-requests/mark-seen
 // Sets patient_seen_at = NOW() on all answered requests that haven't been seen yet.
