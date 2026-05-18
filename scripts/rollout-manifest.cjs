@@ -25,6 +25,10 @@ const REQUIRED_MIGRATIONS = [
   "20260518190000_treatment_price_variants.sql",
   "20260518200000_treatment_price_label_i18n.sql",
   "20260518210000_treatment_price_variants_clinic_id.sql",
+  "20260518240000_treatment_proposal_workflow.sql",
+  "20260518250000_treatment_requests_patient_seen_at.sql",
+  "20260518260000_treatment_requests_lead_status.sql",
+  "20260518270000_coordinator_channel_taxonomy.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
