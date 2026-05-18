@@ -423,6 +423,10 @@ const {
   isCoordinationPlaceholderOffer,
   ensureCoordinationOfferForRequest,
 } = require("./lib/patientCoordinationChat");
+const {
+  setupTreatmentRequestOrchestration,
+  orchestrateTreatmentRequestCreated,
+} = require("./lib/treatmentRequestOrchestration");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -7502,6 +7506,22 @@ app.get("/api/health", async (req, res) => {
             error: String(e && e.message ? e.message : e),
           };
         }
+        try {
+          const {
+            validatePricingSchemaAtStartup,
+            getLastPricingSchemaStatus,
+          } = require("./lib/schemaStartupValidation");
+          const cached = getLastPricingSchemaStatus();
+          payload.pricingSchema =
+            cached && cached.checkedAt
+              ? cached
+              : await validatePricingSchemaAtStartup();
+        } catch (schemaErr) {
+          payload.pricingSchema = {
+            ok: false,
+            error: String(schemaErr && schemaErr.message ? schemaErr.message : schemaErr),
+          };
+        }
       } else {
         payload.database = {
           ok: null,
@@ -13447,6 +13467,79 @@ app.patch("/api/patient/language", requireToken, canonicalPatientUuid, async (re
   }
 });
 
+// POST /api/patient/me/appointments — book consultation + sync coordinator workspace
+app.post("/api/patient/me/appointments", requireToken, canonicalPatientUuid, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const patientId = String(req.patientUuid || req.patientId || "").trim();
+    const body = req.body || {};
+    const clinicId = String(body.clinicId || body.clinic_id || "").trim();
+    const startAtRaw = body.startAt || body.start_at || body.scheduledAt || body.date;
+    const {
+      persistAppointmentRow,
+      syncAppointmentToCoordination,
+      toStartIso,
+      resolvePatientClinicId,
+    } = require("./lib/appointmentCoordinationSync");
+
+    let cid = clinicId;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cid)) {
+      cid = (await resolvePatientClinicId(patientId)) || "";
+    }
+    if (!cid) {
+      return res.status(400).json({ ok: false, error: "clinic_id_required" });
+    }
+
+    const startAt = toStartIso(startAtRaw);
+    if (!startAt) {
+      return res.status(400).json({ ok: false, error: "invalid_start_at" });
+    }
+
+    const treatmentLabel = String(body.treatment || body.procedure || body.treatmentLabel || "Consultation").trim();
+    const persisted = await persistAppointmentRow({
+      patient_id: patientId,
+      clinic_id: cid,
+      start_at: startAt,
+      procedure: treatmentLabel,
+      status: "scheduled",
+      duration_minutes: Number(body.durationMinutes || body.duration_minutes) || 30,
+      notes: body.notes || null,
+    });
+
+    const sync = await syncAppointmentToCoordination({
+      patientId,
+      clinicId: cid,
+      eventType: "appointment_booked",
+      appointment: {
+        id: persisted.ok ? persisted.id : null,
+        startAt,
+        treatmentLabel,
+        status: "scheduled",
+        source: "patient_self_book",
+      },
+      source: "patient_self_book",
+      sendPatientMessage: body.sendPatientMessage !== false,
+      locale: String(body.locale || "en").slice(0, 5),
+    });
+
+    return res.status(201).json({
+      ok: true,
+      appointment: {
+        id: persisted.id || null,
+        startAt,
+        treatment: treatmentLabel,
+        persisted: persisted.ok,
+      },
+      coordination: sync,
+    });
+  } catch (e) {
+    console.error("[POST /api/patient/me/appointments]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error", message: e?.message || "Internal server error" });
+  }
+});
+
 // GET /api/patient/price-estimate?treatments=cleaning,whitening&lat=&lng=&country=
 // Server-side only: min/max and per-clinic totals from clinics.prices (jsonb) or settings.prices.
 app.get("/api/patient/price-estimate", requireToken, async (req, res) => {
@@ -19163,6 +19256,21 @@ app.get("/api/patient/:patientId/timeline", requireToken, async (req, res) => {
       });
     });
 
+    try {
+      const { listPatientCoordinationTimelineItems } = require("./lib/appointmentCoordinationSync");
+      const coordItems = await listPatientCoordinationTimelineItems(patientId, null);
+      for (const ci of coordItems) {
+        if (!items.some((x) => x.id === ci.id)) items.push(ci);
+      }
+      items.sort((a, b) => {
+        const ta = Date.parse(a.start_date || a.created_at || "") || 0;
+        const tb = Date.parse(b.start_date || b.created_at || "") || 0;
+        return ta - tb;
+      });
+    } catch (coordTimelineErr) {
+      console.warn("[TIMELINE] coordination appointments skipped:", coordTimelineErr?.message || coordTimelineErr);
+    }
+
     console.log(`[TIMELINE] patientId=${patientId} total items=${items.length} (flights=${allFlights.length})`);
     return res.json({ ok: true, items });
   } catch (e) {
@@ -22935,6 +23043,19 @@ async function upsertAdminProcedureIntoEncounterTreatments({
     if (error) console.warn("[ET UPSERT] insert failed:", error.message, "tooth:", toothNum, "proc:", etId);
     else console.log("[ET UPSERT] inserted:", etId, "tooth:", toothNum, "enc:", encounterId, "created_by:", createdByDoctorId);
   }
+
+  if (schedIso && patientUuid && UUID_RE.test(clinicUuidForTz)) {
+    void require("./lib/appointmentCoordinationSync")
+      .syncAppointmentFromProcedureSchedule({
+        patientId: patientUuid,
+        clinicId: clinicUuidForTz,
+        scheduledAt: schedIso,
+        treatmentLabel: String(typeFinal || "Consultation"),
+        source: "encounter_treatment_upsert",
+        sendPatientMessage: false,
+      })
+      .catch((e) => console.warn("[appointmentCoordination] encounter upsert:", e?.message || e));
+  }
 }
 
 /**
@@ -23361,6 +23482,26 @@ app.post("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asy
       error: "scheduling_alert_sync_failed",
       details: alertError?.message || null,
     };
+  }
+
+  if (dateFinal) {
+    try {
+      const { syncAppointmentFromProcedureSchedule, resolvePatientClinicId } = require("./lib/appointmentCoordinationSync");
+      const coordClinicId =
+        req.isAdmin && req.clinicId ? String(req.clinicId) : await resolvePatientClinicId(patientId);
+      await syncAppointmentFromProcedureSchedule({
+        patientId,
+        clinicId: coordClinicId,
+        scheduledAt: dateFinal,
+        treatmentLabel: typeFinal,
+        source: "patient_treatment_post",
+        previousScheduledAt:
+          prevProcForSchedule?.scheduledAt || prevProcForSchedule?.date || null,
+        sendPatientMessage: false,
+      });
+    } catch (coordErr) {
+      console.warn("[TREATMENTS POST] appointment coordination:", coordErr?.message || coordErr);
+    }
   }
   
   // Return the updated data in the same format as GET endpoint
@@ -42461,7 +42602,12 @@ app.post("/api/admin/treatment-prices/:id/variants/sync", requireAdminAuth, asyn
     if (!result.ok) {
       const status =
         result.error === "price_not_found" ? 404 : result.error === "variants_table_missing" ? 503 : 400;
-      return res.status(status).json(result);
+      return res.status(status).json({
+        ...result,
+        ok: false,
+        variantsTable: "public.treatment_price_variants",
+        applyMigration: result.migration || "supabase/migrations/20260518190000_treatment_price_variants.sql",
+      });
     }
     return res.json({
       ok: true,
@@ -43409,6 +43555,18 @@ async function postBootInit() {
     // Test Supabase connection
     if (isSupabaseEnabled()) {
       await testSupabaseConnection();
+      try {
+        const {
+          validatePricingSchemaAtStartup,
+          logPricingSchemaStartup,
+        } = require("./lib/schemaStartupValidation");
+        const { setVariantsClinicIdColumnSupported } = require("./lib/clinicTreatmentPriceVariants");
+        const pricingSchema = await validatePricingSchemaAtStartup();
+        setVariantsClinicIdColumnSupported(pricingSchema.variantsClinicIdColumn === true);
+        logPricingSchemaStartup(pricingSchema);
+      } catch (schemaErr) {
+        console.error("[POST-BOOT] pricing schema validation failed:", schemaErr?.message || schemaErr);
+      }
     } else {
 
     }
@@ -52973,37 +53131,20 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
         const rowMc = insertedMc || {};
         if (rowMc.id != null) requestIdsMc.push(String(rowMc.id));
         if (rowMc.id != null) {
-          void initProposalOnRequestCreate({
-            id: rowMc.id,
-            clinic_id: cidMc,
-            patient_id: resolvedMulti,
+          void orchestrateTreatmentRequestCreated({
+            requestRow: {
+              id: rowMc.id,
+              patient_id: resolvedMulti,
+              clinic_id: cidMc,
+              description: descriptionMc,
+              preferred_treatment: preferredMc,
+            },
+            patientMessage: descriptionMc,
+            skipProposalInit: false,
           }).catch((e) =>
-            console.warn("[treatmentProposalWorkflow] init multi:", e?.message || e),
-          );
-          void ensureCoordinationOfferForRequest(String(rowMc.id)).catch((e) =>
-            console.warn("[patientCoordinationChat] init multi:", e?.message || e),
+            console.warn("[treatmentRequestOrchestration] multi:", e?.message || e),
           );
         }
-
-        void (async () => {
-          const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
-          if (!resolvedPid) return;
-          const requestIdMc = rowMc.id != null ? String(rowMc.id) : "";
-          let offerIdMc = null;
-          if (requestIdMc) {
-            const coordMc = await ensureCoordinationOfferForRequest(requestIdMc);
-            if (coordMc.ok && coordMc.offerId) offerIdMc = coordMc.offerId;
-          }
-          return afterPatientInboundMessage({
-            patientId: resolvedPid,
-            clinicId: cidMc,
-            patientMessage: descriptionMc,
-            source: "quote_request",
-            contextMode: "coordinator",
-            offerId: offerIdMc,
-            treatmentRequestId: requestIdMc || null,
-          });
-        })().catch((e) => console.warn("[aiSlaContinuity] treatment-request multi:", e?.message || e));
 
         if (primaryPhoto) {
           const photoAttachMc = attachmentObjectFromPhotoUrl(primaryPhoto);
@@ -53133,42 +53274,29 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       clinic_id: String(clinicId).slice(0, 8),
     });
 
+    let coordinationOfferId = null;
     if (row.id != null) {
-      void initProposalOnRequestCreate({
-        id: row.id,
-        clinic_id: clinicId,
-        patient_id: resolvedPatientId,
+      const coordQuick = await ensureCoordinationOfferForRequest(String(row.id), {
+        createIfMissing: true,
+      });
+      if (coordQuick.ok && coordQuick.offerId) {
+        coordinationOfferId = coordQuick.offerId;
+      }
+      void orchestrateTreatmentRequestCreated({
+        requestRow: {
+          id: row.id,
+          patient_id: resolvedPatientId,
+          clinic_id: clinicId,
+          description,
+          preferred_treatment: preferred,
+        },
+        patientMessage:
+          description || [preferred, budget].filter(Boolean).join(" — ") || "Treatment quote request",
+        skipProposalInit: false,
       }).catch((e) =>
-        console.warn("[treatmentProposalWorkflow] init:", e?.message || e),
-      );
-      void ensureCoordinationOfferForRequest(String(row.id)).catch((e) =>
-        console.warn("[patientCoordinationChat] init:", e?.message || e),
+        console.warn("[treatmentRequestOrchestration]:", e?.message || e),
       );
     }
-
-    void (async () => {
-      const resolvedPid = await resolveMessagesPatientDbId(tokenPatientId);
-      if (!resolvedPid) return;
-      const requestIdStr = row.id != null ? String(row.id) : "";
-      let coordinationOfferId = null;
-      if (requestIdStr) {
-        const coord = await ensureCoordinationOfferForRequest(requestIdStr);
-        if (coord.ok && coord.offerId) coordinationOfferId = coord.offerId;
-      }
-      const quoteText =
-        description ||
-        [preferred, budget].filter(Boolean).join(" — ") ||
-        "Treatment quote request";
-      return afterPatientInboundMessage({
-        patientId: resolvedPid,
-        clinicId,
-        patientMessage: quoteText,
-        source: "quote_request",
-        contextMode: "coordinator",
-        offerId: coordinationOfferId,
-        treatmentRequestId: requestIdStr || null,
-      });
-    })().catch((e) => console.warn("[aiSlaContinuity] treatment-request:", e?.message || e));
 
     return res.status(201).json({
       ok: true,
@@ -53180,6 +53308,8 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
         preferred_treatment: row.preferred_treatment != null ? row.preferred_treatment : preferred,
         status: row.status || 'pending',
         created_at: row.created_at || nowIso,
+        coordination_offer_id: coordinationOfferId,
+        can_open_chat: !!(coordinationOfferId || clinicId),
       },
     });
   } catch (e) {
@@ -58620,6 +58750,7 @@ setupOfferInboundOrchestration({
     }
   },
 });
+setupTreatmentRequestOrchestration({ insertIntoTableWithColumnPruning });
 const inboundClinicMessageInsert = createOfferAwareClinicMessageInsert(
   baseInboundClinicMessageInsert,
 );
