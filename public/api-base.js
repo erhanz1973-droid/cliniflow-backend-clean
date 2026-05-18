@@ -85,13 +85,32 @@
     return /\.netlify\.app$/i.test(String(hostname || ''));
   }
 
+  /** Admin static + API on one Railway service (e.g. cliniflow-backend-clean-production.up.railway.app). */
+  function isRailwayBackendHost(hostname) {
+    return /\.up\.railway\.app$/i.test(String(hostname || ''));
+  }
+
+  function isKnownBackendApiHost(hostname) {
+    var h = String(hostname || '');
+    if (!h) return false;
+    try {
+      if (h === new URL(DEFAULT_BACKEND_API).hostname) return true;
+    } catch (_e) {}
+    return isRailwayBackendHost(h);
+  }
+
+  function pageOrigin() {
+    if (typeof w.location === 'undefined' || !w.location.origin) return '';
+    return stripTrailingSlash(String(w.location.origin));
+  }
+
   var SOURCE_LABELS = {
     manual_override: 'Manual override',
     env: 'Environment variable',
     cache: 'Page meta (cliniflow-api-base)',
     default_backend: 'Default backend',
     legacy_render_admin: 'Legacy Render admin host',
-    same_origin: 'Same-origin (relative URLs)',
+    same_origin: 'Same-origin (admin on API host)',
   };
 
   /**
@@ -121,6 +140,10 @@
     }
     if (isNetlifyUiHost(h)) {
       return { origin: stripTrailingSlash(DEFAULT_BACKEND_API), source: 'default_backend' };
+    }
+    if (isKnownBackendApiHost(h)) {
+      var same = pageOrigin();
+      if (same) return { origin: same, source: 'same_origin' };
     }
     return { origin: '', source: 'same_origin' };
   }
@@ -153,10 +176,11 @@
     rawCacheSource: cachedSource,
   };
 
-  function logApiResolution(prefix, payload) {
+  function logApiResolution(prefix, payload, opts) {
+    if (opts && opts.silent) return;
     try {
-      console.log(prefix, payload.origin || '(empty — relative URLs)');
-      console.log('[api-base] API source:', payload.source);
+      var label = SOURCE_LABELS[payload.source] || payload.source;
+      console.log(prefix, payload.origin || '(relative URLs)', '· source:', payload.source, '—', label);
     } catch (_e) {
       /* ignore */
     }
@@ -165,7 +189,7 @@
   logApiResolution('🌐 API BASE (raw cache):', {
     origin: cached,
     source: cachedSource,
-  });
+  }, { silent: cachedSource === 'same_origin' && !!cached });
 
   w.cliniflowApiBase = function () {
     return cached;
@@ -198,6 +222,17 @@
         }
       }
     } catch (_e) {}
+    var pageHost =
+      typeof w.location !== 'undefined' ? String(w.location.hostname || '') : '';
+    if (isKnownBackendApiHost(pageHost)) {
+      var same = pageOrigin();
+      if (same) {
+        adminResolution.origin = same;
+        adminResolution.source = 'same_origin';
+        adminResolution.sourceLabel = SOURCE_LABELS.same_origin;
+        return same;
+      }
+    }
     if (!_adminApiFallbackLogged) {
       _adminApiFallbackLogged = true;
       try {
@@ -232,10 +267,14 @@
   w.API_BASE_URL = cliniflowAdminApiOriginImpl();
   w.API_BASE = w.API_BASE_URL;
 
-  logApiResolution('🌐 API BASE (admin resolve):', {
-    origin: w.API_BASE_URL,
-    source: adminResolution.source,
-  });
+  logApiResolution(
+    '🌐 API BASE (admin resolve):',
+    {
+      origin: w.API_BASE_URL,
+      source: adminResolution.source,
+    },
+    { silent: adminResolution.source === 'same_origin' },
+  );
 
   w.apiUrl = function (path) {
     var p = String(path || '');
