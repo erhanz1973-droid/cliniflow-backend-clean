@@ -414,6 +414,11 @@ const {
   setupProposalSlaSweep,
 } = require("./lib/treatmentProposalWorkflow");
 const { resolveOperationalClinicId } = require("./lib/clinicOperationalContext");
+const {
+  LEAD_STATUS,
+  ensureLeadWorkspaceForClinic,
+  markLeadConvertedToClinicPatient,
+} = require("./lib/patientLeadLifecycle");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -2163,21 +2168,10 @@ async function updatePatientRowWithColumnPruning(resolvedPatientId, patch) {
   return { ok: false, error: new Error("prune_exhausted") };
 }
 
+/** @deprecated — use ensureLeadWorkspaceForClinic; does not set patients.clinic_id. */
 async function patchPatientClinicIfMissing(resolvedPatientId, clinicId) {
-  if (!isSupabaseEnabled() || !resolvedPatientId || !clinicId) return;
-  const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
-    resolvedPatientId
-  );
-  const has =
-    (rowClinicId && String(rowClinicId).trim()) || (rowClinicCode && String(rowClinicCode).trim());
-  if (has) return;
-  const patch = { clinic_id: clinicId, is_lead: true };
-  const { data: c } = await supabase.from("clinics").select("clinic_code").eq("id", clinicId).maybeSingle();
-  if (c?.clinic_code) patch.clinic_code = String(c.clinic_code).trim().toUpperCase();
-  const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patch);
-  if (!up.ok) {
-    console.warn("[MESSAGES] patchPatientClinicIfMissing failed", up.error?.message || up.error || "update_failed");
-  }
+  if (!resolvedPatientId || !clinicId) return;
+  await ensureLeadWorkspaceForClinic(resolvedPatientId, clinicId, { source: "legacy_patchPatientClinicIfMissing" });
 }
 
 /** Bazı prod DB'lerde patient_chat_threads yok; PostgREST PGRST205 “schema cache” / `chat_threads` önerisi. */
@@ -2614,49 +2608,35 @@ async function maybeAutoAssignInboundLeadThread(resolvedPatientId, inboundClinic
 }
 
 /**
- * When the app sends a message from the clinic list it knows clinicCode/clinicId; patient row may still be unlinked.
- * Best-effort: set patients.clinic_id / clinic_code and mark is_lead only if the patient has neither (does not override existing clinic).
+ * Resolve clinic for messaging routing only — does NOT set patients.clinic_id (quote ≠ membership).
+ * Ensures lead thread + coordinator workspace for operational AI/chat.
  */
 async function applyClinicContextToPatientIfMissing(resolvedPatientId, contextClinicCodeRaw, contextClinicIdRaw) {
   if (!isSupabaseEnabled() || !resolvedPatientId) return;
-  const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
-    resolvedPatientId
-  );
-  const hasClinic =
-    (rowClinicId && String(rowClinicId).trim()) || (rowClinicCode && String(rowClinicCode).trim());
-  if (hasClinic) return;
 
   const ctxCode = String(contextClinicCodeRaw || "").trim().toUpperCase();
   const ctxId = String(contextClinicIdRaw || "").trim();
   let targetClinicId = null;
-  let targetClinicCode = null;
   if (ctxId && UUID_RE.test(ctxId)) {
-    const { data: c } = await supabase.from("clinics").select("id, clinic_code").eq("id", ctxId).maybeSingle();
-    if (c?.id) {
-      targetClinicId = String(c.id);
-      if (c.clinic_code) targetClinicCode = String(c.clinic_code).trim().toUpperCase();
-    }
-  }
-  if (!targetClinicId && ctxCode) {
+    targetClinicId = ctxId;
+  } else if (ctxCode) {
     const c = await getClinicByCode(ctxCode);
-    if (c?.id) {
-      targetClinicId = String(c.id);
-      targetClinicCode = ctxCode;
-    }
+    if (c?.id) targetClinicId = String(c.id);
   }
-  if (!targetClinicId) return;
-
-  const patch = { clinic_id: targetClinicId, is_lead: true };
-  if (targetClinicCode) patch.clinic_code = targetClinicCode;
-  const up = await updatePatientRowWithColumnPruning(resolvedPatientId, patch);
-  if (!up.ok) {
-    console.warn("[MESSAGES] patient_clinic_context_patch_failed", up.error?.message || up.error || "update_failed");
-  } else {
-    console.log("[MESSAGES] patient_clinic_context_applied", {
-      patient_id: resolvedPatientId,
-      clinic_id: targetClinicId,
+  if (!targetClinicId) {
+    const resolved = await resolveOperationalClinicId(resolvedPatientId, {
+      contextClinicId: ctxId,
+      contextClinicCode: ctxCode,
+      logLabel: "applyClinicContext_workspace_only",
     });
+    targetClinicId = resolved.clinicId || null;
   }
+  if (!targetClinicId || !UUID_RE.test(targetClinicId)) return;
+
+  await ensureLeadWorkspaceForClinic(resolvedPatientId, targetClinicId, {
+    source: "patient_message_context",
+    leadStatus: LEAD_STATUS.INQUIRY,
+  });
 }
 
 async function _insertMessageToSupabaseCore({
@@ -13012,6 +12992,10 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
         message: upErr?.message || "Güncelleme başarısız.",
       });
     }
+
+    void markLeadConvertedToClinicPatient(patientRow.id, clinic.id).catch((e) =>
+      console.warn("[PATCH /api/patient/clinic] lead convert flags:", e?.message || e),
+    );
 
     const patientStatusAfterJoin =
       patientStatus === "PENDING" || patientStatus === "" ? "ACTIVE" : patientStatus;
@@ -43931,7 +43915,7 @@ async function collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw)
     if (!keys.length) return true;
     for (let i = 0; i < keys.length; i += 80) {
       const chunk = keys.slice(i, i + 80);
-      const { data, error } = await supabase.from("patients").select("id, patient_id").in(col, chunk);
+      const { data, error } = await supabase.from("patients").select("id, patient_id, is_lead, clinic_id").in(col, chunk);
       if (error) {
         const c = String(error.code || "");
         if (["42703", "PGRST204", "PGRST205"].includes(c)) return false;
@@ -43939,6 +43923,7 @@ async function collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw)
         return true;
       }
       (data || []).forEach((r) => {
+        if (r?.is_lead === true) return;
         if (r?.id) out.add(String(r.id).trim());
         if (r?.patient_id != null && String(r.patient_id).trim()) out.add(String(r.patient_id).trim());
       });
@@ -46782,7 +46767,9 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         const c = String(clinicId).trim();
         patients = patients.filter((row) => {
           const pc = row?.clinic_id != null ? String(row.clinic_id).trim() : "";
-          if (pc && pc !== c) return false;
+          if (!pc || pc !== c) return false;
+          if (row.is_lead === true) return false;
+          if (row.archived_at != null && String(row.archived_at).trim() !== "") return false;
           return true;
         });
       }
@@ -52814,6 +52801,8 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         proposal_status_label: proposal.proposal_status_label,
         proposal_waiting_minutes: proposal.proposal_waiting_minutes,
         proposal_draft_available: proposal.proposal_draft_available,
+        lead_status: r.lead_status || null,
+        is_clinic_member: false,
       };
     });
 
