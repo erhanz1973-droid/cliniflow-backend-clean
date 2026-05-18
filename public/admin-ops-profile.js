@@ -24,6 +24,7 @@ const SECTION_I18N_ID = {
   "ai-safety": "aiSafety",
   handoff: "handoff",
   "internal-notes": "internalNotes",
+  "conversion-coordinator": "conversionCoordinator",
 };
 
 function op(key, params) {
@@ -355,6 +356,43 @@ function renderAllSections() {
     </form>`,
   );
 
+  const conv = s.conversionCoordinator || {};
+  renderSectionShell(
+    "conversion-coordinator",
+    secTitle("conversion-coordinator"),
+    secHint("conversion-coordinator"),
+    `<p class="field-helper">Default: <strong>Soft Conversion Coordinator</strong> — helpful, trust-building, conversion-aware, non-pushy. The Conversion Engine runs before each AI reply.</p>
+    <form class="ops-form" data-form="conversion-coordinator">
+      <div class="check-row" style="margin-bottom:12px"><label><input type="checkbox" name="enabled" ${conv.enabled !== false ? "checked" : ""}/> Enable Conversion Engine</label></div>
+      <div class="form-grid">
+        ${fld("preset", `<select name="preset">
+          <option value="soft_conversion_coordinator"${conv.preset === "soft_conversion_coordinator" || !conv.preset ? " selected" : ""}>Soft Conversion Coordinator</option>
+          <option value="balanced_coordinator"${conv.preset === "balanced_coordinator" ? " selected" : ""}>Balanced Coordinator</option>
+          <option value="consultation_focused"${conv.preset === "consultation_focused" ? " selected" : ""}>Consultation Focused</option>
+        </select>`)}
+        ${fld("conversionIntensity", `<select name="conversionIntensity">
+          <option value="low"${conv.conversionIntensity === "low" || !conv.conversionIntensity ? " selected" : ""}>Low (recommended)</option>
+          <option value="medium"${conv.conversionIntensity === "medium" ? " selected" : ""}>Medium</option>
+          <option value="high"${conv.conversionIntensity === "high" ? " selected" : ""}>High</option>
+        </select>`)}
+        ${fld("ctaAggressiveness", `<select name="ctaAggressiveness">
+          <option value="soft"${conv.ctaAggressiveness === "soft" || !conv.ctaAggressiveness ? " selected" : ""}>Soft CTA</option>
+          <option value="medium"${conv.ctaAggressiveness === "medium" ? " selected" : ""}>Medium CTA</option>
+          <option value="firm"${conv.ctaAggressiveness === "firm" ? " selected" : ""}>Firm CTA</option>
+        </select>`)}
+        ${fld("pricingBehavior", `<select name="pricingBehavior">
+          <option value="educate_then_range"${conv.pricingBehavior === "educate_then_range" || !conv.pricingBehavior ? " selected" : ""}>Educate, then give range</option>
+          <option value="range_only"${conv.pricingBehavior === "range_only" ? " selected" : ""}>Range only (brief)</option>
+          <option value="defer_to_coordinator"${conv.pricingBehavior === "defer_to_coordinator" ? " selected" : ""}>Defer to coordinator</option>
+        </select>`)}
+        ${fld("followUpStyle", `<select name="followUpStyle">
+          <option value="gentle_check_in"${conv.followUpStyle === "gentle_check_in" || !conv.followUpStyle ? " selected" : ""}>Gentle check-in</option>
+          <option value="proactive_next_step"${conv.followUpStyle === "proactive_next_step" ? " selected" : ""}>Proactive next step</option>
+        </select>`)}
+        ${fld("forbiddenPhrases", `<textarea name="forbiddenPhrases" rows="4" placeholder="One per line or comma-separated">${esc((conv.forbiddenPhrases || []).join("\n"))}</textarea>`, true)}
+      </div>
+    </form>`,
+  );
 
   const m = s.materials || {};
   renderSectionShell(
@@ -543,6 +581,20 @@ function collectSectionPayload(sectionId) {
           .map((s) => s.trim())
           .filter(Boolean),
         freeformNotes: String(fd.get("freeformNotes") || "").trim(),
+      };
+    case "conversion-coordinator":
+      return {
+        version: 1,
+        enabled: chk("enabled"),
+        preset: String(fd.get("preset") || "soft_conversion_coordinator").trim(),
+        conversionIntensity: String(fd.get("conversionIntensity") || "low").trim(),
+        ctaAggressiveness: String(fd.get("ctaAggressiveness") || "soft").trim(),
+        pricingBehavior: String(fd.get("pricingBehavior") || "educate_then_range").trim(),
+        followUpStyle: String(fd.get("followUpStyle") || "gentle_check_in").trim(),
+        forbiddenPhrases: String(fd.get("forbiddenPhrases") || "")
+          .split(/[\n,]+/)
+          .map((s) => s.trim())
+          .filter(Boolean),
       };
     case "ai-safety": {
       const categories = {};
