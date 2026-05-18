@@ -361,6 +361,11 @@
       <div class="ops-filter-tabs" id="operationalFilterTabs"></div>
     </div>
 
+    <div class="ops-filter-section">
+      <div class="queue-section-hd">Responder handling</div>
+      <div class="ops-filter-tabs" id="handlingFilterTabs"></div>
+    </div>
+
     <p class="scan-hint">
       <strong>Quick scan:</strong> patient → treatment interest → blocker → who is waiting → next step.
     </p>
@@ -463,7 +468,9 @@
     let activeSignalFilter = null;
     let activeIntakeQueue = "";
     let activeOperationalFilter = "";
+    let activeHandlingFilter = "";
     let operationalFilterDefs = [];
+    let handlingFilterDefs = [];
     let intakeQueueDefs = [];
     let leads = [];
     let selectedId = null;
@@ -639,6 +646,40 @@
       if (!id) return "—";
       const s = String(id);
       return s.length > 10 ? s.slice(0, 8) + "…" : s;
+    }
+
+
+    function renderHandlingFilterTabs() {
+      const el = document.getElementById("handlingFilterTabs");
+      if (!el) return;
+      const defs = handlingFilterDefs.length
+        ? handlingFilterDefs
+        : [{ id: "", label: "All handling", count: leads.length }];
+      el.innerHTML = defs
+        .map(function (f) {
+          const active = activeHandlingFilter === (f.id || "") ? " active" : "";
+          const count = f.count != null && f.count > 0 ? ' <span class="q-count">' + f.count + "</span>" : "";
+          return (
+            '<button type="button" class="ops-filter-btn' +
+            active +
+            '" data-handling="' +
+            esc(f.id || "") +
+            '" title="' +
+            esc(f.description || "") +
+            '">' +
+            esc(f.label) +
+            count +
+            "</button>"
+          );
+        })
+        .join("");
+      el.querySelectorAll(".ops-filter-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeHandlingFilter = btn.getAttribute("data-handling") || "";
+          renderHandlingFilterTabs();
+          loadLeads();
+        });
+      });
     }
 
     function renderMissionControl(L) {
@@ -1077,9 +1118,10 @@
     }
 
     function ownershipAssignLabel(L) {
-      if (L.coordinationMode === "human_active") return "Coordinator (human)";
-      if (L.delegation && L.delegation.statusLabel) return L.delegation.statusLabel;
-      return "AI assisting";
+      if (L.primaryResponderLabel) return L.primaryResponderLabel;
+      if (L.responderModeLabel) return L.responderModeLabel;
+      if (L.coordinationMode === "human_active") return "Human coordinator";
+      return "AI Coordinator";
     }
 
     function lastActivityLabel(L) {
@@ -1129,6 +1171,9 @@
               esc(L.operationalStatusLabel) +
               "</span>"
             : "";
+          const handlingBadge = L.handlingStateLabel
+            ? '<span class="badge" style="background:#e0e7ff;color:#3730a3">' + esc(L.handlingStateLabel) + "</span>"
+            : "";
           const waHint =
             L.hasWhatsapp
               ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#047857;margin-top:4px">WhatsApp on file</div>'
@@ -1161,7 +1206,7 @@
             '<div class="lead-status-line">' + esc(L.operationalStatusLabel || "Active") + '</div>' +
             '<div class="lead-meta-row"><strong>Blocker:</strong> ' + esc(L.blockingReason || "None") + ' · <strong>Next:</strong> ' + esc(L.nextAction || "—") + '</div>' +
             '<div class="lead-meta-row"><strong>Owner:</strong> ' + esc(ownershipAssignLabel(L)) + ' · ' + esc(lastActivityLabel(L)) + (L.appointmentStatus === "scheduled" ? ' · <strong>Appointment</strong>' : '') + '</div>' +
-            (opsBadge ? '<div class="lead-badges">' + opsBadge + "</div>" : "") +
+            (opsBadge || handlingBadge ? '<div class="lead-badges">' + opsBadge + handlingBadge + "</div>" : "") +
             latestPreview +
             waHint +
             ownership +
@@ -1189,43 +1234,55 @@
     function renderDelegationBar(L) {
       const d = L.delegation || {};
       const policy = L.clinicPolicy || clinicPolicyGlobal || {};
-      const current =
-        d.uiPreset ||
-        (d.aiMode === "AI_ACTIVE" ? "ACTIVE" : d.aiMode === "HUMAN_ONLY" ? "OFF" : "ASSIST");
-      const escalated = !!(L.aiEscalationRequired || d.aiEscalationRequired);
-      const modes = [
-        { id: "OFF", label: "Off" },
-        { id: "ASSIST", label: "Assist" },
-        { id: "ACTIVE", label: "Active" },
+      const responder = L.responderMode || "HYBRID";
+      const escalated = responder === "ESCALATED" || !!(L.aiEscalationRequired || d.aiEscalationRequired);
+      const responderModes = [
+        { id: "AI_ACTIVE", label: "AI Coordinator" },
+        { id: "HYBRID", label: "Hybrid" },
+        { id: "HUMAN_ACTIVE", label: "Human" },
+        { id: "ESCALATED", label: "Escalated" },
+      ];
+      const primaryOptions = [
+        { id: "ai_coordinator", label: "AI Coordinator" },
+        { id: "doctor", label: "Doctor" },
+        { id: "shared_queue", label: "Shared queue" },
       ];
       const statusClass = escalated ? " delegation-status escalation" : " delegation-status";
       let html =
         '<div class="delegation-bar" id="delegationBar">' +
-        '<div class="delegation-hd">Live AI coordination <span style="font-weight:500;text-transform:none;color:var(--muted)">(this patient)</span></div>' +
+        '<div class="delegation-hd">Hybrid coordination <span style="font-weight:500;text-transform:none;color:var(--muted)">(this patient)</span></div>' +
         '<div class="' +
         statusClass.trim() +
         '">' +
-        esc(d.statusLabel || L.aiStatusLabel || "—") +
+        esc(L.primaryResponderLabel || "AI Coordinator") +
+        " · " +
+        esc(L.responderModeLabel || d.statusLabel || L.aiStatusLabel || "—") +
+        (L.handlingStateLabel ? " · " + esc(L.handlingStateLabel) : "") +
         "</div>" +
-        '<div class="delegation-tabs">';
-      modes.forEach(function (m) {
-        const active = current === m.id ? " active" : "";
-        const disabled =
-          escalated && m.id !== "OFF"
-            ? " disabled"
-            : m.id === "ACTIVE" && policy.ceilingMode === "AI_DRAFT"
-              ? " disabled"
-              : m.id === "ACTIVE" && policy.ceilingMode === "HUMAN_ONLY"
-                ? " disabled"
-                : "";
+        '<p class="delegation-note" style="margin:6px 0 8px">Primary responder — operational ownership (not “assign bot”).</p>' +
+        '<div class="delegation-tabs" id="primaryResponderTabs">';
+      primaryOptions.forEach(function (m) {
+        const active =
+          (L.primaryResponder && L.primaryResponder.type === m.id) ||
+          L.primaryResponderType === m.id;
         html +=
           '<button type="button" class="delegation-btn' +
-          active +
-          '" data-ui-preset="' +
+          (active ? " active" : "") +
+          '" data-primary-responder="' +
           esc(m.id) +
-          '"' +
-          (disabled ? " disabled" : "") +
-          ">" +
+          '">' +
+          esc(m.label) +
+          "</button>";
+      });
+      html += '</div><div class="delegation-tabs" style="margin-top:8px">';
+      responderModes.forEach(function (m) {
+        const active = responder === m.id;
+        html +=
+          '<button type="button" class="delegation-btn' +
+          (active ? " active" : "") +
+          '" data-responder-mode="' +
+          esc(m.id) +
+          '">' +
           esc(m.label) +
           "</button>";
       });
@@ -1233,15 +1290,17 @@
         "</div>" +
         '<p class="delegation-note"><strong>Clinic-wide max:</strong> ' +
         esc(policy.ceilingLabel || "—") +
-        ' — set in <a href="/admin-ops-profile.html">Clinic AI Training</a>. You choose what is active for this patient only.</p>' +
+        ' — <a href="/admin-ops-profile.html">Clinic AI Training</a>. AI never claims a named doctor reviewed imaging — only “our clinic team”.</p>' +
         '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button type="button" class="refresh-btn" id="btnTakeOver" style="background:#1d4ed8;font-size:0.75rem;padding:6px 10px">Take over</button>' +
         '<button type="button" class="refresh-btn" id="btnPauseAi" style="background:#64748b;font-size:0.75rem;padding:6px 10px">Pause AI</button>' +
-        '<button type="button" class="refresh-btn" id="btnDoctorReview" style="background:#b45309;font-size:0.75rem;padding:6px 10px">Require review</button>' +
+        '<button type="button" class="refresh-btn" id="btnResumeAi" style="background:#059669;font-size:0.75rem;padding:6px 10px">Resume AI</button>' +
+        '<button type="button" class="refresh-btn" id="btnDoctorReview" style="background:#b45309;font-size:0.75rem;padding:6px 10px">Escalate</button>' +
         "</div>";
       if (escalated) {
         html +=
-          '<p class="delegation-note" style="color:#b91c1c"><strong>Human review required</strong> — auto-replies are paused. Resolve the issue, then resume assisting.</p>' +
-          '<button type="button" class="refresh-btn" id="btnClearEscalation" style="margin-top:8px;background:#64748b">Mark reviewed &amp; resume assisting</button>';
+          '<p class="delegation-note" style="color:#b91c1c"><strong>Needs takeover</strong> — AI paused until a clinician resumes.</p>' +
+          '<button type="button" class="refresh-btn" id="btnClearEscalation" style="margin-top:8px;background:#64748b">Mark reviewed &amp; resume hybrid</button>';
       }
       html += "</div>";
       return html;
@@ -1356,25 +1415,31 @@
         }
         wireDocumentHandlers(id);
 
-        body.querySelectorAll(".delegation-btn").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            if (btn.disabled) return;
-            const preset = btn.getAttribute("data-ui-preset");
-            if (preset) await setAiDelegation(id, { uiPreset: preset });
+
+        body.querySelectorAll("[data-responder-mode]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const mode = btn.getAttribute("data-responder-mode");
+            if (mode) setAiDelegation(id, { responderMode: mode });
           });
         });
+        body.querySelectorAll("[data-primary-responder]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const pr = btn.getAttribute("data-primary-responder");
+            if (pr) setAiDelegation(id, { primaryResponderType: pr });
+          });
+        });
+        const btnTake = document.getElementById("btnTakeOver");
+        if (btnTake) btnTake.addEventListener("click", () => setAiDelegation(id, { action: "takeOver" }));
         const btnPause = document.getElementById("btnPauseAi");
-        if (btnPause) {
-          btnPause.addEventListener("click", () => setAiDelegation(id, { pauseAi: true }));
-        }
+        if (btnPause) btnPause.addEventListener("click", () => setAiDelegation(id, { pauseAi: true }));
+        const btnResume = document.getElementById("btnResumeAi");
+        if (btnResume) btnResume.addEventListener("click", () => setAiDelegation(id, { action: "resumeAi", clearEscalation: true }));
         const btnReview = document.getElementById("btnDoctorReview");
-        if (btnReview) {
-          btnReview.addEventListener("click", () => setAiDelegation(id, { requireDoctorReview: true }));
-        }
+        if (btnReview) btnReview.addEventListener("click", () => setAiDelegation(id, { responderMode: "ESCALATED" }));
         const btnClearEsc = document.getElementById("btnClearEscalation");
         if (btnClearEsc) {
           btnClearEsc.addEventListener("click", async () => {
-            await setAiDelegation(id, { uiPreset: "ASSIST", clearEscalation: true });
+            await setAiDelegation(id, { action: "resumeAi", responderMode: "HYBRID", clearEscalation: true });
           });
         }
 
@@ -1438,6 +1503,9 @@
         if (activeOperationalFilter) {
           url += "&ops=" + encodeURIComponent(activeOperationalFilter);
         }
+        if (activeHandlingFilter) {
+          url += "&handling=" + encodeURIComponent(activeHandlingFilter);
+        }
         if (activeIntakeQueue) {
           url += "&queue=" + encodeURIComponent(activeIntakeQueue);
         } else if (activeWorkspace && activeWorkspace !== "recent") {
@@ -1453,6 +1521,10 @@
         if (json.operationalFilters && json.operationalFilters.length) {
           operationalFilterDefs = json.operationalFilters;
           renderOperationalFilterTabs();
+        }
+        if (json.handlingFilters && json.handlingFilters.length) {
+          handlingFilterDefs = json.handlingFilters;
+          renderHandlingFilterTabs();
         }
         if (json.intakeQueues && json.intakeQueues.length) {
           intakeQueueDefs = json.intakeQueues;
