@@ -748,6 +748,10 @@
         perNight: "/gece",
         sections: {
           aiProfile: { title: "YZ nasıl konuşsun?", hint: "Diller, ton ve karşılama — asistanınıza kliniğinizin sesini öğretin." },
+          conversionCoordinator: {
+            title: "Dönüşüm koordinatörü",
+            hint: "Güven odaklı, satış botu değil — ton, CTA, fiyatlandırma ve yasak ifadeler.",
+          },
           materials: { title: "Markalar ve malzemeler", hint: "İmplant markaları, laboratuvar, garanti — doğru bilgi için." },
           travel: { title: "Seyahat ve konaklama", hint: "Diş turizmi soruları için partner oteller." },
           logistics: { title: "Saatler ve koordinasyon", hint: "Çalışma saatleri, yanıt süresi, acil iletişim." },
