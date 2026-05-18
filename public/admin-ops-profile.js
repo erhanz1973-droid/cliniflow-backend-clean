@@ -380,7 +380,7 @@ function renderAllSections() {
     ["explain_treatment_process", "Explain treatment process"],
   ];
   function linesToTextarea(arr) {
-    return esc((arr || []).join("\\n"));
+    return esc((arr || []).join("\n"));
   }
   renderSectionShell(
     "conversion-coordinator",
@@ -400,9 +400,9 @@ function renderAllSections() {
           <option value="proactive"${intensity === "proactive" || intensity === "high" ? " selected" : ""}>Proactive — conversion-focused (never pushy)</option>
         </select>`)}
         ${fld("ctaStyle", `<select name="ctaStyle">
-          <option value="soft"${cta === "soft" ? " selected" : ""}>Soft — e.g. "If you'd like, I can also explain the process."</option>
-          <option value="balanced"${cta === "balanced" || cta === "medium" ? " selected" : ""}>Balanced — outline visits & preparation</option>
-          <option value="proactive"${cta === "proactive" || cta === "firm" ? " selected" : ""}>Proactive — e.g. "You can upload your X-ray anytime…"</option>
+          <option value="soft"${cta === "soft" ? " selected" : ""}>Soft — optional follow-up (If you would like, I can explain the process)</option>
+          <option value="balanced"${cta === "balanced" || cta === "medium" ? " selected" : ""}>Balanced — outline visits and preparation</option>
+          <option value="proactive"${cta === "proactive" || cta === "firm" ? " selected" : ""}>Proactive — clear next step (e.g. upload X-ray when ready)</option>
         </select>`, true)}
         ${fld("pricingBehavior", `<select name="pricingBehavior">
           <option value="educate_then_range"${conv.pricingBehavior === "educate_then_range" || !conv.pricingBehavior ? " selected" : ""}>Educate, then give range</option>
