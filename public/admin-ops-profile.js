@@ -357,39 +357,66 @@ function renderAllSections() {
   );
 
   const conv = s.conversionCoordinator || {};
+  const intensity = conv.coordinatorIntensity || conv.conversionIntensity || "gentle";
+  const cta = conv.ctaStyle || conv.ctaAggressiveness || "soft";
+  const cats = conv.forbiddenCategories || {};
+  const nextPrefs = Array.isArray(conv.nextStepPreference) ? conv.nextStepPreference : [];
+  const presetOptions = [
+    ["soft_conversion_coordinator", "Soft Conversion Coordinator (default)"],
+    ["luxury_clinic", "Luxury Clinic"],
+    ["budget_clinic", "Budget Clinic"],
+    ["dental_tourism", "Dental Tourism"],
+    ["implant_focused", "Implant Focused"],
+    ["cosmetic_dentistry", "Cosmetic Dentistry"],
+    ["international_patients", "International Patients"],
+    ["consultation_focused", "Consultation Focused"],
+  ];
+  const nextStepOptions = [
+    ["collect_xray", "Collect X-ray / imaging"],
+    ["book_consultation", "Book consultation"],
+    ["start_whatsapp", "Start WhatsApp conversation"],
+    ["schedule_visit", "Schedule clinic visit"],
+    ["collect_patient_info", "Collect patient information"],
+    ["explain_treatment_process", "Explain treatment process"],
+  ];
+  function linesToTextarea(arr) {
+    return esc((arr || []).join("\\n"));
+  }
   renderSectionShell(
     "conversion-coordinator",
     secTitle("conversion-coordinator"),
     secHint("conversion-coordinator"),
-    `<p class="field-helper">Default: <strong>Soft Conversion Coordinator</strong> — helpful, trust-building, conversion-aware, non-pushy. The Conversion Engine runs before each AI reply.</p>
+    `<p class="field-helper"><strong>AI Treatment Coordinator</strong> — behavioral governance (not a sales bot). Conversion Engine is <strong>on by default</strong>.</p>
     <form class="ops-form" data-form="conversion-coordinator">
-      <div class="check-row" style="margin-bottom:12px"><label><input type="checkbox" name="enabled" ${conv.enabled !== false ? "checked" : ""}/> Enable Conversion Engine</label></div>
+      <div class="check-row" style="margin-bottom:12px">
+        <label><input type="checkbox" name="enabled" ${conv.enabled !== false ? "checked" : ""}/> Conversion Engine enabled</label>
+        <label style="margin-left:16px"><input type="checkbox" name="recordTimelineEvents" ${conv.recordTimelineEvents !== false ? "checked" : ""}/> Record conversion timeline events</label>
+      </div>
       <div class="form-grid">
-        ${fld("preset", `<select name="preset">
-          <option value="soft_conversion_coordinator"${conv.preset === "soft_conversion_coordinator" || !conv.preset ? " selected" : ""}>Soft Conversion Coordinator</option>
-          <option value="balanced_coordinator"${conv.preset === "balanced_coordinator" ? " selected" : ""}>Balanced Coordinator</option>
-          <option value="consultation_focused"${conv.preset === "consultation_focused" ? " selected" : ""}>Consultation Focused</option>
+        ${fld("preset", `<select name="preset">${presetOptions.map(([val, label]) => `<option value="${val}"${conv.preset === val || (!conv.preset && val === "soft_conversion_coordinator") ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`, true)}
+        ${fld("coordinatorIntensity", `<select name="coordinatorIntensity">
+          <option value="gentle"${intensity === "gentle" || intensity === "low" ? " selected" : ""}>Gentle — informational, trust-first</option>
+          <option value="balanced"${intensity === "balanced" || intensity === "medium" ? " selected" : ""}>Balanced — active coordinator</option>
+          <option value="proactive"${intensity === "proactive" || intensity === "high" ? " selected" : ""}>Proactive — conversion-focused (never pushy)</option>
         </select>`)}
-        ${fld("conversionIntensity", `<select name="conversionIntensity">
-          <option value="low"${conv.conversionIntensity === "low" || !conv.conversionIntensity ? " selected" : ""}>Low (recommended)</option>
-          <option value="medium"${conv.conversionIntensity === "medium" ? " selected" : ""}>Medium</option>
-          <option value="high"${conv.conversionIntensity === "high" ? " selected" : ""}>High</option>
-        </select>`)}
-        ${fld("ctaAggressiveness", `<select name="ctaAggressiveness">
-          <option value="soft"${conv.ctaAggressiveness === "soft" || !conv.ctaAggressiveness ? " selected" : ""}>Soft CTA</option>
-          <option value="medium"${conv.ctaAggressiveness === "medium" ? " selected" : ""}>Medium CTA</option>
-          <option value="firm"${conv.ctaAggressiveness === "firm" ? " selected" : ""}>Firm CTA</option>
-        </select>`)}
+        ${fld("ctaStyle", `<select name="ctaStyle">
+          <option value="soft"${cta === "soft" ? " selected" : ""}>Soft — e.g. "If you'd like, I can also explain the process."</option>
+          <option value="balanced"${cta === "balanced" || cta === "medium" ? " selected" : ""}>Balanced — outline visits & preparation</option>
+          <option value="proactive"${cta === "proactive" || cta === "firm" ? " selected" : ""}>Proactive — e.g. "You can upload your X-ray anytime…"</option>
+        </select>`, true)}
         ${fld("pricingBehavior", `<select name="pricingBehavior">
           <option value="educate_then_range"${conv.pricingBehavior === "educate_then_range" || !conv.pricingBehavior ? " selected" : ""}>Educate, then give range</option>
           <option value="range_only"${conv.pricingBehavior === "range_only" ? " selected" : ""}>Range only (brief)</option>
           <option value="defer_to_coordinator"${conv.pricingBehavior === "defer_to_coordinator" ? " selected" : ""}>Defer to coordinator</option>
         </select>`)}
-        ${fld("followUpStyle", `<select name="followUpStyle">
-          <option value="gentle_check_in"${conv.followUpStyle === "gentle_check_in" || !conv.followUpStyle ? " selected" : ""}>Gentle check-in</option>
-          <option value="proactive_next_step"${conv.followUpStyle === "proactive_next_step" ? " selected" : ""}>Proactive next step</option>
-        </select>`)}
-        ${fld("forbiddenPhrases", `<textarea name="forbiddenPhrases" rows="4" placeholder="One per line or comma-separated">${esc((conv.forbiddenPhrases || []).join("\n"))}</textarea>`, true)}
+        ${fld("nextStepPreference", `<div class="check-row" style="flex-direction:column;align-items:flex-start;gap:6px">${nextStepOptions.map(([val, label]) => `<label><input type="checkbox" name="nextStepPreference" value="${val}" ${nextPrefs.includes(val) ? "checked" : ""}/> ${esc(label)}</label>`).join("")}</div>`, true)}
+      </div>
+      <p class="hint" style="margin:12px 0 6px"><strong>Safety phrase categories</strong></p>
+      <div class="form-grid">
+        ${fld("forbidden_guarantees", `<textarea name="forbidden_guarantees" rows="3">${linesToTextarea(cats.forbidden_guarantees)}</textarea>`)}
+        ${fld("forbidden_diagnosis", `<textarea name="forbidden_diagnosis" rows="3">${linesToTextarea(cats.forbidden_diagnosis)}</textarea>`)}
+        ${fld("forbidden_claims", `<textarea name="forbidden_claims" rows="3">${linesToTextarea(cats.forbidden_claims)}</textarea>`)}
+        ${fld("forbidden_urgency", `<textarea name="forbidden_urgency" rows="3">${linesToTextarea(cats.forbidden_urgency)}</textarea>`, true)}
       </div>
     </form>`,
   );
@@ -582,20 +609,34 @@ function collectSectionPayload(sectionId) {
           .filter(Boolean),
         freeformNotes: String(fd.get("freeformNotes") || "").trim(),
       };
-    case "conversion-coordinator":
-      return {
-        version: 1,
-        enabled: chk("enabled"),
-        preset: String(fd.get("preset") || "soft_conversion_coordinator").trim(),
-        conversionIntensity: String(fd.get("conversionIntensity") || "low").trim(),
-        ctaAggressiveness: String(fd.get("ctaAggressiveness") || "soft").trim(),
-        pricingBehavior: String(fd.get("pricingBehavior") || "educate_then_range").trim(),
-        followUpStyle: String(fd.get("followUpStyle") || "gentle_check_in").trim(),
-        forbiddenPhrases: String(fd.get("forbiddenPhrases") || "")
+    case "conversion-coordinator": {
+      function parseLines(name) {
+        return String(fd.get(name) || "")
           .split(/[\n,]+/)
           .map((s) => s.trim())
-          .filter(Boolean),
+          .filter(Boolean);
+      }
+      const nextStepPreference = [];
+      form.querySelectorAll('input[name="nextStepPreference"]:checked').forEach((cb) => {
+        nextStepPreference.push(cb.value);
+      });
+      return {
+        version: 2,
+        enabled: chk("enabled"),
+        recordTimelineEvents: chk("recordTimelineEvents"),
+        preset: String(fd.get("preset") || "soft_conversion_coordinator").trim(),
+        coordinatorIntensity: String(fd.get("coordinatorIntensity") || "gentle").trim(),
+        ctaStyle: String(fd.get("ctaStyle") || "soft").trim(),
+        pricingBehavior: String(fd.get("pricingBehavior") || "educate_then_range").trim(),
+        nextStepPreference,
+        forbiddenCategories: {
+          forbidden_guarantees: parseLines("forbidden_guarantees"),
+          forbidden_diagnosis: parseLines("forbidden_diagnosis"),
+          forbidden_claims: parseLines("forbidden_claims"),
+          forbidden_urgency: parseLines("forbidden_urgency"),
+        },
       };
+    }
     case "ai-safety": {
       const categories = {};
       document.querySelectorAll("[data-autonomy]").forEach((sel) => {
