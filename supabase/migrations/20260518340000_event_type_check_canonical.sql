@@ -1,14 +1,5 @@
--- Hybrid AI + doctor coordination: explicit responder mode and timeline events.
-
-ALTER TABLE public.ai_coordinator_lead_profiles
-  ADD COLUMN IF NOT EXISTS responder_mode text,
-  ADD COLUMN IF NOT EXISTS primary_responder_type text;
-
-COMMENT ON COLUMN public.ai_coordinator_lead_profiles.responder_mode IS
-  'AI_ACTIVE | HUMAN_ACTIVE | HYBRID | ESCALATED — who drives patient-facing replies.';
-
-COMMENT ON COLUMN public.ai_coordinator_lead_profiles.primary_responder_type IS
-  'ai_coordinator | doctor | shared_queue — operational ownership label for inbox UI.';
+-- Repair event_type CHECK after partial apply or legacy rows (e.g. continuity_fallback).
+-- Safe to run if 20260518330000 failed on ADD CONSTRAINT.
 
 DO $$
 BEGIN
@@ -20,7 +11,6 @@ BEGIN
   END IF;
 END $$;
 
--- Rows created under older migrations (e.g. continuity_fallback) must be valid before CHECK is re-added.
 UPDATE public.ai_coordinator_lead_events e
 SET
   event_metadata = COALESCE(e.event_metadata, '{}'::jsonb)

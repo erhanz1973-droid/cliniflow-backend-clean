@@ -20,7 +20,7 @@ ALTER TABLE public.ai_coordinator_lead_events
     'task_created', 'visit_plan_drafted',
     'xray_uploaded', 'ct_scan_uploaded', 'document_uploaded',
     'doctor_review_requested', 'missing_documents_detected',
-    'intake_journey_updated', 'system'
+    'intake_journey_updated', 'continuity_fallback', 'system'
   ));
 
 NOTIFY pgrst, 'reload schema';
