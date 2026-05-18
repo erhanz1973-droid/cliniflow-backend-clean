@@ -54052,7 +54052,7 @@ async function loadOfferMessagingContext(offerId) {
 
   const { data: offer, error: oErr } = await supabase
     .from("treatment_offers")
-    .select("id, request_id, doctor_id")
+    .select("id, request_id, doctor_id, clinic_id")
     .eq("id", offerId)
     .maybeSingle();
   if (oErr || !offer) return null;
@@ -54526,6 +54526,26 @@ app.post("/api/offer-messages", async (req, res) => {
       messageRow: message,
       doctorRow: access.offer,
     });
+
+    if (actor.kind === "patient") {
+      const patientUuid = String(tr.patient_id || "").trim();
+      const clinicHint = String(
+        tr.clinic_id || access.offer?.clinic_id || "",
+      ).trim();
+      const inboundText = text || (attachment_url ? "📷" : "");
+      void (async () => {
+        const { afterPatientOfferMessageInbound } = require("./lib/offerInboundOrchestration");
+        return afterPatientOfferMessageInbound({
+          offerId,
+          patientId: patientUuid,
+          patientMessage: inboundText,
+          clinicId: clinicHint || null,
+          treatmentRequestId: tr.id ? String(tr.id) : null,
+        });
+      })().catch((e) =>
+        console.warn("[offerInboundOrchestration] hook:", e?.message || e),
+      );
+    }
 
     return res.json({ ok: true, message });
   } catch (e) {
@@ -58474,7 +58494,11 @@ registerAiCoordinatorDoctorRoutes(app, { requireDoctorAuth });
 
 const { setupAiSlaContinuity, afterPatientInboundMessage } = require("./lib/aiSlaContinuity");
 const { setupAiPatientInboundReply } = require("./lib/aiPatientInboundReply");
-const inboundClinicMessageInsert = (params) =>
+const {
+  setupOfferInboundOrchestration,
+  createOfferAwareClinicMessageInsert,
+} = require("./lib/offerInboundOrchestration");
+const baseInboundClinicMessageInsert = (params) =>
   insertMessageToSupabase({
     patientId: params.patientId,
     sender: "clinic",
@@ -58482,6 +58506,17 @@ const inboundClinicMessageInsert = (params) =>
     type: params.type || "text",
     contextClinicId: params.contextClinicId,
   });
+setupOfferInboundOrchestration({
+  insertIntoTableWithColumnPruning,
+  emitOfferNewMessage: (offerId, message) => {
+    if (chatSocketIo) {
+      chatSocketIo.to(`offer:${offerId}`).emit("offer_new_message", message);
+    }
+  },
+});
+const inboundClinicMessageInsert = createOfferAwareClinicMessageInsert(
+  baseInboundClinicMessageInsert,
+);
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
 setupProposalSlaSweep();
