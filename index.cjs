@@ -46192,9 +46192,14 @@ async function seedOfferThreadSystemMessage(offerId, doctorId, doctorName, offer
   const note = offerFields?.note != null ? String(offerFields.note).trim() : "";
   if (note) lines.push(`📝 ${note}`);
 
+  const seedSenderId = String(doctorId || "").trim();
+  if (!UUID_RE.test(seedSenderId)) {
+    console.warn("[offer-seed] skip system message: doctor sender_id is not a UUID");
+    return;
+  }
   const insertRow = {
     offer_id: String(offerId),
-    sender_id: String(doctorId || "").trim() || "doctor",
+    sender_id: seedSenderId,
     sender_role: "system",
     sender_name: String(doctorName || "Doctor").trim() || "Doctor",
     text: lines.join("\n"),
