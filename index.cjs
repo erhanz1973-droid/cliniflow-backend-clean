@@ -427,6 +427,7 @@ const {
   setupTreatmentRequestOrchestration,
   orchestrateTreatmentRequestCreated,
 } = require("./lib/treatmentRequestOrchestration");
+const { resolvePatientVisibleStatus } = require("./lib/treatmentRequestLifecycle");
 const JWT_SECRET = (() => {
   const s = typeof process.env.JWT_SECRET === "string" ? process.env.JWT_SECRET.trim() : "";
   if (s.length >= 8) return s;
@@ -52968,6 +52969,15 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         ? String(coordLatest.text ?? coordLatest.message_text ?? "").trim()
         : null;
       const proposal = enrichRequestProposalFields(r, { offerCount: reqOffers.length });
+      const coordRole = String(coordLatest?.sender_role || "").toLowerCase();
+      const clinicRepliedInThread =
+        Boolean(coordLastText) &&
+        coordRole !== "patient" &&
+        coordRole !== "";
+      const visible = resolvePatientVisibleStatus(r, {
+        coordinationHasClinicReply: clinicRepliedInThread,
+        formalOfferCount: reqOffers.length,
+      });
       return {
         id: r.id,
         clinic_id: r.clinic_id || null,
@@ -52978,7 +52988,8 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         image_url,
         budget: r.budget || null,
         preferred_treatment: r.preferred_treatment || null,
-        status: r.status,
+        status: visible.status,
+        lifecycle_tier: visible.lifecycle,
         created_at: r.created_at,
         offers: reqOffers,
         coordination_offer_id: coordOfferId || null,
@@ -54780,6 +54791,16 @@ app.post("/api/offer-messages", async (req, res) => {
         });
       })().catch((e) =>
         console.warn("[offerInboundOrchestration] hook:", e?.message || e),
+      );
+    } else if (actor.kind === "doctor" && tr?.id) {
+      const { markTreatmentRequestResponded } = require("./lib/treatmentRequestLifecycle");
+      void markTreatmentRequestResponded({
+        requestId: String(tr.id),
+        offerId,
+        clinicId: String(tr.clinic_id || access.offer?.clinic_id || "").trim(),
+        source: "doctor_reply",
+      }).catch((e) =>
+        console.warn("[treatmentRequestLifecycle] doctor_offer_msg:", e?.message || e),
       );
     }
 

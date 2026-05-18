@@ -32,6 +32,7 @@ const REQUIRED_MIGRATIONS = [
   "20260518280000_treatment_price_variants_ensure.sql",
   "20260518290000_appointment_coordination_events.sql",
   "20260518300000_conversation_primary_language.sql",
+  "20260518310000_treatment_request_first_response.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
