@@ -505,4 +505,7 @@
     }
   });
 
+  window.adminFetchUrl = adminFetchUrl;
+  window.cliniflowAdminFetchUrl = adminFetchUrl;
+
 })();

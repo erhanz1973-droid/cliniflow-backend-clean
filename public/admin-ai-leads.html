@@ -437,6 +437,8 @@
       return p;
     }
 
+    let leadsLoadInFlight = false;
+
     function adminFetch(path, opts) {
       const url = resolveAdminApiUrl(path);
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
@@ -444,7 +446,20 @@
         { Accept: "application/json", Authorization: "Bearer " + token },
         (opts && opts.headers) || {},
       );
-      return fetch(url, Object.assign({}, opts, { headers }));
+      const timeoutMs =
+        opts && opts.timeoutMs != null ? Number(opts.timeoutMs) : 90_000;
+      const ctrl = new AbortController();
+      const timer = setTimeout(function () {
+        ctrl.abort();
+      }, timeoutMs);
+      const fetchOpts = Object.assign({}, opts || {}, {
+        headers,
+        signal: ctrl.signal,
+      });
+      delete fetchOpts.timeoutMs;
+      return fetch(url, fetchOpts).finally(function () {
+        clearTimeout(timer);
+      });
     }
 
     function esc(s) {
@@ -1138,6 +1153,7 @@
 
     function renderLeadList() {
       const el = document.getElementById("leadList");
+      if (!el) return;
       renderOpsStatusStrip();
       if (!leads.length) {
         el.innerHTML =
@@ -1494,12 +1510,20 @@
       }
     }
 
-    async function loadLeads() {
+    async function loadLeads(opts) {
+      const sync = opts && opts.sync === true;
+      if (leadsLoadInFlight) return;
+      leadsLoadInFlight = true;
       const errEl = document.getElementById("globalErr");
+      const listEl = document.getElementById("leadList");
+      if (!listEl) {
+        leadsLoadInFlight = false;
+        return;
+      }
       errEl.style.display = "none";
-      document.getElementById("leadList").innerHTML = '<div class="empty">Loading…</div>';
+      listEl.innerHTML = '<div class="empty">Loading…</div>';
       try {
-        let url = "/api/admin/ai-leads?limit=120&sync=1";
+        let url = "/api/admin/ai-leads?limit=120&sync=" + (sync ? "1" : "0");
         if (activeOperationalFilter) {
           url += "&ops=" + encodeURIComponent(activeOperationalFilter);
         }
@@ -1513,9 +1537,13 @@
         } else if (activeSignalFilter) {
           url += "&filter=" + encodeURIComponent(activeSignalFilter);
         }
-        const res = await adminFetch(url);
-        const json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Failed to load leads");
+        const res = await adminFetch(url, { timeoutMs: sync ? 120_000 : 60_000 });
+        const json = await res.json().catch(function () {
+          return {};
+        });
+        if (!res.ok || !json.ok) {
+          throw new Error(json.message || json.error || "Failed to load leads (" + res.status + ")");
+        }
         leads = json.leads || [];
         if (json.clinicPolicy) clinicPolicyGlobal = json.clinicPolicy;
         if (json.operationalFilters && json.operationalFilters.length) {
@@ -1535,8 +1563,17 @@
           loadDetail(selectedId);
         }
       } catch (e) {
-        document.getElementById("leadList").innerHTML =
-          '<div class="err">' + esc(e.message) + "</div>";
+        const msg =
+          e && e.name === "AbortError"
+            ? "Request timed out. Click Refresh to sync treatment requests."
+            : e && e.message
+              ? e.message
+              : "Failed to load queue";
+        listEl.innerHTML = '<div class="err">' + esc(msg) + "</div>";
+        errEl.style.display = "block";
+        errEl.textContent = msg;
+      } finally {
+        leadsLoadInFlight = false;
       }
     }
 
@@ -1570,11 +1607,25 @@
     });
 
     document.getElementById("btnRefresh").addEventListener("click", async function () {
+      const btn = document.getElementById("btnRefresh");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Syncing…";
+      }
       loadQueueCounts();
       try {
-        await adminFetch("/api/admin/coordination/workspace?refresh=1&limit=80");
+        await adminFetch("/api/admin/coordination/workspace?refresh=1&limit=80", {
+          timeoutMs: 120_000,
+        });
       } catch (_) {}
-      loadLeads();
+      try {
+        await loadLeads({ sync: true });
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Refresh";
+        }
+      }
     });
 
     setInterval(function () {
