@@ -34,6 +34,7 @@ const REQUIRED_MIGRATIONS = [
   "20260518300000_conversation_primary_language.sql",
   "20260518310000_treatment_request_first_response.sql",
   "20260518320000_lead_whatsapp_collection.sql",
+  "20260518400000_clinical_guidance.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
@@ -65,6 +66,24 @@ const SCHEMA_PROBES = [
     id: "lead_events",
     table: "ai_coordinator_lead_events",
     columns: ["profile_id", "event_type", "event_metadata", "patient_message", "ai_reply"],
+  },
+  {
+    id: "clinical_guidance",
+    table: "clinical_guidance",
+    columns: [
+      "id",
+      "profile_id",
+      "patient_id",
+      "clinic_id",
+      "intent_text",
+      "intent_tags",
+      "never_patient_visible",
+    ],
+  },
+  {
+    id: "clinical_communication_drafts",
+    table: "clinical_communication_drafts",
+    columns: ["guidance_id", "draft_text", "status", "message_provenance", "safety_report"],
   },
   {
     id: "patient_documents",

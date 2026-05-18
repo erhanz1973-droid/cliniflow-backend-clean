@@ -246,6 +246,14 @@ function optionLabel(group, value, fallback) {
   return op("options." + group + "." + value) || fallback;
 }
 
+function convT(key, fallback) {
+  return op("conversion." + key) || fallback;
+}
+
+function convOpt(group, key, fallback) {
+  return op("conversion." + group + "." + key) || fallback;
+}
+
 function autonomyLevelLabel(level) {
   return op("autonomyLevels." + level) || level;
 }
@@ -362,22 +370,22 @@ function renderAllSections() {
   const cats = conv.forbiddenCategories || {};
   const nextPrefs = Array.isArray(conv.nextStepPreference) ? conv.nextStepPreference : [];
   const presetOptions = [
-    ["soft_conversion_coordinator", "Soft Conversion Coordinator (default)"],
-    ["luxury_clinic", "Luxury Clinic"],
-    ["budget_clinic", "Budget Clinic"],
-    ["dental_tourism", "Dental Tourism"],
-    ["implant_focused", "Implant Focused"],
-    ["cosmetic_dentistry", "Cosmetic Dentistry"],
-    ["international_patients", "International Patients"],
-    ["consultation_focused", "Consultation Focused"],
+    ["soft_conversion_coordinator", convOpt("presets", "soft_conversion_coordinator", "Soft Conversion Coordinator (default)")],
+    ["luxury_clinic", convOpt("presets", "luxury_clinic", "Luxury Clinic")],
+    ["budget_clinic", convOpt("presets", "budget_clinic", "Budget Clinic")],
+    ["dental_tourism", convOpt("presets", "dental_tourism", "Dental Tourism")],
+    ["implant_focused", convOpt("presets", "implant_focused", "Implant Focused")],
+    ["cosmetic_dentistry", convOpt("presets", "cosmetic_dentistry", "Cosmetic Dentistry")],
+    ["international_patients", convOpt("presets", "international_patients", "International Patients")],
+    ["consultation_focused", convOpt("presets", "consultation_focused", "Consultation Focused")],
   ];
   const nextStepOptions = [
-    ["collect_xray", "Collect X-ray / imaging"],
-    ["book_consultation", "Book consultation"],
-    ["start_whatsapp", "Start WhatsApp conversation"],
-    ["schedule_visit", "Schedule clinic visit"],
-    ["collect_patient_info", "Collect patient information"],
-    ["explain_treatment_process", "Explain treatment process"],
+    ["collect_xray", convOpt("nextStep", "collect_xray", "Collect X-ray / imaging")],
+    ["book_consultation", convOpt("nextStep", "book_consultation", "Book consultation")],
+    ["start_whatsapp", convOpt("nextStep", "start_whatsapp", "Start WhatsApp conversation")],
+    ["schedule_visit", convOpt("nextStep", "schedule_visit", "Schedule clinic visit")],
+    ["collect_patient_info", convOpt("nextStep", "collect_patient_info", "Collect patient information")],
+    ["explain_treatment_process", convOpt("nextStep", "explain_treatment_process", "Explain treatment process")],
   ];
   function linesToTextarea(arr) {
     return esc((arr || []).join("\n"));
@@ -386,32 +394,32 @@ function renderAllSections() {
     "conversion-coordinator",
     secTitle("conversion-coordinator"),
     secHint("conversion-coordinator"),
-    `<p class="field-helper"><strong>AI Treatment Coordinator</strong> — behavioral governance (not a sales bot). Conversion Engine is <strong>on by default</strong>.</p>
+    `<p class="field-helper"><strong>${esc(convT("introTitle", "AI Treatment Coordinator"))}</strong> — ${esc(convT("introBody", "behavioral governance (not a sales bot). Conversion Engine is on by default."))}</p>
     <form class="ops-form" data-form="conversion-coordinator">
       <div class="check-row" style="margin-bottom:12px">
-        <label><input type="checkbox" name="enabled" ${conv.enabled !== false ? "checked" : ""}/> Conversion Engine enabled</label>
-        <label style="margin-left:16px"><input type="checkbox" name="recordTimelineEvents" ${conv.recordTimelineEvents !== false ? "checked" : ""}/> Record conversion timeline events</label>
+        <label><input type="checkbox" name="enabled" ${conv.enabled !== false ? "checked" : ""}/> ${esc(convT("engineEnabled", "Conversion Engine enabled"))}</label>
+        <label style="margin-left:16px"><input type="checkbox" name="recordTimelineEvents" ${conv.recordTimelineEvents !== false ? "checked" : ""}/> ${esc(convT("recordTimelineEvents", "Record conversion timeline events"))}</label>
       </div>
       <div class="form-grid">
         ${fld("preset", `<select name="preset">${presetOptions.map(([val, label]) => `<option value="${val}"${conv.preset === val || (!conv.preset && val === "soft_conversion_coordinator") ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`, true)}
         ${fld("coordinatorIntensity", `<select name="coordinatorIntensity">
-          <option value="gentle"${intensity === "gentle" || intensity === "low" ? " selected" : ""}>Gentle — informational, trust-first</option>
-          <option value="balanced"${intensity === "balanced" || intensity === "medium" ? " selected" : ""}>Balanced — active coordinator</option>
-          <option value="proactive"${intensity === "proactive" || intensity === "high" ? " selected" : ""}>Proactive — conversion-focused (never pushy)</option>
+          <option value="gentle"${intensity === "gentle" || intensity === "low" ? " selected" : ""}>${esc(convOpt("intensity", "gentle", "Gentle — informational, trust-first"))}</option>
+          <option value="balanced"${intensity === "balanced" || intensity === "medium" ? " selected" : ""}>${esc(convOpt("intensity", "balanced", "Balanced — active coordinator"))}</option>
+          <option value="proactive"${intensity === "proactive" || intensity === "high" ? " selected" : ""}>${esc(convOpt("intensity", "proactive", "Proactive — conversion-focused (never pushy)"))}</option>
         </select>`)}
         ${fld("ctaStyle", `<select name="ctaStyle">
-          <option value="soft"${cta === "soft" ? " selected" : ""}>Soft — optional follow-up (If you would like, I can explain the process)</option>
-          <option value="balanced"${cta === "balanced" || cta === "medium" ? " selected" : ""}>Balanced — outline visits and preparation</option>
-          <option value="proactive"${cta === "proactive" || cta === "firm" ? " selected" : ""}>Proactive — clear next step (e.g. upload X-ray when ready)</option>
+          <option value="soft"${cta === "soft" ? " selected" : ""}>${esc(convOpt("ctaStyle", "soft", "Soft — optional follow-up"))}</option>
+          <option value="balanced"${cta === "balanced" || cta === "medium" ? " selected" : ""}>${esc(convOpt("ctaStyle", "balanced", "Balanced — outline visits and preparation"))}</option>
+          <option value="proactive"${cta === "proactive" || cta === "firm" ? " selected" : ""}>${esc(convOpt("ctaStyle", "proactive", "Proactive — clear next step"))}</option>
         </select>`, true)}
         ${fld("pricingBehavior", `<select name="pricingBehavior">
-          <option value="educate_then_range"${conv.pricingBehavior === "educate_then_range" || !conv.pricingBehavior ? " selected" : ""}>Educate, then give range</option>
-          <option value="range_only"${conv.pricingBehavior === "range_only" ? " selected" : ""}>Range only (brief)</option>
-          <option value="defer_to_coordinator"${conv.pricingBehavior === "defer_to_coordinator" ? " selected" : ""}>Defer to coordinator</option>
+          <option value="educate_then_range"${conv.pricingBehavior === "educate_then_range" || !conv.pricingBehavior ? " selected" : ""}>${esc(convOpt("pricingBehavior", "educate_then_range", "Educate, then give range"))}</option>
+          <option value="range_only"${conv.pricingBehavior === "range_only" ? " selected" : ""}>${esc(convOpt("pricingBehavior", "range_only", "Range only (brief)"))}</option>
+          <option value="defer_to_coordinator"${conv.pricingBehavior === "defer_to_coordinator" ? " selected" : ""}>${esc(convOpt("pricingBehavior", "defer_to_coordinator", "Defer to coordinator"))}</option>
         </select>`)}
         ${fld("nextStepPreference", `<div class="check-row" style="flex-direction:column;align-items:flex-start;gap:6px">${nextStepOptions.map(([val, label]) => `<label><input type="checkbox" name="nextStepPreference" value="${val}" ${nextPrefs.includes(val) ? "checked" : ""}/> ${esc(label)}</label>`).join("")}</div>`, true)}
       </div>
-      <p class="hint" style="margin:12px 0 6px"><strong>Safety phrase categories</strong></p>
+      <p class="hint" style="margin:12px 0 6px"><strong>${esc(convT("safetyHeading", "Safety phrase categories"))}</strong></p>
       <div class="form-grid">
         ${fld("forbidden_guarantees", `<textarea name="forbidden_guarantees" rows="3">${linesToTextarea(cats.forbidden_guarantees)}</textarea>`)}
         ${fld("forbidden_diagnosis", `<textarea name="forbidden_diagnosis" rows="3">${linesToTextarea(cats.forbidden_diagnosis)}</textarea>`)}

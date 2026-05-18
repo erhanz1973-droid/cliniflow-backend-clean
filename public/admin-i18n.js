@@ -761,6 +761,46 @@
           handoff: { title: "Yükseltme kuralları", hint: "YZ ne zaman koordinatör veya doktoru uyarır." },
           internalNotes: { title: "Klinik hikâyesi (dahili)", hint: "Konumlandırma ve öncelikler — tona yön verir, hastaya aynen gösterilmez." }
         },
+        conversion: {
+          introTitle: "YZ Tedavi Koordinatörü",
+          introBody: "davranış yönetimi (satış botu değil). Dönüşüm Motoru varsayılan olarak açıktır.",
+          engineEnabled: "Dönüşüm Motoru etkin",
+          recordTimelineEvents: "Dönüşüm zaman çizelgesi olaylarını kaydet",
+          safetyHeading: "Güvenlik ifade kategorileri",
+          presets: {
+            soft_conversion_coordinator: "Yumuşak dönüşüm koordinatörü (varsayılan)",
+            luxury_clinic: "Lüks klinik",
+            budget_clinic: "Ekonomik klinik",
+            dental_tourism: "Diş turizmi",
+            implant_focused: "İmplant odaklı",
+            cosmetic_dentistry: "Estetik diş hekimliği",
+            international_patients: "Uluslararası hastalar",
+            consultation_focused: "Konsültasyon odaklı",
+          },
+          intensity: {
+            gentle: "Hafif — bilgilendirici, güven öncelikli",
+            balanced: "Dengeli — aktif koordinatör",
+            proactive: "Proaktif — dönüşüm odaklı (asla baskıcı değil)",
+          },
+          ctaStyle: {
+            soft: "Yumuşak — isteğe bağlı takip",
+            balanced: "Dengeli — ziyaret ve hazırlığı özetle",
+            proactive: "Proaktif — net sonraki adım",
+          },
+          pricingBehavior: {
+            educate_then_range: "Önce bilgilendir, sonra aralık ver",
+            range_only: "Yalnızca kısa fiyat aralığı",
+            defer_to_coordinator: "Koordinatöre yönlendir",
+          },
+          nextStep: {
+            collect_xray: "Röntgen / görüntüleme iste",
+            book_consultation: "Konsültasyon planla",
+            start_whatsapp: "WhatsApp görüşmesi başlat",
+            schedule_visit: "Klinik ziyareti planla",
+            collect_patient_info: "Hasta bilgisi topla",
+            explain_treatment_process: "Tedavi sürecini açıkla",
+          },
+        },
         sedationAvailable: "Sedasyon mevcut",
         weekendAvailability: "Hafta sonu müsaitlik",
         sameDayTreatment: "Aynı gün tedavi",
@@ -827,6 +867,10 @@
           aiProfile: {
             intro: "Hangi dillerde yanıt verileceğini ve asistanınızın nasıl konuşacağını ayarlayın. Marka, fiyat ve süreç bilgisi tek yerde kalır — YZ her dilde doğal yanıt verir.",
             aiUsageSummary: "Dil seçimi, karşılama, imza ve hasta iletişim tonu."
+          },
+          conversionCoordinator: {
+            intro: "Güven odaklı yumuşak dönüşüm — ton, CTA, fiyatlandırma ve yasak ifadeler. Satış botu değil; Dönüşüm Motoru koordinatör yanıtlarını yönlendirir.",
+            aiUsageSummary: "Koordinatör sohbetlerinde strateji bloğu; isteğe bağlı zaman çizelgesi analitiği.",
           },
           materials: {
             intro: "Kliniğinizin çalıştığı marka ve malzemeler. YZ marka uydurmadan seçenekleri açıklar.",
@@ -903,6 +947,52 @@
             aiUsage: "Dahili ton ipuçları — hastaya doğrudan gösterilmez.",
             placeholder: "lüks, samimi, premium, hızlı_yanıt",
             example: "premium, samimi, hızlı_yanıt"
+          },
+          preset: {
+            label: "Klinik ön ayarı",
+            helper: "Klinik tipinize göre hazır dönüşüm stili — ton, CTA ve fiyatlandırmayı ayarlar.",
+            aiUsage: "Dönüşüm Motoru strateji bloğuna ön ayar kurallarını yükler.",
+          },
+          coordinatorIntensity: {
+            label: "Koordinatör yoğunluğu",
+            helper: "YZ'nin güveni koruyarak sonraki adımlara ne kadar aktif yönlendireceği.",
+            aiUsage: "Dönüşüm duruşu: hafif (bilgilendirici), dengeli veya proaktif.",
+          },
+          ctaStyle: {
+            label: "Harekete geçirme (CTA) stili",
+            helper: "Sonraki adımları (röntgen, konsültasyon, WhatsApp, ziyaret) ne kadar doğrudan önereceği.",
+            aiUsage: "Yanıtların kapanış cümleleri ve takip davetleri.",
+          },
+          pricingBehavior: {
+            label: "Fiyatlandırma davranışı",
+            helper: "Önce bilgilendirip aralık verme, kısa aralık veya insan koordinatöre yönlendirme.",
+            aiUsage: "Maliyet sorularında fiyatla ilgili yanıtları şekillendirir.",
+          },
+          nextStepPreference: {
+            label: "Tercih edilen sonraki adımlar",
+            helper: "Uygun olduğunda YZ'nin önceliklendirmesi gereken adımlar (hepsi birden değil).",
+            aiUsage: "Koordinatör sohbetlerinde CTA seçimini yönlendirir.",
+          },
+          forbidden_guarantees: {
+            label: "Yasak garanti ifadeleri",
+            helper: "YZ'nin asla kullanmaması gereken ifadeler (satır başına bir tane).",
+            aiUsage: "Sonuç ve garanti dili için güvenlik filtresi.",
+            placeholder: "garantili sonuç\n%100 başarı",
+          },
+          forbidden_diagnosis: {
+            label: "Yasak tanı dili",
+            helper: "Engellenecek tanı veya kesinlik ifadeleri.",
+            aiUsage: "Yanıtları operasyonel tutar; klinik tanı değil.",
+          },
+          forbidden_claims: {
+            label: "Yasak pazarlama iddiaları",
+            helper: "Kaçınılacak abartılı veya karşılaştırmalı iddialar.",
+            aiUsage: "Markaya uygun, uyumlu hasta mesajları.",
+          },
+          forbidden_urgency: {
+            label: "Yasak aciliyet baskısı",
+            helper: "Engellenecek yüksek baskılı aciliyet ifadeleri.",
+            aiUsage: "Baskıcı veya korkuya dayalı dönüşüm taktiklerini önler.",
           },
           implantBrands: {
             label: "İmplant markaları",
@@ -2049,6 +2139,10 @@
         perNight: "/night",
         sections: {
           aiProfile: { title: "How your AI speaks", hint: "Languages, tone, and greetings — teach your clinic voice." },
+          conversionCoordinator: {
+            title: "Conversion Coordinator",
+            hint: "Trust-first behavioral governance — tone, CTA, pricing, forbidden phrases (not a sales bot).",
+          },
           materials: { title: "Brands & materials", hint: "Implant brands, labs, warranty — so replies stay accurate." },
           travel: { title: "Travel & stays", hint: "Partner hotels for medical travel questions." },
           logistics: { title: "Hours & coordination", hint: "Opening hours, response targets, emergency contact." },
@@ -2057,6 +2151,46 @@
           aiSafety: { title: "When AI needs a human", hint: "What the AI can answer alone vs suggest vs hand off." },
           handoff: { title: "Escalation rules", hint: "When the AI alerts your coordinator or doctor." },
           internalNotes: { title: "Clinic story (internal)", hint: "Positioning and priorities — shapes tone, not shown verbatim to patients." }
+        },
+        conversion: {
+          introTitle: "AI Treatment Coordinator",
+          introBody: "behavioral governance (not a sales bot). Conversion Engine is on by default.",
+          engineEnabled: "Conversion Engine enabled",
+          recordTimelineEvents: "Record conversion timeline events",
+          safetyHeading: "Safety phrase categories",
+          presets: {
+            soft_conversion_coordinator: "Soft Conversion Coordinator (default)",
+            luxury_clinic: "Luxury Clinic",
+            budget_clinic: "Budget Clinic",
+            dental_tourism: "Dental Tourism",
+            implant_focused: "Implant Focused",
+            cosmetic_dentistry: "Cosmetic Dentistry",
+            international_patients: "International Patients",
+            consultation_focused: "Consultation Focused",
+          },
+          intensity: {
+            gentle: "Gentle — informational, trust-first",
+            balanced: "Balanced — active coordinator",
+            proactive: "Proactive — conversion-focused (never pushy)",
+          },
+          ctaStyle: {
+            soft: "Soft — optional follow-up (If you would like, I can explain the process)",
+            balanced: "Balanced — outline visits and preparation",
+            proactive: "Proactive — clear next step (e.g. upload X-ray when ready)",
+          },
+          pricingBehavior: {
+            educate_then_range: "Educate, then give range",
+            range_only: "Range only (brief)",
+            defer_to_coordinator: "Defer to coordinator",
+          },
+          nextStep: {
+            collect_xray: "Collect X-ray / imaging",
+            book_consultation: "Book consultation",
+            start_whatsapp: "Start WhatsApp conversation",
+            schedule_visit: "Schedule clinic visit",
+            collect_patient_info: "Collect patient information",
+            explain_treatment_process: "Explain treatment process",
+          },
         },
         sedationAvailable: "Sedation available",
         weekendAvailability: "Weekend availability",
@@ -2124,6 +2258,10 @@
           aiProfile: {
             intro: "Choose which languages patients can use and how your assistant should sound. Clinic knowledge stays in one place — the AI responds naturally in each language.",
             aiUsageSummary: "Language choice, greetings, signatures, and communication tone."
+          },
+          conversionCoordinator: {
+            intro: "Trust-first soft conversion — tone, CTA, pricing, and forbidden phrases. Not a sales bot; the Conversion Engine guides coordinator replies.",
+            aiUsageSummary: "Strategy block in coordinator chats; optional timeline analytics.",
           },
           materials: {
             intro: "Which brands and materials your clinic works with. Helps AI explain options without inventing brands.",
@@ -2200,6 +2338,52 @@
             aiUsage: "Internal tone hints — not shown directly to patients.",
             placeholder: "luxury, friendly, premium, fast_response",
             example: "premium, friendly, fast_response"
+          },
+          preset: {
+            label: "Clinic preset",
+            helper: "Pre-configured conversion style for your clinic type — adjusts tone, CTA, and pricing behavior.",
+            aiUsage: "Loads preset rules into the Conversion Engine strategy block.",
+          },
+          coordinatorIntensity: {
+            label: "Coordinator intensity",
+            helper: "How actively the AI guides patients toward next steps while staying trust-first.",
+            aiUsage: "Sets conversion posture: gentle (informational), balanced, or proactive.",
+          },
+          ctaStyle: {
+            label: "Call-to-action style",
+            helper: "How directly the AI suggests next steps (X-ray, consult, WhatsApp, visit).",
+            aiUsage: "Shapes closing lines and follow-up invitations in replies.",
+          },
+          pricingBehavior: {
+            label: "Pricing behavior",
+            helper: "Whether the AI educates before giving ranges, gives brief ranges only, or defers to a human coordinator.",
+            aiUsage: "Controls price-related replies when patients ask about cost.",
+          },
+          nextStepPreference: {
+            label: "Preferred next steps",
+            helper: "Which next steps the AI should prioritize when appropriate (not all at once).",
+            aiUsage: "Guides CTA selection in coordinator conversations.",
+          },
+          forbidden_guarantees: {
+            label: "Forbidden guarantees",
+            helper: "Phrases the AI must never use (one per line).",
+            aiUsage: "Safety filter for outcome and warranty language.",
+            placeholder: "guaranteed results\n100% success",
+          },
+          forbidden_diagnosis: {
+            label: "Forbidden diagnosis language",
+            helper: "Diagnostic claims or certainty phrases to block.",
+            aiUsage: "Keeps replies operational, not clinical diagnosis.",
+          },
+          forbidden_claims: {
+            label: "Forbidden marketing claims",
+            helper: "Overpromising or comparative claims to avoid.",
+            aiUsage: "Brand-safe, compliant patient messaging.",
+          },
+          forbidden_urgency: {
+            label: "Forbidden urgency pressure",
+            helper: "High-pressure urgency phrases to block.",
+            aiUsage: "Prevents pushy or fear-based conversion tactics.",
           },
           implantBrands: {
             label: "Implant brands",
@@ -3092,6 +3276,9 @@
         pageTitle: "Обучение ИИ клиники — Clinifly Admin",
         title: "Обучение ИИ клиники",
         lead: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пациентам.",
+        policyLayerTitle: "Правила ИИ для всей клиники (максимально допустимые)",
+        policyLayerBody: "Определите, что ИИ может делать в клинике — категории, ограничения безопасности, языки и эскалация. Это верхний предел; координаторы и врачи выбирают активный режим для каждого пациента в Центре координации или в приложении врача.",
+        liveControlNote: "Режим «Выкл / Помощь / Активен» для каждого пациента здесь не настраивается — используйте живую ИИ-координацию в каждом обращении.",
         backSettings: "← Настройки аккаунта",
         counts: "Отели: {hotels} · Протоколы workflow: {protocols}",
         loading: "Загрузка…",
@@ -3120,6 +3307,10 @@
         perNight: "/ночь",
         sections: {
           aiProfile: { title: "Профиль ИИ клиники", hint: "Многоязычная оркестрация ИИ — один источник знаний." },
+          conversionCoordinator: {
+            title: "Координатор конверсии",
+            hint: "Поведение с упором на доверие — тон, CTA, цены и запрещённые фразы (не бот продаж).",
+          },
           materials: { title: "Бренды имплантов и материалы", hint: "Бренды, лаборатории, гарантия." },
           travel: { title: "Путешествие и проживание", hint: "Партнёрские отели для dental tourism." },
           logistics: { title: "Логистика клиники", hint: "Часы работы, SLA, экстренный контакт." },
@@ -3128,6 +3319,46 @@
           aiSafety: { title: "Безопасность ИИ и проверка человеком", hint: "Автономия по категориям." },
           handoff: { title: "Правила передачи человеку", hint: "Когда ИИ эскалирует координатору или врачу." },
           internalNotes: { title: "Внутренние заметки для ИИ", hint: "Позиционирование клиники." }
+        },
+        conversion: {
+          introTitle: "ИИ-координатор лечения",
+          introBody: "управление поведением (не бот продаж). Conversion Engine включён по умолчанию.",
+          engineEnabled: "Conversion Engine включён",
+          recordTimelineEvents: "Записывать события конверсии в timeline",
+          safetyHeading: "Категории запрещённых фраз",
+          presets: {
+            soft_conversion_coordinator: "Мягкий координатор конверсии (по умолчанию)",
+            luxury_clinic: "Люксовая клиника",
+            budget_clinic: "Бюджетная клиника",
+            dental_tourism: "Стоматологический туризм",
+            implant_focused: "Фокус на имплантах",
+            cosmetic_dentistry: "Эстетическая стоматология",
+            international_patients: "Международные пациенты",
+            consultation_focused: "Фокус на консультации",
+          },
+          intensity: {
+            gentle: "Мягкий — информационный, доверие прежде всего",
+            balanced: "Сбалансированный — активный координатор",
+            proactive: "Проактивный — фокус на конверсии (без навязчивости)",
+          },
+          ctaStyle: {
+            soft: "Мягкий — необязательное продолжение",
+            balanced: "Сбалансированный — визиты и подготовка",
+            proactive: "Проактивный — чёткий следующий шаг",
+          },
+          pricingBehavior: {
+            educate_then_range: "Сначала объяснить, затем диапазон",
+            range_only: "Только краткий диапазон",
+            defer_to_coordinator: "Передать координатору",
+          },
+          nextStep: {
+            collect_xray: "Запросить рентген / снимки",
+            book_consultation: "Записать на консультацию",
+            start_whatsapp: "Начать диалог в WhatsApp",
+            schedule_visit: "Запланировать визит в клинику",
+            collect_patient_info: "Собрать данные пациента",
+            explain_treatment_process: "Объяснить процесс лечения",
+          },
         },
         sedationAvailable: "Седация доступна",
         weekendAvailability: "Работа в выходные",
@@ -3195,6 +3426,10 @@
           aiProfile: {
             intro: "Многоязычная оркестрация ИИ — включите языки и добавьте необязательные локализованные тексты для пациентов. Операционные знания (бренды, цены, workflow) остаются в одном источнике; ИИ локализует при ответе.",
             aiUsageSummary: "Маршрутизация языка, локализованные приветствия/подписи и руководство по локализации для координатора."
+          },
+          conversionCoordinator: {
+            intro: "Мягкая конверсия с упором на доверие — тон, CTA, цены и запрещённые фразы. Не бот продаж; Conversion Engine направляет ответы координатора.",
+            aiUsageSummary: "Блок стратегии в чатах координатора; опциональная аналитика timeline.",
           },
           materials: {
             intro: "Какие бренды и материалы использует ваша клиника. ИИ объясняет варианты без выдуманных брендов.",
@@ -3271,6 +3506,52 @@
             aiUsage: "Внутренние подсказки тона — не показываются пациенту напрямую.",
             placeholder: "люкс, дружелюбный, премиум, быстрый_ответ",
             example: "премиум, дружелюбный, быстрый_ответ"
+          },
+          preset: {
+            label: "Пресет клиники",
+            helper: "Готовый стиль конверсии для типа клиники — тон, CTA и цены.",
+            aiUsage: "Загружает правила пресета в блок стратегии Conversion Engine.",
+          },
+          coordinatorIntensity: {
+            label: "Интенсивность координатора",
+            helper: "Насколько активно ИИ ведёт к следующим шагам, сохраняя доверие.",
+            aiUsage: "Поза конверсии: мягкая, сбалансированная или проактивная.",
+          },
+          ctaStyle: {
+            label: "Стиль призыва к действию",
+            helper: "Насколько прямо предлагать следующие шаги (рентген, консультация, WhatsApp, визит).",
+            aiUsage: "Формирует завершения ответов и приглашения к follow-up.",
+          },
+          pricingBehavior: {
+            label: "Поведение по ценам",
+            helper: "Сначала объяснение и диапазон, только диапазон или передача координатору.",
+            aiUsage: "Управляет ответами о стоимости.",
+          },
+          nextStepPreference: {
+            label: "Предпочтительные следующие шаги",
+            helper: "Какие шаги приоритизировать, когда уместно (не все сразу).",
+            aiUsage: "Направляет выбор CTA в чатах координатора.",
+          },
+          forbidden_guarantees: {
+            label: "Запрещённые гарантии",
+            helper: "Фразы, которые ИИ никогда не должен использовать (по одной на строку).",
+            aiUsage: "Фильтр безопасности для гарантий и результатов.",
+            placeholder: "гарантированный результат\n100% успех",
+          },
+          forbidden_diagnosis: {
+            label: "Запрещённый диагностический язык",
+            helper: "Диагностические или категоричные формулировки для блокировки.",
+            aiUsage: "Ответы остаются операционными, не клинический диагноз.",
+          },
+          forbidden_claims: {
+            label: "Запрещённые маркетинговые заявления",
+            helper: "Преувеличения и сравнения, которых следует избегать.",
+            aiUsage: "Безопасные для бренда сообщения пациентам.",
+          },
+          forbidden_urgency: {
+            label: "Запрещённое давление срочности",
+            helper: "Агрессивные формулировки срочности для блокировки.",
+            aiUsage: "Предотвращает навязчивую или пугающую конверсию.",
           },
           implantBrands: { label: "Бренды имплантов", helper: "Бренды, которые вы обычно используете.", aiUsage: "Объяснение брендов и вариантов.", placeholder: "Straumann, Nobel, Osstem" },
           premiumBrands: { label: "Премиум бренды", helper: "Бренды высшего сегмента, если предлагаете.", aiUsage: "Сравнение премиум-вариантов." },
@@ -4088,6 +4369,9 @@
         pageTitle: "კლინიკის AI სწავლება — Clinifly Admin",
         title: "კლინიკის AI სწავლება",
         lead: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს პაციენტებს.",
+        policyLayerTitle: "კლინიკის მასშტაბის AI წესები (დაშვებული ზღვარი)",
+        policyLayerBody: "განსაზღვრეთ, რას შეუძლია AI თქვენს კლინიკაში — კატეგორიები, უსაფრთხოების ლიმიტები, ენები და ესკალაცია. ეს ზღვარია; კოორდინატორები და ექიმები თითოეული პაციენტისთვის აქტიურ რეჟიმს ირჩევენ კოორდინაციის ცენტრში ან ექიმის აპში.",
+        liveControlNote: "პაციენტზე გამორთული / დამხმარე / აქტიური აქ არ ირჩევა — გამოიყენეთ ცოცხალი AI კოორდინაცია თითოეულ მოთხოვნაში.",
         backSettings: "← ანგარიშის პარამეტრები",
         counts: "სასტუმროები: {hotels} · workflow პროტოკოლები: {protocols}",
         loading: "იტვირთება…",
@@ -4116,6 +4400,10 @@
         perNight: "/ღამე",
         sections: {
           aiProfile: { title: "კლინიკის AI პროფილი", hint: "მრავალენოვანი AI ორკესტრაცია." },
+          conversionCoordinator: {
+            title: "კონვერსიის კოორდინატორი",
+            hint: "ნდობაზე დაფუძნებული ქცევა — ტონი, CTA, ფასები და აკრძალული ფრაზები (არა გაყიდვების ბოტი).",
+          },
           materials: { title: "იმპლანტის ბრენდები და მასალები", hint: "ბრენდები, ლაბორატორიები, გარანტია." },
           travel: { title: "მოგზაურობა და საცხოვრებელი", hint: "პარტნიორი სასტუმროები." },
           logistics: { title: "კლინიკის ლოჯისტიკა", hint: "საათები, SLA, გადაუდებელი კონტაქტი." },
@@ -4124,6 +4412,46 @@
           aiSafety: { title: "AI უსაფრთხოება და ადამიანის შემოწმება", hint: "ავტონომია კატეგორიებით." },
           handoff: { title: "ადამიანზე გადაცემის წესები", hint: "როდის AI ესკალირებს." },
           internalNotes: { title: "შიდა AI შენიშვნები", hint: "კლინიკის პოზიციონირება." }
+        },
+        conversion: {
+          introTitle: "AI მკურნალობის კოორდინატორი",
+          introBody: "ქცევის მართვა (არა გაყიდვების ბოტი). Conversion Engine ნაგულისხმევად ჩართულია.",
+          engineEnabled: "Conversion Engine ჩართული",
+          recordTimelineEvents: "კონვერსიის timeline მოვლენების ჩაწერა",
+          safetyHeading: "უსაფრთხოების ფრაზების კატეგორიები",
+          presets: {
+            soft_conversion_coordinator: "რბილი კონვერსიის კოორდინატორი (ნაგულისხმევი)",
+            luxury_clinic: "ლუქს კლინიკა",
+            budget_clinic: "ბიუჯეტური კლინიკა",
+            dental_tourism: "სტომატოლოგიური ტურიზმი",
+            implant_focused: "იმპლანტზე ფოკუსი",
+            cosmetic_dentistry: "ესთეტიკური სტომატოლოგია",
+            international_patients: "საერთაშორისო პაციენტები",
+            consultation_focused: "კონსულტაციაზე ფოკუსი",
+          },
+          intensity: {
+            gentle: "რბილი — საინფორმაციო, ნდობა პირველ რიგში",
+            balanced: "დაბალანსებული — აქტიური კოორდინატორი",
+            proactive: "პროაქტიული — კონვერსიაზე ფოკუსი (არასოდეს თავდაჯერებული)",
+          },
+          ctaStyle: {
+            soft: "რბილი — არასავალდებულო გაგრძელება",
+            balanced: "დაბალანსებული — ვიზიტები და მომზადება",
+            proactive: "პროაქტიული — ნათელი შემდეგი ნაბიჯი",
+          },
+          pricingBehavior: {
+            educate_then_range: "ჯერ ახსნა, შემდეგ დიაპაზონი",
+            range_only: "მხოლოდ მოკლე დიაპაზონი",
+            defer_to_coordinator: "კოორდინატორზე გადაცემა",
+          },
+          nextStep: {
+            collect_xray: "რენტგენის / გამოსახულების მოთხოვნა",
+            book_consultation: "კონსულტაციის დაჯავშნა",
+            start_whatsapp: "WhatsApp საუბრის დაწყება",
+            schedule_visit: "კლინიკაში ვიზიტის დაგეგმვა",
+            collect_patient_info: "პაციენტის ინფორმაციის შეგროვება",
+            explain_treatment_process: "მკურნალობის პროცესის ახსნა",
+          },
         },
         sedationAvailable: "სედაცია ხელმისაწვდომია",
         weekendAvailability: "შაბათ-კვირა",
@@ -4191,6 +4519,10 @@
           aiProfile: {
             intro: "მრავალენოვანი AI ორკესტრაცია — ჩართეთ ენები და დაამატეთ არასავალდებულო ლოკალიზებული ტექსტი პაციენტისთვის. ოპერაციული ცოდნა (ბრენდები, ფასები, workflow) რჩება ერთ წყაროში; AI ლოკალიზაციას პასუხის დროს აკეთებს.",
             aiUsageSummary: "ენის მიმართვა, ლოკალიზებული მისალმება/ხელმოწერები და კოორდინატორის prompt-ების ლოკალიზაციის სახელმძღვანელო."
+          },
+          conversionCoordinator: {
+            intro: "ნდობაზე დაფუძნებული რბილი კონვერსია — ტონი, CTA, ფასები და აკრძალული ფრაზები. არა გაყიდვების ბოტი; Conversion Engine მართავს კოორდინატორის პასუხებს.",
+            aiUsageSummary: "სტრატეგიის ბლოკი კოორდინატორის საუბრებში; არასავალდებულო timeline ანალიტიკა.",
           },
           materials: {
             intro: "რომელ ბრენდებსა და მასალებს იყენებთ. AI ახსნის ვარიანტებს გამოგონილი ბრენდების გარეშე.",
@@ -4267,6 +4599,52 @@
             aiUsage: "შიდა ტონის მინიშნებები — პაციენტისთვის პირდაპირ არ ჩანს.",
             placeholder: "ლუქსი, მეგობრული, პრემიუმ, სწრაფი_პასუხი",
             example: "პრემიუმ, მეგობრული, სწრაფი_პასუხი"
+          },
+          preset: {
+            label: "კლინიკის პრესეტი",
+            helper: "მზა კონვერსიის სტილი კლინიკის ტიპისთვის — ტონი, CTA და ფასების ქცევა.",
+            aiUsage: "იტვირთება Conversion Engine სტრატეგიის ბლოკში.",
+          },
+          coordinatorIntensity: {
+            label: "კოორდინატორის ინტენსივობა",
+            helper: "რამდენად აქტიურად მიუძღვება AI შემდეგ ნაბიჯებს, ნდობის შენარჩუნებით.",
+            aiUsage: "კონვერსიის პოზა: რბილი, დაბალანსებული ან პროაქტიული.",
+          },
+          ctaStyle: {
+            label: "მოქმედებისკენ მოწოდების სტილი",
+            helper: "რამდენად პირდაპირ შესთავაზოს შემდეგი ნაბიჯები (რენტგენი, კონსულტაცია, WhatsApp, ვიზიტი).",
+            aiUsage: "ფორმირებს პასუხების დასასრულს და follow-up მოწოდებებს.",
+          },
+          pricingBehavior: {
+            label: "ფასების ქცევა",
+            helper: "ჯერ ახსნა და დიაპაზონი, მხოლოდ დიაპაზონი ან კოორდინატორზე გადაცემა.",
+            aiUsage: "აკონტროლებს პასუხებს ღირებულების შესახებ.",
+          },
+          nextStepPreference: {
+            label: "სასურველი შემდეგი ნაბიჯები",
+            helper: "რომელი ნაბიჯები უნდა პრიორიტეტული იყოს, როცა შესაფერისია (არა ყველა ერთად).",
+            aiUsage: "მართავს CTA-ის არჩევას კოორდინატორის საუბრებში.",
+          },
+          forbidden_guarantees: {
+            label: "აკრძალული გარანტიები",
+            helper: "ფრაზები, რომლებიც AI-ს არასოდეს უნდა გამოიყენოს (თითო ხაზზე ერთი).",
+            aiUsage: "უსაფრთხოების ფილტრი შედეგებისა და გარანტიის ენისთვის.",
+            placeholder: "გარანტირებული შედეგი\n100% წარმატება",
+          },
+          forbidden_diagnosis: {
+            label: "აკრძალული დიაგნოზის ენა",
+            helper: "დიაგნოზის ან კატეგორიული ფორმულირებები ბლოკირებისთვის.",
+            aiUsage: "პასუხები რჩება ოპერაციული, არა კლინიკური დიაგნოზი.",
+          },
+          forbidden_claims: {
+            label: "აკრძალული მარკეტინგული განცხადებები",
+            helper: "გადაჭარბებული ან შედარებითი განცხადებები, რომლებიც უნდა ავიცილოთ.",
+            aiUsage: "ბრენდისთვის უსაფრთხო პაციენტის შეტყობინებები.",
+          },
+          forbidden_urgency: {
+            label: "აკრძალული სასწრაფო ზეწოლა",
+            helper: "აგრესიული სასწრაფო ფორმულირებები ბლოკირებისთვის.",
+            aiUsage: "თავიდან აგაცილებთ თავდაჯერებულ ან საშიში კონვერსიას.",
           },
           implantBrands: {
             label: "იმპლანტის ბრენდები",

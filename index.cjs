@@ -58813,6 +58813,12 @@ const inboundClinicMessageInsert = createOfferAwareClinicMessageInsert(
 );
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
+const { registerClinicalGuidanceRoutes } = require("./lib/clinicalGuidanceRoutes");
+registerClinicalGuidanceRoutes(app, {
+  requireDoctorAuth,
+  requireAdminAuth,
+  insertClinicMessage: inboundClinicMessageInsert,
+});
 setupProposalSlaSweep();
 
 const { registerClinicTravelAdminRoutes } = require("./lib/clinicTravelAdminRoutes");
