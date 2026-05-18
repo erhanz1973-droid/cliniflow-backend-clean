@@ -47,6 +47,7 @@
       font-size: 0.85rem; color: var(--text); display: flex; justify-content: space-between; align-items: center;
     }
     .lead-list { overflow-y: auto; max-height: calc(100vh - 220px); }
+    .lead-list.is-refreshing { opacity: 0.88; pointer-events: none; }
     .lead-item {
       padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
       transition: background 0.15s;
@@ -1512,6 +1513,7 @@
 
     async function loadLeads(opts) {
       const sync = opts && opts.sync === true;
+      const silent = opts && opts.silent === true;
       if (leadsLoadInFlight) return;
       leadsLoadInFlight = true;
       const errEl = document.getElementById("globalErr");
@@ -1520,8 +1522,12 @@
         leadsLoadInFlight = false;
         return;
       }
-      errEl.style.display = "none";
-      listEl.innerHTML = '<div class="empty">Loading…</div>';
+      if (!silent) {
+        errEl.style.display = "none";
+        listEl.innerHTML = '<div class="empty">Loading…</div>';
+      } else {
+        listEl.classList.add("is-refreshing");
+      }
       try {
         let url = "/api/admin/ai-leads?limit=120&sync=" + (sync ? "1" : "0");
         if (activeOperationalFilter) {
@@ -1559,7 +1565,7 @@
           renderIntakeQueueTabs();
         }
         renderLeadList();
-        if (selectedId && leads.some((l) => l.id === selectedId)) {
+        if (!silent && selectedId && leads.some((l) => l.id === selectedId)) {
           loadDetail(selectedId);
         }
       } catch (e) {
@@ -1569,10 +1575,15 @@
             : e && e.message
               ? e.message
               : "Failed to load queue";
-        listEl.innerHTML = '<div class="err">' + esc(msg) + "</div>";
-        errEl.style.display = "block";
-        errEl.textContent = msg;
+        if (!silent) {
+          listEl.innerHTML = '<div class="err">' + esc(msg) + "</div>";
+          errEl.style.display = "block";
+          errEl.textContent = msg;
+        } else {
+          console.warn("[coordination] background refresh:", msg);
+        }
       } finally {
+        listEl.classList.remove("is-refreshing");
         leadsLoadInFlight = false;
       }
     }
@@ -1630,8 +1641,8 @@
 
     setInterval(function () {
       if (document.hidden) return;
-      loadLeads();
-    }, 45000);
+      loadLeads({ silent: true });
+    }, 90000);
 
     loadQueueCounts();
     loadLeads();
