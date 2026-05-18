@@ -276,6 +276,47 @@
     .lead-timing { font-size: 0.7rem; color: var(--muted); margin-top: 6px; }
     .badge-wait-patient { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
     .badge-wait-clinic { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .badge-ops-status {
+      display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 0.68rem;
+      font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+      background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc;
+    }
+    .badge-ops-quote { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+    .badge-ops-wait { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+    .badge-ops-review { background: #faf5ff; color: #7e22ce; border: 1px solid #e9d5ff; }
+    .lead-latest {
+      font-size: 0.78rem; color: #334155; margin-top: 6px; line-height: 1.35;
+      font-style: italic;
+    }
+    .ops-status-strip {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
+    }
+    .ops-pill {
+      font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+      background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0;
+    }
+    .mission-control {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
+      margin-bottom: 14px; padding: 12px 14px; background: #f0f9ff;
+      border: 1px solid #bae6fd; border-radius: var(--radius-sm);
+    }
+    .mission-control .mc-hd {
+      grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap; margin-bottom: 2px;
+    }
+    .mission-control .mc-title {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #0369a1; font-weight: 800;
+    }
+    .mission-cell label {
+      display: block; font-size: 0.65rem; text-transform: uppercase;
+      letter-spacing: 0.04em; color: #64748b; margin-bottom: 3px;
+    }
+    .mission-cell div { font-size: 0.84rem; font-weight: 700; color: #0f172a; line-height: 1.35; }
+    .mission-latest {
+      grid-column: 1 / -1; font-size: 0.82rem; color: #334155; line-height: 1.45;
+      font-style: italic; margin-top: 2px;
+    }
     .queue-more { margin-top: 8px; }
     .queue-more summary { cursor: pointer; font-size: 0.75rem; color: var(--muted); font-weight: 700; }
     .scan-hint {
@@ -297,6 +338,8 @@
       </p>
       <a class="ops-test-link" href="/admin-ops-rollout.html" target="_blank" rel="noopener">Workflow stress test →</a>
     </div>
+
+    <div id="opsStatusStrip" class="ops-status-strip" style="display:none"></div>
 
     <p class="scan-hint">
       <strong>Quick scan:</strong> patient → treatment interest → blocker → who is waiting → next step.
@@ -515,6 +558,106 @@
       if (flags.complaintRefund) out.push('<span class="badge badge-esc-refund">Refund</span>');
       if (flags.repeatedQuestions) out.push('<span class="badge badge-esc-repeat">Repeated Q</span>');
       return out.join("");
+    }
+
+    function shortAssignee(id) {
+      if (!id) return "—";
+      const s = String(id);
+      return s.length > 10 ? s.slice(0, 8) + "…" : s;
+    }
+
+    function renderMissionControl(L) {
+      const p = L.operationalProjection || {};
+      const status = L.operationalStatus || p.operationalStatus || "in_progress";
+      const statusLabel = L.operationalStatusLabel || p.operationalStatusLabel || status;
+      const latest = L.latestMessagePreview || p.latestMessagePreview;
+      const role = L.latestMessageRole || p.latestMessageRole;
+      const appt =
+        p.appointmentStatus === "scheduled" || L.appointmentStatus === "scheduled"
+          ? "Scheduled" +
+            (p.appointmentStartAt || L.appointmentStartAt
+              ? " · " + fmtTime(p.appointmentStartAt || L.appointmentStartAt)
+              : "")
+          : "—";
+      const aiLabel =
+        (L.delegation && L.delegation.statusLabel) ||
+        p.aiStatusLabel ||
+        L.aiStatusLabel ||
+        (L.coordinationMode === "human_active" ? "Human only" : "AI assisting");
+      const proposal = p.proposalStatus || L.proposalStatus;
+      const hasWa = L.hasWhatsapp === true || p.hasWhatsapp === true;
+      const waMissing = L.whatsappMissing === true || p.whatsappMissing === true;
+      const contactLabel =
+        L.preferredContactChannelLabel ||
+        (L.preferredContactChannel === "whatsapp"
+          ? "WhatsApp"
+          : L.preferredContactChannel === "in_app"
+            ? "In-app chat"
+            : L.preferredContactChannel || "In-app chat");
+      const waLine = hasWa
+        ? esc(L.whatsappNumber || "On file")
+        : waMissing
+          ? "Not shared yet"
+          : "Declined / not used";
+      return (
+        '<div class="mission-control">' +
+        '<div class="mc-hd">' +
+        '<span class="mc-title">Live operational status</span>' +
+        '<span class="' +
+        opsStatusBadgeClass(status) +
+        '">' +
+        esc(statusLabel) +
+        "</span>" +
+        "</div>" +
+        '<div class="mission-cell"><label>Blocker</label><div>' +
+        esc(L.blockingReason || p.blocker || "None") +
+        "</div></div>" +
+        '<div class="mission-cell"><label>Next step</label><div>' +
+        esc(L.nextAction || p.nextStep || "—") +
+        "</div></div>" +
+        '<div class="mission-cell"><label>Waiting on</label><div>' +
+        esc(
+          L.waitingPartyLabel ||
+            (L.waitingParty === "patient"
+              ? "Patient"
+              : L.waitingParty === "clinic"
+                ? "Clinic"
+                : "—"),
+        ) +
+        "</div></div>" +
+        '<div class="mission-cell"><label>AI</label><div>' +
+        esc(aiLabel) +
+        "</div></div>" +
+        '<div class="mission-cell"><label>Appointment</label><div>' +
+        esc(appt) +
+        "</div></div>" +
+        '<div class="mission-cell"><label>Contact</label><div>' +
+        esc(contactLabel) +
+        "</div></div>" +
+        '<div class="mission-cell"><label>WhatsApp</label><div>' +
+        waLine +
+        (waMissing ? ' <span class="badge badge-missing-intake">Missing</span>' : "") +
+        "</div></div>" +
+        '<div class="mission-cell"><label>Assigned</label><div>' +
+        esc(shortAssignee(L.assignedCoordinatorId || p.assignedCoordinatorId)) +
+        (L.assignedDoctorId || p.assignedDoctorId
+          ? " · Dr " + esc(shortAssignee(L.assignedDoctorId || p.assignedDoctorId))
+          : "") +
+        "</div></div>" +
+        (proposal
+          ? '<div class="mission-cell"><label>Proposal</label><div>' + esc(proposal) + "</div></div>"
+          : "") +
+        (latest
+          ? '<div class="mission-latest">Latest: “' +
+            esc(latest) +
+            "”" +
+            (role
+              ? ' <span style="font-style:normal;color:var(--muted)">(' + esc(role) + ")</span>"
+              : "") +
+            "</div>"
+          : "") +
+        "</div>"
+      );
     }
 
     function slaStrip(L) {
@@ -817,10 +960,53 @@
       }).join("") + "</ul>";
     }
 
+    function opsStatusBadgeClass(status) {
+      const s = String(status || "").toLowerCase();
+      if (s === "quote_sent" || s === "appointment_booked" || s === "consultation_scheduled") {
+        return "badge-ops-status badge-ops-quote";
+      }
+      if (s.indexOf("waiting") === 0) return "badge-ops-status badge-ops-wait";
+      if (s === "ai_unresolved" || s === "follow_up_needed") return "badge-ops-status badge-ops-review";
+      return "badge-ops-status";
+    }
+
+    function renderOpsStatusStrip() {
+      const strip = document.getElementById("opsStatusStrip");
+      if (!strip) return;
+      const counts = {};
+      const labelByStatus = {};
+      for (const L of leads) {
+        const k = L.operationalStatus || "in_progress";
+        counts[k] = (counts[k] || 0) + 1;
+        if (!labelByStatus[k]) {
+          labelByStatus[k] = L.operationalStatusLabel || k.replace(/_/g, " ");
+        }
+      }
+      const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+      if (!entries.length) {
+        strip.style.display = "none";
+        return;
+      }
+      strip.style.display = "flex";
+      strip.innerHTML = entries
+        .map(function (pair) {
+          return (
+            '<span class="ops-pill">' +
+            esc(labelByStatus[pair[0]] || pair[0]) +
+            ": " +
+            pair[1] +
+            "</span>"
+          );
+        })
+        .join("");
+    }
+
     function renderLeadList() {
       const el = document.getElementById("leadList");
+      renderOpsStatusStrip();
       if (!leads.length) {
-        el.innerHTML = '<div class="empty">No patients in this queue yet. New conversations from the patient app will appear here.</div>';
+        el.innerHTML =
+          '<div class="empty">No patients in this queue yet. New conversations from the patient app will appear here.</div>';
         return;
       }
       el.innerHTML = leads
@@ -843,6 +1029,22 @@
             : "";
           const timing = leadTimingLabel(L);
           const badges = slaBadge(L);
+          const opsBadge = L.operationalStatusLabel
+            ? '<span class="' +
+              opsStatusBadgeClass(L.operationalStatus) +
+              '">' +
+              esc(L.operationalStatusLabel) +
+              "</span>"
+            : "";
+          const waHint =
+            L.hasWhatsapp
+              ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#047857;margin-top:4px">WhatsApp on file</div>'
+              : L.whatsappMissing
+                ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#b45309;margin-top:4px">WhatsApp not shared</div>'
+                : "";
+          const latestPreview = L.latestMessagePreview
+            ? '<div class="lead-latest">“' + esc(L.latestMessagePreview) + "”</div>"
+            : "";
           const emergency =
             L.escalationFlags && L.escalationFlags.emergency
               ? ' <span class="badge badge-esc-emergency">Urgent</span>'
@@ -863,6 +1065,9 @@
             "</span>" +
             "</div>" +
             '<div class="lead-interest">' + esc(interest) + "</div>" +
+            (opsBadge ? '<div class="lead-badges">' + opsBadge + "</div>" : "") +
+            latestPreview +
+            waHint +
             ownership +
             blockHtml +
             nextHtml +
@@ -1026,6 +1231,7 @@
           : '<div class="placeholder-reply"><strong>AI drafts paused</strong> — choose Draft only, Assisting, or Human only to compose replies.</div>';
 
         body.innerHTML =
+          renderMissionControl(L) +
           slaStrip(L) +
           blockDetail +
           escRow +
@@ -1188,10 +1394,19 @@
       loadLeads();
     });
 
-    document.getElementById("btnRefresh").addEventListener("click", function () {
+    document.getElementById("btnRefresh").addEventListener("click", async function () {
       loadQueueCounts();
+      try {
+        await adminFetch("/api/admin/coordination/workspace?refresh=1&limit=80");
+      } catch (_) {}
       loadLeads();
     });
+
+    setInterval(function () {
+      if (document.hidden) return;
+      loadLeads();
+    }, 45000);
+
     loadQueueCounts();
     loadLeads();
   </script>

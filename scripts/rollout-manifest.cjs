@@ -33,6 +33,7 @@ const REQUIRED_MIGRATIONS = [
   "20260518290000_appointment_coordination_events.sql",
   "20260518300000_conversation_primary_language.sql",
   "20260518310000_treatment_request_first_response.sql",
+  "20260518320000_lead_whatsapp_collection.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
@@ -135,6 +136,7 @@ const HTTP_ROUTE_PROBES = [
   { method: "POST", path: "/ai/intake-tags", expectStatuses: [400, 401, 403, 422], body: {} },
   { method: "GET", path: "/api/patient/me/intake-journey", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/ai-leads/queues", expectStatuses: [401, 403] },
+  { method: "GET", path: "/api/admin/coordination/workspace", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/clinic/ai-ops/meta", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/clinic/ai-ops/settings", expectStatuses: [401, 403] },
   { method: "GET", path: "/api/admin/clinic/ops-profile/meta", expectStatuses: [401, 403] },
