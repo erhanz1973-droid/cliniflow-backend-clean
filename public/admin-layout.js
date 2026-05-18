@@ -26,6 +26,10 @@
     var p = String(path || '');
     if (!p.startsWith('/')) p = '/' + p;
     var u;
+    if (typeof cliniflowAdminApiOrigin === 'function') {
+      var adminBase = cliniflowAdminApiOrigin();
+      if (adminBase) return String(adminBase).replace(/\/+$/, '') + p;
+    }
     if (typeof apiUrl === 'function') {
       u = apiUrl(p);
       if (String(u).indexOf('http') === 0) return u;
@@ -40,6 +44,17 @@
     }
     if (isBackendUiHost()) return String(RENDER_ADMIN_API_FALLBACK).replace(/\/+$/, '') + p;
     return p;
+  }
+
+  function loadOpsStrip() {
+    if (window.__CLINIFLOW_OPS_STRIP_LOADED__) return;
+    var p = window.location.pathname || '';
+    if (p.includes('login') || p.includes('register')) return;
+    window.__CLINIFLOW_OPS_STRIP_LOADED__ = true;
+    var s = document.createElement('script');
+    s.src = '/admin-ops-strip.js?v=202605183';
+    s.defer = true;
+    document.body.appendChild(s);
   }
 
   /* ── Navigation items (key maps to dashboard.nav.{key}) ────── */
@@ -245,6 +260,8 @@
 
     // Start unread badge polling
     startBadgePolling();
+
+    loadOpsStrip();
 
     // Hook into i18n updates to refresh sidebar labels
     const prevOnI18nUpdated = window.onI18nUpdated;

@@ -85,36 +85,49 @@
     return /\.netlify\.app$/i.test(String(hostname || ''));
   }
 
-  function resolveOnce() {
+  var SOURCE_LABELS = {
+    manual_override: 'Manual override',
+    env: 'Environment variable',
+    cache: 'Page meta (cliniflow-api-base)',
+    default_backend: 'Default backend',
+    legacy_render_admin: 'Legacy Render admin host',
+    same_origin: 'Same-origin (relative URLs)',
+  };
+
+  /**
+   * @returns {{ origin: string, source: string }}
+   */
+  function resolveOnceWithSource() {
     if (typeof w.CLINIFLOW_API_BASE_URL === 'string' && w.CLINIFLOW_API_BASE_URL.trim()) {
-      return stripTrailingSlash(w.CLINIFLOW_API_BASE_URL);
+      return { origin: stripTrailingSlash(w.CLINIFLOW_API_BASE_URL), source: 'manual_override' };
     }
     var meta = typeof document !== 'undefined' ? document.querySelector('meta[name="cliniflow-api-base"]') : null;
     var fromMeta = meta && meta.getAttribute('content');
     if (fromMeta && String(fromMeta).trim()) {
-      return stripTrailingSlash(fromMeta);
+      return { origin: stripTrailingSlash(fromMeta), source: 'cache' };
     }
-    /** Set once when API is on Railway (public URL) and admin is on Render or another host. */
     if (typeof w.__CLINIFLOW_RAILWAY_BACKEND__ === 'string' && w.__CLINIFLOW_RAILWAY_BACKEND__.trim()) {
-      return stripTrailingSlash(w.__CLINIFLOW_RAILWAY_BACKEND__);
+      return { origin: stripTrailingSlash(w.__CLINIFLOW_RAILWAY_BACKEND__), source: 'env' };
     }
     var h = typeof w.location !== 'undefined' ? w.location.hostname : '';
     if (h === 'localhost' || h === '127.0.0.1' || h === '::1') {
-      return stripTrailingSlash(DEFAULT_BACKEND_API);
+      return { origin: stripTrailingSlash(DEFAULT_BACKEND_API), source: 'default_backend' };
     }
     if (isBackendStaticUiHost(h)) {
-      return stripTrailingSlash(DEFAULT_ADMIN_API_RENDER);
+      return { origin: stripTrailingSlash(DEFAULT_ADMIN_API_RENDER), source: 'legacy_render_admin' };
     }
     if (h === RENDER_ADMIN_HOST) {
-      return stripTrailingSlash(DEFAULT_BACKEND_API);
+      return { origin: stripTrailingSlash(DEFAULT_BACKEND_API), source: 'default_backend' };
     }
     if (isNetlifyUiHost(h)) {
-      return stripTrailingSlash(DEFAULT_BACKEND_API);
+      return { origin: stripTrailingSlash(DEFAULT_BACKEND_API), source: 'default_backend' };
     }
-    return '';
+    return { origin: '', source: 'same_origin' };
   }
 
-  var cached = resolveOnce();
+  var resolved = resolveOnceWithSource();
+  var cached = resolved.origin;
+  var cachedSource = resolved.source;
 
   /** Static admin from python/http-server on loopback: never treat the static origin as the API (returns HTML, not JSON). */
   (function coerceLoopbackStaticAdmin() {
@@ -125,23 +138,40 @@
       var u = new URL(cached);
       if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
         cached = stripTrailingSlash(DEFAULT_BACKEND_API);
+        cachedSource = 'default_backend';
       }
     } catch (_e) {
       /* ignore */
     }
   })();
 
-  try {
-    console.log('🌐 API BASE (raw cache):', cached || '(empty)');
-  } catch (_e) {
-    /* ignore */
+  var adminResolution = {
+    origin: '',
+    source: 'default_backend',
+    sourceLabel: SOURCE_LABELS.default_backend,
+    rawCache: cached || '',
+    rawCacheSource: cachedSource,
+  };
+
+  function logApiResolution(prefix, payload) {
+    try {
+      console.log(prefix, payload.origin || '(empty — relative URLs)');
+      console.log('[api-base] API source:', payload.source);
+    } catch (_e) {
+      /* ignore */
+    }
   }
+
+  logApiResolution('🌐 API BASE (raw cache):', {
+    origin: cached,
+    source: cachedSource,
+  });
 
   w.cliniflowApiBase = function () {
     return cached;
   };
 
-  var _adminApiFallbackWarned = false;
+  var _adminApiFallbackLogged = false;
 
   /**
    * Use for all admin/register/login/patient static HTML fetches.
@@ -149,35 +179,63 @@
    */
   function cliniflowAdminApiOriginImpl() {
     var b = assertValidApiOrigin(cached, true);
-    if (b) return b;
+    if (b) {
+      adminResolution.origin = b;
+      adminResolution.source = cachedSource;
+      adminResolution.sourceLabel = SOURCE_LABELS[cachedSource] || cachedSource;
+      return b;
+    }
     try {
       var meta = typeof document !== 'undefined' ? document.querySelector('meta[name="cliniflow-api-base"]') : null;
       var fm = meta && meta.getAttribute('content');
       if (fm && String(fm).trim()) {
         var m = assertValidApiOrigin(fm, true);
-        if (m) return m;
+        if (m) {
+          adminResolution.origin = m;
+          adminResolution.source = 'cache';
+          adminResolution.sourceLabel = SOURCE_LABELS.cache;
+          return m;
+        }
       }
     } catch (_e) {}
-    if (!_adminApiFallbackWarned) {
-      _adminApiFallbackWarned = true;
+    if (!_adminApiFallbackLogged) {
+      _adminApiFallbackLogged = true;
       try {
-        console.warn('[api-base] cliniflowAdminApiOrigin: invalid/empty cache — using DEFAULT_BACKEND_API');
+        console.info(
+          '[api-base] No cached API origin found; using default backend.',
+          DEFAULT_BACKEND_API,
+        );
       } catch (_e2) {}
     }
-    return stripTrailingSlash(DEFAULT_BACKEND_API);
+    adminResolution.origin = stripTrailingSlash(DEFAULT_BACKEND_API);
+    adminResolution.source = 'default_backend';
+    adminResolution.sourceLabel = SOURCE_LABELS.default_backend;
+    return adminResolution.origin;
   }
 
   w.cliniflowAdminApiOrigin = cliniflowAdminApiOriginImpl;
+
+  w.cliniflowGetApiResolution = function () {
+    var origin = cliniflowAdminApiOriginImpl();
+    return {
+      origin: origin,
+      source: adminResolution.source,
+      sourceLabel: adminResolution.sourceLabel,
+      rawCache: adminResolution.rawCache,
+      rawCacheSource: adminResolution.rawCacheSource,
+    };
+  };
+
+  w.CLINIFLOW_API_RESOLUTION = w.cliniflowGetApiResolution();
 
   w.getApiBase = w.cliniflowApiBase;
   w.API_BASE_URL = cliniflowAdminApiOriginImpl();
   w.API_BASE = w.API_BASE_URL;
 
-  try {
-    console.log('🌐 API BASE (admin resolve):', w.API_BASE_URL);
-  } catch (_e) {
-    /* ignore */
-  }
+  logApiResolution('🌐 API BASE (admin resolve):', {
+    origin: w.API_BASE_URL,
+    source: adminResolution.source,
+  });
 
   w.apiUrl = function (path) {
     var p = String(path || '');

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605184"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Operations rollout checklist — Clinifly</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
+  <style>
+    .wrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; }
+    .muted { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin-bottom: 20px; }
+    section { margin-bottom: 28px; }
+    h2 { font-size: 1rem; margin-bottom: 10px; }
+    ul.checklist { list-style: none; padding: 0; }
+    ul.checklist li {
+      padding: 8px 0; border-bottom: 1px solid var(--border);
+      display: flex; gap: 10px; align-items: flex-start; font-size: 0.9rem;
+    }
+    ul.checklist input { margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
+    th { background: #f8fafc; }
+    a.back { font-weight: 700; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p><a class="back" href="/admin-ai-leads.html">← Coordinator workspace</a></p>
+    <h1>Operations rollout &amp; workflow test</h1>
+    <p class="muted">
+      Staged deploy: <code>scripts/ROLLOUT_STAGED.md</code> · Operations: <code>OPERATIONS_ROLLOUT.md</code>
+    </p>
+
+    <section>
+      <h2>Deploy order</h2>
+      <ul class="checklist">
+        <li><input type="checkbox" /> Supabase migrations applied (staging, then prod)</li>
+        <li><input type="checkbox" /> Railway deploy from <code>cliniflow-backend-clean/</code></li>
+        <li><input type="checkbox" /> Admin UI / Netlify if separate static assets changed</li>
+        <li><input type="checkbox" /> Patient app build points at correct API URL</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>API smoke tests</h2>
+      <ul class="checklist">
+        <li><input type="checkbox" /> <code>GET /api/admin/ai-leads/queues</code> returns intake queue counts</li>
+        <li><input type="checkbox" /> <code>GET /api/admin/ai-leads?queue=doctor_review</code> filters correctly</li>
+        <li><input type="checkbox" /> <code>GET /api/patient/me/intake-journey</code> (patient JWT)</li>
+        <li><input type="checkbox" /> <code>POST /ai/intake-tags</code> updates flags + journey</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>3-second scan test (coordinator ergonomics)</h2>
+      <p class="muted">Pick 10 random leads. For each, a coordinator should answer in ~3 seconds without opening detail:</p>
+      <ul class="checklist">
+        <li><input type="checkbox" /> Who needs attention? (name + urgent flag if any)</li>
+        <li><input type="checkbox" /> What is blocking progression? (one short line)</li>
+        <li><input type="checkbox" /> Who are we waiting on? (patient vs clinic)</li>
+        <li><input type="checkbox" /> What should happen next? (next action line)</li>
+        <li><input type="checkbox" /> Inbox does <strong>not</strong> feel like a CRM dashboard (badge overload, metric noise)</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Coordinator workspace (manual)</h2>
+      <ul class="checklist">
+        <li><input type="checkbox" /> Primary queues visible; secondary under “More queues”</li>
+        <li><input type="checkbox" /> SLA filters collapsed under “Response &amp; follow-up”</li>
+        <li><input type="checkbox" /> Doctor review queue matches pending doc reviews</li>
+        <li><input type="checkbox" /> Human follow-up queue after coordinator takeover</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Seed staging data</h2>
+      <p class="muted">
+        From <code>cliniflow-backend-clean</code> on staging Supabase:
+        <code>COORDINATOR_SIM_ALLOW=1 node scripts/seed-coordinator-simulation.cjs --clinic-id=&lt;uuid&gt;</code>
+        — creates 28 <code>sim_coord_*</code> leads. See <code>scripts/COORDINATOR_SIMULATION.md</code>.
+      </p>
+    </section>
+
+    <section>
+      <h2>Observe coordinator behavior (not opinions)</h2>
+      <ul class="checklist">
+        <li><input type="checkbox" /> Note hesitation before opening a lead</li>
+        <li><input type="checkbox" /> Note wrong queue selected repeatedly</li>
+        <li><input type="checkbox" /> Note missed doctor-review backlog</li>
+        <li><input type="checkbox" /> Note ignored “waiting on clinic” rows</li>
+        <li><input type="checkbox" /> Note repeated clicks on same lead (unclear next step)</li>
+        <li><input type="checkbox" /> Note scanning delays (&gt;3s to triage)</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Workflow stress test (20–30 leads)</h2>
+      <p class="muted">Run on <strong>staging</strong> before production. Goal: friction and confusion, not feature coverage.</p>
+      <ul class="checklist">
+        <li><input type="checkbox" /> 20–30 simultaneous leads — scroll and queue switch stay fast</li>
+        <li><input type="checkbox" /> Incomplete uploads (photos / X-ray) — correct queue + “waiting on patient”</li>
+        <li><input type="checkbox" /> Implant-tagged leads — implant queue; blocker text is plain language</li>
+        <li><input type="checkbox" /> Cosmetic-tagged leads — cosmetic queue</li>
+        <li><input type="checkbox" /> Patients who abandon midway — inactive / stale timing visible</li>
+        <li><input type="checkbox" /> Pending doctor review — clinic wait + clear next step</li>
+        <li><input type="checkbox" /> Multilingual conversations — language visible in detail, not noisy in list</li>
+        <li><input type="checkbox" /> Coordinator handoff (Human Active) — human follow-up queue + “Send coordinator reply”</li>
+        <li><input type="checkbox" /> Consultation-ready leads — secondary queue; not mixed with blockers</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Patient Treatment Guide (friction)</h2>
+      <ul class="checklist">
+        <li><input type="checkbox" /> Checklist feels short (not hospital CRM)</li>
+        <li><input type="checkbox" /> Full journey hidden until expanded</li>
+        <li><input type="checkbox" /> No tourism / package sales language in patient flow</li>
+        <li><input type="checkbox" /> Upload prompts calm; no upload fatigue on first visit</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Workflow scenarios</h2>
+      <table>
+        <thead>
+          <tr><th>Scenario</th><th>Expected queue / signal</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Missing X-ray</td><td>Awaiting X-ray</td></tr>
+          <tr><td>Missing photos</td><td>Awaiting photos</td></tr>
+          <tr><td>Pending dentist review</td><td>Doctor review pending</td></tr>
+          <tr><td>Readiness ≥ 70%</td><td>Consultation ready</td></tr>
+          <tr><td>Implant tags</td><td>Implant interest</td></tr>
+          <tr><td>Cosmetic tags</td><td>Cosmetic goals</td></tr>
+          <tr><td>Human coordinator active</td><td>Human follow-up</td></tr>
+          <tr><td>No patient reply 24h+</td><td>Inactive workspace</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Not in Phase 3 (intentionally deferred)</h2>
+      <p class="muted">
+        Autonomous clinical messaging, auto-sent patient reminders, and new intake taxonomies.
+        When added: operational reminders only, humans stay in the loop.
+      </p>
+    </section>
+  </div>
+  <script src="/admin-layout.js?v=202605171"></script>
+</body>
+</html>

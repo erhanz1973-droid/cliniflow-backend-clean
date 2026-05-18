@@ -7479,6 +7479,19 @@ app.get("/health/detail", (req, res) => {
 app.get("/api/health", async (req, res) => {
   try {
     const deep = String(req.query.deep || "") === "1";
+    let buildInfo = {};
+    try {
+      buildInfo = require("./lib/buildInfo.cjs");
+    } catch (_) {
+      buildInfo = {};
+    }
+    const railwayRegion =
+      String(
+        process.env.RAILWAY_REGION ||
+          process.env.RAILWAY_REPLICA_REGION ||
+          process.env.RAILWAY_DEPLOYMENT_REGION ||
+          "",
+      ).trim() || undefined;
     const payload = {
       ok: true,
       status: "ok",
@@ -7486,6 +7499,14 @@ app.get("/api/health", async (req, res) => {
       uptimeSeconds: Math.floor((Date.now() - SERVER_BOOT_MS) / 1000),
       environment: IS_PROD ? "production" : String(process.env.NODE_ENV || "development"),
       version: CLINIFLOW_PKG_VERSION,
+      apiBuild: buildInfo.apiBuild || CLINIFLOW_PKG_VERSION,
+      service: buildInfo.service || "cliniflow-backend-clean",
+      schemaMigrationsHead: buildInfo.schemaMigrationsHead || undefined,
+      region: railwayRegion,
+      railwayRegion,
+      aiOrchestration: Boolean(
+        String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim(),
+      ),
       commit:
         String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT || "").trim() ||
         undefined,
@@ -7771,13 +7792,28 @@ app.get("/", (req, res) => res.redirect("/admin-login.html"));
 
 // Public version endpoint — hit this in a browser to confirm which build is live.
 // e.g. https://cliniflow-backend.onrender.com/api/version
-app.get("/api/version", (req, res) => res.json({
-  version: "v8",
-  commit:  "cb175eef",
-  sim:     "programmatic-whitening",
-  ai:      false,
-  built:   "2026-04-13",
-}));
+app.get("/api/version", (req, res) => {
+  let buildInfo = {};
+  try {
+    buildInfo = require("./lib/buildInfo.cjs");
+  } catch (_) {
+    buildInfo = {};
+  }
+  return res.json({
+    ok: true,
+    version: CLINIFLOW_PKG_VERSION,
+    apiBuild: buildInfo.apiBuild || CLINIFLOW_PKG_VERSION,
+    service: buildInfo.service || "cliniflow-backend-clean",
+    schemaMigrationsHead: buildInfo.schemaMigrationsHead,
+    commit:
+      String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT || "").trim() ||
+      undefined,
+    aiOrchestration: Boolean(
+      String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim(),
+    ),
+    built: buildInfo.apiBuild || new Date().toISOString().slice(0, 10),
+  });
+});
 app.get("/admin", (req, res) => res.redirect("/admin-login.html"));
 // /dashboard should serve normal admin dashboard, NOT redirect to Super Admin
 app.get("/dashboard", (req, res) => {
