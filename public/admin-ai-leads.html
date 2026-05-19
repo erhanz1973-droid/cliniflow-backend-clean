@@ -5,8 +5,9 @@
   <script src="/api-base.js?v=202605185"></script>
   <script src="/admin-layout.js?v=202605184"></script>
   <script src="/admin-i18n.js?v=37"></script>
+  <script src="/admin-coordination-i18n.js?v=202605191"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Coordination Center — Clinifly Admin</title>
+  <title data-coord-i18n="hero.title">Coordination Center — Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
   <script>
     (function () {
@@ -348,40 +349,40 @@
 <body>
   <div class="ai-wrap">
     <div class="ai-header">
-      <h1>Coordination Center</h1>
-      <p>
+      <h1 data-coord-i18n="hero.title">Coordination Center</h1>
+      <p data-coord-i18n="hero.subtitle">
         See which patients need attention, what is blocking progress, and where action is required.
       </p>
-      <a class="ops-test-link" href="/admin-ops-rollout.html" target="_blank" rel="noopener">Workflow stress test →</a>
+      <a class="ops-test-link" href="/admin-ops-rollout.html" target="_blank" rel="noopener" data-coord-i18n="hero.workflowTest">Workflow stress test →</a>
     </div>
 
     <div id="opsStatusStrip" class="ops-status-strip" style="display:none"></div>
 
     <div class="ops-filter-section">
-      <div class="queue-section-hd">Operational status</div>
+      <div class="queue-section-hd" data-coord-i18n="filters.operationalStatus">Operational status</div>
       <div class="ops-filter-tabs" id="operationalFilterTabs"></div>
     </div>
 
     <div class="ops-filter-section">
-      <div class="queue-section-hd">Responder handling</div>
+      <div class="queue-section-hd" data-coord-i18n="filters.responderHandling">Responder handling</div>
       <div class="ops-filter-tabs" id="handlingFilterTabs"></div>
     </div>
 
-    <p class="scan-hint">
-      <strong>Quick scan:</strong> patient → treatment interest → blocker → who is waiting → next step.
+    <p class="scan-hint" data-coord-i18n="filters.quickScan">
+      Quick scan: patient → treatment interest → blocker → who is waiting → next step.
     </p>
 
     <div class="queue-section">
-      <div class="queue-section-hd">Priority queues</div>
+      <div class="queue-section-hd" data-coord-i18n="filters.priorityQueues">Priority queues</div>
       <div class="intake-queue-tabs" id="intakeQueueTabsPrimary"></div>
       <details class="queue-more">
-        <summary>Treatment categories</summary>
+        <summary data-coord-i18n="filters.treatmentCategories">Treatment categories</summary>
         <div class="intake-queue-tabs" id="intakeQueueTabsMore" style="margin-top:8px"></div>
       </details>
     </div>
 
     <details class="workspace-section" style="margin-bottom:12px">
-      <summary class="queue-section-hd" style="cursor:pointer">Follow-up &amp; response times</summary>
+      <summary class="queue-section-hd" style="cursor:pointer" data-coord-i18n="filters.followUpTimes">Follow-up &amp; response times</summary>
       <div class="workspace-tabs" id="workspaceTabs" style="margin-top:8px">
         <button type="button" class="ws-btn active" data-ws="recent" title="All active conversations">All active</button>
         <button type="button" class="ws-btn" data-ws="waiting_human" title="Patient wrote; clinic has not replied">Waiting for clinic reply</button>
@@ -393,7 +394,7 @@
     </details>
 
     <details class="legacy-filters" style="margin-bottom:12px">
-      <summary>More filters</summary>
+      <summary data-coord-i18n="filters.moreFilters">More filters</summary>
       <div class="filters signal-filters" id="filters" style="margin-top:8px">
         <button type="button" class="filter-btn" data-filter="hot">High booking intent</button>
         <button type="button" class="filter-btn" data-filter="implant">Implant inquiries</button>
@@ -409,18 +410,18 @@
     <div class="layout">
       <section class="panel">
         <div class="panel-hd">
-          <span>Attention queue</span>
-          <button type="button" class="refresh-btn" id="btnRefresh">Refresh</button>
+          <span data-coord-i18n="queue.attention">Attention queue</span>
+          <button type="button" class="refresh-btn" id="btnRefresh" data-coord-i18n="common.refresh">Refresh</button>
         </div>
         <div class="lead-list" id="leadList">
-          <div class="empty">Loading…</div>
+          <div class="empty" data-coord-i18n="common.loading">Loading…</div>
         </div>
       </section>
 
       <section class="panel">
-        <div class="panel-hd"><span id="detailTitle">Select a patient</span></div>
+        <div class="panel-hd"><span id="detailTitle" data-coord-i18n="queue.selectPatient">Select a patient</span></div>
         <div class="detail-body" id="detailBody">
-          <div class="empty">Select a patient from the queue to see what is blocking, who is waiting, and the next step.</div>
+          <div class="empty" data-coord-i18n="queue.selectPatientHint">Select a patient from the queue to see what is blocking, who is waiting, and the next step.</div>
         </div>
       </section>
     </div>
@@ -443,8 +444,17 @@
     function adminFetch(path, opts) {
       const url = resolveAdminApiUrl(path);
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      const uiLang =
+        (window.CoordinationI18n && typeof CoordinationI18n.uiLanguageHeader === "function"
+          ? CoordinationI18n.uiLanguageHeader()
+          : null) ||
+        (window.i18n && typeof window.i18n.getLang === "function" ? window.i18n.getLang() : "en");
       const headers = Object.assign(
-        { Accept: "application/json", Authorization: "Bearer " + token },
+        {
+          Accept: "application/json",
+          Authorization: "Bearer " + token,
+          "X-UI-Language": uiLang,
+        },
         (opts && opts.headers) || {},
       );
       const timeoutMs =
@@ -471,7 +481,17 @@
         .replace(/"/g, "&quot;");
     }
 
-    function fmtTime(iso) {
+    function ct(key, params) {
+      if (window.CoordinationI18n && typeof CoordinationI18n.t === "function") {
+        return CoordinationI18n.t(key, params);
+      }
+      return String(key);
+    }
+
+    function fmtTime(iso, opts) {
+      if (window.CoordinationI18n && typeof CoordinationI18n.fmtTime === "function") {
+        return CoordinationI18n.fmtTime(iso, opts);
+      }
       if (!iso) return "—";
       try {
         return new Date(iso).toLocaleString();
@@ -504,6 +524,40 @@
       "tag_cosmetic",
     ];
 
+    const WS_TAB_KEYS = {
+      recent: "filters.allActive",
+      waiting_human: "filters.waitingClinic",
+      inactive: "filters.inactive24h",
+      assigned: "filters.assignedCoordinator",
+      hot: "filters.highBooking",
+      ai_unresolved: "filters.needsReview",
+    };
+
+    const SIGNAL_FILTER_KEYS = {
+      hot: "filters.hot",
+      implant: "filters.implant",
+      veneers: "filters.veneers",
+      high_booking: "filters.readyToBook",
+      high_urgency: "filters.urgent",
+      human: "filters.humanEngaged",
+    };
+
+    function applyCoordinationStaticI18n() {
+      if (window.CoordinationI18n && typeof CoordinationI18n.applyStaticDom === "function") {
+        CoordinationI18n.applyStaticDom();
+      }
+      document.querySelectorAll("#workspaceTabs .ws-btn").forEach(function (btn) {
+        const ws = btn.getAttribute("data-ws");
+        if (WS_TAB_KEYS[ws]) btn.textContent = ct(WS_TAB_KEYS[ws]);
+      });
+      document.querySelectorAll("#filters .filter-btn").forEach(function (btn) {
+        const f = btn.getAttribute("data-filter");
+        if (SIGNAL_FILTER_KEYS[f]) btn.textContent = ct(SIGNAL_FILTER_KEYS[f]);
+      });
+      const refreshBtn = document.getElementById("btnRefresh");
+      if (refreshBtn) refreshBtn.textContent = ct("common.refresh");
+    }
+
     function renderIntakeQueueTabs() {
       const primaryEl = document.getElementById("intakeQueueTabsPrimary");
       const moreEl = document.getElementById("intakeQueueTabsMore");
@@ -511,7 +565,7 @@
       const allBtn =
         '<button type="button" class="queue-btn' +
         (!activeIntakeQueue ? " active" : "") +
-        '" data-queue="">All patients</button>';
+        '" data-queue="">' + esc(ct("queue.allPatients")) + "</button>";
       function btnFor(id) {
         const def = intakeQueueDefs.find(function (q) {
           return q.id === id;
@@ -559,7 +613,7 @@
       if (!el) return;
       const defs = operationalFilterDefs.length
         ? operationalFilterDefs
-        : [{ id: "", label: "All active", count: leads.length }];
+        : [{ id: "", label: ct("filters.allActive"), count: leads.length }];
       el.innerHTML = defs
         .map(function (f) {
           const active = activeOperationalFilter === (f.id || "") ? " active" : "";
@@ -612,49 +666,51 @@
     function slaBadge(L) {
       const sla = L.sla || {};
       const parts = [];
-      if (sla.isWaiting4h) parts.push('<span class="badge badge-urgent-critical">No clinic reply 4h+</span>');
-      else if (sla.isWaiting1h) parts.push('<span class="badge badge-urgent-warn">No clinic reply 1h+</span>');
-      if (sla.isInactive24h) parts.push('<span class="badge badge-stale">No activity 24h+</span>');
-      if (L.needsReview || L.aiUnresolved) parts.push('<span class="badge badge-unresolved">Needs review</span>');
-      if (L.isHot) parts.push('<span class="badge badge-hot">High intent</span>');
+      if (sla.isWaiting4h) parts.push('<span class="badge badge-urgent-critical">' + esc(ct("badges.noClinic4h")) + "</span>");
+      else if (sla.isWaiting1h) parts.push('<span class="badge badge-urgent-warn">' + esc(ct("badges.noClinic1h")) + "</span>");
+      if (sla.isInactive24h) parts.push('<span class="badge badge-stale">' + esc(ct("badges.inactive24h")) + "</span>");
+      if (L.needsReview || L.aiUnresolved) parts.push('<span class="badge badge-unresolved">' + esc(ct("badges.needsReview")) + "</span>");
+      if (L.isHot) parts.push('<span class="badge badge-hot">' + esc(ct("badges.hot")) + "</span>");
       return parts.join("");
     }
 
     function formatTreatmentInterest(L) {
       const raw = String(L.treatmentInterest || "").trim();
       const tags = (L.operationalIntakeFlags && L.operationalIntakeFlags.patientReportedTags) || [];
-      if (/implant/i.test(raw) || tags.includes("implant_interest")) return "Interested in implants";
+      if (/implant/i.test(raw) || tags.includes("implant_interest")) return ct("interest.implants");
       if (/veneer|cosmetic|smile|whitening/i.test(raw) || tags.some(function (t) {
         return ["veneer_interest", "cosmetic_goal", "whitening_interest", "orthodontic_interest"].indexOf(t) >= 0;
-      })) return "Interested in veneers / cosmetic";
-      if (raw) return "Interested in " + raw.replace(/_/g, " ");
-      if (L.country) return "Inquiry from " + L.country;
-      return "Treatment inquiry";
+      })) return ct("interest.cosmetic");
+      if (raw) return ct("interest.generic", { treatment: raw.replace(/_/g, " ") });
+      if (L.country) return ct("interest.fromCountry", { country: L.country });
+      return ct("interest.inquiry");
     }
 
     function leadTimingLabel(L) {
       const sla = L.sla || {};
-      if (sla.isWaiting4h) return "No clinic reply for 4h+";
-      if (sla.isWaiting1h && sla.waitingDurationLabel) return "No clinic reply for " + sla.waitingDurationLabel;
-      if (sla.isWaiting1h) return "No clinic reply for 1h+";
-      if (sla.isInactive24h) return "No activity for 24h+";
+      if (sla.isWaiting4h) return ct("timing.noClinic4h");
+      if (sla.isWaiting1h && sla.waitingDurationLabel) {
+        return ct("timing.noClinic1h", { duration: sla.waitingDurationLabel });
+      }
+      if (sla.isWaiting1h) return ct("timing.noClinic1hShort");
+      if (sla.isInactive24h) return ct("timing.inactive24h");
       if (L.waitingParty === "clinic" && sla.waitingDurationLabel) {
-        return "Waiting on clinic · " + sla.waitingDurationLabel;
+        return ct("timing.waitingClinic", { duration: sla.waitingDurationLabel });
       }
       if (L.waitingParty === "patient" && sla.inactiveLabel) {
-        return "Waiting on patient · " + sla.inactiveLabel;
+        return ct("timing.waitingPatient", { duration: sla.inactiveLabel });
       }
-      if (sla.waitingDurationLabel) return "Waiting " + sla.waitingDurationLabel;
-      return "Updated " + fmtTime(L.updatedAt);
+      if (sla.waitingDurationLabel) return ct("timing.waiting", { duration: sla.waitingDurationLabel });
+      return ct("common.updated", { time: fmtTime(L.updatedAt) });
     }
 
     function escalationBadges(flags) {
       if (!flags || typeof flags !== "object") return "";
       const out = [];
-      if (flags.emergency) out.push('<span class="badge badge-esc-emergency">Emergency</span>');
-      if (flags.angry) out.push('<span class="badge badge-esc-angry">Angry</span>');
-      if (flags.complaintRefund) out.push('<span class="badge badge-esc-refund">Refund</span>');
-      if (flags.repeatedQuestions) out.push('<span class="badge badge-esc-repeat">Repeated Q</span>');
+      if (flags.emergency) out.push('<span class="badge badge-esc-emergency">' + esc(ct("badges.emergency")) + "</span>");
+      if (flags.angry) out.push('<span class="badge badge-esc-angry">' + esc(ct("badges.angry")) + "</span>");
+      if (flags.complaintRefund) out.push('<span class="badge badge-esc-refund">' + esc(ct("badges.refund")) + "</span>");
+      if (flags.repeatedQuestions) out.push('<span class="badge badge-esc-repeat">' + esc(ct("badges.repeatedQ")) + "</span>");
       return out.join("");
     }
 
@@ -670,7 +726,7 @@
       if (!el) return;
       const defs = handlingFilterDefs.length
         ? handlingFilterDefs
-        : [{ id: "", label: "All handling", count: leads.length }];
+        : [{ id: "", label: ct("filters.allHandling"), count: leads.length }];
       el.innerHTML = defs
         .map(function (f) {
           const active = activeHandlingFilter === (f.id || "") ? " active" : "";
@@ -706,83 +762,81 @@
       const role = L.latestMessageRole || p.latestMessageRole;
       const appt =
         p.appointmentStatus === "scheduled" || L.appointmentStatus === "scheduled"
-          ? "Scheduled" +
+          ? ct("mission.scheduled") +
             (p.appointmentStartAt || L.appointmentStartAt
               ? " · " + fmtTime(p.appointmentStartAt || L.appointmentStartAt)
               : "")
-          : "—";
+          : ct("common.dash");
       const aiLabel =
         (L.delegation && L.delegation.statusLabel) ||
         p.aiStatusLabel ||
         L.aiStatusLabel ||
-        (L.coordinationMode === "human_active" ? "Human only" : "AI assisting");
+        (L.coordinationMode === "human_active" ? ct("ai.humanOnly") : ct("ai.assisting"));
       const proposal = p.proposalStatus || L.proposalStatus;
       const hasWa = L.hasWhatsapp === true || p.hasWhatsapp === true;
       const waMissing = L.whatsappMissing === true || p.whatsappMissing === true;
       const contactLabel =
         L.preferredContactChannelLabel ||
         (L.preferredContactChannel === "whatsapp"
-          ? "WhatsApp"
+          ? ct("contact.whatsapp")
           : L.preferredContactChannel === "in_app"
-            ? "In-app chat"
-            : L.preferredContactChannel || "In-app chat");
+            ? ct("contact.inApp")
+            : L.preferredContactChannel || ct("contact.inApp"));
       const waLine = hasWa
-        ? esc(L.whatsappNumber || "On file")
+        ? esc(L.whatsappNumber || ct("mission.onFile"))
         : waMissing
-          ? "Not shared yet"
-          : "Declined / not used";
+          ? ct("mission.notShared")
+          : ct("mission.declined");
       return (
         '<div class="mission-control">' +
         '<div class="mc-hd">' +
-        '<span class="mc-title">Live operational status</span>' +
+        '<span class="mc-title">' + esc(ct("mission.title")) + "</span>" +
         '<span class="' +
         opsStatusBadgeClass(status) +
         '">' +
         esc(statusLabel) +
         "</span>" +
         "</div>" +
-        '<div class="mission-cell"><label>Blocker</label><div>' +
-        esc(L.blockingReason || p.blocker || "None") +
+        '<div class="mission-cell"><label>' + esc(ct("mission.blocker")) + '</label><' + 'div>' +
+        esc(L.blockingReason || p.blocker || ct("common.none")) +
         "</div></div>" +
-        '<div class="mission-cell"><label>Next step</label><div>' +
-        esc(L.nextAction || p.nextStep || "—") +
+        '<div class="mission-cell"><label>' + esc(ct("mission.nextStep")) + '</label><' + 'div>' +
+        esc(L.nextAction || p.nextStep || ct("common.dash")) +
         "</div></div>" +
-        '<div class="mission-cell"><label>Waiting on</label><div>' +
+        '<div class="mission-cell"><label>' + esc(ct("mission.waitingOn")) + '</label><' + 'div>' +
         esc(
           L.waitingPartyLabel ||
             (L.waitingParty === "patient"
-              ? "Patient"
+              ? ct("mission.patientParty")
               : L.waitingParty === "clinic"
-                ? "Clinic"
-                : "—"),
+                ? ct("mission.clinicParty")
+                : ct("common.dash")),
         ) +
         "</div></div>" +
-        '<div class="mission-cell"><label>AI</label><div>' +
+        '<div class="mission-cell"><label>' + esc(ct("mission.ai")) + '</label><' + 'div>' +
         esc(aiLabel) +
         "</div></div>" +
-        '<div class="mission-cell"><label>Appointment</label><div>' +
+        '<div class="mission-cell"><label>' + esc(ct("mission.appointment")) + '</label><' + 'div>' +
         esc(appt) +
         "</div></div>" +
-        '<div class="mission-cell"><label>Contact</label><div>' +
+        '<div class="mission-cell"><label>' + esc(ct("mission.contact")) + '</label><' + 'div>' +
         esc(contactLabel) +
         "</div></div>" +
-        '<div class="mission-cell"><label>WhatsApp</label><div>' +
+        '<div class="mission-cell"><label>' + esc(ct("mission.whatsapp")) + '</label><' + 'div>' +
         waLine +
-        (waMissing ? ' <span class="badge badge-missing-intake">Missing</span>' : "") +
+        (waMissing ? ' <span class="badge badge-missing-intake">' + esc(ct("badges.missingIntake")) + "</span>" : "") +
         "</div></div>" +
-        '<div class="mission-cell"><label>Assigned</label><div>' +
+        '<div class="mission-cell"><label>' + esc(ct("mission.assigned")) + '</label><' + 'div>' +
         esc(shortAssignee(L.assignedCoordinatorId || p.assignedCoordinatorId)) +
         (L.assignedDoctorId || p.assignedDoctorId
-          ? " · Dr " + esc(shortAssignee(L.assignedDoctorId || p.assignedDoctorId))
+          ? " · " + ct("detail.drPrefix") + " " + esc(shortAssignee(L.assignedDoctorId || p.assignedDoctorId))
           : "") +
         "</div></div>" +
         (proposal
-          ? '<div class="mission-cell"><label>Proposal</label><div>' + esc(proposal) + "</div></div>"
+          ? '<div class="mission-cell"><label>' + esc(ct("mission.proposal")) + '</label><' + 'div>' + esc(proposal) + "</div></div>"
           : "") +
         (latest
-          ? '<div class="mission-latest">Latest: “' +
-            esc(latest) +
-            "”" +
+          ? '<div class="mission-latest">' + esc(ct("mission.latest", { text: latest })) +
             (role
               ? ' <span style="font-style:normal;color:var(--muted)">(' + esc(role) + ")</span>"
               : "") +
@@ -794,13 +848,17 @@
 
     function slaStrip(L) {
       const sla = L.sla || {};
-      const waitClass = sla.isWaiting4h ? 'critical' : sla.isWaiting1h ? 'warn' : '';
+      const waitClass = sla.isWaiting4h ? "critical" : sla.isWaiting1h ? "warn" : "";
+      const dash = ct("common.dash");
+      const aiStat =
+        (L.delegation && L.delegation.statusLabel) ||
+        (L.coordinationMode === "human_active" ? ct("ai.humanOnly") : ct("ai.assisting"));
       return (
         '<div class="sla-strip">' +
-        '<div class="sla-cell"><label>Last patient message</label><div>' + esc(fmtTime(sla.lastPatientMessageAt)) + '</div></div>' +
-        '<div class="sla-cell"><label>Response wait</label><div class="sla-val ' + waitClass + '">' + esc(sla.waitingDurationLabel || '—') + '</div></div>' +
-        '<div class="sla-cell"><label>Since coordinator reply</label><div>' + esc(sla.sinceLastHumanReplyLabel || '—') + '</div></div>' +
-        '<div class="sla-cell"><label>AI status</label><div>' + esc((L.delegation && L.delegation.statusLabel) || (L.coordinationMode === 'human_active' ? 'Human only' : 'AI assisting')) + '</div></div>' +
+        '<div class="sla-cell"><label>' + esc(ct("sla.lastPatient")) + '</label><div>' + esc(fmtTime(sla.lastPatientMessageAt)) + '</div></div>' +
+        '<div class="sla-cell"><label>' + esc(ct("detail.responseWait")) + '</label><div class="sla-val ' + waitClass + '">' + esc(sla.waitingDurationLabel || dash) + '</div></div>' +
+        '<div class="sla-cell"><label>' + esc(ct("detail.sinceCoordinatorReply")) + '</label><div>' + esc(sla.sinceLastHumanReplyLabel || dash) + '</div></div>' +
+        '<div class="sla-cell"><label>' + esc(ct("detail.aiStatus")) + '</label><div>' + esc(aiStat) + '</div></div>' +
         '</div>'
       );
     }
@@ -1644,8 +1702,25 @@
       loadLeads({ silent: true });
     }, 90000);
 
-    loadQueueCounts();
-    loadLeads();
+    window.rerenderCoordinationCenter = function () {
+      applyCoordinationStaticI18n();
+      renderIntakeQueueTabs();
+      renderOperationalFilterTabs();
+      renderHandlingFilterTabs();
+      renderLeadList();
+      if (selectedId) loadDetail(selectedId);
+    };
+
+    if (window.CoordinationI18n && typeof CoordinationI18n.init === "function") {
+      CoordinationI18n.init().then(function () {
+        applyCoordinationStaticI18n();
+        loadQueueCounts();
+        loadLeads();
+      });
+    } else {
+      loadQueueCounts();
+      loadLeads();
+    }
   </script>
 </body>
 </html>

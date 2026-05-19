@@ -5189,6 +5189,9 @@
     if (typeof window.rerenderOpsProfile === 'function') {
       try { window.rerenderOpsProfile(); } catch (e) { console.warn('rerenderOpsProfile', e); }
     }
+    if (typeof window.rerenderCoordinationCenter === 'function') {
+      try { window.rerenderCoordinationCenter(); } catch (e) { console.warn('rerenderCoordinationCenter', e); }
+    }
     if (typeof window.rerenderTravelPage === 'function') {
       try { window.rerenderTravelPage(); } catch (e) { console.warn('rerenderTravelPage', e); }
     }
