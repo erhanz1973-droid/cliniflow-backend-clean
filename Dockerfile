@@ -14,6 +14,7 @@ RUN npm ci --omit=dev \
 
 COPY index.cjs ./
 COPY lib ./lib
+COPY shared ./shared
 COPY public ./public
 
 RUN mkdir -p data public/uploads
