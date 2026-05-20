@@ -1,9 +1,6 @@
-# Railway config (cliniflow-backend-clean service root).
+# Railway config (service root: cliniflow-backend-clean/).
+# No explicit builder — Railway auto-detects Dockerfile in this directory.
 # https://docs.railway.com/config-as-code/reference
-
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "node index.cjs"

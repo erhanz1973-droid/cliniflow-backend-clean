@@ -1,0 +1,30 @@
+# Shrink Railway upload/build context (service root should be this folder).
+node_modules
+npm-debug.log*
+.git
+.env
+.env.*
+.DS_Store
+
+# Docs / ops scripts (not needed at runtime)
+*.md
+scripts
+OPERATIONS_ROLLOUT.md
+
+# DB migrations applied via Supabase, not in container
+supabase
+
+# Local / IDE
+.cursor
+.vscode
+
+# Large or generated assets
+public/uploads
+data
+
+# Simulation / verification only
+scripts/coordinator-simulation-dataset.cjs
+scripts/seed-coordinator-simulation.cjs
+scripts/clear-coordinator-simulation.cjs
+scripts/verify-*.cjs
+scripts/insert-ops-profile-i18n.py

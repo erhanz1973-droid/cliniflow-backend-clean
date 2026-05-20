@@ -5,12 +5,37 @@ npm-debug.log*
 .env
 .env.*
 .DS_Store
+
+# Runtime uploads created in container
 public/uploads
+data
+
+# Docs / dev tooling
 *.md
+scripts
+OPERATIONS_ROLLOUT.md
+supabase
+.cursor
+.vscode
+
+# Monorepo paths (if build context ever includes parent)
+../cliniflow-backend
+../cliniflow-app
+../cliniflow-admin
+../doctor-clean
+../public
+../server
+../server_OLD
+../routes
+../migrations
+../tmp-backend-clean-deploy
+../tmp
+../.expo
+../dist
+../build
+
 scripts/coordinator-simulation-dataset.cjs
 scripts/seed-coordinator-simulation.cjs
 scripts/clear-coordinator-simulation.cjs
 scripts/verify-*.cjs
 scripts/insert-ops-profile-i18n.py
-supabase
-.cursor
