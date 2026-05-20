@@ -13,6 +13,7 @@ RUN npm ci --omit=dev \
   && npm cache clean --force
 
 COPY index.cjs ./
+COPY middleware ./middleware
 COPY lib ./lib
 COPY shared ./shared
 COPY public ./public
