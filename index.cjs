@@ -54016,9 +54016,11 @@ async function countUnreadPatientMessagesByOfferIds(offerIds, opts = {}) {
 
   const clinicId = String(opts.clinicId || "").trim();
   const enrolledSet =
-    opts.excludeEnrolled !== false && UUID_RE.test(clinicId)
-      ? await offerIdsWithEnrolledSharedCare(ids, clinicId)
-      : new Set();
+    opts.enrolledOfferIds instanceof Set
+      ? opts.enrolledOfferIds
+      : opts.excludeEnrolled !== false && UUID_RE.test(clinicId)
+        ? await offerIdsWithEnrolledSharedCare(ids, clinicId)
+        : new Set();
 
   const chunkSize = 80;
   for (let i = 0; i < ids.length; i += chunkSize) {
@@ -55074,18 +55076,21 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       return res.status(401).json({ ok: false, error: "Unauthorized", code: "doctor_key_missing" });
     }
 
-    // Prefer full rows first: `*` loads every column (photos, photo_urls, attachment_urls, …).
-    // Listing only base columns can succeed while omitting photo JSONB → UI never gets images.
-    const trSelectVariants = [
-      "*",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos, attachment_urls",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos, attachment_urls",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, attachment_urls",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls",
-      "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
-    ];
+    // lite=1 (default): lean columns + skip patient_files scan — doctor inbox list opens fast.
+    const lite =
+      String(req.query.lite ?? req.query.list ?? "1").trim().toLowerCase() !== "0";
+    const trSelectVariants = lite
+      ? [
+          "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls",
+          "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id",
+        ]
+      : [
+          "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos, attachment_urls",
+          "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photo_urls, photos",
+          "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos, attachment_urls",
+          "id, patient_id, description, budget, preferred_treatment, status, created_at, clinic_id, photos",
+          "*",
+        ];
 
     let list = [];
     let lastTrErr = null;
@@ -55108,6 +55113,11 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     if (!list.length && lastTrErr) {
       console.warn("[DOCTOR treatment-requests] select failed after variants:", lastTrErr.message);
     }
+    const requestIds = list.map((r) => r.id).filter(Boolean);
+    if (!requestIds.length) {
+      return res.json({ ok: true, requests: [] });
+    }
+
     const pids = [
       ...new Set(
         list
@@ -55115,10 +55125,11 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
           .filter((id) => UUID_RE.test(id))
       ),
     ];
-    const nameById = {};
-    /** Lowercased patient_id → { clinic_id, is_lead } — source of truth when thread row lags after PATCH /api/patient/clinic. */
-    const patientMetaById = {};
-    if (pids.length > 0) {
+
+    const loadPatientsMeta = async () => {
+      const nameById = {};
+      const patientMetaById = {};
+      if (!pids.length) return { nameById, patientMetaById };
       const chunk = pids.slice(0, 500);
       const patientSelVariants = [
         "id, name, full_name, clinic_id, is_lead",
@@ -55143,11 +55154,13 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
           is_lead: p.is_lead === true ? true : p.is_lead === false ? false : null,
         };
       }
-    }
+      return { nameById, patientMetaById };
+    };
 
-    /** Same precedence as doctor thread-summary: prefer graduated row (is_lead false), else newest updated_at. */
-    const leadThreadByPatientTr = new Map();
-    if (clinicId && UUID_RE.test(clinicId) && pids.length > 0) {
+    const loadLeadThreads = async (threadPids) => {
+      const leadThreadByPatientTr = new Map();
+      const lookupPids = Array.isArray(threadPids) ? threadPids : pids;
+      if (!clinicId || !UUID_RE.test(clinicId) || !lookupPids.length) return leadThreadByPatientTr;
       const tsMsTr = (row) => {
         const u = row?.updated_at != null ? Date.parse(String(row.updated_at)) : NaN;
         return Number.isFinite(u) ? u : 0;
@@ -55160,13 +55173,19 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         if (!pLead && nLead) return prev;
         return tsMsTr(next) >= tsMsTr(prev) ? next : prev;
       };
-      for (let ti = 0; ti < pids.length; ti += 90) {
-        const chunk = pids.slice(ti, ti + 90);
-        const { data: trows, error: terr } = await supabase
-          .from("patient_chat_threads")
-          .select("patient_id, is_lead, updated_at")
-          .eq("clinic_id", clinicId)
-          .in("patient_id", chunk);
+      const threadLoads = [];
+      for (let ti = 0; ti < lookupPids.length; ti += 90) {
+        const chunk = lookupPids.slice(ti, ti + 90);
+        threadLoads.push(
+          supabase
+            .from("patient_chat_threads")
+            .select("patient_id, is_lead, updated_at")
+            .eq("clinic_id", clinicId)
+            .in("patient_id", chunk),
+        );
+      }
+      const threadResults = await Promise.all(threadLoads);
+      for (const { data: trows, error: terr } of threadResults) {
         if (terr || !Array.isArray(trows)) continue;
         for (const tr of trows) {
           const pkey = String(tr?.patient_id || "").trim().toLowerCase();
@@ -55174,30 +55193,36 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
           leadThreadByPatientTr.set(pkey, pickBetterTr(leadThreadByPatientTr.get(pkey), tr));
         }
       }
-    }
+      return leadThreadByPatientTr;
+    };
 
-    const requestIds = list.map((r) => r.id).filter(Boolean);
-    if (!requestIds.length) {
-      return res.json({ ok: true, requests: [] });
-    }
-
-    let allOffers = [];
-    const offerSelectVariants = [
-      "id, request_id, doctor_id, treatment_type, price_text, price_range, duration, note, created_at, clinic_id",
-      "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at, clinic_id",
-      "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at",
-      "id, request_id, doctor_id, created_at",
-    ];
-    for (const osel of offerSelectVariants) {
-      const { data: offerRows, error: offerErr } = await supabase
-        .from("treatment_offers")
-        .select(osel)
-        .in("request_id", requestIds);
-      if (!offerErr && Array.isArray(offerRows)) {
-        allOffers = offerRows;
-        break;
+    const loadOffers = async () => {
+      const offerSelectVariants = [
+        "id, request_id, doctor_id, treatment_type, price_text, price_range, duration, note, created_at, clinic_id",
+        "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at, clinic_id",
+        "id, request_id, doctor_id, treatment_type, price_range, duration, note, created_at",
+        "id, request_id, doctor_id, created_at",
+      ];
+      for (const osel of offerSelectVariants) {
+        const { data: offerRows, error: offerErr } = await supabase
+          .from("treatment_offers")
+          .select(osel)
+          .in("request_id", requestIds);
+        if (!offerErr && Array.isArray(offerRows)) {
+          return offerRows;
+        }
       }
-    }
+      return [];
+    };
+
+    /** Match this doctor's offer — compare to any resolved UUID (not only doctorKeys[0]). */
+    const doctorIdMatchSet = new Set(doctorKeys.map((k) => String(k || "").trim()).filter(Boolean));
+    if (rawDoctor) doctorIdMatchSet.add(String(rawDoctor).trim());
+
+    const [{ nameById, patientMetaById }, allOffers] = await Promise.all([
+      loadPatientsMeta(),
+      loadOffers(),
+    ]);
 
     const offersByReq = {};
     for (const o of allOffers || []) {
@@ -55206,9 +55231,18 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       offersByReq[rid].push(o);
     }
 
-    /** Match this doctor's offer — compare to any resolved UUID (not only doctorKeys[0]). */
-    const doctorIdMatchSet = new Set(doctorKeys.map((k) => String(k || "").trim()).filter(Boolean));
-    if (rawDoctor) doctorIdMatchSet.add(String(rawDoctor).trim());
+    const pidsForThreadLookup = [
+      ...new Set(
+        list
+          .filter((r) => {
+            const offs = offersByReq[r.id] || [];
+            return offs.some((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
+          })
+          .map((r) => String(r.patient_id || "").trim())
+          .filter((id) => UUID_RE.test(id))
+      ),
+    ];
+    const leadThreadByPatientTr = await loadLeadThreads(pidsForThreadLookup);
 
     const mapReqStatus = (s) => {
       const x = String(s || "").toLowerCase();
@@ -55218,19 +55252,42 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     };
 
     let patientFilesFallbackByReqId = {};
-    try {
-      patientFilesFallbackByReqId = await mapPatientFilesPhotosByTreatmentRequestId(list);
-    } catch (fbErr) {
-      console.warn("[DOCTOR treatment-requests] patient_files fallback:", fbErr?.message);
+    if (!lite) {
+      try {
+        patientFilesFallbackByReqId = await mapPatientFilesPhotosByTreatmentRequestId(list);
+      } catch (fbErr) {
+        console.warn("[DOCTOR treatment-requests] patient_files fallback:", fbErr?.message);
+      }
     }
 
     const mineOfferIds = [];
+    const enrolledOfferIds = new Set();
     for (const r of list) {
       const offs = offersByReq[r.id] || [];
       const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
-      if (mine?.id) mineOfferIds.push(String(mine.id));
+      if (!mine?.id) continue;
+      const oid = String(mine.id);
+      mineOfferIds.push(oid);
+      const pid = String(r.patient_id || "").trim();
+      const pidKey = pid ? pid.toLowerCase() : "";
+      const thrMerged = pidKey ? leadThreadByPatientTr.get(pidKey) : null;
+      const pmeta = pidKey ? patientMetaById[pidKey] : null;
+      const patientMemberThisClinic =
+        UUID_RE.test(clinicId) &&
+        pmeta &&
+        pmeta.clinic_id &&
+        String(pmeta.clinic_id).toLowerCase() === String(clinicId).toLowerCase() &&
+        pmeta.is_lead === false;
+      if (patientMemberThisClinic || (thrMerged && thrMerged.is_lead === false)) {
+        enrolledOfferIds.add(oid);
+      }
     }
-    const unreadByOffer = await countUnreadPatientMessagesByOfferIds(mineOfferIds, { clinicId });
+    const unreadByOffer = lite
+      ? Object.fromEntries(mineOfferIds.map((id) => [id, 0]))
+      : await countUnreadPatientMessagesByOfferIds(mineOfferIds, {
+          clinicId,
+          enrolledOfferIds,
+        });
 
     const requests = list.map((r) => {
       const offs = offersByReq[r.id] || [];

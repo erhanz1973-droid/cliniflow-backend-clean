@@ -35,6 +35,7 @@ const REQUIRED_MIGRATIONS = [
   "20260518310000_treatment_request_first_response.sql",
   "20260518320000_lead_whatsapp_collection.sql",
   "20260518400000_clinical_guidance.sql",
+  "20260520100000_treatment_requests_inbox_indexes.sql",
 ];
 
 /** Probe tables/columns via Supabase REST (limit 0). */
