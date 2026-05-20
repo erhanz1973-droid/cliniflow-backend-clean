@@ -53037,7 +53037,7 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       const coordLastText = coordLatest
         ? String(coordLatest.text ?? coordLatest.message_text ?? "").trim()
         : null;
-      const proposal = enrichRequestProposalFields(r, { offerCount: reqOffers.length });
+      const proposal = enrichRequestProposalFields(r, { formalOfferCount: reqOffers.length });
       const coordRole = String(coordLatest?.sender_role || "").toLowerCase();
       const clinicRepliedInThread =
         Boolean(coordLastText) &&
@@ -55323,7 +55323,8 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         });
 
     const requests = list.map((r) => {
-      const offs = offersByReq[r.id] || [];
+      const allOffs = offersByReq[r.id] || [];
+      const offs = allOffs.filter((o) => !isCoordinationPlaceholderOffer(o));
       const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
       const pid = String(r.patient_id || "").trim();
       const patientName = (pid && nameById[pid]) || "Patient";
@@ -55372,7 +55373,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         patientMemberThisClinic || Boolean(thrMerged && thrMerged.is_lead === false);
       const rawUnread = myOid ? unreadByOffer[myOid] || 0 : 0;
       const unread_count = enrolledSharedCare ? 0 : rawUnread;
-      const proposal = enrichRequestProposalFields(r, { offerCount: offs.length });
+      const proposal = enrichRequestProposalFields(r, { formalOfferCount: offs.length });
       return {
         id: String(r.id),
         patient_name: patientName,
@@ -55385,6 +55386,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         status: mapReqStatus(r.status),
         created_at: r.created_at || new Date().toISOString(),
         offer_count: offs.length,
+        has_formal_offer: offs.length > 0,
         my_offer_id: mine ? String(mine.id) : null,
         my_offer: myOfferPayload,
         unread_count,
