@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log*
+.git
+.gitignore
+.env
+.env.*
+.DS_Store
+public/uploads
+*.md
+scripts/coordinator-simulation-dataset.cjs
+scripts/seed-coordinator-simulation.cjs
+scripts/clear-coordinator-simulation.cjs
+scripts/verify-*.cjs
+scripts/insert-ops-profile-i18n.py
+supabase
+.cursor
