@@ -393,6 +393,39 @@ function resolveListenPort() {
 }
 const PORT = resolveListenPort();
 console.log("[STARTUP] effective PORT =", PORT, "from env =", process.env.PORT != null ? String(process.env.PORT) : "(unset)");
+
+let httpListenStarted = false;
+function startHttpServerOnce(onReady) {
+  if (httpListenStarted) {
+    if (typeof onReady === "function") onReady();
+    return;
+  }
+  httpListenStarted = true;
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log("[STARTUP] http.Server listening on 0.0.0.0:" + PORT);
+    if (typeof onReady === "function") onReady();
+  });
+  server.on("error", (err) => {
+    console.error("[SERVER] listen/bind error:", err?.message || err);
+    if (String(process.env.NODE_ENV || "").toLowerCase() === "production") {
+      process.exit(1);
+    }
+  });
+}
+
+// Railway: bind before the rest of index.cjs finishes registering routes (slow cold start).
+if (
+  process.env.PORT &&
+  (process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_SERVICE_ID ||
+    process.env.RAILWAY_PUBLIC_DOMAIN ||
+    process.env.RAILWAY_DEPLOYMENT_ID)
+) {
+  startHttpServerOnce(() => {
+    console.log("[STARTUP] early listen for Railway healthcheck");
+  });
+}
+
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const { pushLog, traceMiddleware, pushDeliveryV1, newPushTraceId } = require("./lib/pushLog.cjs");
@@ -59188,7 +59221,7 @@ if (_pushAggMs >= 120000) {
   if (typeof _aggTimer.unref === "function") _aggTimer.unref();
 }
 
-server.listen(PORT, "0.0.0.0", () => {
+startHttpServerOnce(() => {
   console.log("🚀 BACKEND STARTED ON PORT:", PORT);
   console.log("Server running on port " + PORT);
   console.log(`✅ Server listening on 0.0.0.0:${PORT} (process.env.PORT=${JSON.stringify(process.env.PORT ?? null)})`);
@@ -59211,10 +59244,6 @@ server.listen(PORT, "0.0.0.0", () => {
       !!process.env.SMTP_USER &&
       !!process.env.SMTP_PASS,
   });
-
-
-
-
 
   postBootInit().catch((e) => {
     console.error("[POST-BOOT] postBootInit() failed (server keeps running):", e?.message || e);

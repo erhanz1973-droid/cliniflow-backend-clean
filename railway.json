@@ -2,6 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
     "startCommand": "node index.cjs",
-    "healthcheckPath": "/api/health"
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 300
   }
 }
