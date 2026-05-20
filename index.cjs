@@ -457,6 +457,10 @@ const {
   ensureCoordinationOfferForRequest,
 } = require("./lib/patientCoordinationChat");
 const {
+  resolveOperationalDoctorForPatientClinic,
+  listDoctorLeadMessagingOffers,
+} = require("./lib/resolveOperationalDoctor.cjs");
+const {
   setupTreatmentRequestOrchestration,
   orchestrateTreatmentRequestCreated,
 } = require("./lib/treatmentRequestOrchestration");
@@ -4200,6 +4204,8 @@ function messageRowHasAiResultAttachment(row, opts) {
 
 function shouldEnqueueChatPushForInsertedMessage(opts, insertedRow) {
   if (opts?.suppressChatSideEffects === true) return false;
+  const offerMsgId = String(insertedRow?.offer_message_id || opts?.offerMessageId || "").trim();
+  if (offerMsgId && UUID_RE.test(offerMsgId)) return false;
   const msgType = normalizeMessageTypeForPush(
     insertedRow?.type ?? opts?.type,
     insertedRow?.attachments ?? opts?.attachments,
@@ -46453,22 +46459,15 @@ async function buildDoctorOfferInboxThreads(req, opts = {}) {
   const clinicId = String(req.doctor?.clinic_id || req.clinicId || "").trim();
   const doctorIdList = [...doctorIdMatchSet];
 
-  let offerQuery = supabase
-    .from("treatment_offers")
-    .select("id, request_id, treatment_type, created_at, doctor_id, clinic_id")
-    .in("doctor_id", doctorIdList)
-    .order("created_at", { ascending: false })
-    .limit(400);
-  if (clinicId && UUID_RE.test(clinicId)) {
-    offerQuery = offerQuery.or(`clinic_id.eq.${clinicId},clinic_id.is.null`);
-  }
-  const { data: offerRows, error: offerErr } = await offerQuery;
-  if (offerErr || !offerRows?.length) {
-    if (offerErr) console.warn("[buildDoctorOfferInboxThreads] offers:", offerErr.message);
+  const offers = await listDoctorLeadMessagingOffers(supabase, {
+    doctorIdList,
+    doctorIdMatchSet,
+    clinicId,
+    isCoordinationPlaceholderOffer,
+  });
+  if (!offers.length) {
     return { rows: [], offerUnreadTotal: 0 };
   }
-
-  const offers = offerRows.filter((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
   const offerIds = offers.map((o) => String(o.id || "").trim()).filter((id) => UUID_RE.test(id));
   if (!offerIds.length) return { rows: [], offerUnreadTotal: 0 };
 
@@ -48604,9 +48603,54 @@ async function handleDoctorInboxSummary(req, res) {
       })
       .slice(0, 20);
 
+    let messaging = {
+      chatUnread: 0,
+      offerUnread: 0,
+      totalUnread: 0,
+      hasNewPatientMessages: false,
+    };
+    try {
+      const chatUnread = await getDoctorChatUnreadForPushBadge(doctorId);
+      const offerDoctorKey = doctorKeysUuidFk[0] || doctorId;
+      const offerUnread = await getOfferNotificationsApi().countDoctorOfferUnreadTotal(
+        offerDoctorKey,
+        clinicId,
+      );
+      const totalUnread = Math.min(999999, (Number(chatUnread) || 0) + (Number(offerUnread) || 0));
+      messaging = {
+        chatUnread: Number(chatUnread) || 0,
+        offerUnread: Number(offerUnread) || 0,
+        totalUnread,
+        hasNewPatientMessages: totalUnread > 0,
+      };
+      if (messaging.hasNewPatientMessages) {
+        const msgTitle =
+          messaging.offerUnread > 0 && messaging.chatUnread > 0
+            ? "New patient messages"
+            : messaging.offerUnread > 0
+              ? "New lead / request messages"
+              : "New patient chat messages";
+        notifications = [
+          {
+            id: `messaging_unread_${Date.now()}`,
+            type: "patient_message",
+            title: msgTitle,
+            body: `${messaging.totalUnread} unread message${messaging.totalUnread === 1 ? "" : "s"}`,
+            created_at: new Date().toISOString(),
+            read: false,
+            action: "open_requests_or_patients",
+          },
+          ...notifications,
+        ];
+      }
+    } catch (msgUnreadErr) {
+      console.warn("[DOCTOR INBOX-SUMMARY] messaging unread:", msgUnreadErr?.message || msgUnreadErr);
+    }
+
     return res.json({
       ok: true,
       doctor: doctor || { id: doctorId, name: req.doctor?.name || 'Doctor' },
+      messaging,
       dashboardCalendar: {
         timezone: dashboardCalendarTz,
         todayYmd: todayStr,
@@ -54110,6 +54154,9 @@ function getOfferNotificationsApi() {
       getPatientChatUnreadForPushBadge,
       treatmentRequestPatientIdFilters,
       bumpUnreadCountsCache,
+      resolveOperationalDoctorForPatientClinic,
+      listDoctorLeadMessagingOffers,
+      isCoordinationPlaceholderOffer,
     });
   }
   return _offerNotificationsApi;
@@ -55073,18 +55120,16 @@ app.get("/api/doctor/treatment-requests/offer-unread", requireDoctorAuth, async 
       return res.status(401).json({ ok: false, error: "doctor_key_missing" });
     }
     const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+    const doctorIdList = [...new Set([doctorKey, rawDoctor, ...doctorKeys].map((k) => String(k || "").trim()).filter(Boolean))];
+    const doctorIdMatchSet = new Set(doctorIdList);
 
-    let offerQuery = supabase.from("treatment_offers").select("id").eq("doctor_id", doctorKey);
-    if (clinicId && UUID_RE.test(clinicId)) {
-      // Include rows with null clinic_id (legacy offers) — strict eq hid unread on request cards.
-      offerQuery = offerQuery.or(`clinic_id.eq.${clinicId},clinic_id.is.null`);
-    }
-    const { data: offerRows, error: offerErr } = await offerQuery.limit(400);
-    if (offerErr) {
-      console.warn("[DOCTOR offer-unread] offers select:", offerErr.message);
-      return res.json({ ok: true, by_offer: {} });
-    }
-    const offerIds = (offerRows || [])
+    const scopedOffers = await listDoctorLeadMessagingOffers(supabase, {
+      doctorIdList,
+      doctorIdMatchSet,
+      clinicId,
+      isCoordinationPlaceholderOffer,
+    });
+    const offerIds = scopedOffers
       .map((o) => String(o.id || "").trim())
       .filter((id) => UUID_RE.test(id));
     const by_offer = await countUnreadPatientMessagesByOfferIds(offerIds, { clinicId });
@@ -55212,7 +55257,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         threadLoads.push(
           supabase
             .from("patient_chat_threads")
-            .select("patient_id, is_lead, updated_at")
+            .select("patient_id, is_lead, assigned_doctor_id, updated_at")
             .eq("clinic_id", clinicId)
             .in("patient_id", chunk),
         );
@@ -55267,10 +55312,6 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     const pidsForThreadLookup = [
       ...new Set(
         list
-          .filter((r) => {
-            const offs = offersByReq[r.id] || [];
-            return offs.some((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
-          })
           .map((r) => String(r.patient_id || "").trim())
           .filter((id) => UUID_RE.test(id))
       ),
@@ -55296,14 +55337,20 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     const mineOfferIds = [];
     const enrolledOfferIds = new Set();
     for (const r of list) {
-      const offs = offersByReq[r.id] || [];
-      const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
-      if (!mine?.id) continue;
-      const oid = String(mine.id);
-      mineOfferIds.push(oid);
+      const allOffs = offersByReq[r.id] || [];
+      const offs = allOffs.filter((o) => !isCoordinationPlaceholderOffer(o));
+      const placeholder = allOffs.find((o) => isCoordinationPlaceholderOffer(o));
+      let mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
       const pid = String(r.patient_id || "").trim();
       const pidKey = pid ? pid.toLowerCase() : "";
       const thrMerged = pidKey ? leadThreadByPatientTr.get(pidKey) : null;
+      if (!mine?.id && placeholder?.id && thrMerged?.assigned_doctor_id) {
+        const assignedThr = String(thrMerged.assigned_doctor_id || "").trim();
+        if (doctorIdMatchSet.has(assignedThr)) mine = placeholder;
+      }
+      if (!mine?.id) continue;
+      const oid = String(mine.id);
+      mineOfferIds.push(oid);
       const pmeta = pidKey ? patientMetaById[pidKey] : null;
       const patientMemberThisClinic =
         UUID_RE.test(clinicId) &&
@@ -55325,7 +55372,8 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     const requests = list.map((r) => {
       const allOffs = offersByReq[r.id] || [];
       const offs = allOffs.filter((o) => !isCoordinationPlaceholderOffer(o));
-      const mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
+      const placeholder = allOffs.find((o) => isCoordinationPlaceholderOffer(o));
+      let mine = offs.find((o) => doctorIdMatchSet.has(String(o.doctor_id || "").trim()));
       const pid = String(r.patient_id || "").trim();
       const patientName = (pid && nameById[pid]) || "Patient";
       let rawPhotoList = extractTreatmentRequestPhotoList(r);
@@ -55335,6 +55383,13 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const photosNormalized = rawPhotoList
         .map((u) => normalizeOfferAttachmentUrl(req, u) || String(u || "").trim())
         .filter(Boolean);
+      const pidKey = pid ? pid.toLowerCase() : "";
+      const thrMerged = pidKey ? leadThreadByPatientTr.get(pidKey) : null;
+      const pmeta = pidKey ? patientMetaById[pidKey] : null;
+      if (!mine?.id && placeholder?.id && thrMerged?.assigned_doctor_id) {
+        const assignedThr = String(thrMerged.assigned_doctor_id || "").trim();
+        if (doctorIdMatchSet.has(assignedThr)) mine = placeholder;
+      }
       const myOfferPayload =
         mine && mine.id
           ? {
@@ -55348,9 +55403,6 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
             }
           : null;
       const myOid = mine?.id ? String(mine.id) : null;
-      const pidKey = pid ? pid.toLowerCase() : "";
-      const thrMerged = pidKey ? leadThreadByPatientTr.get(pidKey) : null;
-      const pmeta = pidKey ? patientMetaById[pidKey] : null;
       const patientMemberThisClinic =
         UUID_RE.test(clinicId) &&
         pmeta &&
