@@ -1194,8 +1194,8 @@
     function ownershipAssignLabel(L) {
       if (L.primaryResponderLabel) return L.primaryResponderLabel;
       if (L.responderModeLabel) return L.responderModeLabel;
-      if (L.coordinationMode === "human_active") return "Human coordinator";
-      return "AI Coordinator";
+      if (L.coordinationMode === "human_active") return ct("ai.humanCoordinator");
+      return ct("ai.coordinator");
     }
 
     function lastActivityLabel(L) {
@@ -1203,11 +1203,19 @@
       const aiAt = sla.lastAiReplyAt ? new Date(sla.lastAiReplyAt).getTime() : 0;
       const humanAt = sla.lastHumanReplyAt ? new Date(sla.lastHumanReplyAt).getTime() : 0;
       if (aiAt && aiAt >= humanAt) {
-        return "AI replied" + (sla.waitingDurationLabel ? " · waiting " + sla.waitingDurationLabel : "");
+        return (
+          ct("detail.aiReplied") +
+          (sla.waitingDurationLabel ? " · " + ct("detail.waiting") + " " + sla.waitingDurationLabel : "")
+        );
       }
-      if (humanAt) return "Coordinator replied";
-      if (sla.lastPatientMessageAt) return "Patient wrote" + (sla.waitingDurationLabel ? " · " + sla.waitingDurationLabel + " ago" : "");
-      return "Updated " + fmtTime(L.updatedAt);
+      if (humanAt) return ct("detail.coordinatorReplied");
+      if (sla.lastPatientMessageAt) {
+        return (
+          ct("detail.patientWrote") +
+          (sla.waitingDurationLabel ? " · " + sla.waitingDurationLabel + " " + ct("detail.ago") : "")
+        );
+      }
+      return ct("common.updated", { time: fmtTime(L.updatedAt) });
     }
 
     function renderLeadList() {
@@ -1215,21 +1223,20 @@
       if (!el) return;
       renderOpsStatusStrip();
       if (!leads.length) {
-        el.innerHTML =
-          '<div class="empty">No cases match this filter. Try All active or click Refresh to sync treatment requests and offer chats.</div>';
+        el.innerHTML = '<div class="empty">' + esc(ct("detail.noCasesFilter")) + "</div>";
         return;
       }
       el.innerHTML = leads
         .map((L) => {
-          const title = L.patientName || "Patient";
+          const title = L.patientName || ct("common.patient");
           const interest = formatTreatmentInterest(L);
           const blockUrgent =
             L.operationalIntakeFlags?.doctorReviewNeeded || (L.sla && L.sla.isWaiting4h);
           const ownership =
             L.waitingParty === "patient"
-              ? '<div class="lead-ownership wait-patient">Waiting on patient</div>'
+              ? '<div class="lead-ownership wait-patient">' + esc(ct("badges.waitPatient")) + "</div>"
               : L.waitingParty === "clinic"
-                ? '<div class="lead-ownership wait-clinic">Waiting on clinic</div>'
+                ? '<div class="lead-ownership wait-clinic">' + esc(ct("badges.waitClinic")) + "</div>"
                 : "";
           const blockHtml = L.blockingReason
             ? '<div class="lead-block' + (blockUrgent ? " urgent" : "") + '">' + esc(L.blockingReason) + "</div>"
@@ -1251,16 +1258,16 @@
             : "";
           const waHint =
             L.hasWhatsapp
-              ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#047857;margin-top:4px">WhatsApp on file</div>'
+              ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#047857;margin-top:4px">' + esc(ct("detail.whatsappOnFile")) + "</div>"
               : L.whatsappMissing
-                ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#b45309;margin-top:4px">WhatsApp not shared</div>'
+                ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#b45309;margin-top:4px">' + esc(ct("detail.whatsappNotShared")) + "</div>"
                 : "";
           const latestPreview = L.latestMessagePreview
             ? '<div class="lead-latest">“' + esc(L.latestMessagePreview) + "”</div>"
             : "";
           const emergency =
             L.escalationFlags && L.escalationFlags.emergency
-              ? ' <span class="badge badge-esc-emergency">Urgent</span>'
+              ? ' <span class="badge badge-esc-emergency">' + esc(ct("detail.urgent")) + "</span>"
               : "";
           return (
             '<div class="lead-item' +
@@ -1273,14 +1280,29 @@
             esc(title) +
             emergency +
             "</div>" +
-            '<span class="score" title="Intake readiness">' +
+            '<span class="score" title="' + esc(ct("detail.intakeReadiness")) + '">' +
             (L.readinessPercent != null ? L.readinessPercent + "%" : "—") +
             "</span>" +
             "</div>" +
             '<div class="lead-interest">' + esc(interest) + "</div>" +
-            '<div class="lead-status-line">' + esc(L.operationalStatusLabel || "Active") + '</div>' +
-            '<div class="lead-meta-row"><strong>Blocker:</strong> ' + esc(L.blockingReason || "None") + ' · <strong>Next:</strong> ' + esc(L.nextAction || "—") + '</div>' +
-            '<div class="lead-meta-row"><strong>Owner:</strong> ' + esc(ownershipAssignLabel(L)) + ' · ' + esc(lastActivityLabel(L)) + (L.appointmentStatus === "scheduled" ? ' · <strong>Appointment</strong>' : '') + '</div>' +
+            '<div class="lead-status-line">' + esc(L.operationalStatusLabel || ct("detail.active")) + "</div>" +
+            '<div class="lead-meta-row"><strong>' +
+            esc(ct("mission.blocker")) +
+            ":</strong> " +
+            esc(L.blockingReason || ct("common.none")) +
+            " · <strong>" +
+            esc(ct("mission.nextStep")) +
+            ":</strong> " +
+            esc(L.nextAction || ct("common.dash")) +
+            "</div>" +
+            '<div class="lead-meta-row"><strong>' +
+            esc(ct("detail.ownerLabel")) +
+            ":</strong> " +
+            esc(ownershipAssignLabel(L)) +
+            " · " +
+            esc(lastActivityLabel(L)) +
+            (L.appointmentStatus === "scheduled" ? " · <strong>" + esc(ct("detail.appointment")) + "</strong>" : "") +
+            "</div>" +
             (opsBadge || handlingBadge ? '<div class="lead-badges">' + opsBadge + handlingBadge + "</div>" : "") +
             latestPreview +
             waHint +
