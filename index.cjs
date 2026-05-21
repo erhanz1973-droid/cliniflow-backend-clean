@@ -24258,20 +24258,48 @@ async function postPatientMeMessagesHandler(req, res) {
       offerIdHint: mirrorOfferHint,
     }).catch((e) => console.warn("[offer-mirror-patient] exception:", e?.message || e));
 
-    if (mirrorClinicId && UUID_RE.test(mirrorClinicId)) {
-      void (async () => {
-        const resolvedPid = await resolveMessagesPatientDbId(patientId);
-        if (!resolvedPid) return;
-        return afterPatientInboundMessage({
-          patientId: resolvedPid,
-          clinicId: mirrorClinicId,
-          patientMessage: text || (attachments ? "📷" : ""),
-          source: "chat",
-          contextMode: "coordinator",
-          offerId: mirrorOfferHint,
+    void (async () => {
+      const resolvedPid = await resolveMessagesPatientDbId(patientId);
+      if (!resolvedPid) return;
+      const operational = await resolveOperationalClinicId(resolvedPid, {
+        contextClinicId: ctxId,
+        contextClinicCode: ctxCode,
+        offerId: mirrorOfferHint,
+        logLabel: "postPatientMeMessages_ai",
+      });
+      const aiClinicId = UUID_RE.test(mirrorClinicId)
+        ? mirrorClinicId
+        : String(operational.clinicId || "").trim();
+      if (!UUID_RE.test(aiClinicId)) {
+        console.warn("[aiSlaContinuity] inbound skipped: clinic_unresolved", {
+          patientId: resolvedPid.slice(0, 8),
+          skippedReason: operational.skippedReason || null,
         });
-      })().catch((e) => console.warn("[aiSlaContinuity] inbound hook:", e?.message || e));
-    }
+        return;
+      }
+      let treatmentRequestId = null;
+      if (isSupabaseEnabled()) {
+        const { data: tr } = await supabase
+          .from("treatment_requests")
+          .select("id")
+          .eq("patient_id", resolvedPid)
+          .eq("clinic_id", aiClinicId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        treatmentRequestId = tr?.id ? String(tr.id) : null;
+      }
+      return afterPatientInboundMessage({
+        patientId: resolvedPid,
+        clinicId: aiClinicId,
+        patientMessage: text || (attachments ? "📷" : ""),
+        source: "chat",
+        contextMode: "coordinator",
+        offerId: mirrorOfferHint,
+        treatmentRequestId,
+        preferOfferThread: true,
+      });
+    })().catch((e) => console.warn("[aiSlaContinuity] inbound hook:", e?.message || e));
 
     return res.json({
       ok: true,
