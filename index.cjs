@@ -466,6 +466,7 @@ const {
 const {
   maybeAutoAssignRespondingDoctor,
   maybeAutoAssignFromRecentOfferMessages,
+  assignDoctorOnPatientClinicJoin,
 } = require("./lib/autoAssignRespondingDoctor");
 const {
   setupTreatmentRequestOrchestration,
@@ -13176,9 +13177,6 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
     void markLeadConvertedToClinicPatient(patientRow.id, clinic.id).catch((e) =>
       console.warn("[PATCH /api/patient/clinic] lead convert flags:", e?.message || e),
     );
-    void maybeAutoAssignFromRecentOfferMessages(patientRow.id, clinic.id).catch((e) =>
-      console.warn("[PATCH /api/patient/clinic] auto-assign from messaging:", e?.message || e),
-    );
 
     const patientStatusAfterJoin =
       patientStatus === "PENDING" || patientStatus === "" ? "ACTIVE" : patientStatus;
@@ -13251,6 +13249,26 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
       if (!isPatientChatThreadsTableUnavailable(thEx)) {
         console.warn("[PATCH /api/patient/clinic] thread reactivate exception:", thEx?.message || thEx);
       }
+    }
+
+    try {
+      const assignResult = await assignDoctorOnPatientClinicJoin(patientRow.id, clinic.id);
+      if (assignResult.ok) {
+        console.log("[PATCH /api/patient/clinic] doctor assigned", {
+          patient_id: String(patientRow.id).slice(0, 8),
+          clinic_id: String(clinic.id).slice(0, 8),
+          path: assignResult.path,
+          doctor_id: assignResult.doctorId ? String(assignResult.doctorId).slice(0, 8) : null,
+        });
+      } else {
+        console.warn("[PATCH /api/patient/clinic] duty doctor assign skipped", {
+          patient_id: String(patientRow.id).slice(0, 8),
+          clinic_id: String(clinic.id).slice(0, 8),
+          reason: assignResult.reason || assignResult.path,
+        });
+      }
+    } catch (assignEx) {
+      console.warn("[PATCH /api/patient/clinic] doctor assign:", assignEx?.message || assignEx);
     }
 
     bumpUnreadCountsCache(clinic.id);
@@ -47295,6 +47313,7 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
 
     const cidNorm = clinicId && UUID_RE.test(String(clinicId).trim()) ? String(clinicId).trim() : "";
     const staleThreadRepairIds = [];
+    const unassignedMemberRepairIds = [];
     for (const patient of patients || []) {
       const pid = String(patient.id || "").trim();
       if (!UUID_RE.test(pid)) continue;
@@ -47302,14 +47321,24 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       if (patientNeedsStaleThreadReactivateAfterRejoin(patient, clinicId, thread)) {
         staleThreadRepairIds.push(pid);
       }
+      if (cidNorm && isCurrentClinicMemberPatientRow(patient, clinicId)) {
+        unassignedMemberRepairIds.push(pid);
+      }
     }
-    if (staleThreadRepairIds.length && cidNorm) {
+    if ((staleThreadRepairIds.length || unassignedMemberRepairIds.length) && cidNorm) {
       void (async () => {
         for (const pid of staleThreadRepairIds.slice(0, 32)) {
           try {
             await reactivatePatientChatThreadOnClinicJoin(pid, cidNorm);
           } catch (e) {
             console.warn("[DOCTOR PATIENTS] stale thread repair:", e?.message || e);
+          }
+        }
+        for (const pid of unassignedMemberRepairIds.slice(0, 24)) {
+          try {
+            await assignDoctorOnPatientClinicJoin(pid, cidNorm);
+          } catch (e) {
+            console.warn("[DOCTOR PATIENTS] default doctor assign repair:", e?.message || e);
           }
         }
         bumpUnreadCountsCache(cidNorm);
@@ -59477,7 +59506,6 @@ const { registerTreatmentProposalAdminRoutes } = require("./lib/treatmentProposa
 registerTreatmentProposalAdminRoutes(app, { requireAdminAuth });
 
 const { registerAiCoordinatorDoctorRoutes } = require("./lib/aiCoordinatorDoctorRoutes");
-registerAiCoordinatorDoctorRoutes(app, { requireDoctorAuth });
 
 const { setupAiSlaContinuity, afterPatientInboundMessage } = require("./lib/aiSlaContinuity");
 const { setupAiPatientInboundReply } = require("./lib/aiPatientInboundReply");
@@ -59511,6 +59539,10 @@ const { registerClinicalGuidanceRoutes } = require("./lib/clinicalGuidanceRoutes
 registerClinicalGuidanceRoutes(app, {
   requireDoctorAuth,
   requireAdminAuth,
+  insertClinicMessage: inboundClinicMessageInsert,
+});
+registerAiCoordinatorDoctorRoutes(app, {
+  requireDoctorAuth,
   insertClinicMessage: inboundClinicMessageInsert,
 });
 setupProposalSlaSweep();
