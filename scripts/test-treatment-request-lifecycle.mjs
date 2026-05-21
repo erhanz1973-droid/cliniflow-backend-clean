@@ -6,13 +6,22 @@ import {
   shouldMarkResponded,
 } from "../lib/treatmentRequestLifecycle.js";
 
-test("pending + clinic thread reply → answered responded", () => {
+test("pending + clinic thread reply + doctor ready → answered responded", () => {
   const v = resolvePatientVisibleStatus(
     { status: "pending", proposal_status: "waiting_for_quote" },
-    { coordinationHasClinicReply: true, formalOfferCount: 0 },
+    { coordinationHasClinicReply: true, formalOfferCount: 0, clinicHasMessagingDoctor: true },
   );
   assert.equal(v.status, "answered");
   assert.equal(v.lifecycle, "responded");
+});
+
+test("pending + AI thread reply but no clinic doctor → still waiting", () => {
+  const v = resolvePatientVisibleStatus(
+    { status: "pending", proposal_status: "coordinator_responded" },
+    { coordinationHasClinicReply: true, formalOfferCount: 0, clinicHasMessagingDoctor: false },
+  );
+  assert.equal(v.status, "pending");
+  assert.equal(v.lifecycle, "awaiting_clinic_doctor");
 });
 
 test("formal offers → quoted tier", () => {

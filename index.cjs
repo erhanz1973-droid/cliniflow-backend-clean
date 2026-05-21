@@ -455,6 +455,8 @@ const {
 const {
   isCoordinationPlaceholderOffer,
   ensureCoordinationOfferForRequest,
+  clinicHasMessagingDoctor,
+  CLINIC_DOCTOR_NOT_ASSIGNED,
 } = require("./lib/patientCoordinationChat");
 const {
   resolveOperationalDoctorForPatientClinic,
@@ -53098,6 +53100,13 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       });
     }
 
+    const clinicDoctorReady = {};
+    for (const cid of reqClinicIds) {
+      const id = String(cid || "").trim();
+      if (!UUID_RE.test(id)) continue;
+      clinicDoctorReady[id] = await clinicHasMessagingDoctor(id);
+    }
+
     const result = requests.map((r) => {
       const cid = r.clinic_id ? String(r.clinic_id) : '';
       const photos = treatmentRequestRowPhotos(r);
@@ -53115,9 +53124,11 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         Boolean(coordLastText) &&
         coordRole !== "patient" &&
         coordRole !== "";
+      const hasMessagingDoctor = !cid || clinicDoctorReady[cid] === true;
       const visible = resolvePatientVisibleStatus(r, {
         coordinationHasClinicReply: clinicRepliedInThread,
         formalOfferCount: reqOffers.length,
+        clinicHasMessagingDoctor: hasMessagingDoctor,
       });
       return {
         id: r.id,
@@ -53134,7 +53145,8 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         created_at: r.created_at,
         offers: reqOffers,
         coordination_offer_id: coordOfferId || null,
-        can_open_chat: !!(coordOfferId || reqOffers.length || cid),
+        can_open_chat: !!(coordOfferId || reqOffers.length) && hasMessagingDoctor,
+        awaiting_clinic_doctor: !hasMessagingDoctor,
         coordination_last_message: coordLastText || null,
         coordination_last_message_at: coordLatest?.created_at || null,
         coordination_last_message_role: coordLatest?.sender_role || null,
@@ -53510,6 +53522,14 @@ app.post(
 
       const result = await ensureCoordinationOfferForRequest(requestId, { createIfMissing: true });
       if (!result.ok || !result.offerId) {
+        if (result.reason === "no_clinic_doctor") {
+          return res.status(422).json({
+            ok: false,
+            error: CLINIC_DOCTOR_NOT_ASSIGNED.error,
+            message: CLINIC_DOCTOR_NOT_ASSIGNED.message,
+            message_en: CLINIC_DOCTOR_NOT_ASSIGNED.message_en,
+          });
+        }
         return res.status(422).json({
           ok: false,
           error: result.reason || "coordination_unavailable",
