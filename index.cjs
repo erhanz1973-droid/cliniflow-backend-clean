@@ -55417,6 +55417,8 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
           enrolledOfferIds,
         });
 
+    const latestMsgByOffer = await fetchLatestOfferMessageByOfferIds(mineOfferIds);
+
     const requests = list.map((r) => {
       const allOffs = offersByReq[r.id] || [];
       const offs = allOffs.filter((o) => !isCoordinationPlaceholderOffer(o));
@@ -55474,6 +55476,18 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const rawUnread = myOid ? unreadByOffer[myOid] || 0 : 0;
       const unread_count = enrolledSharedCare ? 0 : rawUnread;
       const proposal = enrichRequestProposalFields(r, { formalOfferCount: offs.length });
+      const latestRow = myOid ? latestMsgByOffer.get(myOid) : null;
+      const last_message_at =
+        (latestRow?.created_at && String(latestRow.created_at)) ||
+        r.updated_at ||
+        r.created_at ||
+        new Date().toISOString();
+      const last_message_preview = latestRow
+        ? String(latestRow.text ?? latestRow.message_text ?? "").trim().slice(0, 240)
+        : null;
+      const last_message_role = latestRow?.sender_role
+        ? String(latestRow.sender_role).toLowerCase()
+        : null;
       return {
         id: String(r.id),
         patient_name: patientName,
@@ -55497,7 +55511,23 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         coordinator_queue_title: proposal.coordinator_queue_title,
         needs_quote_action: proposal.needs_quote_action,
         proposal_draft_available: proposal.proposal_draft_available,
+        last_message_at,
+        last_message_preview,
+        last_message_role,
       };
+    });
+
+    requests.sort((a, b) => {
+      const au = Math.max(0, Number(a.unread_count) || 0);
+      const bu = Math.max(0, Number(b.unread_count) || 0);
+      if (au > 0 && bu === 0) return -1;
+      if (bu > 0 && au === 0) return 1;
+      if (bu !== au) return bu - au;
+      const at =
+        Date.parse(String(a.last_message_at || a.created_at || "")) || 0;
+      const bt =
+        Date.parse(String(b.last_message_at || b.created_at || "")) || 0;
+      return bt - at;
     });
 
     return res.json({ ok: true, requests });
