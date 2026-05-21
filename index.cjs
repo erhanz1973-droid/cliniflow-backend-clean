@@ -455,6 +455,7 @@ const {
 const {
   isCoordinationPlaceholderOffer,
   ensureCoordinationOfferForRequest,
+  resolveCoordinationOfferIdForPatientClinic,
   clinicHasMessagingDoctor,
   CLINIC_DOCTOR_NOT_ASSIGNED,
 } = require("./lib/patientCoordinationChat");
@@ -46341,6 +46342,7 @@ async function resolveLeadOfferIdForPatientClinicMessage(patientIdRaw, clinicIdR
       const trPid = String(ctx.tr?.patient_id || "").trim();
       const matchesPatient = patientFilters.some((f) => String(f).trim() === trPid);
       if (matchesPatient) {
+        if (isCoordinationPlaceholderOffer(ctx.offer)) return hint;
         const clinicId = String(clinicIdRaw || ctx.tr?.clinic_id || "").trim();
         const enrolled = await isOfferPatientEnrolledSharedCare(hint, clinicId);
         if (!enrolled) return hint;
@@ -46387,8 +46389,20 @@ async function resolveLeadOfferIdForPatientClinicMessage(patientIdRaw, clinicIdR
 
   const ctx = await loadOfferMessagingContext(oid);
   if (!ctx) return null;
+  if (isCoordinationPlaceholderOffer(ctx.offer)) return oid;
   const enrolled = await isOfferPatientEnrolledSharedCare(oid, clinicId || ctx.tr?.clinic_id);
-  return enrolled ? null : oid;
+  if (enrolled) {
+    const cid = String(clinicId || ctx.tr?.clinic_id || "").trim();
+    const resolvedPid = await resolveMessagesPatientDbId(String(patientIdRaw || "").trim());
+    if (UUID_RE.test(cid) && resolvedPid) {
+      const coordId = await resolveCoordinationOfferIdForPatientClinic(resolvedPid, cid, {
+        createIfMissing: false,
+      });
+      if (coordId && UUID_RE.test(coordId)) return coordId;
+    }
+    return null;
+  }
+  return oid;
 }
 
 /** Mirror patient clinic-tab message into offer_messages (symmetric to doctor→patient_messages). */
