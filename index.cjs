@@ -53957,10 +53957,20 @@ async function resolveTreatmentRequestMessagingMeta(tr, doctorReq) {
   };
 }
 
+async function isCoordinationOfferThread(offerId, tr) {
+  const oid = String(offerId || "").trim();
+  const rid = String(tr?.id || "").trim();
+  if (!UUID_RE.test(oid) || !UUID_RE.test(rid)) return false;
+  const ctx = await loadOfferMessagingContext(oid);
+  if (ctx?.offer && isCoordinationPlaceholderOffer(ctx.offer)) return true;
+  const ensured = await ensureCoordinationOfferForRequest(rid, { createIfMissing: false });
+  return ensured.ok && String(ensured.offerId || "").trim() === oid;
+}
+
 async function isOfferPatientEnrolledSharedCare(offerId, clinicId) {
   const ctx = await loadOfferMessagingContext(offerId);
   if (!ctx?.tr) return false;
-  if (isCoordinationPlaceholderOffer(ctx.offer)) return false;
+  if (await isCoordinationOfferThread(offerId, ctx.tr)) return false;
   return isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
 }
 
@@ -54021,7 +54031,8 @@ async function assertOfferMessagingAccess(actor, offerId) {
     actor.kind === "doctor"
       ? String(actor.doctor?.clinic_id || actor.clinicId || "").trim()
       : String(tr.clinic_id || "").trim();
-  if (await isOfferPatientEnrolledSharedCare(offerId, actorClinicId)) {
+  const coordinationThread = await isCoordinationOfferThread(offerId, tr);
+  if (!coordinationThread && (await isOfferPatientEnrolledSharedCare(offerId, actorClinicId))) {
     return {
       error: "offer_thread_archived",
       patient_id: String(tr.patient_id || "").trim() || null,
@@ -54565,16 +54576,22 @@ function formatTreatmentRequestDescriptionForChat(raw) {
 // Avoids repeated Supabase round-trips on every message send.
 const _offerMessagingContextCache = new Map();
 const _OFFER_CTX_TTL_MS = 5 * 60 * 1000;
+/** Bump when offer context shape changes (e.g. coordination note fields). */
+const _OFFER_CTX_CACHE_VER = 2;
 
 async function loadOfferMessagingContext(offerId) {
   const cached = _offerMessagingContextCache.get(offerId);
-  if (cached && Date.now() - cached.ts < _OFFER_CTX_TTL_MS) {
+  if (
+    cached &&
+    cached.ver === _OFFER_CTX_CACHE_VER &&
+    Date.now() - cached.ts < _OFFER_CTX_TTL_MS
+  ) {
     return cached.ctx;
   }
 
   const { data: offer, error: oErr } = await supabase
     .from("treatment_offers")
-    .select("id, request_id, doctor_id, clinic_id")
+    .select("id, request_id, doctor_id, clinic_id, note, price_text, price_range, is_coordination_placeholder")
     .eq("id", offerId)
     .maybeSingle();
   if (oErr || !offer) return null;
@@ -54590,7 +54607,7 @@ async function loadOfferMessagingContext(offerId) {
   if (tErr || !tr?.patient_id) return null;
 
   const ctx = { offer, tr };
-  _offerMessagingContextCache.set(offerId, { ctx, ts: Date.now() });
+  _offerMessagingContextCache.set(offerId, { ctx, ts: Date.now(), ver: _OFFER_CTX_CACHE_VER });
   return ctx;
 }
 
