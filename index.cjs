@@ -34108,6 +34108,99 @@ app.post("/api/admin/chat/upload", requireAdminAuth, chatUpload.array("files", 5
     res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
 });
+// ================== CLINIC SETTINGS (patient) ==================
+const {
+  readReferralDiscountPercentFromClinicRow,
+  normalizeReferralDiscountPercent,
+} = require("./lib/clinicReferralDiscount");
+
+// GET /api/clinic/settings — enrolled patient's clinic (referral discount for Davet screen)
+app.get("/api/clinic/settings", requireToken, async (req, res) => {
+  try {
+    const patientId = String(req.patientId || "").trim();
+    if (!patientId) {
+      return res.status(401).json({ success: false, ok: false, error: "unauthorized" });
+    }
+
+    if (!isSupabaseEnabled()) {
+      const patients = readJson(PAT_FILE, {});
+      const patient =
+        patients[patientId] ||
+        Object.values(patients).find(
+          (p) => String(p?.patientId || p?.patient_id || "").trim() === patientId,
+        );
+      const clinicId = patient?.clinicId || patient?.clinic_id || null;
+      const clinics = readJson(CLINICS_FILE, {});
+      const clinic =
+        (clinicId && clinics[clinicId]) ||
+        readJson(CLINIC_FILE, {}) ||
+        null;
+      const referral_discount_percent = readReferralDiscountPercentFromClinicRow(clinic);
+      return res.json({
+        success: true,
+        ok: true,
+        data: {
+          id: clinicId || clinic?.id || null,
+          name: clinic?.name || null,
+          referral_discount_percent,
+        },
+      });
+    }
+
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let patientRow = null;
+    if (UUID_RE.test(patientId)) {
+      const r1 = await supabase
+        .from("patients")
+        .select("id, patient_id, clinic_id")
+        .eq("id", patientId)
+        .maybeSingle();
+      patientRow = r1.data || null;
+    }
+    if (!patientRow) {
+      const r2 = await supabase
+        .from("patients")
+        .select("id, patient_id, clinic_id")
+        .eq("patient_id", patientId)
+        .maybeSingle();
+      patientRow = r2.data || null;
+    }
+
+    const clinicId = patientRow?.clinic_id ? String(patientRow.clinic_id).trim() : "";
+    if (!clinicId || !UUID_RE.test(clinicId)) {
+      return res.json({
+        success: true,
+        ok: true,
+        data: { id: null, name: null, referral_discount_percent: 0 },
+      });
+    }
+
+    const { data: crow, error: cErr } = await supabase
+      .from("clinics")
+      .select("id, name, settings, default_inviter_discount_percent, default_invited_discount_percent")
+      .eq("id", clinicId)
+      .maybeSingle();
+    if (cErr) {
+      console.warn("[GET /api/clinic/settings]", cErr.message);
+      return res.status(500).json({ success: false, ok: false, error: "clinic_load_failed" });
+    }
+
+    const referral_discount_percent = readReferralDiscountPercentFromClinicRow(crow || {});
+    return res.json({
+      success: true,
+      ok: true,
+      data: {
+        id: crow?.id || clinicId,
+        name: crow?.name || null,
+        referral_discount_percent,
+      },
+    });
+  } catch (e) {
+    console.error("[GET /api/clinic/settings]", e?.message || e);
+    return res.status(500).json({ success: false, ok: false, error: "internal_error" });
+  }
+});
+
 // ================== CLINIC INFO ==================
 // GET /api/clinic (Public - mobile app için)
 // Supports ?code=XXX query parameter to get specific clinic from CLINICS_FILE
@@ -34975,8 +35068,36 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: referralLevelError });
     }
 
-    const inviterPercent = referralLevels.level1 != null ? referralLevels.level1 : existing.defaultInviterDiscountPercent ?? null;
-    const invitedPercent = referralLevels.level1 != null ? referralLevels.level1 : existing.defaultInvitedDiscountPercent ?? null;
+    const referralDiscountFromBody =
+      body.referral_discount_percent ??
+      body.referralDiscountPercent ??
+      body.settings?.referral_discount_percent ??
+      body.settings?.referralDiscountPercent ??
+      null;
+    const unifiedReferralPercent =
+      referralDiscountFromBody != null && String(referralDiscountFromBody).trim() !== ""
+        ? normalizeReferralDiscountPercent(referralDiscountFromBody)
+        : referralLevels.level1 != null
+          ? normalizeReferralDiscountPercent(referralLevels.level1)
+          : null;
+    if (unifiedReferralPercent != null) {
+      referralLevels.level1 = unifiedReferralPercent;
+      if (referralLevels.level2 == null) referralLevels.level2 = unifiedReferralPercent;
+      if (referralLevels.level3 == null) referralLevels.level3 = unifiedReferralPercent;
+    }
+
+    const inviterPercent =
+      unifiedReferralPercent != null
+        ? unifiedReferralPercent
+        : referralLevels.level1 != null
+          ? referralLevels.level1
+          : existing.defaultInviterDiscountPercent ?? null;
+    const invitedPercent =
+      unifiedReferralPercent != null
+        ? unifiedReferralPercent
+        : referralLevels.level1 != null
+          ? referralLevels.level1
+          : existing.defaultInvitedDiscountPercent ?? null;
     const rawChairCount = Number.parseInt(
       body?.chairCount ?? body?.chair_count ?? body?.settings?.chairCount ?? body?.settings?.chair_count,
       10
@@ -35096,6 +35217,14 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         defaultInviterDiscountPercent: inviterPercent,
         defaultInvitedDiscountPercent: invitedPercent,
         referralLevels,
+        referral_discount_percent:
+          unifiedReferralPercent != null
+            ? unifiedReferralPercent
+            : existing.settings?.referral_discount_percent ?? referralLevels.level1 ?? null,
+        referralDiscountPercent:
+          unifiedReferralPercent != null
+            ? unifiedReferralPercent
+            : existing.settings?.referral_discount_percent ?? referralLevels.level1 ?? null,
         logoUrl: String(persistedLogo || ""),
         googleMapsUrl: String(
           body.googleMapsUrl || bodyBranding.googleMapLink || existingMapsFallback || existing.googleMapsUrl || existingBranding.googleMapLink || ""
