@@ -13173,22 +13173,16 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
       referralError: referralJoinResult?.error || null,
     });
 
-    // Graduate the single patient+clinic chat thread from "lead" to member **without** clearing assignee —
-    // keeps Doctor A on the same thread after enrollment (shared care; admin/clinic can still post as before).
+    // Graduate + reactivate thread (clears leave-archive) — keeps assigned_doctor_id for same doctor inbox.
     try {
-      const { error: thErr } = await supabase
-        .from("patient_chat_threads")
-        .update({ is_lead: false, updated_at: new Date().toISOString() })
-        .eq("patient_id", resolvedUuid)
-        .eq("clinic_id", clinic.id);
-      if (thErr && !isPatientChatThreadsTableUnavailable(thErr)) {
-        console.warn("[PATCH /api/patient/clinic] thread graduate:", thErr.message || thErr);
-      }
+      await reactivatePatientChatThreadOnClinicJoin(resolvedUuid, clinic.id);
     } catch (thEx) {
       if (!isPatientChatThreadsTableUnavailable(thEx)) {
-        console.warn("[PATCH /api/patient/clinic] thread graduate exception:", thEx?.message || thEx);
+        console.warn("[PATCH /api/patient/clinic] thread reactivate exception:", thEx?.message || thEx);
       }
     }
+
+    bumpUnreadCountsCache(clinic.id);
 
     return res.json({
       ok: true,
@@ -13244,16 +13238,21 @@ function isPatientActiveForDoctorMessaging(patient, clinicId, threadMeta) {
 
 /** Lead assigned on patient_chat_threads to this doctor — show on GET /api/doctor/patients roster. */
 function isAssignedLeadOnDoctorRoster(patient, clinicId, threadMeta, doctorIdMatchSet) {
-  if (!patient || patient.is_lead !== true) return false;
+  if (!patient) return false;
   const cid = clinicId ? String(clinicId).trim() : "";
-  const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
-  if (!cid || !pc || pc !== cid) return false;
+  if (!cid || !UUID_RE.test(cid)) return false;
   if (isThreadLifecycleArchived(threadMeta)) return false;
   const assigned = String(threadMeta?.assigned_doctor_id || "").trim();
   if (!assigned || !UUID_RE.test(assigned)) return false;
   const matchSet =
     doctorIdMatchSet instanceof Set ? doctorIdMatchSet : new Set(doctorIdMatchSet || []);
-  return matchSet.has(assigned);
+  if (!matchSet.has(assigned)) return false;
+  const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
+  const threadLead = threadMeta?.is_lead === true;
+  const patientLead = patient.is_lead === true;
+  if (pc === cid && (patientLead || threadLead)) return true;
+  if (threadLead && assigned) return true;
+  return false;
 }
 
 /** Enrolled member or explicitly assigned lead — doctor "my patients" list (scope=active). */
@@ -13307,8 +13306,11 @@ async function loadClinicPatientThreadLifecycleMap(patientUuids, clinicId) {
         }
         const prevArch = isThreadLifecycleArchived(prev);
         const nextArch = isThreadLifecycleArchived(row);
-        if (nextArch && !prevArch) {
+        if (prevArch && !nextArch) {
           map.set(pid, row);
+          continue;
+        }
+        if (!prevArch && nextArch) {
           continue;
         }
         const pu = Date.parse(String(prev.updated_at || 0));
@@ -13407,6 +13409,42 @@ async function archivePatientClinicMembershipOnLeave(resolvedPatientId, formerCl
 
   bumpUnreadCountsCache(clinicId);
   return { ok: true };
+}
+
+/** Re-open clinic thread when patient re-joins after leave (keeps assigned_doctor_id). */
+async function reactivatePatientChatThreadOnClinicJoin(resolvedPatientId, clinicId) {
+  if (!resolvedPatientId || !clinicId || !UUID_RE.test(String(clinicId).trim())) return;
+  const pid = String(resolvedPatientId).trim();
+  const cid = String(clinicId).trim();
+  const nowIso = new Date().toISOString();
+  let threadPatch = {
+    is_lead: false,
+    lifecycle_status: "active",
+    archived_at: null,
+    archive_reason: null,
+    updated_at: nowIso,
+  };
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const { error } = await supabase
+      .from("patient_chat_threads")
+      .update(threadPatch)
+      .eq("patient_id", pid)
+      .eq("clinic_id", cid);
+    if (!error) {
+      console.log("[reactivatePatientChatThreadOnClinicJoin] ok", {
+        patient_id: pid.slice(0, 8),
+        clinic_id: cid.slice(0, 8),
+      });
+      return;
+    }
+    if (!isMissingColumnError(error)) {
+      console.warn("[reactivatePatientChatThreadOnClinicJoin]", error.message || error);
+      return;
+    }
+    const col = getMissingColumnName(error);
+    if (!col || !(col in threadPatch)) return;
+    delete threadPatch[col];
+  }
 }
 
 // DELETE /api/patient/clinic — leave current clinic (mobile profile: "Klinikten Ayrıl")
@@ -15398,6 +15436,11 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
     }
 
     await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+    try {
+      await reactivatePatientChatThreadOnClinicJoin(patientId, clinicId);
+    } catch (reactErr) {
+      console.warn("[ADMIN assign-doctor] thread reactivate:", reactErr?.message || reactErr);
+    }
     bumpUnreadCountsCache(clinicId);
     return res.json({
       ok: true,
@@ -47217,14 +47260,16 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         thread,
         doctorIdMatchSet
       );
-      const conversationArchived =
-        !messagingActive &&
-        (threadArchived ||
+      const conversationArchived = messagingActive
+        ? false
+        : threadArchived ||
           Boolean(patient.archived_at) ||
           (patient.is_lead === true && !assignedLead) ||
-          !pc);
+          !pc;
       const leftClinic =
-        !pc || (patient.is_lead === true && !assignedLead) || Boolean(patient.archived_at);
+        messagingActive
+          ? false
+          : !pc || (patient.is_lead === true && !assignedLead) || Boolean(patient.archived_at);
       return {
         id: patient.id || patient.patient_id,
         patientId: patient.patient_id || patient.id,
@@ -47233,7 +47278,7 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         email: patient.email,
         status: patient.status,
         department: patient.department,
-        clinicId: pc || null,
+        clinicId: pc || (messagingActive && clinicId ? String(clinicId).trim() : null),
         isLead: patient.is_lead === true,
         archivedAt: patient.archived_at || thread?.archived_at || null,
         threadLifecycleStatus: threadLife || null,
