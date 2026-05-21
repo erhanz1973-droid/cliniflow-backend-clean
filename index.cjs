@@ -46280,6 +46280,24 @@ async function fetchLatestOfferMessageByOfferIds(offerIds) {
   return map;
 }
 
+/** Newest offer_messages row among all offer_ids on a treatment request. */
+function pickLatestOfferMessageAcrossOfferIds(offerIds, latestMsgByOffer) {
+  let latestRow = null;
+  let bestTs = 0;
+  for (const oid of offerIds || []) {
+    const id = String(oid || "").trim();
+    if (!id) continue;
+    const row = latestMsgByOffer.get(id);
+    if (!row) continue;
+    const ts = Date.parse(String(row.created_at || "")) || 0;
+    if (!latestRow || ts >= bestTs) {
+      latestRow = row;
+      bestTs = ts;
+    }
+  }
+  return latestRow;
+}
+
 /** Unread doctor→patient rows in offer threads (patient badge on offer cards). */
 async function countUnreadDoctorMessagesByOfferIds(offerIds) {
   const ids = [
@@ -55600,7 +55618,14 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
           enrolledOfferIds,
         });
 
-    const latestMsgByOffer = await fetchLatestOfferMessageByOfferIds(mineOfferIds);
+    const allActivityOfferIds = [];
+    for (const r of list) {
+      for (const o of offersByReq[r.id] || []) {
+        const oid = String(o.id || "").trim();
+        if (UUID_RE.test(oid)) allActivityOfferIds.push(oid);
+      }
+    }
+    const latestMsgByOffer = await fetchLatestOfferMessageByOfferIds(allActivityOfferIds);
 
     const requests = list.map((r) => {
       const allOffs = offersByReq[r.id] || [];
@@ -55661,9 +55686,15 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         enrolledSharedCare && mine && !isCoordinationPlaceholderOffer(mine);
       const unread_count = hideOfferUnreadForEnrolled ? 0 : rawUnread;
       const proposal = enrichRequestProposalFields(r, { formalOfferCount: offs.length });
-      const latestRow = myOid ? latestMsgByOffer.get(myOid) : null;
+      const requestOfferIds = allOffs
+        .map((o) => String(o.id || "").trim())
+        .filter((id) => UUID_RE.test(id));
+      const latestRow = pickLatestOfferMessageAcrossOfferIds(requestOfferIds, latestMsgByOffer);
+      const threadActivityAt =
+        thrMerged?.updated_at != null ? String(thrMerged.updated_at) : null;
       const last_message_at =
         (latestRow?.created_at && String(latestRow.created_at)) ||
+        threadActivityAt ||
         r.updated_at ||
         r.created_at ||
         new Date().toISOString();
@@ -55703,16 +55734,14 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
     });
 
     requests.sort((a, b) => {
-      const au = Math.max(0, Number(a.unread_count) || 0);
-      const bu = Math.max(0, Number(b.unread_count) || 0);
-      if (au > 0 && bu === 0) return -1;
-      if (bu > 0 && au === 0) return 1;
-      if (bu !== au) return bu - au;
       const at =
         Date.parse(String(a.last_message_at || a.created_at || "")) || 0;
       const bt =
         Date.parse(String(b.last_message_at || b.created_at || "")) || 0;
-      return bt - at;
+      if (bt !== at) return bt - at;
+      const au = Math.max(0, Number(a.unread_count) || 0);
+      const bu = Math.max(0, Number(b.unread_count) || 0);
+      return bu - au;
     });
 
     return res.json({ ok: true, requests });
