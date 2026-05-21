@@ -46342,7 +46342,7 @@ async function resolveLeadOfferIdForPatientClinicMessage(patientIdRaw, clinicIdR
       const matchesPatient = patientFilters.some((f) => String(f).trim() === trPid);
       if (matchesPatient) {
         const clinicId = String(clinicIdRaw || ctx.tr?.clinic_id || "").trim();
-        const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
+        const enrolled = await isOfferPatientEnrolledSharedCare(hint, clinicId);
         if (!enrolled) return hint;
       }
     }
@@ -46387,10 +46387,7 @@ async function resolveLeadOfferIdForPatientClinicMessage(patientIdRaw, clinicIdR
 
   const ctx = await loadOfferMessagingContext(oid);
   if (!ctx) return null;
-  const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(
-    ctx.tr,
-    clinicId || ctx.tr?.clinic_id,
-  );
+  const enrolled = await isOfferPatientEnrolledSharedCare(oid, clinicId || ctx.tr?.clinic_id);
   return enrolled ? null : oid;
 }
 
@@ -53195,7 +53192,7 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         !!cid &&
         memberClinicId.toLowerCase() === cid.toLowerCase() &&
         memberIsLead === false;
-      const chatRoute = isClinicMember ? "patient_chat" : "offer_chat";
+      const chatRoute = coordOfferId ? "offer_chat" : isClinicMember ? "patient_chat" : "offer_chat";
       const visible = resolvePatientVisibleStatus(r, {
         coordinationHasClinicReply: clinicRepliedInThread,
         formalOfferCount: reqOffers.length,
@@ -53610,22 +53607,6 @@ app.post(
         });
       }
 
-      if (result.route === "patient_chat" || result.enrolled === true) {
-        return res.json({
-          ok: true,
-          route: "patient_chat",
-          enrolled: true,
-          patient_id: result.patientId || tr.patient_id || null,
-          clinic_id: result.clinicId || tr.clinic_id || null,
-          clinic_code: result.clinicCode || null,
-          request_id: requestId,
-          offer_id: result.offerId || null,
-          coordination_offer_id: result.offerId || null,
-          has_formal_offer: result.hasFormalOffer === true,
-          offer_created: result.offerCreated === true,
-        });
-      }
-
       if (!result.offerId) {
         return res.status(422).json({
           ok: false,
@@ -53636,12 +53617,13 @@ app.post(
       return res.json({
         ok: true,
         route: "offer_chat",
-        enrolled: false,
+        enrolled: result.enrolled === true,
         offer_id: result.offerId,
         coordination_offer_id: result.offerId,
         has_formal_offer: result.hasFormalOffer === true,
         offer_created: result.offerCreated === true,
         clinic_id: result.clinicId || tr.clinic_id || null,
+        patient_id: result.patientId || tr.patient_id || null,
         request_id: requestId,
       });
     } catch (e) {
@@ -53923,8 +53905,21 @@ async function resolveTreatmentRequestMessagingMeta(tr, doctorReq) {
   const clinicId = String(doctorReq?.clinicId || doctorReq?.doctor?.clinic_id || "").trim();
   const patientId = String(tr?.patient_id || "").trim();
   const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(tr, clinicId);
+  const requestId = String(tr?.id || "").trim();
+  if (UUID_RE.test(requestId)) {
+    const coord = await ensureCoordinationOfferForRequest(requestId, { createIfMissing: false });
+    if (coord.ok && coord.offerId) {
+      return {
+        enrolled,
+        route: "offer_chat",
+        patient_id: UUID_RE.test(patientId) ? patientId : null,
+        offer_id: coord.offerId,
+        lead_thread_is_lead: enrolled ? false : true,
+      };
+    }
+  }
   let offerId = null;
-  if (!enrolled && UUID_RE.test(String(tr?.id || ""))) {
+  if (!enrolled && UUID_RE.test(requestId)) {
     const rawDoctor = String(doctorReq?.doctorId || doctorReq?.doctor?.id || "").trim();
     const doctorKeys = await doctorKeysForUuidFkInQuery([rawDoctor].filter(Boolean));
     const doctorKey = doctorKeys[0] || rawDoctor;
@@ -53951,6 +53946,7 @@ async function resolveTreatmentRequestMessagingMeta(tr, doctorReq) {
 async function isOfferPatientEnrolledSharedCare(offerId, clinicId) {
   const ctx = await loadOfferMessagingContext(offerId);
   if (!ctx?.tr) return false;
+  if (isCoordinationPlaceholderOffer(ctx.offer)) return false;
   return isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
 }
 
@@ -53970,7 +53966,7 @@ async function offerIdsWithEnrolledSharedCare(offerIds, clinicId) {
 
   const { data: offers } = await supabase
     .from("treatment_offers")
-    .select("id, request_id")
+    .select("id, request_id, note, price_text, price_range, is_coordination_placeholder")
     .in("id", ids);
   if (!offers?.length) return enrolled;
 
@@ -53995,6 +53991,7 @@ async function offerIdsWithEnrolledSharedCare(offerIds, clinicId) {
     const rid = String(offer.request_id || "").trim();
     const tr = rid ? trById[rid] : null;
     if (!oid || !tr) continue;
+    if (isCoordinationPlaceholderOffer(offer)) continue;
     if (await isTreatmentRequestPatientEnrolledSharedCare(tr, clinic)) enrolled.add(oid);
   }
   return enrolled;
@@ -54010,7 +54007,7 @@ async function assertOfferMessagingAccess(actor, offerId) {
     actor.kind === "doctor"
       ? String(actor.doctor?.clinic_id || actor.clinicId || "").trim()
       : String(tr.clinic_id || "").trim();
-  if (await isTreatmentRequestPatientEnrolledSharedCare(tr, actorClinicId)) {
+  if (await isOfferPatientEnrolledSharedCare(offerId, actorClinicId)) {
     return {
       error: "offer_thread_archived",
       patient_id: String(tr.patient_id || "").trim() || null,
@@ -55524,7 +55521,11 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         pmeta.clinic_id &&
         String(pmeta.clinic_id).toLowerCase() === String(clinicId).toLowerCase() &&
         pmeta.is_lead === false;
-      if (patientMemberThisClinic || (thrMerged && thrMerged.is_lead === false)) {
+      if (
+        (patientMemberThisClinic || (thrMerged && thrMerged.is_lead === false)) &&
+        mine &&
+        !isCoordinationPlaceholderOffer(mine)
+      ) {
         enrolledOfferIds.add(oid);
       }
     }
@@ -55588,11 +55589,13 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         // Foreign / pre-enrollment lead with an offer — offer_messages thread (no patient_chat_threads row yet).
         lead_thread_is_lead = true;
       }
-      /** After enrollment (`is_lead === false`), offer-thread unread is not surfaced — canonical chat is under Patients. */
+      /** After enrollment, formal offer unread moves to Patients; coordination placeholder stays on this inbox. */
       const enrolledSharedCare =
         patientMemberThisClinic || Boolean(thrMerged && thrMerged.is_lead === false);
       const rawUnread = myOid ? unreadByOffer[myOid] || 0 : 0;
-      const unread_count = enrolledSharedCare ? 0 : rawUnread;
+      const hideOfferUnreadForEnrolled =
+        enrolledSharedCare && mine && !isCoordinationPlaceholderOffer(mine);
+      const unread_count = hideOfferUnreadForEnrolled ? 0 : rawUnread;
       const proposal = enrichRequestProposalFields(r, { formalOfferCount: offs.length });
       const latestRow = myOid ? latestMsgByOffer.get(myOid) : null;
       const last_message_at =
@@ -55705,7 +55708,7 @@ app.get("/api/doctor/offers/:offerId/messaging-meta", requireDoctorAuth, async (
     const okDoc = await compareDoctorIds(doctorKey, ctx.offer.doctor_id);
     if (!okDoc) return res.status(403).json({ ok: false, error: "forbidden" });
 
-    const enrolled = await isTreatmentRequestPatientEnrolledSharedCare(ctx.tr, clinicId);
+    const enrolled = await isOfferPatientEnrolledSharedCare(offerId, clinicId);
     const patientId = String(ctx.tr.patient_id || "").trim();
     return res.json({
       ok: true,
