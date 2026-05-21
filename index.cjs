@@ -734,6 +734,63 @@ async function resolveClinicCodeForPatient(patientId) {
   }
 }
 
+/** Text from AI analysis / coordination attachment blobs when `text` column is empty. */
+function extractTextFromAiResultObject(ai) {
+  if (!ai || typeof ai !== "object") return "";
+  const keyOrder = [
+    "summary",
+    "reply",
+    "text",
+    "message",
+    "body",
+    "content",
+    "analysis",
+    "recommendation",
+    "clinical_note",
+    "patient_message",
+    "ai_reply",
+  ];
+  for (let i = 0; i < keyOrder.length; i++) {
+    const v = ai[keyOrder[i]];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  if (Array.isArray(ai.insights) && ai.insights.length) {
+    const parts = ai.insights
+      .map((x) => {
+        if (typeof x === "string") return x.trim();
+        if (x && typeof x === "object") {
+          return String(x.title || x.text || x.description || x.summary || "").trim();
+        }
+        return "";
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("\n");
+  }
+  return "";
+}
+
+function extractMessageTextFromAttachments(row) {
+  if (!row || typeof row !== "object") return "";
+  let att = row.attachments ?? row.attachment;
+  if (!att) return "";
+  if (typeof att === "string") {
+    try {
+      att = JSON.parse(att);
+    } catch (_) {
+      return "";
+    }
+  }
+  if (!att || typeof att !== "object") return "";
+  const fromAi = extractTextFromAiResultObject(att.aiResult || att.ai_result);
+  if (fromAi) return fromAi;
+  const nested = ["text", "message", "body", "caption", "summary"];
+  for (let j = 0; j < nested.length; j++) {
+    const v = att[nested[j]];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
 /** Message body across `messages` / `patient_messages` schema variants (avoids empty admin bubbles). */
 function extractMessageTextFromDbRow(row) {
   if (!row || typeof row !== "object") return "";
@@ -787,7 +844,21 @@ function extractMessageTextFromDbRow(row) {
       /* ignore */
     }
   }
+  const fromAtt = extractMessageTextFromAttachments(row);
+  if (fromAtt) return fromAtt;
+  if (String(row.type || "").toLowerCase() === "ai_result") {
+    return "AI analiz sonucu";
+  }
   return "";
+}
+
+function extractOfferMessageTextFromRow(row) {
+  if (!row || typeof row !== "object") return "";
+  let text = String(row.text ?? row.message_text ?? row.body ?? "").trim();
+  if (text === "{}" || text === "[]" || /^\{\s*\}$/.test(text)) text = "";
+  if (!text) text = extractMessageTextFromAttachments(row);
+  if (!text && (row.attachment_url || row.file_url)) return "📎 Ek";
+  return text;
 }
 
 function mapDbMessageToLegacyMessage(row) {
@@ -47574,8 +47645,10 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     let offerArchived = [];
     try {
+      const doctorClinicForOffers = String(req.query?.clinic_id || req.query?.clinicId || req.clinicId || "").trim();
       offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
         offerLimit: wantFull ? 400 : 180,
+        clinicId: doctorClinicForOffers,
       });
     } catch (mergeErr) {
       console.warn("[DOCTOR patient messages] offer archive merge:", mergeErr?.message || mergeErr);
@@ -54313,16 +54386,17 @@ async function countOfferMessagesByRoleForInbox(offerIds, senderRole) {
 /** Lead-phase offer_messages → same legacy shape as clinic patient chat (read-only archive). */
 function mapOfferMessageRowToUnifiedLegacy(row) {
   if (!row) return null;
-  const role = String(row.sender_role || "").toLowerCase();
-  const from = role === "patient" ? "PATIENT" : "CLINIC";
+  const roleRaw = String(row.sender_role || "").toLowerCase();
+  const from = roleRaw === "patient" ? "PATIENT" : "CLINIC";
   const createdRaw = row.created_at;
   let createdAt = now();
   if (createdRaw != null) {
     const p = Date.parse(String(createdRaw));
     if (Number.isFinite(p)) createdAt = p;
   }
-  const text = String(row.text ?? row.message_text ?? "").trim();
+  const text = extractOfferMessageTextFromRow(row);
   const senderName = String(row.sender_name || "").trim();
+  const actorKind = String(row.actor_kind || row.message_source || "").toLowerCase();
   const out = {
     id: `offer_msg_${String(row.id || "")}`,
     text,
@@ -54332,7 +54406,15 @@ function mapOfferMessageRowToUnifiedLegacy(row) {
     sourceOfferMessage: true,
     offerId: String(row.offer_id || ""),
   };
-  if (from === "CLINIC" && senderName) out.senderName = senderName;
+  if (from === "CLINIC") {
+    if (senderName) out.senderName = senderName;
+    if (actorKind === "clinic_ai" || roleRaw === "assistant" || roleRaw === "ai") {
+      out.inboundKind = "clinic";
+      if (!out.senderName) out.senderName = "Care Team";
+    } else if (roleRaw === "doctor" || roleRaw === "dr" || actorKind === "doctor") {
+      out.inboundKind = "doctor";
+    }
+  }
   return out;
 }
 
@@ -54344,45 +54426,81 @@ async function fetchDoctorPatientArchivedOfferMessages(resolvedPatientId, req, o
   if (rawDoctor) doctorIdMatchSet.add(rawDoctor);
   if (!doctorIdMatchSet.size) return [];
 
-  const { data: trRows } = await supabase
-    .from("treatment_requests")
-    .select("id")
-    .eq("patient_id", resolvedPatientId)
-    .limit(100);
+  const clinicId = String(opts.clinicId || req.clinicId || req.query?.clinic_id || req.query?.clinicId || "").trim();
+  const offerIdSet = new Set();
+
+  if (UUID_RE.test(clinicId)) {
+    try {
+      const coordOfferId = await resolveCoordinationOfferIdForPatientClinic(resolvedPatientId, clinicId, {
+        createIfMissing: false,
+      });
+      if (UUID_RE.test(String(coordOfferId || ""))) offerIdSet.add(String(coordOfferId).trim());
+    } catch (coordErr) {
+      console.warn("[DOCTOR patient messages] coordination offer:", coordErr?.message || coordErr);
+    }
+  }
+
+  let trQuery = supabase.from("treatment_requests").select("id, clinic_id").eq("patient_id", resolvedPatientId);
+  if (UUID_RE.test(clinicId)) trQuery = trQuery.eq("clinic_id", clinicId);
+  const { data: trRows } = await trQuery.limit(100);
   const requestIds = (trRows || [])
     .map((r) => String(r.id || "").trim())
     .filter((id) => UUID_RE.test(id));
-  if (!requestIds.length) return [];
 
-  const offerIds = [];
   for (let i = 0; i < requestIds.length; i += 40) {
     const chunk = requestIds.slice(i, i + 40);
     const { data: offerRows } = await supabase
       .from("treatment_offers")
-      .select("id, doctor_id")
+      .select("id, doctor_id, note, price_text, price_range, is_coordination_placeholder")
       .in("request_id", chunk);
     for (const o of offerRows || []) {
       const oid = String(o.id || "").trim();
       if (!UUID_RE.test(oid)) continue;
-      if (doctorIdMatchSet.has(String(o.doctor_id || "").trim())) offerIds.push(oid);
+      if (doctorIdMatchSet.has(String(o.doctor_id || "").trim())) {
+        offerIdSet.add(oid);
+        continue;
+      }
+      if (typeof isCoordinationPlaceholderOffer === "function" && isCoordinationPlaceholderOffer(o)) {
+        offerIdSet.add(oid);
+      }
     }
   }
-  const uniqueOfferIds = [...new Set(offerIds)];
+
+  const uniqueOfferIds = [...offerIdSet];
   if (!uniqueOfferIds.length) return [];
 
   const perOfferCap = Math.min(300, Number(opts.offerLimit) > 0 ? Number(opts.offerLimit) : 200);
+  const offerMsgSelectAttempts = [
+    "id, offer_id, sender_role, sender_name, text, message_text, attachment_url, created_at, message_source, actor_kind, attachments",
+    "id, offer_id, sender_role, sender_name, text, message_text, attachment_url, created_at, message_source, actor_kind",
+    "id, offer_id, sender_role, sender_name, text, message_text, created_at",
+    "id, offer_id, sender_role, sender_name, text, created_at",
+  ];
   const archived = [];
   for (let i = 0; i < uniqueOfferIds.length; i += 25) {
     const chunk = uniqueOfferIds.slice(i, i + 25);
-    const { data: rows } = await supabase
-      .from("offer_messages")
-      .select("id, offer_id, sender_role, sender_name, text, message_text, created_at")
-      .in("offer_id", chunk)
-      .order("created_at", { ascending: true })
-      .limit(perOfferCap);
+    let rows = null;
+    for (let s = 0; s < offerMsgSelectAttempts.length; s++) {
+      const { data, error } = await supabase
+        .from("offer_messages")
+        .select(offerMsgSelectAttempts[s])
+        .in("offer_id", chunk)
+        .order("created_at", { ascending: true })
+        .limit(perOfferCap);
+      if (!error) {
+        rows = data;
+        break;
+      }
+      const errMsg = String(error.message || "").toLowerCase();
+      if (!["42703", "PGRST204", "PGRST205"].includes(String(error.code || "")) && !errMsg.includes("column")) {
+        console.warn("[DOCTOR patient messages] offer_messages:", error.message);
+        break;
+      }
+    }
     for (const row of rows || []) {
       const leg = mapOfferMessageRowToUnifiedLegacy(row);
-      if (leg) archived.push(leg);
+      if (leg && (leg.text || leg.from === "PATIENT")) archived.push(leg);
+      else if (leg && !leg.text) archived.push({ ...leg, text: "📎 Ek" });
     }
   }
   return archived;
