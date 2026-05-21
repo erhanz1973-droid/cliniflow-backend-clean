@@ -13242,6 +13242,26 @@ function isPatientActiveForDoctorMessaging(patient, clinicId, threadMeta) {
   return true;
 }
 
+/** Lead assigned on patient_chat_threads to this doctor — show on GET /api/doctor/patients roster. */
+function isAssignedLeadOnDoctorRoster(patient, clinicId, threadMeta, doctorIdMatchSet) {
+  if (!patient || patient.is_lead !== true) return false;
+  const cid = clinicId ? String(clinicId).trim() : "";
+  const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
+  if (!cid || !pc || pc !== cid) return false;
+  if (isThreadLifecycleArchived(threadMeta)) return false;
+  const assigned = String(threadMeta?.assigned_doctor_id || "").trim();
+  if (!assigned || !UUID_RE.test(assigned)) return false;
+  const matchSet =
+    doctorIdMatchSet instanceof Set ? doctorIdMatchSet : new Set(doctorIdMatchSet || []);
+  return matchSet.has(assigned);
+}
+
+/** Enrolled member or explicitly assigned lead — doctor "my patients" list (scope=active). */
+function isDoctorRosterPatientActive(patient, clinicId, threadMeta, doctorIdMatchSet) {
+  if (isPatientActiveForDoctorMessaging(patient, clinicId, threadMeta)) return true;
+  return isAssignedLeadOnDoctorRoster(patient, clinicId, threadMeta, doctorIdMatchSet);
+}
+
 /** Batch thread lifecycle for doctor patient roster (chunked). */
 async function loadClinicPatientThreadLifecycleMap(patientUuids, clinicId) {
   const map = new Map();
@@ -13257,7 +13277,9 @@ async function loadClinicPatientThreadLifecycleMap(patientUuids, clinicId) {
   if (!ids.length) return map;
 
   const selectAttempts = [
+    "patient_id, lifecycle_status, archived_at, is_lead, assigned_doctor_id, updated_at",
     "patient_id, lifecycle_status, archived_at, is_lead, updated_at",
+    "patient_id, is_lead, assigned_doctor_id, updated_at",
     "patient_id, is_lead, updated_at",
   ];
 
@@ -15227,6 +15249,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         );
         if (fb.ok) {
           await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+          bumpUnreadCountsCache(clinicId);
           return res.json({
             ok: true,
             threadId: null,
@@ -15294,6 +15317,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       );
       if (!insErr && insRow?.id) {
         await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+        bumpUnreadCountsCache(clinicId);
         return res.json({
           ok: true,
           threadId: insRow.id,
@@ -15312,6 +15336,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         );
         if (fb2.ok) {
           await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+          bumpUnreadCountsCache(clinicId);
           return res.json({
             ok: true,
             threadId: null,
@@ -15353,6 +15378,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
             .maybeSingle();
           if (!fixErr && fixed?.id) {
             await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+            bumpUnreadCountsCache(clinicId);
             return res.json({
               ok: true,
               threadId: fixed.id,
@@ -15372,6 +15398,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
     }
 
     await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+    bumpUnreadCountsCache(clinicId);
     return res.json({
       ok: true,
       threadId: updated.id,
@@ -18471,6 +18498,7 @@ app.put('/api/admin/patients/assign-doctor', requireAdminAuth, async (req, res) 
     } catch (e) {
       console.warn("[ASSIGN DOCTOR] treatment_team sync failed:", e?.message || e);
     }
+    bumpUnreadCountsCache(clinicId);
     return res.json({
       ok: true,
       patientId: patientUuid,
@@ -44223,7 +44251,7 @@ async function collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw)
         return true;
       }
       (data || []).forEach((r) => {
-        if (r?.is_lead === true) return;
+        if (r?.is_lead === true && col === "doctor_id") return;
         if (r?.id) out.add(String(r.id).trim());
         if (r?.patient_id != null && String(r.patient_id).trim()) out.add(String(r.patient_id).trim());
       });
@@ -47023,6 +47051,19 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
     const doctorId = req.doctorId;
     const clinicId = req.doctor.clinic_id || req.clinicId || null;
     const includeHealth = String(req.query.includeHealth || "").trim() === "1";
+    const doctorKeysRaw = [
+      ...new Set(
+        [
+          String(doctorId || "").trim(),
+          String(req?.doctor?.id || "").trim(),
+          String(req?.doctor?.doctor_id || "").trim(),
+        ].filter(Boolean)
+      ),
+    ];
+    const doctorKeysUuidFk = await doctorKeysForUuidFkInQuery(doctorKeysRaw);
+    const doctorIdMatchSet = new Set(
+      [...doctorKeysRaw, ...doctorKeysUuidFk].map((k) => String(k || "").trim()).filter(Boolean)
+    );
 
     /** Same visibility + 60s cache as messaging/unread (avoids duplicating 5 parallel assignment queries). */
     const visiblePatientIds = await getDoctorVisiblePatientIdSetCached(req);
@@ -47098,7 +47139,6 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
         patients = patients.filter((row) => {
           const pc = row?.clinic_id != null ? String(row.clinic_id).trim() : "";
           if (!pc || pc !== c) return false;
-          if (row.is_lead === true) return false;
           if (row.archived_at != null && String(row.archived_at).trim() !== "") return false;
           return true;
         });
@@ -47125,7 +47165,12 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
     const classified = (patients || []).map((patient) => {
       const pid = String(patient.id || "").trim().toLowerCase();
       const thread = threadByPatient.get(pid) || null;
-      const messagingActive = isPatientActiveForDoctorMessaging(patient, clinicId, thread);
+      const messagingActive = isDoctorRosterPatientActive(
+        patient,
+        clinicId,
+        thread,
+        doctorIdMatchSet
+      );
       return { patient, thread, messagingActive };
     });
 
@@ -47166,10 +47211,20 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
       const threadLife = thread ? String(thread.lifecycle_status || "").trim() : "";
       const threadArchived = isThreadLifecycleArchived(thread);
+      const assignedLead = isAssignedLeadOnDoctorRoster(
+        patient,
+        clinicId,
+        thread,
+        doctorIdMatchSet
+      );
       const conversationArchived =
         !messagingActive &&
-        (threadArchived || Boolean(patient.archived_at) || patient.is_lead === true || !pc);
-      const leftClinic = !pc || patient.is_lead === true || Boolean(patient.archived_at);
+        (threadArchived ||
+          Boolean(patient.archived_at) ||
+          (patient.is_lead === true && !assignedLead) ||
+          !pc);
+      const leftClinic =
+        !pc || (patient.is_lead === true && !assignedLead) || Boolean(patient.archived_at);
       return {
         id: patient.id || patient.patient_id,
         patientId: patient.patient_id || patient.id,
