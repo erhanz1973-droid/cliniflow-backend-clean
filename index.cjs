@@ -13211,12 +13211,18 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
 
 /** Active enrolled roster member at a clinic — excludes leads, unlinked, and archived patients. */
 function isActiveEnrolledClinicPatient(patient, clinicId) {
+  if (!isCurrentClinicMemberPatientRow(patient, clinicId)) return false;
+  if (patient.is_lead === true) return false;
+  return true;
+}
+
+/** Patient row linked to this clinic (member or lead) and not membership-archived on patients table. */
+function isCurrentClinicMemberPatientRow(patient, clinicId) {
   const statusRaw = String(patient?.status || "").toUpperCase();
   if (statusRaw === "ARCHIVED" || statusRaw === "INACTIVE" || statusRaw === "CANCELLED") return false;
   const cid = clinicId ? String(clinicId).trim() : "";
   const pc = patient?.clinic_id != null ? String(patient.clinic_id).trim() : "";
   if (!cid || !pc || pc !== cid) return false;
-  if (patient.is_lead === true) return false;
   if (patient.archived_at != null && String(patient.archived_at).trim() !== "") return false;
   return true;
 }
@@ -13241,7 +13247,6 @@ function isAssignedLeadOnDoctorRoster(patient, clinicId, threadMeta, doctorIdMat
   if (!patient) return false;
   const cid = clinicId ? String(clinicId).trim() : "";
   if (!cid || !UUID_RE.test(cid)) return false;
-  if (isThreadLifecycleArchived(threadMeta)) return false;
   const assigned = String(threadMeta?.assigned_doctor_id || "").trim();
   if (!assigned || !UUID_RE.test(assigned)) return false;
   const matchSet =
@@ -13255,10 +13260,22 @@ function isAssignedLeadOnDoctorRoster(patient, clinicId, threadMeta, doctorIdMat
   return false;
 }
 
-/** Enrolled member or explicitly assigned lead — doctor "my patients" list (scope=active). */
+/**
+ * Active roster: current clinic member OR assigned lead.
+ * Enrolled members stay active even when patient_chat_threads is still archived after re-join (stale leave row).
+ */
 function isDoctorRosterPatientActive(patient, clinicId, threadMeta, doctorIdMatchSet) {
-  if (isPatientActiveForDoctorMessaging(patient, clinicId, threadMeta)) return true;
+  if (isCurrentClinicMemberPatientRow(patient, clinicId)) return true;
   return isAssignedLeadOnDoctorRoster(patient, clinicId, threadMeta, doctorIdMatchSet);
+}
+
+/** Clinic member row but thread still archived from prior leave — repair on doctor roster load. */
+function patientNeedsStaleThreadReactivateAfterRejoin(patient, clinicId, threadMeta) {
+  return (
+    isCurrentClinicMemberPatientRow(patient, clinicId) &&
+    threadMeta &&
+    isThreadLifecycleArchived(threadMeta)
+  );
 }
 
 /** Batch thread lifecycle for doctor patient roster (chunked). */
@@ -47204,6 +47221,29 @@ app.get("/api/doctor/patients", requireDoctorAuth, async (req, res) => {
       .map((p) => String(p.id || "").trim().toLowerCase())
       .filter((x) => PATIENT_ROW_UUID_RE.test(x));
     const threadByPatient = await loadClinicPatientThreadLifecycleMap(patientDbIds, clinicId);
+
+    const cidNorm = clinicId && UUID_RE.test(String(clinicId).trim()) ? String(clinicId).trim() : "";
+    const staleThreadRepairIds = [];
+    for (const patient of patients || []) {
+      const pid = String(patient.id || "").trim();
+      if (!UUID_RE.test(pid)) continue;
+      const thread = threadByPatient.get(pid.toLowerCase()) || null;
+      if (patientNeedsStaleThreadReactivateAfterRejoin(patient, clinicId, thread)) {
+        staleThreadRepairIds.push(pid);
+      }
+    }
+    if (staleThreadRepairIds.length && cidNorm) {
+      void (async () => {
+        for (const pid of staleThreadRepairIds.slice(0, 32)) {
+          try {
+            await reactivatePatientChatThreadOnClinicJoin(pid, cidNorm);
+          } catch (e) {
+            console.warn("[DOCTOR PATIENTS] stale thread repair:", e?.message || e);
+          }
+        }
+        bumpUnreadCountsCache(cidNorm);
+      })();
+    }
 
     const classified = (patients || []).map((patient) => {
       const pid = String(patient.id || "").trim().toLowerCase();
