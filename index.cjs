@@ -54041,16 +54041,12 @@ async function assertOfferMessagingAccess(actor, offerId) {
   }
 
   if (actor.kind === "patient") {
-    // Fast path: if patientId is already a UUID and matches tr.patient_id, skip DB lookup
     const pid = String(actor.patientId || "").trim();
     const trPid = String(tr.patient_id || "").trim();
-    if (UUID_RE.test(pid) && pid.toLowerCase() === trPid.toLowerCase()) {
+    if (await patientIdsMatchForToken(pid, trPid)) {
       return { ok: true, offer, tr };
     }
-    const resolvedUuid = await resolveMessagesPatientDbId(pid);
-    const filters = treatmentRequestPatientIdFilters(pid, resolvedUuid);
-    if (!filters.includes(trPid)) return { error: "forbidden" };
-    return { ok: true, offer, tr };
+    return { error: "forbidden" };
   }
 
   if (actor.kind === "doctor") {
@@ -54577,10 +54573,13 @@ function formatTreatmentRequestDescriptionForChat(raw) {
 const _offerMessagingContextCache = new Map();
 const _OFFER_CTX_TTL_MS = 5 * 60 * 1000;
 /** Bump when offer context shape changes (e.g. coordination note fields). */
-const _OFFER_CTX_CACHE_VER = 2;
+const _OFFER_CTX_CACHE_VER = 3;
 
 async function loadOfferMessagingContext(offerId) {
-  const cached = _offerMessagingContextCache.get(offerId);
+  const oid = String(offerId || "").trim();
+  if (!UUID_RE.test(oid)) return null;
+
+  const cached = _offerMessagingContextCache.get(oid);
   if (
     cached &&
     cached.ver === _OFFER_CTX_CACHE_VER &&
@@ -54589,25 +54588,59 @@ async function loadOfferMessagingContext(offerId) {
     return cached.ctx;
   }
 
-  const { data: offer, error: oErr } = await supabase
-    .from("treatment_offers")
-    .select("id, request_id, doctor_id, clinic_id, note, price_text, price_range, is_coordination_placeholder")
-    .eq("id", offerId)
-    .maybeSingle();
-  if (oErr || !offer) return null;
+  const offerSelectAttempts = [
+    "id, request_id, doctor_id, clinic_id, note, price_text, price_range",
+    "id, request_id, doctor_id, clinic_id, note",
+    "id, request_id, doctor_id, clinic_id",
+  ];
+  let offer = null;
+  let oErr = null;
+  for (const sel of offerSelectAttempts) {
+    const r = await supabase.from("treatment_offers").select(sel).eq("id", oid).maybeSingle();
+    oErr = r.error;
+    if (!oErr && r.data) {
+      offer = r.data;
+      break;
+    }
+    const msg = String(oErr?.message || "").toLowerCase();
+    const missingCol =
+      String(oErr?.code || "") === "42703" ||
+      String(oErr?.code || "") === "PGRST204" ||
+      msg.includes("does not exist") ||
+      msg.includes("could not find");
+    if (!missingCol) break;
+  }
+  if (oErr || !offer) {
+    console.warn("[loadOfferMessagingContext] offer lookup failed", {
+      offerId: oid.slice(0, 8),
+      message: oErr?.message || "no_row",
+    });
+    return null;
+  }
 
-  // Only id + patient_id are needed for access checks and mirror inserts.
-  // Avoid column-probing loops that add ~7s per failed attempt.
+  const requestId = String(offer.request_id || "").trim();
+  if (!UUID_RE.test(requestId)) {
+    console.warn("[loadOfferMessagingContext] offer missing request_id", { offerId: oid.slice(0, 8) });
+    return null;
+  }
+
   const { data: tr, error: tErr } = await supabase
-      .from("treatment_requests")
+    .from("treatment_requests")
     .select("id, patient_id, clinic_id")
-      .eq("id", offer.request_id)
-      .maybeSingle();
+    .eq("id", requestId)
+    .maybeSingle();
 
-  if (tErr || !tr?.patient_id) return null;
+  if (tErr || !tr?.patient_id) {
+    console.warn("[loadOfferMessagingContext] treatment_request lookup failed", {
+      offerId: oid.slice(0, 8),
+      requestId: requestId.slice(0, 8),
+      message: tErr?.message || "no_patient",
+    });
+    return null;
+  }
 
   const ctx = { offer, tr };
-  _offerMessagingContextCache.set(offerId, { ctx, ts: Date.now(), ver: _OFFER_CTX_CACHE_VER });
+  _offerMessagingContextCache.set(oid, { ctx, ts: Date.now(), ver: _OFFER_CTX_CACHE_VER });
   return ctx;
 }
 
