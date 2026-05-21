@@ -463,6 +463,10 @@ const {
   listDoctorLeadMessagingOffers,
 } = require("./lib/resolveOperationalDoctor.cjs");
 const {
+  maybeAutoAssignRespondingDoctor,
+  maybeAutoAssignFromRecentOfferMessages,
+} = require("./lib/autoAssignRespondingDoctor");
+const {
   setupTreatmentRequestOrchestration,
   orchestrateTreatmentRequestCreated,
 } = require("./lib/treatmentRequestOrchestration");
@@ -2888,6 +2892,7 @@ async function _insertMessageToSupabaseCore({
       message_id: primaryResult.data?.id || null,
       via: "messages",
     });
+    fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId || inboundClinicId, senderIdOpt, fromPatient);
     return { ...primaryResult, insertedTable: "messages" };
   }
 
@@ -2905,6 +2910,7 @@ async function _insertMessageToSupabaseCore({
         message_id: pruned.data?.id || null,
         via: "messages_pruned",
       });
+      fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId || inboundClinicId, senderIdOpt, fromPatient);
       return { ...pruned, insertedTable: "messages" };
     }
     const prCode = String(pruned.error?.code || "");
@@ -13098,6 +13104,9 @@ app.patch("/api/patient/clinic", requireToken, async (req, res) => {
     void markLeadConvertedToClinicPatient(patientRow.id, clinic.id).catch((e) =>
       console.warn("[PATCH /api/patient/clinic] lead convert flags:", e?.message || e),
     );
+    void maybeAutoAssignFromRecentOfferMessages(patientRow.id, clinic.id).catch((e) =>
+      console.warn("[PATCH /api/patient/clinic] auto-assign from messaging:", e?.message || e),
+    );
 
     const patientStatusAfterJoin =
       patientStatus === "PENDING" || patientStatus === "" ? "ACTIVE" : patientStatus;
@@ -15598,6 +15607,20 @@ async function finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, cho
     via,
   });
   return "ok";
+}
+
+function fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId, senderIdOpt, fromPatient) {
+  if (fromPatient) return;
+  const cid = String(clinicId || "").trim();
+  const sid = String(senderIdOpt || "").trim();
+  if (!UUID_RE.test(cid) || !DOCTOR_FK_UUID_RE.test(sid)) return;
+  void maybeAutoAssignRespondingDoctor({
+    patientId: String(resolvedPatientId || "").trim(),
+    clinicId: cid,
+    doctorId: sid,
+  }).catch((e) =>
+    console.warn("[autoAssignRespondingDoctor] outbound:", e?.message || e),
+  );
 }
 
 /**
@@ -43895,6 +43918,14 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
     }
   }
 
+  /** No primary yet — eligible clinic doctor may reply; outbound assigns them (responding_doctor). */
+  if (forSend && thread && !thread.assigned_doctor_id && clinicId && UUID_RE.test(clinicId)) {
+    const eligible = await getEligibleDoctorIdForInboundAssignment(req.doctorId, clinicId);
+    if (eligible) {
+      return { ok: true, patientId: resolvedPatientId };
+    }
+  }
+
   if (thread?.assigned_doctor_id) {
     const match = await compareDoctorIds(thread.assigned_doctor_id, req.doctorId);
     if (match) {
@@ -47448,6 +47479,15 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
         const ts = new Date().toISOString();
         await supabase.from("patient_chat_threads").update({ updated_at: ts }).eq("patient_id", patientId);
       } catch (_) { /* non-fatal */ }
+      if (doctorUuid && req.clinicId) {
+        void maybeAutoAssignRespondingDoctor({
+          patientId,
+          clinicId: String(req.clinicId).trim(),
+          doctorId: doctorUuid,
+        }).catch((e) =>
+          console.warn("[autoAssignRespondingDoctor] doctor_reply:", e?.message || e),
+        );
+      }
       const leg = mapPatientMessagesRowToLegacy(pmTry.data) || { text, from: "CLINIC", createdAt: now() };
       void emitRealtimeChatMessageToThread(
         { patientId, sender: "clinic", message: text, senderId: doctorUuid, contextClinicId: req.clinicId || null },
@@ -47481,6 +47521,15 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
         .eq("patient_id", patientId);
     } catch (_) {
       /* non-fatal */
+    }
+    if (doctorUuid && req.clinicId) {
+      void maybeAutoAssignRespondingDoctor({
+        patientId,
+        clinicId: String(req.clinicId).trim(),
+        doctorId: doctorUuid,
+      }).catch((e) =>
+        console.warn("[autoAssignRespondingDoctor] doctor_reply:", e?.message || e),
+      );
     }
     const leg =
       legacyMessageFromInsertedRow(data, insertedTable) || { text, from: "CLINIC", createdAt: now() };
@@ -53010,6 +53059,22 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       return res.json({ ok: true, requests: [] });
     }
 
+    let memberClinicId = null;
+    let memberIsLead = true;
+    if (resolvedUuid) {
+      try {
+        const { data: memRow } = await supabase
+          .from("patients")
+          .select("clinic_id, is_lead")
+          .eq("id", resolvedUuid)
+          .maybeSingle();
+        memberClinicId = memRow?.clinic_id != null ? String(memRow.clinic_id).trim() : null;
+        memberIsLead = memRow?.is_lead !== false;
+      } catch (_) {
+        /* non-fatal */
+      }
+    }
+
     const requestIds = requests.map((r) => r.id);
     const reqClinicIds = [...new Set(requests.map((r) => r.clinic_id).filter(Boolean))];
 
@@ -53125,6 +53190,12 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         coordRole !== "patient" &&
         coordRole !== "";
       const hasMessagingDoctor = !cid || clinicDoctorReady[cid] === true;
+      const isClinicMember =
+        !!memberClinicId &&
+        !!cid &&
+        memberClinicId.toLowerCase() === cid.toLowerCase() &&
+        memberIsLead === false;
+      const chatRoute = isClinicMember ? "patient_chat" : "offer_chat";
       const visible = resolvePatientVisibleStatus(r, {
         coordinationHasClinicReply: clinicRepliedInThread,
         formalOfferCount: reqOffers.length,
@@ -53145,7 +53216,10 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         created_at: r.created_at,
         offers: reqOffers,
         coordination_offer_id: coordOfferId || null,
-        can_open_chat: !!(coordOfferId || reqOffers.length) && hasMessagingDoctor,
+        chat_route: chatRoute,
+        enrolled: isClinicMember,
+        can_open_chat:
+          hasMessagingDoctor && (isClinicMember || !!(coordOfferId || reqOffers.length)),
         awaiting_clinic_doctor: !hasMessagingDoctor,
         coordination_last_message: coordLastText || null,
         coordination_last_message_at: coordLatest?.created_at || null,
@@ -53156,7 +53230,7 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         proposal_waiting_minutes: proposal.proposal_waiting_minutes,
         proposal_draft_available: proposal.proposal_draft_available,
         lead_status: r.lead_status || null,
-        is_clinic_member: false,
+        is_clinic_member: isClinicMember,
       };
     });
 
@@ -53521,7 +53595,7 @@ app.post(
       }
 
       const result = await ensureCoordinationOfferForRequest(requestId, { createIfMissing: true });
-      if (!result.ok || !result.offerId) {
+      if (!result.ok) {
         if (result.reason === "no_clinic_doctor") {
           return res.status(422).json({
             ok: false,
@@ -53536,9 +53610,33 @@ app.post(
         });
       }
 
+      if (result.route === "patient_chat" || result.enrolled === true) {
+        return res.json({
+          ok: true,
+          route: "patient_chat",
+          enrolled: true,
+          patient_id: result.patientId || tr.patient_id || null,
+          clinic_id: result.clinicId || tr.clinic_id || null,
+          clinic_code: result.clinicCode || null,
+          request_id: requestId,
+          offer_id: result.offerId || null,
+          coordination_offer_id: result.offerId || null,
+          has_formal_offer: result.hasFormalOffer === true,
+          offer_created: result.offerCreated === true,
+        });
+      }
+
+      if (!result.offerId) {
+        return res.status(422).json({
+          ok: false,
+          error: result.reason || "coordination_unavailable",
+        });
+      }
+
       return res.json({
         ok: true,
         route: "offer_chat",
+        enrolled: false,
         offer_id: result.offerId,
         coordination_offer_id: result.offerId,
         has_formal_offer: result.hasFormalOffer === true,
@@ -54720,11 +54818,14 @@ app.post("/api/offer-messages", async (req, res) => {
     if (access.error === "not_found") return res.status(404).json({ ok: false, error: "not_found" });
     if (access.error === "supabase_disabled") return res.status(503).json({ ok: false, error: access.error });
     if (access.error === "offer_thread_archived") {
+      const archivedCtx = await loadOfferMessagingContext(offerId);
+      const archivedClinicId = String(archivedCtx?.tr?.clinic_id || "").trim() || null;
       console.log("[canonical-send] offer_messages blocked (archived)", {
         canonical_chat_type: "offer",
-        resolved_thread_kind: "offer_chat",
+        resolved_thread_kind: "patient_chat",
         resolved_offer_id: offerId,
         resolved_patient_id: access.patient_id || null,
+        resolved_clinic_id: archivedClinicId,
         resolved_offer_archived: true,
         actor: actor.kind,
       });
@@ -54733,6 +54834,8 @@ app.post("/api/offer-messages", async (req, res) => {
         error: access.error,
         route: access.route || "patient_chat",
         patient_id: access.patient_id || null,
+        clinic_id: archivedClinicId,
+        enrolled: true,
       });
     }
     if (access.error) return res.status(403).json({ ok: false, error: access.error });
@@ -54812,6 +54915,21 @@ app.post("/api/offer-messages", async (req, res) => {
     if (insErr || !inserted) {
       console.error("[OFFER-MESSAGES POST]", insErr?.message || insErr);
       return res.status(500).json({ ok: false, error: "db_error" });
+    }
+
+    if (actor.kind === "doctor") {
+      const patientUuid = String(tr.patient_id || "").trim();
+      const clinicUuid = String(actor.doctor?.clinic_id || tr.clinic_id || "").trim();
+      const doctorUuid = String(actor.doctor?.id || actor.doctorId || "").trim();
+      if (UUID_RE.test(patientUuid) && UUID_RE.test(clinicUuid) && doctorUuid) {
+        void maybeAutoAssignRespondingDoctor({
+          patientId: patientUuid,
+          clinicId: clinicUuid,
+          doctorId: doctorUuid,
+        }).catch((e) =>
+          console.warn("[autoAssignRespondingDoctor] offer_message:", e?.message || e),
+        );
+      }
     }
 
     const message = {
