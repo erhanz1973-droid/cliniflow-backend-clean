@@ -473,6 +473,7 @@ const {
   maybeAutoAssignRespondingDoctor,
   maybeAutoAssignFromRecentOfferMessages,
   assignDoctorOnPatientClinicJoin,
+  resolveEligibleDoctorKey,
 } = require("./lib/autoAssignRespondingDoctor");
 const {
   setupTreatmentRequestOrchestration,
@@ -2513,10 +2514,14 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
 
   const nowIso = new Date().toISOString();
   if (existing?.id) {
+    const existingId = String(existing.id).trim();
     if (existing.assigned_doctor_id) {
       return { threadId: existing.id, error: null };
     }
     if (existing.is_lead === true) {
+      if (UUID_RE.test(existingId)) {
+        await maybeAutoAssignInboundLeadThread(resolvedPatientId, clinicId, existingId);
+      }
       return { threadId: existing.id, error: null };
     }
     if (existing.is_lead === false && !existing.assigned_doctor_id) {
@@ -2529,7 +2534,13 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
         thread_id: existing.id,
         patient_id: resolvedPatientId,
       });
+      if (UUID_RE.test(existingId)) {
+        await maybeAutoAssignInboundLeadThread(resolvedPatientId, clinicId, existingId);
+      }
       return { threadId: existing.id, error: null };
+    }
+    if (UUID_RE.test(existingId)) {
+      await maybeAutoAssignInboundLeadThread(resolvedPatientId, clinicId, existingId);
     }
     return { threadId: existing.id, error: null };
   }
@@ -2558,7 +2569,44 @@ async function ensureInboundLeadThread(resolvedPatientId, clinicId) {
     patient_id: resolvedPatientId,
     clinic_id: clinicId,
   });
+  const createdId = ins?.id != null ? String(ins.id).trim() : "";
+  if (createdId && UUID_RE.test(createdId)) {
+    await maybeAutoAssignInboundLeadThread(resolvedPatientId, clinicId, createdId);
+  }
   return { threadId: ins?.id, error: null };
+}
+
+/** After admin saves lead inbox routing — assign fixed doctor to existing unassigned leads in that clinic. */
+async function backfillUnassignedLeadsWithClinicLeadRouting(clinicId) {
+  const cid = String(clinicId || "").trim();
+  if (!UUID_RE.test(cid) || !isSupabaseEnabled()) return;
+  const { row, unavailable } = await fetchClinicLeadRoutingSettingsRow(cid);
+  if (unavailable || !row) return;
+  const enabled =
+    row.auto_routing_enabled === true || String(row.auto_routing_enabled || "").toLowerCase() === "true";
+  const mode = normalizeLeadRoutingMode(row.routing_mode);
+  if (!enabled || mode === "manual_only") return;
+
+  const { data: threads, error } = await supabase
+    .from("patient_chat_threads")
+    .select("id, patient_id")
+    .eq("clinic_id", cid)
+    .eq("is_lead", true)
+    .is("assigned_doctor_id", null)
+    .order("created_at", { ascending: true })
+    .limit(300);
+  if (error || !Array.isArray(threads) || !threads.length) return;
+
+  for (const th of threads) {
+    const pid = String(th.patient_id || "").trim();
+    const tid = String(th.id || "").trim();
+    if (!UUID_RE.test(pid) || !UUID_RE.test(tid)) continue;
+    try {
+      await maybeAutoAssignInboundLeadThread(pid, cid, tid);
+    } catch (e) {
+      console.warn("[LEAD ROUTING backfill]", e?.message || e);
+    }
+  }
 }
 
 function parseClinicSettingsJson(raw) {
@@ -2616,12 +2664,16 @@ async function loadDoctorRowForInboundAssignment(doctorUuid) {
   return { row: data, error };
 }
 
-/** Sticky / default / routing: same clinic, APPROVED or ACTIVE, not explicitly inactive */
-async function getEligibleDoctorIdForInboundAssignment(doctorUuid, clinicId) {
-  if (!doctorUuid || !UUID_RE.test(String(doctorUuid))) return null;
-  const { row, error } = await loadDoctorRowForInboundAssignment(String(doctorUuid).trim());
-  if (error || !row?.id) return null;
-  return doctorRowEligibleForInboundAssignment(row, clinicId) ? String(row.id) : null;
+/** Sticky / default / routing: same clinic, APPROVED or ACTIVE — doctors.id UUID or legacy doctor_id code */
+async function getEligibleDoctorIdForInboundAssignment(doctorKeyRaw, clinicId) {
+  const raw = String(doctorKeyRaw || "").trim();
+  if (!raw) return null;
+  if (UUID_RE.test(raw)) {
+    const { row, error } = await loadDoctorRowForInboundAssignment(raw);
+    if (error || !row?.id) return null;
+    return doctorRowEligibleForInboundAssignment(row, clinicId) ? String(row.id) : null;
+  }
+  return resolveEligibleDoctorKey(raw, clinicId);
 }
 
 async function listEligibleDoctorsForInboundAssignment(clinicId) {
@@ -16085,7 +16137,7 @@ async function pickDoctorForLeadRoutingIntake(clinicId, settingsRow, eligibleSor
 
   if (mode === "fixed_doctor") {
     const fixed = settingsRow.fixed_doctor_id != null ? String(settingsRow.fixed_doctor_id).trim() : "";
-    if (!fixed || !DOCTOR_FK_UUID_RE.test(fixed)) return { doctorId: null, via: null };
+    if (!fixed) return { doctorId: null, via: null };
     const v = await getEligibleDoctorIdForInboundAssignment(fixed, clinicId);
     return v ? { doctorId: v, via: "intake_fixed_doctor" } : { doctorId: null, via: null };
   }
@@ -16488,7 +16540,6 @@ app.put("/api/admin/clinic-lead-routing-settings", requireAdminAuth, async (req,
         : body.fixed_doctor_id != null
           ? String(body.fixed_doctor_id).trim()
           : "";
-    if (!fixedDoctorId || !DOCTOR_FK_UUID_RE.test(fixedDoctorId)) fixedDoctorId = null;
 
     if (autoRoutingEnabled && routingMode === "fixed_doctor") {
       if (!fixedDoctorId) {
@@ -16540,6 +16591,11 @@ app.put("/api/admin/clinic-lead-routing-settings", requireAdminAuth, async (req,
     }
 
     const r = saved || upsertRow;
+    if (autoRoutingEnabled && routingMode !== "manual_only") {
+      void backfillUnassignedLeadsWithClinicLeadRouting(clinicId).catch((bfErr) =>
+        console.warn("[ADMIN clinic-lead-routing-settings] backfill:", bfErr?.message || bfErr),
+      );
+    }
     return res.json({
       ok: true,
       settings: {
@@ -47357,18 +47413,19 @@ async function fetchRecentPatientMessagesRowsForChunk(patientChunk, limitRows) {
   return [];
 }
 
-/** Latest offer_messages row per offer_id (desc scan). */
+/** Latest offer_messages row per offer_id — scan chunk and keep max created_at per offer (not first row in global desc limit). */
 async function fetchLatestOfferMessageByOfferIds(offerIds) {
   const map = new Map();
   const ids = [...new Set((offerIds || []).map((x) => String(x || "").trim()).filter((id) => UUID_RE.test(id)))];
   for (let i = 0; i < ids.length; i += 72) {
     const part = ids.slice(i, i + 72);
+    const rowLimit = Math.min(4000, Math.max(120, part.length * 24));
     const { data, error } = await supabase
       .from("offer_messages")
       .select("id, offer_id, text, message_text, created_at, sender_role, sender_name")
       .in("offer_id", part)
       .order("created_at", { ascending: false })
-      .limit(Math.min(800, part.length * 12));
+      .limit(rowLimit);
     if (error) {
       if (!isOfferMessagesTableUnavailableError(error)) {
         console.warn("[fetchLatestOfferMessageByOfferIds]", error.message);
@@ -47377,10 +47434,77 @@ async function fetchLatestOfferMessageByOfferIds(offerIds) {
     }
     for (const row of data || []) {
       const oid = String(row.offer_id || "").trim();
-      if (oid && !map.has(oid)) map.set(oid, row);
+      if (!oid) continue;
+      const ts = Date.parse(String(row.created_at || "")) || 0;
+      const prev = map.get(oid);
+      const prevTs = prev ? Date.parse(String(prev.created_at || "")) || 0 : 0;
+      if (!prev || ts >= prevTs) map.set(oid, row);
     }
   }
   return map;
+}
+
+function pickLatestActivityIso(candidates) {
+  let best = null;
+  let bestMs = 0;
+  for (const raw of candidates) {
+    if (raw == null || String(raw).trim() === "") continue;
+    const ms = Date.parse(String(raw));
+    if (!Number.isFinite(ms)) continue;
+    if (!best || ms >= bestMs) {
+      bestMs = ms;
+      best = String(raw);
+    }
+  }
+  return best;
+}
+
+/** Latest inbound activity per patient (patient_messages + messages) for treatment-request inbox sort. */
+async function fetchLatestPatientInboundActivityByPatientIds(patientIds, clinicId, clinicCode) {
+  const out = new Map();
+  const list = [
+    ...new Set(
+      (patientIds || [])
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter((x) => PATIENT_ROW_UUID_RE.test(x))
+    ),
+  ];
+  if (!list.length || !isSupabaseEnabled()) return out;
+
+  const perChunkLimit = (n) => Math.min(320, Math.max(40, n * 6));
+  for (let i = 0; i < list.length; i += 72) {
+    const chunk = list.slice(i, i + 72);
+    const lim = perChunkLimit(chunk.length);
+    const [pmRows, mgRows] = await Promise.all([
+      fetchRecentPatientMessagesRowsForChunk(chunk, lim),
+      fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim),
+    ]);
+    const ingest = (row, mapPatientKey) => {
+      const pid = mapPatientKey(row);
+      if (!pid) return;
+      const iso = row?.created_at != null ? String(row.created_at) : "";
+      const ms = Date.parse(iso) || 0;
+      if (!ms) return;
+      const prev = out.get(pid);
+      if (!prev || ms >= prev.ms) {
+        const text = String(row.text ?? row.message_text ?? row.message ?? row.content ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 240);
+        const role = String(row.sender_role || row.from_role || (row.from_patient ? "patient" : "") || "")
+          .trim()
+          .toLowerCase();
+        out.set(pid, { ms, created_at: iso, preview: text || null, role: role || null });
+      }
+    };
+    for (const row of pmRows || []) {
+      ingest(row, (r) => String(r?.patient_id || "").trim().toLowerCase());
+    }
+    for (const row of mgRows || []) {
+      ingest(row, (r) => String(r?.patient_id || "").trim().toLowerCase());
+    }
+  }
+  return out;
 }
 
 /** Newest offer_messages row among all offer_ids on a treatment request. */
@@ -56874,6 +56998,22 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       }
     }
     const latestMsgByOffer = await fetchLatestOfferMessageByOfferIds(allActivityOfferIds);
+    let clinicCodeForActivity = "";
+    if (clinicId && UUID_RE.test(clinicId)) {
+      const { data: clRow } = await supabase
+        .from("clinics")
+        .select("clinic_code")
+        .eq("id", clinicId)
+        .maybeSingle();
+      clinicCodeForActivity = clRow?.clinic_code
+        ? String(clRow.clinic_code).trim().toUpperCase()
+        : "";
+    }
+    const latestPatientActivityByPid = await fetchLatestPatientInboundActivityByPatientIds(
+      pids,
+      clinicId,
+      clinicCodeForActivity
+    );
 
     const requests = list.map((r) => {
       const allOffs = offersByReq[r.id] || [];
@@ -56940,18 +57080,28 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       const latestRow = pickLatestOfferMessageAcrossOfferIds(requestOfferIds, latestMsgByOffer);
       const threadActivityAt =
         thrMerged?.updated_at != null ? String(thrMerged.updated_at) : null;
+      const patientActivity = pidKey ? latestPatientActivityByPid.get(pidKey) : null;
+      const offerMsgAt = latestRow?.created_at ? String(latestRow.created_at) : null;
       const last_message_at =
-        (latestRow?.created_at && String(latestRow.created_at)) ||
-        threadActivityAt ||
-        r.updated_at ||
-        r.created_at ||
-        new Date().toISOString();
-      const last_message_preview = latestRow
+        pickLatestActivityIso([
+          offerMsgAt,
+          patientActivity?.created_at,
+          threadActivityAt,
+          r.updated_at,
+          r.created_at,
+        ]) || new Date().toISOString();
+      let last_message_preview = latestRow
         ? String(latestRow.text ?? latestRow.message_text ?? "").trim().slice(0, 240)
         : null;
-      const last_message_role = latestRow?.sender_role
+      let last_message_role = latestRow?.sender_role
         ? String(latestRow.sender_role).toLowerCase()
         : null;
+      const patientActMs = patientActivity?.ms || 0;
+      const offerActMs = offerMsgAt ? Date.parse(offerMsgAt) || 0 : 0;
+      if (patientActivity?.preview && patientActMs >= offerActMs) {
+        last_message_preview = patientActivity.preview;
+        if (patientActivity.role) last_message_role = patientActivity.role;
+      }
       return {
         id: String(r.id),
         patient_name: patientName,
