@@ -859,6 +859,78 @@ function extractMessageTextFromDbRow(row) {
   return "";
 }
 
+/** Redundant body columns for heterogeneous `patient_messages` schemas (text vs message vs message_text). */
+function patientMessageBodyFields(bodyText, opts = {}) {
+  let s = String(bodyText ?? "").trim();
+  if (!s && opts.attachmentFallback) s = "[attachment]";
+  if (!s) return {};
+  return { text: s, message: s, message_text: s, content: s };
+}
+
+function isRenderableLegacyMessage(m) {
+  if (!m) return false;
+  const t = String(m.text || "").trim();
+  if (t.length > 0) return true;
+  const att = m.attachment;
+  if (att && typeof att === "object") {
+    const url = String(att.url || "").trim();
+    if (url.length > 0) return true;
+    const ft = String(att.fileType || "").toLowerCase();
+    const mime = String(att.mimeType || att.mime || "").toLowerCase();
+    if (ft === "image" || mime.startsWith("image/")) return true;
+  }
+  const ty = String(m.type || "").toLowerCase();
+  if (ty === "image" && att) return true;
+  return false;
+}
+
+function filterRenderableLegacyMessages(list) {
+  return (Array.isArray(list) ? list : []).filter(isRenderableLegacyMessage);
+}
+
+/** Map `patient_messages` + backfill mirror rows that lost body text on insert (offer_message_id → offer_messages). */
+async function mapAndHydratePatientMessagesRows(pmRows) {
+  if (!Array.isArray(pmRows)) return [];
+  const legacyPm = [];
+  const need = [];
+  for (const row of pmRows) {
+    const leg = mapPatientMessagesRowToLegacy(row);
+    if (!leg) continue;
+    legacyPm.push(leg);
+    if (!String(leg.text || "").trim()) {
+      const oid = String(row.offer_message_id || "").trim();
+      if (oid && UUID_RE.test(oid)) need.push({ leg, oid });
+    }
+  }
+  if (!need.length || !isSupabaseEnabled()) return legacyPm;
+
+  const idSet = [...new Set(need.map((n) => n.oid))];
+  const textById = new Map();
+  const chunkSize = 40;
+  for (let i = 0; i < idSet.length; i += chunkSize) {
+    const chunk = idSet.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from("offer_messages")
+      .select("id, text, message_text, attachment_url")
+      .in("id", chunk);
+    if (error) {
+      console.warn("[MESSAGES] offer_messages hydrate:", error.message);
+      break;
+    }
+    for (const row of data || []) {
+      const id = String(row.id || "").trim();
+      const txt = extractOfferMessageTextFromRow(row);
+      if (id && txt) textById.set(id, txt);
+    }
+  }
+
+  for (const { leg, oid } of need) {
+    const txt = textById.get(oid);
+    if (txt) leg.text = txt;
+  }
+  return legacyPm;
+}
+
 function extractOfferMessageTextFromRow(row) {
   if (!row || typeof row !== "object") return "";
   let text = String(row.text ?? row.message_text ?? row.body ?? "").trim();
@@ -980,8 +1052,19 @@ function mapPatientMessagesRowToLegacy(row) {
     } else if (readRaw instanceof Date) readAt = readRaw.getTime();
   }
   let bodyText = extractMessageTextFromDbRow(row);
-  const inboundKind =
+  const actorKind = String(row.actor_kind || row.message_source || "").toLowerCase();
+  let inboundKind =
     role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
+  if (
+    actorKind === "clinic_ai" ||
+    role === "assistant" ||
+    role === "ai" ||
+    role === "clinic"
+  ) {
+    inboundKind = "clinic";
+  } else if (role === "doctor" && actorKind === "clinic_ai") {
+    inboundKind = "clinic";
+  }
   const senderNameTrim = String(
     row.sender_name || row.senderName || row.doctor_name || row.sender_display_name || "",
   ).trim();
@@ -1001,6 +1084,7 @@ function mapPatientMessagesRowToLegacy(row) {
   if (from === "CLINIC") {
     outPm.inboundKind = inboundKind;
     if (senderNameTrim) outPm.senderName = senderNameTrim;
+    else if (inboundKind === "clinic") outPm.senderName = "Care Team";
   }
   return outPm;
 }
@@ -1290,9 +1374,11 @@ async function fetchMessagesFromSupabase(patientId, opts = {}) {
     const pmRows = !pmRes.error && Array.isArray(pmRes.data) ? pmRes.data : [];
     const mgRows = !mgRes.error && Array.isArray(mgRes.data) ? mgRes.data : [];
 
-    const legacyPm = pmRows.map(mapPatientMessagesRowToLegacy).filter(Boolean);
+    const legacyPm = await mapAndHydratePatientMessagesRows(pmRows);
     const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
-    const mergedDesc = [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(b) - mergedSortKey(a));
+    const mergedDesc = filterRenderableLegacyMessages(
+      [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(b) - mergedSortKey(a)),
+    );
     const sliced = mergedDesc.slice(0, tailCap);
     const merged = sliced.sort((a, b) => mergedSortKey(a) - mergedSortKey(b));
 
@@ -1324,9 +1410,11 @@ async function fetchMessagesFromSupabase(patientId, opts = {}) {
   const pmRows = !pmRes.error && Array.isArray(pmRes.data) ? pmRes.data : [];
   const mgRows = !mgRes.error && Array.isArray(mgRes.data) ? mgRes.data : [];
 
-  const legacyPm = pmRows.map(mapPatientMessagesRowToLegacy).filter(Boolean);
+  const legacyPm = await mapAndHydratePatientMessagesRows(pmRows);
   const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
-  const merged = [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(a) - mergedSortKey(b));
+  const merged = filterRenderableLegacyMessages(
+    [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(a) - mergedSortKey(b)),
+  );
 
   if (merged.length > 0) {
     return { data: merged, error: null, preMapped: true };
@@ -1971,7 +2059,7 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     patient_id: resolvedPatientId,
     message_id: messageId,
     chat_id: String(patientIdParam || "").trim(),
-    text: String(text || "").trim(),
+    ...patientMessageBodyFields(text),
     type: String(msgType || "text").trim() || "text",
     attachment: null,
     ...(clinicFk ? { clinic_id: clinicFk } : {}),
@@ -2028,7 +2116,7 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
     patient_id: resolvedPatientId,
     message_id: messageId,
     chat_id: String(patientIdParam || "").trim(),
-    text: String(text || "").trim(),
+    ...patientMessageBodyFields(text),
     type: String(msgType || "text").trim() || "text",
     attachment: null,
   };
@@ -55750,7 +55838,7 @@ app.post("/api/offer-messages", async (req, res) => {
             patient_id: patientUuid,
             chat_id: patientUuid,  // patient_messages.chat_id = patient id
             from_role: "clinic",  // patient_messages only allows clinic/admin/patient — no "doctor"
-            message_text: inserted.text || "[attachment]",
+            ...patientMessageBodyFields(inserted.text, { attachmentFallback: true }),
             // patient_messages.message_id is NOT NULL — use same pattern as insertPatientMessageViaPatientMessages
             message_id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
             ...(clinicUuid && UUID_RE.test(clinicUuid) ? { clinic_id: clinicUuid } : {}),
@@ -55798,7 +55886,7 @@ app.post("/api/offer-messages", async (req, res) => {
           patient_id: patientUuid,
           chat_id: patientUuid,
           from_role: "patient",
-          message_text: inserted.text || "[attachment]",
+          ...patientMessageBodyFields(inserted.text, { attachmentFallback: true }),
           message_id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
           ...(clinicUuid && UUID_RE.test(clinicUuid) ? { clinic_id: clinicUuid } : {}),
           offer_id: offerId,
