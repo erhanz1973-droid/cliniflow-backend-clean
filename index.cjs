@@ -4969,7 +4969,6 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
       const stableId = extractStableMessageIdForChatPush(insertedRow, insertedTableHint);
       const clinicUuid = await resolveClinicIdForChatPush(opts, insertedRow || {});
       const senderDoctorId = String(opts?.senderId || "").trim();
-      const suppressDoctorPushIfOfferMirror = opts?.suppressDoctorPushIfOfferMirror === true;
 
       let assignedDoctorId = null;
       if (clinicUuid && UUID_RE.test(String(clinicUuid)) && isSupabaseEnabled()) {
@@ -5004,7 +5003,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
             })
           );
         }
-        if (clinicUuid && !suppressDoctorPushIfOfferMirror)
+        if (clinicUuid)
           await notifyAssignedDoctorExpoInbound(resolved, clinicUuid, clip, {
             routingPath: "enqueue_patient_inbound",
             messageStableId: stableId,
@@ -24532,17 +24531,6 @@ async function postPatientMeMessagesHandler(req, res) {
         if (operational?.clinicId) preMirrorClinicId = operational.clinicId;
       }
     }
-    let suppressDoctorPushIfOfferMirror = false;
-    try {
-      const mirrorOfferId = await resolveLeadOfferIdForPatientClinicMessage(
-        patientId,
-        preMirrorClinicId,
-        mirrorOfferHint,
-      );
-      suppressDoctorPushIfOfferMirror = !!mirrorOfferId;
-    } catch (_) {
-      suppressDoctorPushIfOfferMirror = false;
-    }
     const { data, error, insertedTable } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
@@ -24553,7 +24541,6 @@ async function postPatientMeMessagesHandler(req, res) {
         ? { contextClinicCode: String(ctxCode).trim() }
         : {}),
       ...(ctxId != null && String(ctxId).trim() ? { contextClinicId: String(ctxId).trim() } : {}),
-      ...(suppressDoctorPushIfOfferMirror ? { suppressDoctorPushIfOfferMirror: true } : {}),
     });
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
