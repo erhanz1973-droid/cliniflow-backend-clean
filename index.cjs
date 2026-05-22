@@ -2032,8 +2032,13 @@ async function handlePatientMessagesReadMark(req, res) {
   }
 }
 
-async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgType) {
-  const resolvedPatientId = await resolveMessagesPatientDbId(patientIdParam);
+async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgType, insertOpts) {
+  const opts = insertOpts && typeof insertOpts === "object" ? insertOpts : {};
+  const preResolved = String(opts.preResolvedPatientId || "").trim();
+  const resolvedPatientId =
+    preResolved && UUID_RE.test(preResolved)
+      ? preResolved
+      : await resolveMessagesPatientDbId(patientIdParam);
   if (!resolvedPatientId) {
     return {
       data: null,
@@ -2041,30 +2046,35 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     };
   }
   const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-  let clinicFk = null;
-  try {
-    const { data: prow } = await supabase
-      .from("patients")
-      .select("clinic_id")
-      .eq("id", resolvedPatientId)
-      .maybeSingle();
-    clinicFk =
-      prow?.clinic_id != null && String(prow.clinic_id).trim() ? String(prow.clinic_id).trim() : null;
-    if (!clinicFk) {
-      const { data: thr } = await supabase
-        .from("patient_chat_threads")
+  let clinicFk =
+    opts.clinicId != null && UUID_RE.test(String(opts.clinicId).trim())
+      ? String(opts.clinicId).trim()
+      : null;
+  if (!clinicFk) {
+    try {
+      const { data: prow } = await supabase
+        .from("patients")
         .select("clinic_id")
-        .eq("patient_id", resolvedPatientId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
+        .eq("id", resolvedPatientId)
         .maybeSingle();
       clinicFk =
-        thr?.clinic_id != null && String(thr.clinic_id).trim()
-          ? String(thr.clinic_id).trim()
-          : null;
+        prow?.clinic_id != null && String(prow.clinic_id).trim() ? String(prow.clinic_id).trim() : null;
+      if (!clinicFk) {
+        const { data: thr } = await supabase
+          .from("patient_chat_threads")
+          .select("clinic_id")
+          .eq("patient_id", resolvedPatientId)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        clinicFk =
+          thr?.clinic_id != null && String(thr.clinic_id).trim()
+            ? String(thr.clinic_id).trim()
+            : null;
+      }
+    } catch (_) {
+      /* optional — column may differ */
     }
-  } catch (_) {
-    /* optional — column may differ */
   }
   const baseRow = {
     patient_id: resolvedPatientId,
@@ -5222,8 +5232,14 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
           `evt_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       };
     }
+    const optThread = String(opts?.threadId ?? opts?.thread_id ?? "").trim();
     const raw = insertedRow.thread_id ?? insertedRow.threadId;
-    let tid = raw != null && UUID_RE.test(String(raw).trim()) ? String(raw).trim() : null;
+    let tid =
+      optThread && UUID_RE.test(optThread)
+        ? optThread
+        : raw != null && UUID_RE.test(String(raw).trim())
+          ? String(raw).trim()
+          : null;
 
     // Fallback: thread_id not stored on the row (e.g. patient_messages table without thread_id column).
     // Look up patient_chat_threads by patient_id so the socket room can still be resolved.
@@ -5249,12 +5265,14 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
     const roomId = threadChatRoomId(tid);
     if (!roomId) return;
 
-    try {
-      const before = await chatSocketIo.in(roomId).fetchSockets();
-      console.log("[chat-socket] ROOM SIZE (before emit)", roomId, before.length);
-    } catch (_) {
-      /* non-fatal */
-    }
+    void (async () => {
+      try {
+        const before = await chatSocketIo.in(roomId).fetchSockets();
+        console.log("[chat-socket] ROOM SIZE (before emit)", roomId, before.length);
+      } catch (_) {
+        /* non-fatal */
+      }
+    })();
 
     const emitAt = Date.now();
     console.log("[chat-socket] EMIT TIME", emitAt, {
@@ -6504,8 +6522,11 @@ const DOCTOR_VISIBLE_MSG_TTL_MS = 60000;
 const doctorVisiblePatientIdCache = new Map(); // key: doctorId → { set, expires }
 const doctorVisiblePatientIdInFlight = new Map(); // key: doctorId -> Promise<Set>
 /** Aggregated chat preview — avoids N× GET /api/patient/:id/messages on dashboard load. */
-const DOCTOR_MSG_THREAD_SUMMARY_TTL_MS = 22000;
+const DOCTOR_MSG_THREAD_SUMMARY_TTL_MS = 45000;
 const doctorMessagesThreadSummaryCache = new Map(); // key: doc:${did}:… → { body, expires }
+/** doctors.id + doctor_id code → expanded FK keys (compareDoctorIds / access checks). */
+const DOCTOR_FK_KEYS_CACHE_TTL_MS = 300000;
+const doctorFkKeysCache = new Map(); // key: normalized id → { keys, expires }
 
 /** Short-lived cache for dashboard treatment_events fan-out (today vs tomorrow shared TTL). */
 const dashboardTevSlotsCache = new Map(); // key: `tev:${clinicId}:${dayYmd}` → { slots, exp }
@@ -44500,19 +44521,61 @@ async function resolveDoctorCodeKeysToUuids(others) {
 
 /** Use for .in() / .eq() on uuid FK doctor columns — never pass d_… without resolving first. */
 async function doctorKeysForUuidFkInQuery(doctorKeysRaw) {
-  const { uuids, others } = splitDoctorKeysUuidAndOther(doctorKeysRaw);
+  const arr = [...new Set((doctorKeysRaw || []).map((k) => String(k || "").trim()).filter(Boolean))];
+  if (!arr.length) return [];
+  const cacheKey = arr.map((k) => k.toLowerCase()).sort().join("|");
+  const hit = doctorFkKeysCache.get(cacheKey);
+  if (hit && hit.expires > Date.now()) return hit.keys;
+  const { uuids, others } = splitDoctorKeysUuidAndOther(arr);
   const resolved = await resolveDoctorCodeKeysToUuids(others);
-  return [...new Set([...uuids, ...resolved])];
+  const keys = [...new Set([...uuids, ...resolved, ...arr])];
+  doctorFkKeysCache.set(cacheKey, { keys, expires: Date.now() + DOCTOR_FK_KEYS_CACHE_TTL_MS });
+  return keys;
+}
+
+function doctorIdsMatchFast(a, b) {
+  const sa = String(a || "").trim();
+  const sb = String(b || "").trim();
+  if (!sa || !sb) return false;
+  if (sa.toLowerCase() === sb.toLowerCase()) return true;
+  return (
+    DOCTOR_FK_UUID_RE.test(sa) &&
+    DOCTOR_FK_UUID_RE.test(sb) &&
+    sa.toLowerCase() === sb.toLowerCase()
+  );
 }
 
 async function compareDoctorIds(a, b) {
+  if (doctorIdsMatchFast(a, b)) return true;
   const keysA = await doctorKeysForUuidFkInQuery([a]);
   const keysB = await doctorKeysForUuidFkInQuery([b]);
-  const setA = new Set(keysA);
+  const setA = new Set(keysA.map((x) => String(x).trim().toLowerCase()));
   for (const kb of keysB) {
-    if (setA.has(kb)) return true;
+    if (setA.has(String(kb).trim().toLowerCase())) return true;
   }
   return false;
+}
+
+/** Memoized on req in requireDoctorAuth — avoids repeated doctors lookups per HTTP request. */
+async function getDoctorMatchKeysForReq(req) {
+  if (req && Array.isArray(req._doctorMatchKeys) && req._doctorMatchKeys.length) {
+    return req._doctorMatchKeys;
+  }
+  const raw = [
+    String(req?.doctorId || "").trim(),
+    String(req?.doctor?.id || "").trim(),
+    String(req?.doctor?.doctor_id || "").trim(),
+  ].filter(Boolean);
+  const keys = await doctorKeysForUuidFkInQuery(raw);
+  if (req) req._doctorMatchKeys = keys;
+  return keys;
+}
+
+function assignedDoctorMatchesKeys(assignedRaw, matchKeys) {
+  const assigned = String(assignedRaw || "").trim().toLowerCase();
+  if (!assigned || !matchKeys?.length) return false;
+  const set = new Set(matchKeys.map((k) => String(k).trim().toLowerCase()));
+  return set.has(assigned);
 }
 
 /** Resolve admin "messageId" to internal patients.id — accepts message row id, patient_messages.message_id, thread id, or patient id. */
@@ -44588,6 +44651,7 @@ async function doctorMessagingAccessFastPath(resolvedPatientId, req) {
   const doctorUuid = String(req.doctor?.id || req.doctorId || "").trim();
   if (!UUID_RE.test(pid) || !UUID_RE.test(clinicId) || !doctorUuid) return null;
   try {
+    const matchKeys = await getDoctorMatchKeysForReq(req);
     const { data } = await supabase
       .from("patient_chat_threads")
       .select("id, assigned_doctor_id")
@@ -44597,11 +44661,21 @@ async function doctorMessagingAccessFastPath(resolvedPatientId, req) {
       .limit(1)
       .maybeSingle();
     const assigned = String(data?.assigned_doctor_id || "").trim();
-    if (assigned && (await compareDoctorIds(assigned, doctorUuid))) {
+    if (
+      assigned &&
+      (assignedDoctorMatchesKeys(assigned, matchKeys) ||
+        doctorIdsMatchFast(assigned, doctorUuid) ||
+        (await compareDoctorIds(assigned, doctorUuid)))
+    ) {
       return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
     }
     const op = await resolveMessagingDoctorForPatientClinic(pid, clinicId);
-    if (op && (await compareDoctorIds(op, doctorUuid))) {
+    if (
+      op &&
+      (assignedDoctorMatchesKeys(op, matchKeys) ||
+        doctorIdsMatchFast(op, doctorUuid) ||
+        (await compareDoctorIds(op, doctorUuid)))
+    ) {
       return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
     }
   } catch (_) {
@@ -46317,6 +46391,12 @@ async function requireDoctorAuth(req, res, next) {
     req.doctor = doctor;
     req.doctorId = doctor.id || doctor.doctor_id || doctorIdFromToken;
     req.clinicId = doctor.clinic_id || String(decoded.clinicId || "").trim() || null;
+    req._doctorMatchKeys = await doctorKeysForUuidFkInQuery([
+      String(req.doctorId || "").trim(),
+      String(doctor.id || "").trim(),
+      String(doctor.doctor_id || "").trim(),
+      doctorIdFromToken,
+    ].filter(Boolean));
     next();
   } catch (error) {
     const code = error?.name === "TokenExpiredError" ? "token_expired" : "invalid_token";
@@ -47554,23 +47634,33 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
   /** ~5 rows/patient per chunk cap — enough for latest-per-patient without 3k-row pulls per chunk. */
   const perChunkLimit = (n) => Math.min(280, Math.max(48, n * 5));
 
-  for (let i = 0; i < uuidList.length; i += 72) {
-    const chunk = uuidList.slice(i, i + 72);
-    const lim = perChunkLimit(chunk.length);
-    const [mgRows, pmRows] = await Promise.all([
-      fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim),
-      fetchRecentPatientMessagesRowsForChunk(chunk, lim),
-    ]);
-    for (const row of mgRows || []) {
-      const leg = mapDbMessageToLegacyMessage(row);
-      if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
-      ingestLatestLegacyMessage(latestByPid, leg);
-    }
-    for (const row of pmRows || []) {
-      const leg = mapPatientMessagesRowToLegacy(row);
-      if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
-      ingestLatestLegacyMessage(latestByPid, leg);
-    }
+  const msgChunkSize = 72;
+  const msgChunks = [];
+  for (let i = 0; i < uuidList.length; i += msgChunkSize) {
+    msgChunks.push(uuidList.slice(i, i + msgChunkSize));
+  }
+  const msgChunkConcurrency = 2;
+  for (let ci = 0; ci < msgChunks.length; ci += msgChunkConcurrency) {
+    const batch = msgChunks.slice(ci, ci + msgChunkConcurrency);
+    await Promise.all(
+      batch.map(async (chunk) => {
+        const lim = perChunkLimit(chunk.length);
+        const [mgRows, pmRows] = await Promise.all([
+          fetchRecentMessageRowsForPatientChunk(chunk, clinicId, clinicCode, lim),
+          fetchRecentPatientMessagesRowsForChunk(chunk, lim),
+        ]);
+        for (const row of mgRows || []) {
+          const leg = mapDbMessageToLegacyMessage(row);
+          if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
+          ingestLatestLegacyMessage(latestByPid, leg);
+        }
+        for (const row of pmRows || []) {
+          const leg = mapPatientMessagesRowToLegacy(row);
+          if (leg && !leg.patientId && row?.patient_id) leg.patientId = String(row.patient_id).trim();
+          ingestLatestLegacyMessage(latestByPid, leg);
+        }
+      }),
+    );
   }
 
   const patientMeta = new Map();
@@ -48413,18 +48503,17 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
         : null;
 
     // Try the same simple path the admin endpoint uses — patient_messages table
-    const pmTry = await insertClinicMessageViaPatientMessages(
-      patientId,
-      text,
-      msgType,
-      threadIdForInsert,
-      UUID_RE.test(clinicIdForInsert) ? clinicIdForInsert : null
-    );
+    const pmTry = await insertClinicMessageViaPatientMessages(patientId, text, msgType, {
+      preResolvedPatientId: patientId,
+      clinicId: UUID_RE.test(clinicIdForInsert) ? clinicIdForInsert : null,
+    });
     if (!pmTry.error && pmTry.data) {
-      try {
-        const ts = new Date().toISOString();
-        await supabase.from("patient_chat_threads").update({ updated_at: ts }).eq("patient_id", patientId);
-      } catch (_) { /* non-fatal */ }
+      void supabase
+        .from("patient_chat_threads")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("patient_id", patientId)
+        .then(() => {})
+        .catch(() => {});
       if (doctorUuid && req.clinicId) {
         void maybeAutoAssignRespondingDoctor({
           patientId,
@@ -48436,7 +48525,14 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       }
       const leg = mapPatientMessagesRowToLegacy(pmTry.data) || { text, from: "CLINIC", createdAt: now() };
       void emitRealtimeChatMessageToThread(
-        { patientId, sender: "clinic", message: text, senderId: doctorUuid, contextClinicId: req.clinicId || null },
+        {
+          patientId,
+          sender: "clinic",
+          message: text,
+          senderId: doctorUuid,
+          contextClinicId: req.clinicId || null,
+          threadId: threadIdForInsert,
+        },
         pmTry.data,
         "patient_messages"
       );
@@ -60387,10 +60483,12 @@ try {
           threadRow = null;
         }
 
-        const threadPid =
-          threadRow?.patient_id != null
-            ? await resolveMessagesPatientDbId(String(threadRow.patient_id))
-            : null;
+        const rawPid = threadRow?.patient_id != null ? String(threadRow.patient_id).trim() : "";
+        let threadPid =
+          rawPid && PATIENT_ROW_UUID_RE.test(rawPid.toLowerCase()) ? rawPid.toLowerCase() : null;
+        if (!threadPid) {
+          threadPid = rawPid ? await resolveMessagesPatientDbId(rawPid) : null;
+        }
         if (!threadPid || !UUID_RE.test(threadPid)) {
           socket.emit("chat_join_error", { error: "thread_not_found" });
           if (typeof ack === "function") ack({ ok: false, error: "thread_not_found" });
@@ -60406,7 +60504,21 @@ try {
         } else if (role === "DOCTOR") {
           const doctorUuid = String(decoded.doctorId || decoded.id || "").trim();
           const assigned = String(threadRow?.assigned_doctor_id || "").trim();
-          if (assigned && doctorUuid && (await compareDoctorIds(assigned, doctorUuid))) {
+          let doctorMatchKeys = socket.data?._doctorMatchKeys;
+          if (!Array.isArray(doctorMatchKeys) || !doctorMatchKeys.length) {
+            doctorMatchKeys = await doctorKeysForUuidFkInQuery([
+              doctorUuid,
+              String(decoded.id || "").trim(),
+            ].filter(Boolean));
+            socket.data._doctorMatchKeys = doctorMatchKeys;
+          }
+          if (
+            assigned &&
+            (assignedDoctorMatchesKeys(assigned, doctorMatchKeys) ||
+              doctorIdsMatchFast(assigned, doctorUuid))
+          ) {
+            authorized = true;
+          } else if (assigned && doctorUuid && (await compareDoctorIds(assigned, doctorUuid))) {
             authorized = true;
           } else {
             const fakeReq = {
@@ -60416,6 +60528,7 @@ try {
                 id: decoded.doctorId || decoded.id,
                 clinic_id: decoded.clinicId || threadRow?.clinic_id || null,
               },
+              _doctorMatchKeys: doctorMatchKeys,
             };
             const fast = await doctorMessagingAccessFastPath(threadPid, fakeReq);
             if (fast?.ok) authorized = true;
@@ -60433,29 +60546,35 @@ try {
         }
 
         await socket.join(roomId);
-        try {
-          const fetched = await chatSocketIo.in(roomId).fetchSockets();
-          const elapsedMs = Date.now() - joinReceivedAt;
-          console.log(
-            "[chat-socket] JOINED ROOM",
-            roomId,
-            "threadIdJoined=",
-            threadIdJoined,
-            "ROOM_SIZE",
-            fetched.length,
-            "(2 = patient + doctor in same Socket.IO room)",
-            "latency_ms_since_join_received",
-            elapsedMs,
-          );
-        } catch (roomErr) {
-          console.warn("[chat-socket] fetchSockets:", roomErr?.message || roomErr);
-        }
+        const joinedAt = Date.now();
+        const joinLatencyMs = joinedAt - joinReceivedAt;
+        console.log(
+          "[chat-socket] JOINED ROOM",
+          roomId,
+          "threadIdJoined=",
+          threadIdJoined,
+          "latency_ms_since_join_received",
+          joinLatencyMs,
+        );
+        void (async () => {
+          try {
+            const fetched = await chatSocketIo.in(roomId).fetchSockets();
+            console.log(
+              "[chat-socket] ROOM_SIZE",
+              roomId,
+              fetched.length,
+              "(2 = patient + doctor in same Socket.IO room)",
+            );
+          } catch (roomErr) {
+            console.warn("[chat-socket] fetchSockets:", roomErr?.message || roomErr);
+          }
+        })();
         if (typeof ack === "function") {
           ack({
             ok: true,
             room: roomId,
             threadId: threadIdJoined,
-            serverAckTime: Date.now(),
+            serverAckTime: joinedAt,
             joinReceivedTime: joinReceivedAt,
           });
         }
