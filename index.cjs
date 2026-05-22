@@ -1844,23 +1844,17 @@ async function bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTabl
     const pidSrc = insertedRow?.patient_id || opts?.patientId;
     const resolved = pidSrc ? await resolveMessagesPatientDbId(String(pidSrc)) : null;
     if (!resolved) return;
-    const clinicUuid =
-      insertedRow?.clinic_id != null ? String(insertedRow.clinic_id).trim() : "";
     if (!fromPatient) {
       await incrementPatientUnreadOnClinicMessage(resolved);
       return;
     }
+    const clinicUuid = await resolveClinicIdForChatPush(opts, insertedRow || {});
     if (!UUID_RE.test(clinicUuid)) return;
-    const { data } = await supabase
-      .from("patient_chat_threads")
-      .select("assigned_doctor_id")
-      .eq("patient_id", resolved)
-      .eq("clinic_id", clinicUuid)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const aid = String(data?.assigned_doctor_id || "").trim();
-    if (UUID_RE.test(aid)) await incrementDoctorUnreadForAssignedDoctor(aid);
+    const aid = await resolveMessagingDoctorForPatientClinic(resolved, clinicUuid);
+    if (UUID_RE.test(aid)) {
+      await incrementDoctorUnreadForAssignedDoctor(aid);
+      bumpUnreadCountsCache(clinicUuid);
+    }
   } catch (e) {
     console.warn("[MESSAGES unread bump]", e?.message || e);
   }
@@ -2120,7 +2114,13 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
 }
 
 /** Same storage as admin replies — keeps admin chat GET (patient_messages merge) consistent. */
-async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgType, threadIdOpt) {
+async function insertPatientMessageViaPatientMessages(
+  patientIdParam,
+  text,
+  msgType,
+  threadIdOpt,
+  clinicIdOpt
+) {
   const resolvedPatientId = await resolveMessagesPatientDbId(patientIdParam);
   if (!resolvedPatientId) {
     return {
@@ -2129,6 +2129,10 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
     };
   }
   const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  const clinicFk =
+    clinicIdOpt != null && UUID_RE.test(String(clinicIdOpt).trim())
+      ? String(clinicIdOpt).trim()
+      : null;
   const baseRow = {
     patient_id: resolvedPatientId,
     message_id: messageId,
@@ -2136,6 +2140,7 @@ async function insertPatientMessageViaPatientMessages(patientIdParam, text, msgT
     ...patientMessageBodyFields(text),
     type: String(msgType || "text").trim() || "text",
     attachment: null,
+    ...(clinicFk ? { clinic_id: clinicFk } : {}),
   };
   const baseRows = [];
   if (threadIdOpt && UUID_RE.test(String(threadIdOpt).trim())) {
@@ -2956,7 +2961,8 @@ async function _insertMessageToSupabaseCore({
       patientId,
       msgText,
       msgType,
-      inboundThreadId
+      inboundThreadId,
+      inboundClinicId
     );
     if (!pmTry.error && pmTry.data) {
       console.log("MESSAGE_INSERT", {
@@ -4718,6 +4724,25 @@ async function resolveLeadAssignedDoctorForPatientClinic(resolvedPatientId, clin
   }
 }
 
+/** Thread assignee, then patients.primary_doctor_id / roster fields (enrolled members). */
+async function resolveMessagingDoctorForPatientClinic(resolvedPatientId, clinicUuid) {
+  const pid = String(resolvedPatientId || "").trim();
+  const cid = String(clinicUuid || "").trim();
+  if (!UUID_RE.test(pid) || !UUID_RE.test(cid)) return null;
+  const fromThread = await resolveLeadAssignedDoctorForPatientClinic(pid, cid);
+  if (fromThread) return fromThread;
+  try {
+    const op = await resolveOperationalDoctorForPatientClinic(supabase, {
+      patientId: pid,
+      clinicId: cid,
+    });
+    const did = String(op || "").trim();
+    return UUID_RE.test(did) ? did : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function deliverClinicInboundPatientNotifications(meta) {
   const { patientLookupId, previewRaw, clinicUuid, senderHint, messageStableId = null } = meta;
   const pv = truncateChatPreview(previewRaw || "Yeni mesaj");
@@ -4878,7 +4903,10 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const did = String(data?.assigned_doctor_id || "").trim();
+    let did = String(data?.assigned_doctor_id || "").trim();
+    if (!did || !UUID_RE.test(did)) {
+      did = (await resolveMessagingDoctorForPatientClinic(resolvedPatientId, clinicUuid)) || "";
+    }
     if (!did || !UUID_RE.test(did)) {
       if (isDoctorPushExpoTraceEnabled()) {
         const bodySd = String(composerOpts?.senderDoctorId || "").trim();
@@ -5043,7 +5071,20 @@ async function resolveClinicIdForChatPush(opts, insertedRow) {
   const ctx =
     opts?.contextClinicId != null ? String(opts.contextClinicId).trim() : "";
   if (UUID_RE.test(ctx)) return ctx;
-  return null;
+  const pidSrc = insertedRow?.patient_id || opts?.patientId;
+  if (!pidSrc || !isSupabaseEnabled()) return null;
+  try {
+    const resolved = await resolveMessagesPatientDbId(String(pidSrc));
+    if (!resolved) return null;
+    const inbound = await resolveClinicIdForInbound(resolved, {
+      contextClinicId: UUID_RE.test(ctx) ? ctx : null,
+      contextClinicCode:
+        opts?.contextClinicCode != null ? String(opts.contextClinicCode).trim() : null,
+    });
+    return UUID_RE.test(String(inbound || "")) ? String(inbound).trim() : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 /** Fire-and-forget: patient inbound → notify assigned doctor; clinic/admin outbound → notify patient + assigned doctor (unless doctor is the sender). Deduped via chat_push_dispatches. */
@@ -5078,7 +5119,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
       let assignedDoctorId = null;
       if (clinicUuid && UUID_RE.test(String(clinicUuid)) && isSupabaseEnabled()) {
         try {
-          assignedDoctorId = await resolveLeadAssignedDoctorForPatientClinic(resolved, clinicUuid);
+          assignedDoctorId = await resolveMessagingDoctorForPatientClinic(resolved, clinicUuid);
         } catch (_) {
           assignedDoctorId = null;
         }
@@ -46759,7 +46800,7 @@ async function computeDoctorUnreadInboundForPush(doctorUuid, clinicIdParam, clin
     if (!visible.size) return 0;
 
     const visibleDbUuids = await expandVisiblePatientKeysToDbUuids(visible);
-    const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuids);
+    const rows = await fetchDoctorScopedUnreadInboundRows(clinicId, clinicCode, visibleDbUuids);
     return Array.isArray(rows) ? rows.length : 0;
   } catch (e) {
     console.warn("[expo-push] doctor badge count:", e?.message || e);
@@ -46885,9 +46926,63 @@ async function fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, pati
   return [];
 }
 
+/** Unread patient-originated rows in `patient_messages` (fast path inserts; doctor badge + counts). */
+async function fetchUnreadPatientMessagesInboundRowsChunked(clinicId, patientUuidIterable) {
+  const list = [
+    ...new Set(
+      [...(patientUuidIterable || [])]
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter((x) => PATIENT_ROW_UUID_RE.test(x))
+    ),
+  ];
+  if (!list.length || !isSupabaseEnabled()) return [];
+
+  const cid = clinicId ? String(clinicId).trim() : "";
+  const acc = [];
+
+  for (let i = 0; i < list.length; i += UNREAD_MSG_PATIENT_CHUNK) {
+    const chunk = list.slice(i, i + UNREAD_MSG_PATIENT_CHUNK);
+    const variants = [];
+    if (UUID_RE.test(cid)) {
+      variants.push({ clinicScoped: true });
+    }
+    variants.push({ clinicScoped: false });
+
+    for (const v of variants) {
+      let q = supabase
+        .from("patient_messages")
+        .select("patient_id")
+        .in("patient_id", chunk)
+        .or("from_role.eq.patient,from_role.eq.PATIENT")
+        .is("read_at", null);
+      if (v.clinicScoped) q = q.eq("clinic_id", cid);
+      const r = await q;
+      if (!r.error) {
+        acc.push(...(r.data || []));
+        break;
+      }
+      const errMsg = String(r.error?.message || "").toLowerCase();
+      const missingCol =
+        ["42703", "PGRST204", "PGRST205"].includes(String(r.error?.code || "")) ||
+        errMsg.includes("does not exist") ||
+        errMsg.includes("column");
+      if (!missingCol) break;
+    }
+  }
+  return acc;
+}
+
+async function fetchDoctorScopedUnreadInboundRows(clinicId, clinicCode, patientUuidIterable) {
+  const [mgRows, pmRows] = await Promise.all([
+    fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, patientUuidIterable),
+    fetchUnreadPatientMessagesInboundRowsChunked(clinicId, patientUuidIterable),
+  ]);
+  return [...(mgRows || []), ...(pmRows || [])];
+}
+
 async function fetchUnreadInboundCountsByPatientMessages(clinicId, clinicCode, visibleDbUuidSet) {
   const unreadByPatient = new Map();
-  const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuidSet);
+  const rows = await fetchDoctorScopedUnreadInboundRows(clinicId, clinicCode, visibleDbUuidSet);
   for (const row of Array.isArray(rows) ? rows : []) {
     const p = String(row?.patient_id || "").trim().toLowerCase();
     if (!p || !visibleDbUuidSet.has(p)) continue;
@@ -47618,7 +47713,7 @@ app.get("/api/doctor/messages/unread-counts", requireDoctorAuth, async (req, res
     }
 
     const visibleDbUuids = await expandVisiblePatientKeysToDbUuids(visible);
-    const rows = await fetchUnreadMessagePatientIdRowsChunked(clinicId, clinicCode, visibleDbUuids);
+    const rows = await fetchDoctorScopedUnreadInboundRows(clinicId, clinicCode, visibleDbUuids);
 
     if (totalOnly) {
       const chatUnread = rows.length;
