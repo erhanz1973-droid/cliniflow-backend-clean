@@ -4004,8 +4004,21 @@ async function patchExpoEntityMuted(kind, uuidRaw, mutedEnabled) {
   return patchExpoUserNotificationsMuted(kind, uuidRaw, mutedEnabled);
 }
 
+/** Resolve doctors.id UUID for push_tokens.owner_id (may be stored under legacy doctor_id codes). */
+async function resolveOwnerUuidForExpoPush(kind, ownerKeyRaw) {
+  const raw = String(ownerKeyRaw || "").trim();
+  if (!raw) return null;
+  if (kind === "doctor") {
+    const keys = await doctorKeysForUuidFkInQuery([raw]);
+    const uuid = keys.find((k) => DOCTOR_FK_UUID_RE.test(String(k)));
+    return uuid ? String(uuid).trim() : null;
+  }
+  if (DOCTOR_FK_UUID_RE.test(raw)) return raw;
+  return raw;
+}
+
 async function loadExpoTokenRows(kind, uuidRaw) {
-  const u = String(uuidRaw || "").trim();
+  const u = await resolveOwnerUuidForExpoPush(kind, uuidRaw);
   if (!u) return [];
   if (await probePushTokensDbAvailable()) {
     try {
@@ -4142,7 +4155,15 @@ async function logDoctorNoExpoTokensDebug(ownerUuid, expoTrace) {
 }
 
 async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, expoTrace) {
-  const u = String(uuidRaw || "").trim();
+  const u = (await resolveOwnerUuidForExpoPush(kind, uuidRaw)) || String(uuidRaw || "").trim();
+  if (!u || (kind === "doctor" && !DOCTOR_FK_UUID_RE.test(u))) {
+    if (kind === "doctor" && isChatPushPipelineLogEnabled()) {
+      pushLog.info("chat_push.send_skipped_unresolved_doctor_uuid", {
+        doctorKeyRaw: String(uuidRaw || "").slice(0, 24),
+      });
+    }
+    return;
+  }
   if (await fetchUserNotificationsMuted(kind, u)) {
     if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
       pushDeliveryV1("info", {
@@ -4954,19 +4975,16 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         ? String(composerOpts.messageComposerId).trim()
         : "";
   try {
-    const { data } = await supabase
-      .from("patient_chat_threads")
-      .select("assigned_doctor_id, id")
-      .eq("patient_id", resolvedPatientId)
-      .eq("clinic_id", clinicUuid)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    let did = String(data?.assigned_doctor_id || "").trim();
-    if (!did || !UUID_RE.test(did)) {
-      did = (await resolveMessagingDoctorForPatientClinic(resolvedPatientId, clinicUuid)) || "";
-    }
-    if (!did || !UUID_RE.test(did)) {
+    const threadRow = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicUuid);
+    const assignedRaw = String(threadRow?.assigned_doctor_id || "").trim();
+    let did =
+      (await resolveOwnerUuidForExpoPush("doctor", assignedRaw)) ||
+      (await resolveOwnerUuidForExpoPush(
+        "doctor",
+        (await resolveMessagingDoctorForPatientClinic(resolvedPatientId, clinicUuid)) || "",
+      )) ||
+      "";
+    if (!did || !DOCTOR_FK_UUID_RE.test(did)) {
       if (isDoctorPushExpoTraceEnabled()) {
         const bodySd = String(composerOpts?.senderDoctorId || "").trim();
         pushDeliveryV1("info", {
@@ -4986,7 +5004,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       return;
     }
 
-    const threadId = String(data?.id || "").trim();
+    const threadId = String(threadRow?.id || "").trim();
 
     if (isChatPushPipelineLogEnabled()) {
       pushLog.info("chat_push.notify_doctor_assigned", {
