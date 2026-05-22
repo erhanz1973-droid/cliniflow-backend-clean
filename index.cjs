@@ -431,6 +431,7 @@ const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production
 const { pushLog, traceMiddleware, pushDeliveryV1, newPushTraceId } = require("./lib/pushLog.cjs");
 const pushMetrics = require("./lib/pushMetrics.cjs");
 const {
+  PATIENT_INBOUND_DOCTOR_PUSH_TYPE,
   buildChatPushDedupeKey,
   buildMessagePushDataPayload,
   tryClaimChatPushDispatchV2,
@@ -3230,7 +3231,13 @@ async function probeChatPushDispatchesDbAvailable() {
       const m = String(error.message || "").toLowerCase();
       const missingTbl =
         ["42P01", "PGRST205"].includes(c) || (m.includes("relation") && m.includes("does not exist"));
-      chatPushDispatchesDbAvailableMemo = missingTbl ? false : true;
+      chatPushDispatchesDbAvailableMemo = false;
+      if (!missingTbl) {
+        pushLog?.warn?.("chat_push.dedupe_probe_failed", {
+          code: c,
+          message: String(error.message || error).slice(0, 160),
+        });
+      }
     }
   } catch (_) {
     chatPushDispatchesDbAvailableMemo = false;
@@ -3315,6 +3322,38 @@ function stableChatDedupeMessageKey(insertedRow, insertedTableHint) {
 
 function extractStableMessageIdForChatPush(insertedRow, insertedTableHint) {
   return stableChatDedupeMessageKey(insertedRow, insertedTableHint);
+}
+
+function previewFingerprintForPushDedupe(text) {
+  const t = String(text || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  if (!t) return "empty";
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (Math.imul(31, h) + t.charCodeAt(i)) >>> 0;
+  return `fp${h.toString(36)}`;
+}
+
+function stableDedupeKeyForDoctorInbound({ messageStableId, patientId, clinicId, preview }) {
+  const mid = String(messageStableId || "").trim();
+  if (mid) return mid;
+  const pid = String(patientId || "").trim().toLowerCase();
+  const cid = String(clinicId || "").trim().toLowerCase();
+  if (pid && cid) return `inbound:${pid}:${cid}:${previewFingerprintForPushDedupe(preview)}`;
+  return "";
+}
+
+/** Expo-router path for notification tap (works on older app builds via `data.url`). */
+function buildDoctorMessagePushDeepLink({ offerId, patientId, patientName }) {
+  const name = encodeURIComponent(
+    String(patientName || "Patient").trim().slice(0, 80) || "Patient",
+  );
+  const oid = String(offerId || "").trim();
+  const pid = String(patientId || "").trim();
+  if (oid) return `/offer-chat?offerId=${encodeURIComponent(oid)}&otherName=${name}`;
+  if (pid) return `/doctor/patient-chat?patientId=${encodeURIComponent(pid)}&patientName=${name}`;
+  return "";
 }
 
 function readExpoPushStore() {
@@ -4809,23 +4848,34 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
 
     const messageStableId =
       composerOpts?.messageStableId != null ? String(composerOpts.messageStableId).trim() : "";
-    if (messageStableId) {
-      const dedupeKey = buildChatPushDedupeKey({
-        recipientKind: "doctor",
-        recipientId: did,
-        messageStableId,
-        notificationType: "new_message",
+    const dedupeStableId = stableDedupeKeyForDoctorInbound({
+      messageStableId,
+      patientId: resolvedPatientId,
+      clinicId: clinicUuid,
+      preview: pv,
+    });
+    if (!dedupeStableId) {
+      pushLog?.warn?.("chat_push.doctor_inbound_skip_no_dedupe_key", {
+        patientId: String(resolvedPatientId || "").slice(0, 8),
+        clinicId: String(clinicUuid || "").slice(0, 8),
       });
-      const claimed = await tryClaimChatPushDispatch({
-        dedupeKey,
-        messageStableId,
-        messageRowId: messageStableId,
-        recipientKind: "doctor",
-        recipientId: did,
-        notificationType: "new_message",
-      });
-      if (!claimed) return;
+      return;
     }
+    const dedupeKey = buildChatPushDedupeKey({
+      recipientKind: "doctor",
+      recipientId: did,
+      messageStableId: dedupeStableId,
+      notificationType: PATIENT_INBOUND_DOCTOR_PUSH_TYPE,
+    });
+    const claimed = await tryClaimChatPushDispatch({
+      dedupeKey,
+      messageStableId: dedupeStableId,
+      messageRowId: messageStableId || dedupeStableId,
+      recipientKind: "doctor",
+      recipientId: did,
+      notificationType: PATIENT_INBOUND_DOCTOR_PUSH_TYPE,
+    });
+    if (!claimed) return;
 
     let requestId = null;
     let offerId = null;
@@ -4842,9 +4892,14 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       offerId = await resolveLeadOfferIdForPatientClinicMessage(resolvedPatientId, clinicUuid, null);
     } catch (_) {}
 
+    const deepLink = buildDoctorMessagePushDeepLink({
+      offerId,
+      patientId: resolvedPatientId,
+      patientName,
+    });
     const dataPayload = buildMessagePushDataPayload({
       type: "new_message",
-      messageId: messageStableId,
+      messageId: messageStableId || dedupeStableId,
       threadId: UUID_RE.test(threadId) ? threadId : null,
       conversationId: UUID_RE.test(threadId) ? threadId : null,
       requestId,
@@ -4854,8 +4909,9 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       clinicId: clinicUuid,
       preview: pv,
       senderRole: role,
-      route: "patient_chat",
+      route: offerId ? "offer_chat" : "patient_chat",
       leadThreadIsLead: true,
+      url: deepLink,
     });
     if (routingPathTrace) dataPayload.routingPath = routingPathTrace;
     const sendP = sendExpoToEntity(
@@ -24591,6 +24647,7 @@ async function postPatientMeMessagesHandler(req, res) {
         mirrorAttachmentType = mime.startsWith("image/") ? "image" : "document";
       }
     }
+    const mirrorSourceStableId = extractStableMessageIdForChatPush(data, insertedTable);
     void mirrorPatientClinicMessageToOfferThread({
       patientId,
       clinicId: mirrorClinicId,
@@ -24599,6 +24656,7 @@ async function postPatientMeMessagesHandler(req, res) {
       attachmentType: mirrorAttachmentType,
       senderName: String(req.patientName || req.name || "").trim() || undefined,
       offerIdHint: mirrorOfferHint,
+      sourceMessageStableId: mirrorSourceStableId,
     }).catch((e) => console.warn("[offer-mirror-patient] exception:", e?.message || e));
 
     void (async () => {
@@ -25089,12 +25147,14 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
               }),
             );
             if (rpidPush && cidPush && shouldSendDoctorPush) {
+              const adminStableId = extractStableMessageIdForChatPush(pmTry.data, "patient_messages");
               await notifyAssignedDoctorExpoInbound(rpidPush, cidPush, text, {
                 messageComposerRole: "clinic",
                 messageComposerId: adminComposerId || null,
                 senderDoctorId: UUID_RE.test(bodySenderDoctor) ? bodySenderDoctor : null,
                 senderStaffOrDoctorId: adminComposerId || null,
                 routingPath: "admin_messages_admin_post",
+                messageStableId: adminStableId,
               });
             }
           } catch (e) {
@@ -46972,6 +47032,8 @@ async function mirrorPatientClinicMessageToOfferThread(opts) {
   const attachmentType = opts?.attachmentType || null;
   const senderName = String(opts?.senderName || "").trim() || "Patient";
   const offerIdHint = opts?.offerIdHint || null;
+  const sourceMessageStableId =
+    opts?.sourceMessageStableId != null ? String(opts.sourceMessageStableId).trim() : "";
 
   if (!patientId || (!text && !attachmentUrl)) return null;
 
@@ -47032,6 +47094,7 @@ async function mirrorPatientClinicMessageToOfferThread(opts) {
       tr: ctx.tr,
       messageRow: message,
       doctorRow: ctx.offer,
+      sourceMessageStableId: sourceMessageStableId || `offer_msg:${String(message.id)}`,
     })
     .catch((e) => console.warn("[offer-mirror-patient] push:", e?.message || e));
 
@@ -54984,6 +55047,7 @@ function getOfferNotificationsApi() {
       tryClaimChatPushDispatch,
       buildChatPushDedupeKey,
       buildMessagePushDataPayload,
+      PATIENT_INBOUND_DOCTOR_PUSH_TYPE,
       getDoctorChatUnreadForPushBadge,
       getPatientChatUnreadForPushBadge,
       treatmentRequestPatientIdFilters,
