@@ -1896,6 +1896,90 @@ function isSupabaseSchemaMissingColumnError(error) {
   );
 }
 
+/** HEAD counts — patient-side clinic inbound unread (for mark-read noop). */
+async function patientHasUnreadClinicInboundForMark(resolvedPatientId) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id || !isSupabaseEnabled()) return true;
+  let sawAllZero = true;
+  let gotAnyCount = false;
+
+  const mg = await supabase
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("patient_id", id)
+    .eq("from_patient", false)
+    .is("read_at", null);
+  if (!mg.error) {
+    gotAnyCount = true;
+    if (Number(mg.count || 0) > 0) return true;
+  } else if (!isSupabaseSchemaMissingColumnError(mg.error)) {
+    const c = String(mg.error?.code || "");
+    if (!["42P01", "PGRST205"].includes(c)) sawAllZero = false;
+  }
+
+  const pm = await supabase
+    .from("patient_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("patient_id", id)
+    .is("read_at", null)
+    .or("from_role.is.null,from_role.not.in.(patient,PATIENT)");
+  if (!pm.error) {
+    gotAnyCount = true;
+    if (Number(pm.count || 0) > 0) return true;
+  } else {
+    const c = String(pm.error?.code || "");
+    const msg = String(pm.error?.message || "").toLowerCase();
+    const missing =
+      c === "42P01" ||
+      c === "PGRST205" ||
+      (msg.includes("relation") && msg.includes("does not exist")) ||
+      isSupabaseSchemaMissingColumnError(pm.error);
+    if (!missing) sawAllZero = false;
+  }
+  if (gotAnyCount && sawAllZero) return false;
+  return true;
+}
+
+/**
+ * Stamp read_at on inbound clinic/staff rows (patient viewed the thread).
+ * Mirrors `countUnreadClinicMessagesForPatient` filters.
+ */
+async function markClinicInboundMessagesReadForPatient(resolvedPatientId) {
+  const id = String(resolvedPatientId || "").trim();
+  if (!id) return { ok: false, error: { message: "patient_id_required" } };
+  const hasUnread = await patientHasUnreadClinicInboundForMark(id);
+  if (!hasUnread) return { ok: true, error: null, noop: true, updated: 0 };
+  const readAtIso = new Date().toISOString();
+
+  const pmUp = await supabase
+    .from("patient_messages")
+    .update({ read_at: readAtIso })
+    .eq("patient_id", id)
+    .or("from_role.is.null,from_role.not.in.(patient,PATIENT)")
+    .is("read_at", null);
+  if (!pmUp.error) return { ok: true, error: null, updated: 1 };
+  const pmCode = String(pmUp.error?.code || "");
+  const pmMsg = String(pmUp.error?.message || "").toLowerCase();
+  const skipPm =
+    pmCode === "42P01" ||
+    pmCode === "PGRST205" ||
+    (pmMsg.includes("relation") && pmMsg.includes("does not exist")) ||
+    isSupabaseSchemaMissingColumnError(pmUp.error);
+  if (!skipPm) return { ok: false, error: pmUp.error };
+
+  const mgUp = await supabase
+    .from("messages")
+    .update({ read_at: readAtIso })
+    .eq("patient_id", id)
+    .eq("from_patient", false)
+    .is("read_at", null);
+  if (!mgUp.error) return { ok: true, error: null, updated: 1 };
+  if (isSupabaseSchemaMissingColumnError(mgUp.error)) {
+    return { ok: true, error: null, noop: true, updated: 0 };
+  }
+  return { ok: false, error: mgUp.error };
+}
+
 /** HEAD counts — skip UPDATE churn when nothing is unread (POST /messages/read spam). */
 async function adminHasUnreadInboundForMark(resolvedPatientId) {
   const id = String(resolvedPatientId || "").trim();
@@ -1938,8 +2022,8 @@ async function adminHasUnreadInboundForMark(resolvedPatientId) {
   return true;
 }
 
-/** Admin marked patient-originated rows as read (patient_messages and/or messages). */
-async function markPatientMessagesReadForAdmin(resolvedPatientId) {
+/** Stamp read_at on inbound patient rows (clinic/doctor viewed the thread). */
+async function markPatientInboundMessagesRead(resolvedPatientId) {
   const id = String(resolvedPatientId || "").trim();
   if (!id) return { ok: false, error: { message: "patient_id_required" } };
   const hasUnread = await adminHasUnreadInboundForMark(id);
@@ -1988,6 +2072,11 @@ async function markPatientMessagesReadForAdmin(resolvedPatientId) {
     }
   }
   return { ok: true, error: null, noop: true, updated: 0 };
+}
+
+/** Admin marked patient-originated rows as read (patient_messages and/or messages). */
+async function markPatientMessagesReadForAdmin(resolvedPatientId) {
+  return markPatientInboundMessagesRead(resolvedPatientId);
 }
 
 async function handlePatientMessagesReadMark(req, res) {
@@ -4761,18 +4850,36 @@ function resolveHumanChatPushPreview(opts, insertedRow) {
   return "";
 }
 
+/** Sync display label from a patients row (thread-summary, push, inbox). */
+function patientRowDisplayName(row) {
+  if (!row || typeof row !== "object") return null;
+  const full = String(row.full_name || "").trim();
+  if (full) return full.slice(0, 120);
+  const name = String(row.name || "").trim();
+  if (name) return name.slice(0, 120);
+  const joined = [row.first_name, row.last_name]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (joined) return joined.slice(0, 120);
+  const phone = String(row.phone || "").replace(/\s+/g, "").trim();
+  if (phone.length >= 4) return `…${phone.slice(-4)}`;
+  const leg = String(row.patient_id || "").trim();
+  if (leg && !UUID_RE.test(leg) && leg.length <= 40) return leg;
+  return null;
+}
+
 async function fetchPatientDisplayNameForPush(resolvedPatientId) {
   const pid = String(resolvedPatientId || "").trim();
   if (!UUID_RE.test(pid) || !isSupabaseEnabled()) return "Hasta";
   try {
     const { data } = await supabase
       .from("patients")
-      .select("full_name, name, first_name, last_name")
+      .select("full_name, name, first_name, last_name, phone, patient_id")
       .eq("id", pid)
       .maybeSingle();
-    const n = [data?.first_name, data?.last_name].filter(Boolean).join(" ").trim();
-    const cand = String(data?.full_name || data?.name || n || "").trim();
-    return cand ? cand.slice(0, 120) : "Hasta";
+    return patientRowDisplayName(data) || "Hasta";
   } catch (_) {
     return "Hasta";
   }
@@ -25657,15 +25764,39 @@ app.patch("/api/patient/me/notification-preferences", requireToken, async (req, 
   }
 });
 
-// Patient opened chat — reset incremental unread for push badge + icon
+// Patient opened chat — mark inbound rows read + reset push tally
 app.post("/api/patient/me/chat/ack-open", requireToken, async (req, res) => {
   try {
     const raw = String(req.patientId || "").trim();
     if (!raw) return res.status(401).json({ ok: false, error: "unauthorized" });
     const resolved = await resolveMessagesPatientDbId(raw);
     if (!resolved) return res.status(400).json({ ok: false, error: "patient_not_resolved" });
+    const mark = await markClinicInboundMessagesReadForPatient(resolved);
     await persistPatientChatUnreadMergedTally(resolved, 0);
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      updated: Number(mark.updated ?? 0) || 0,
+      noop: !!mark.noop,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
+  }
+});
+
+// POST /api/patient/me/messages/read — same as ack-open (tab badge + offer inbox use read_at counts)
+app.post("/api/patient/me/messages/read", requireToken, async (req, res) => {
+  try {
+    const raw = String(req.patientId || "").trim();
+    if (!raw) return res.status(401).json({ ok: false, error: "unauthorized" });
+    const resolved = await resolveMessagesPatientDbId(raw);
+    if (!resolved) return res.status(400).json({ ok: false, error: "patient_not_resolved" });
+    const mark = await markClinicInboundMessagesReadForPatient(resolved);
+    await persistPatientChatUnreadMergedTally(resolved, 0);
+    return res.json({
+      ok: true,
+      updated: Number(mark.updated ?? 0) || 0,
+      noop: !!mark.noop,
+    });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
@@ -47928,7 +48059,7 @@ async function buildDoctorOfferInboxThreads(req, opts = {}) {
       patientDbId: pid || "",
       patientPublicId: pid ? canonicalPatientPublicId(pid) : null,
       patientLegacyId: pmeta?.patient_id != null ? String(pmeta.patient_id).trim() : null,
-      patientName: String(pmeta?.full_name || pmeta?.name || "").trim() || "Patient",
+      patientName: patientRowDisplayName(pmeta) || "Patient",
       unreadFromPatient: unread,
       treatmentType: offer.treatment_type != null ? String(offer.treatment_type) : null,
       lastMessage: lastRow
@@ -48006,21 +48137,37 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
   }
 
   const patientMeta = new Map();
-  for (let i = 0; i < uuidList.length; i += 80) {
-    const chunk = uuidList.slice(i, i + 80);
-    let q = supabase.from("patients").select("id, name, full_name, patient_id").in("id", chunk);
-    if (clinicId) q = q.eq("clinic_id", clinicId);
-    const { data, error } = await q;
-    if (!error) {
+  const patientNameSelectAttempts = [
+    "id, name, full_name, first_name, last_name, patient_id, phone",
+    "id, name, full_name, patient_id, phone",
+    "id, name, full_name, patient_id",
+    "id, name, full_name",
+  ];
+  outerPatientNameSelect: for (const selectClause of patientNameSelectAttempts) {
+    for (let i = 0; i < uuidList.length; i += 80) {
+      const chunk = uuidList.slice(i, i + 80);
+      const { data, error } = await supabase.from("patients").select(selectClause).in("id", chunk);
+      if (error) {
+        const code = String(error.code || "");
+        if (["42703", "PGRST204"].includes(code)) continue outerPatientNameSelect;
+        break outerPatientNameSelect;
+      }
       for (const row of data || []) {
         const id = String(row?.id || "").trim().toLowerCase();
-        if (id)
-          patientMeta.set(id, {
-            name: String(row?.full_name || row?.name || "").trim() || null,
-            patient_id: row?.patient_id != null ? String(row.patient_id).trim() : null,
-          });
+        if (!id) continue;
+        const label = patientRowDisplayName(row);
+        patientMeta.set(id, {
+          name: label,
+          full_name: String(row?.full_name || "").trim() || null,
+          name_field: String(row?.name || "").trim() || null,
+          first_name: row?.first_name != null ? String(row.first_name).trim() : null,
+          last_name: row?.last_name != null ? String(row.last_name).trim() : null,
+          phone: row?.phone != null ? String(row.phone).trim() : null,
+          patient_id: row?.patient_id != null ? String(row.patient_id).trim() : null,
+        });
       }
     }
+    break;
   }
 
   const leadThreadByPatient = new Map();
@@ -48116,7 +48263,7 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       patientDbId: pid,
       patientPublicId: canonicalPatientPublicId(pid),
       patientLegacyId: meta.patient_id || null,
-      patientName: meta.name || "Hasta",
+      patientName: patientRowDisplayName(meta) || meta.name || "Hasta",
       unreadFromPatient: unread,
       lastMessage: preview,
       lastActivityAt: preview?.createdAt ?? null,
@@ -48805,6 +48952,59 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
     });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/doctor/patient/:patientId/messages/read — mark this patient's inbound rows read (per-thread badge)
+app.post("/api/doctor/patient/:patientId/messages/read", requireDoctorAuth, async (req, res) => {
+  try {
+    const patientId = String(req.params.patientId || "").trim();
+    if (!patientId) {
+      return res.status(400).json({ ok: false, error: "patient_id_required" });
+    }
+    const access = await resolveDoctorPatientMessagingAccess(patientId, req);
+    if (!access.ok) {
+      const payload = { ok: false, error: access.error };
+      if (access.message) payload.message = access.message;
+      return res.status(access.status || 403).json(payload);
+    }
+    const pid = String(access.patientId || "").trim();
+    if (!pid) return res.status(404).json({ ok: false, error: "patient_not_found" });
+
+    const mark = await markPatientInboundMessagesRead(pid);
+    const clinicId = String(req.doctor?.clinic_id || req.clinicId || "").trim();
+    if (Number(mark.updated ?? 0) > 0) bumpUnreadCountsCache(clinicId || null);
+
+    let totalUnread = 0;
+    try {
+      const visible = await getDoctorVisiblePatientIdSetCached(req);
+      const visibleDbUuids = await expandVisiblePatientKeysToDbUuids(visible);
+      const clinicCode = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "")
+        .trim()
+        .toUpperCase();
+      const rows = await fetchDoctorScopedUnreadInboundRows(clinicId, clinicCode, visibleDbUuids);
+      let offerUnread = 0;
+      const did = String(req.doctorId || "").trim();
+      const doctorKeys = await doctorKeysForUuidFkInQuery([did].filter(Boolean));
+      offerUnread = await getOfferNotificationsApi().countDoctorOfferUnreadTotal(
+        doctorKeys[0] || did,
+        clinicId,
+      );
+      totalUnread = rows.length + offerUnread;
+    } catch (_) {
+      /* non-fatal */
+    }
+    void persistDoctorChatUnreadMergedTally(String(req.doctor?.id || req.doctorId || "").trim(), totalUnread);
+
+    return res.json({
+      ok: true,
+      updated: Number(mark.updated ?? 0) || 0,
+      noop: !!mark.noop,
+      totalUnread,
+    });
+  } catch (e) {
+    console.error("[DOCTOR patient messages read]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
