@@ -430,6 +430,11 @@ const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const { pushLog, traceMiddleware, pushDeliveryV1, newPushTraceId } = require("./lib/pushLog.cjs");
 const pushMetrics = require("./lib/pushMetrics.cjs");
+const {
+  buildChatPushDedupeKey,
+  buildMessagePushDataPayload,
+  tryClaimChatPushDispatchV2,
+} = require("./lib/chatPushDispatch.cjs");
 const { emitAuthTelemetryV1 } = require("./lib/authTelemetry.cjs");
 const {
   patientOauthLimiter,
@@ -3217,7 +3222,7 @@ async function probeChatPushDispatchesDbAvailable() {
   chatPushDispatchesDbAvailableMemo = false;
   if (!isSupabaseEnabled() || typeof supabase?.from !== "function") return false;
   try {
-    const { error } = await supabase.from("chat_push_dispatches").select("message_row_id").limit(1);
+    const { error } = await supabase.from("chat_push_dispatches").select("dedupe_key").limit(1);
     if (!error) {
       chatPushDispatchesDbAvailableMemo = true;
     } else {
@@ -3233,53 +3238,59 @@ async function probeChatPushDispatchesDbAvailable() {
   return chatPushDispatchesDbAvailableMemo;
 }
 
-/** Same-process guard before DB unique (helps duplicate realtime + HTTP inserts). Set CHAT_PUSH_MEMORY_DEDUPE_MS=0 to disable. */
-const CHAT_PUSH_MEMORY_DEDUPE_MS = Math.max(
-  0,
-  parseInt(String(process.env.CHAT_PUSH_MEMORY_DEDUPE_MS || "120000"), 10) || 120000,
-);
-const _chatPushMemDedupe = new Map();
+function chatPushDispatchCtx() {
+  return {
+    supabase,
+    isSupabaseEnabled,
+    probeChatPushDispatchesDbAvailable,
+    pushLog,
+    pushMetrics,
+  };
+}
 
-async function tryClaimChatPushDispatch(stableMessageId) {
-  const id = String(stableMessageId || "").trim();
-  if (!id) return true;
-  const dbAvail = await probeChatPushDispatchesDbAvailable();
-  if (dbAvail && CHAT_PUSH_MEMORY_DEDUPE_MS > 0) {
-    const now = Date.now();
-    const prev = _chatPushMemDedupe.get(id);
-    if (prev != null && now - prev < CHAT_PUSH_MEMORY_DEDUPE_MS) {
-      pushLog.warn("chat_push.memory_dedupe", { stableMessageId: id.length > 96 ? `${id.slice(0, 96)}…` : id });
-      pushMetrics.recordChatDedupeMemory();
-      return false;
+/** @param {string|{ dedupeKey?: string, messageStableId?: string, messageRowId?: string, recipientKind?: string, recipientId?: string, notificationType?: string }} claim */
+async function tryClaimChatPushDispatch(claim) {
+  let normalized;
+  if (claim && typeof claim === "object") {
+    normalized = {
+      dedupeKey: String(claim.dedupeKey || "").trim(),
+      messageStableId: claim.messageStableId,
+      messageRowId: claim.messageRowId,
+      recipientKind: claim.recipientKind,
+      recipientId: claim.recipientId,
+      notificationType: claim.notificationType || "chat_message",
+    };
+    if (!normalized.dedupeKey && normalized.messageStableId) {
+      const mid = String(normalized.messageStableId).trim();
+      const rk = String(normalized.recipientKind || "").trim();
+      const rid = String(normalized.recipientId || "").trim();
+      if (rk && rid && mid) {
+        normalized.dedupeKey = buildChatPushDedupeKey({
+          recipientKind: rk,
+          recipientId: rid,
+          messageStableId: mid,
+          notificationType: normalized.notificationType,
+        });
+      } else {
+        normalized.dedupeKey = mid;
+      }
     }
+  } else {
+    const id = String(claim || "").trim();
+    normalized = {
+      dedupeKey: id,
+      messageStableId: id,
+      messageRowId: id,
+      notificationType: "chat_message",
+    };
   }
-  if (!dbAvail) return true;
-  try {
-    const { error } = await supabase.from("chat_push_dispatches").insert({
-      message_row_id: id,
-      kind: "chat",
-    });
-    if (!error) {
-      if (CHAT_PUSH_MEMORY_DEDUPE_MS > 0) _chatPushMemDedupe.set(id, Date.now());
-      return true;
-    }
-    const c = String(error.code || "");
-    const m = String(error.message || "").toLowerCase();
-    if (c === "23505" || m.includes("duplicate") || m.includes("unique")) {
-      pushMetrics.recordChatDedupeDbDuplicate();
-      return false;
-    }
-    pushLog.warn("chat_push.db_claim_failed", { stableMessageId: id.slice(0, 96), message: String(error?.message || error) });
-    return true;
-  } catch (e) {
-    const m = String(e?.message || e || "").toLowerCase();
-    if (m.includes("duplicate") || m.includes("unique")) {
-      pushMetrics.recordChatDedupeDbDuplicate();
-      return false;
-    }
-    pushLog.warn("chat_push.db_claim_throw", { stableMessageId: id.slice(0, 96), message: String(e?.message || e) });
-    return true;
-  }
+  return tryClaimChatPushDispatchV2(chatPushDispatchCtx(), normalized);
+}
+
+function insertedChatRowAlreadyRead(insertedRow) {
+  if (!insertedRow || typeof insertedRow !== "object") return false;
+  const ra = insertedRow.read_at ?? insertedRow.readAt ?? insertedRow.admin_read_at ?? null;
+  return ra != null && String(ra).trim() !== "";
 }
 
 /**
@@ -4564,7 +4575,7 @@ async function resolveLeadAssignedDoctorForPatientClinic(resolvedPatientId, clin
 }
 
 async function deliverClinicInboundPatientNotifications(meta) {
-  const { patientLookupId, previewRaw, clinicUuid, senderHint } = meta;
+  const { patientLookupId, previewRaw, clinicUuid, senderHint, messageStableId = null } = meta;
   const pv = truncateChatPreview(previewRaw || "Yeni mesaj");
   let resolvedDb = null;
   try {
@@ -4597,26 +4608,84 @@ async function deliverClinicInboundPatientNotifications(meta) {
       messageComposerId = aid;
     }
   }
+  let threadId = null;
+  let requestId = null;
+  let offerId = null;
+  if (resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
+    try {
+      const { data: thr } = await supabase
+        .from("patient_chat_threads")
+        .select("id")
+        .eq("patient_id", resolvedDb)
+        .eq("clinic_id", clinicUuid)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (thr?.id && UUID_RE.test(String(thr.id).trim())) threadId = String(thr.id).trim();
+    } catch (_) {}
+    try {
+      const { data: tr } = await supabase
+        .from("treatment_requests")
+        .select("id")
+        .eq("patient_id", resolvedDb)
+        .eq("clinic_id", clinicUuid)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (tr?.id) requestId = String(tr.id).trim();
+    } catch (_) {}
+    try {
+      offerId = await resolveLeadOfferIdForPatientClinicMessage(resolvedDb, clinicUuid, null);
+    } catch (_) {}
+  }
+
+  const pushData = buildMessagePushDataPayload({
+    type: "new_message",
+    messageId: messageStableId,
+    threadId,
+    conversationId: threadId,
+    requestId,
+    offerId,
+    patientId: resolvedDb,
+    clinicId: clinicUuid,
+    senderName: senderLabel,
+    senderRole: "clinic",
+    preview: pv,
+    route: "patient_chat",
+    enrolled: true,
+    leadThreadIsLead: false,
+  });
+
   try {
     void sendPushNotification(patientLookupId, title, pv, {
-      url: "/chat",
-      data: { type: "chat_message", senderName: senderLabel, preview: pv },
+      url: "/(patient)/messages",
+      data: pushData,
     });
   } catch (_) {}
   if (resolvedDb) {
+    const mid = String(messageStableId || "").trim();
+    if (mid) {
+      const dedupeKey = buildChatPushDedupeKey({
+        recipientKind: "patient",
+        recipientId: resolvedDb,
+        messageStableId: mid,
+        notificationType: "new_message",
+      });
+      const claimed = await tryClaimChatPushDispatch({
+        dedupeKey,
+        messageStableId: mid,
+        messageRowId: mid,
+        recipientKind: "patient",
+        recipientId: resolvedDb,
+        notificationType: "new_message",
+      });
+      if (!claimed) return;
+    }
     void sendExpoToEntity("patient", resolvedDb, {
       title,
       body: pv,
       badge,
-      data: {
-        type: "chat_message",
-        patientId: resolvedDb,
-        senderName: senderLabel,
-        preview: pv,
-        clinicId: clinicUuid || null,
-        messageComposerRole,
-        messageComposerId,
-      },
+      data: pushData,
     });
   }
 }
@@ -4634,12 +4703,12 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
   const pvCheck = truncateChatPreview(previewRaw || "");
   if (isAiPreviewPlaceholderText(pvCheck)) return;
   if (!pvCheck) return;
-  if (!skipDispatchClaim && !(await tryClaimChatPushDispatch(messageStableId))) return;
   await deliverClinicInboundPatientNotifications({
     patientLookupId,
     previewRaw,
     clinicUuid,
     senderHint,
+    messageStableId,
   });
 }
 
@@ -4738,17 +4807,57 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
           }
         : null;
 
-    const dataPayload = {
-      type: "chat_message",
-      ...(UUID_RE.test(threadId) ? { threadId } : {}),
+    const messageStableId =
+      composerOpts?.messageStableId != null ? String(composerOpts.messageStableId).trim() : "";
+    if (messageStableId) {
+      const dedupeKey = buildChatPushDedupeKey({
+        recipientKind: "doctor",
+        recipientId: did,
+        messageStableId,
+        notificationType: "new_message",
+      });
+      const claimed = await tryClaimChatPushDispatch({
+        dedupeKey,
+        messageStableId,
+        messageRowId: messageStableId,
+        recipientKind: "doctor",
+        recipientId: did,
+        notificationType: "new_message",
+      });
+      if (!claimed) return;
+    }
+
+    let requestId = null;
+    let offerId = null;
+    try {
+      const { data: tr } = await supabase
+        .from("treatment_requests")
+        .select("id")
+        .eq("patient_id", resolvedPatientId)
+        .eq("clinic_id", clinicUuid)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (tr?.id) requestId = String(tr.id).trim();
+      offerId = await resolveLeadOfferIdForPatientClinicMessage(resolvedPatientId, clinicUuid, null);
+    } catch (_) {}
+
+    const dataPayload = buildMessagePushDataPayload({
+      type: "new_message",
+      messageId: messageStableId,
+      threadId: UUID_RE.test(threadId) ? threadId : null,
+      conversationId: UUID_RE.test(threadId) ? threadId : null,
+      requestId,
+      offerId,
       patientId: resolvedPatientId,
       patientName,
       clinicId: clinicUuid,
       preview: pv,
-      messageComposerRole: role,
-      messageComposerId: role === "patient" ? resolvedPatientId : composerId || "",
-      ...(routingPathTrace ? { routingPath: routingPathTrace } : {}),
-    };
+      senderRole: role,
+      route: "patient_chat",
+      leadThreadIsLead: true,
+    });
+    if (routingPathTrace) dataPayload.routingPath = routingPathTrace;
     const sendP = sendExpoToEntity(
       "doctor",
       did,
@@ -4800,10 +4909,11 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
       if (!resolved) return;
       const clip = resolveHumanChatPushPreview(opts, insertedRow);
       if (!clip) return;
+      if (insertedChatRowAlreadyRead(insertedRow)) return;
       const stableId = extractStableMessageIdForChatPush(insertedRow, insertedTableHint);
-      if (!(await tryClaimChatPushDispatch(stableId))) return;
       const clinicUuid = await resolveClinicIdForChatPush(opts, insertedRow || {});
       const senderDoctorId = String(opts?.senderId || "").trim();
+      const suppressDoctorPushIfOfferMirror = opts?.suppressDoctorPushIfOfferMirror === true;
 
       let assignedDoctorId = null;
       if (clinicUuid && UUID_RE.test(String(clinicUuid)) && isSupabaseEnabled()) {
@@ -4838,9 +4948,10 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
             })
           );
         }
-        if (clinicUuid)
+        if (clinicUuid && !suppressDoctorPushIfOfferMirror)
           await notifyAssignedDoctorExpoInbound(resolved, clinicUuid, clip, {
             routingPath: "enqueue_patient_inbound",
+            messageStableId: stableId,
           });
         return;
       }
@@ -4875,7 +4986,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
       );
 
       await notifyPatientInboundChannels(pidSrc, clip, {
-        messageStableId: null,
+        messageStableId: stableId,
         clinicUuid,
         senderHint: null,
         skipDispatchClaim: true,
@@ -4888,6 +4999,7 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
           senderDoctorId: UUID_RE.test(senderDoctorId) ? senderDoctorId : null,
           senderStaffOrDoctorId: senderDoctorId || null,
           routingPath: "enqueue_clinic_or_admin_outbound",
+          messageStableId: stableId,
         });
       }
     } catch (e) {
@@ -24349,6 +24461,32 @@ async function postPatientMeMessagesHandler(req, res) {
 
     const ctxCode = body.clinicCode ?? body.clinic_code;
     const ctxId = body.clinicId ?? body.clinic_id;
+    const mirrorOfferHint = body.offer_id ?? body.offerId ?? null;
+    let preMirrorClinicId =
+      ctxId != null && String(ctxId).trim() ? String(ctxId).trim() : "";
+    if (!preMirrorClinicId || !UUID_RE.test(preMirrorClinicId)) {
+      const resolvedPidForClinic = await resolveMessagesPatientDbId(patientId);
+      if (resolvedPidForClinic) {
+        const operational = await resolveOperationalClinicId(resolvedPidForClinic, {
+          contextClinicId: ctxId,
+          contextClinicCode: ctxCode,
+          offerId: mirrorOfferHint,
+          logLabel: "postPatientMeMessages_preinsert",
+        });
+        if (operational?.clinicId) preMirrorClinicId = operational.clinicId;
+      }
+    }
+    let suppressDoctorPushIfOfferMirror = false;
+    try {
+      const mirrorOfferId = await resolveLeadOfferIdForPatientClinicMessage(
+        patientId,
+        preMirrorClinicId,
+        mirrorOfferHint,
+      );
+      suppressDoctorPushIfOfferMirror = !!mirrorOfferId;
+    } catch (_) {
+      suppressDoctorPushIfOfferMirror = false;
+    }
     const { data, error, insertedTable } = await insertMessageToSupabase({
       patientId,
       sender: "patient",
@@ -24359,6 +24497,7 @@ async function postPatientMeMessagesHandler(req, res) {
         ? { contextClinicCode: String(ctxCode).trim() }
         : {}),
       ...(ctxId != null && String(ctxId).trim() ? { contextClinicId: String(ctxId).trim() } : {}),
+      ...(suppressDoctorPushIfOfferMirror ? { suppressDoctorPushIfOfferMirror: true } : {}),
     });
     if (error) {
       const supabasePublic = supabaseErrorPublic(error);
@@ -24417,10 +24556,9 @@ async function postPatientMeMessagesHandler(req, res) {
       }
     }
 
-    const mirrorOfferHint = body.offer_id ?? body.offerId ?? null;
     let mirrorClinicId =
-      ctxId != null && String(ctxId).trim()
-        ? String(ctxId).trim()
+      preMirrorClinicId && UUID_RE.test(preMirrorClinicId)
+        ? preMirrorClinicId
         : data?.clinic_id != null
           ? String(data.clinic_id).trim()
           : "";
@@ -54844,6 +54982,8 @@ function getOfferNotificationsApi() {
       doctorKeysForUuidFkInQuery,
       isSupabaseEnabled,
       tryClaimChatPushDispatch,
+      buildChatPushDedupeKey,
+      buildMessagePushDataPayload,
       getDoctorChatUnreadForPushBadge,
       getPatientChatUnreadForPushBadge,
       treatmentRequestPatientIdFilters,
