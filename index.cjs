@@ -4949,7 +4949,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
     } catch (_) {}
     let badge = 0;
     try {
-      badge = await getOfferNotificationsApi().getDoctorCombinedUnreadForPushBadge(did, clinicUuid);
+      badge = await getDoctorChatUnreadForPushBadge(did);
     } catch (_) {}
 
     const bodySd = String(composerOpts?.senderDoctorId || "").trim();
@@ -5010,23 +5010,8 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
     });
     if (!claimed) return;
 
-    let requestId = null;
-    let offerId = null;
-    try {
-      const { data: tr } = await supabase
-        .from("treatment_requests")
-        .select("id")
-        .eq("patient_id", resolvedPatientId)
-        .eq("clinic_id", clinicUuid)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (tr?.id) requestId = String(tr.id).trim();
-      offerId = await resolveLeadOfferIdForPatientClinicMessage(resolvedPatientId, clinicUuid, null);
-    } catch (_) {}
-
     const deepLink = buildDoctorMessagePushDeepLink({
-      offerId,
+      offerId: null,
       patientId: resolvedPatientId,
       patientName,
     });
@@ -5035,15 +5020,15 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       messageId: messageStableId || dedupeStableId,
       threadId: UUID_RE.test(threadId) ? threadId : null,
       conversationId: UUID_RE.test(threadId) ? threadId : null,
-      requestId,
-      offerId,
+      requestId: null,
+      offerId: null,
       patientId: resolvedPatientId,
       patientName,
       clinicId: clinicUuid,
       preview: pv,
       senderRole: role,
-      route: offerId ? "offer_chat" : "patient_chat",
-      leadThreadIsLead: true,
+      route: "patient_chat",
+      leadThreadIsLead: false,
       url: deepLink,
     });
     if (routingPathTrace) dataPayload.routingPath = routingPathTrace;
@@ -5282,34 +5267,37 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
   }
 }
 
+/** Push, badge bump, socket emit — off HTTP critical path so POST /messages returns quickly. */
+async function runChatMessageSideEffectsAfterInsert(opts, insertedRow, insertedTableHint) {
+  if (!shouldEnqueueChatPushForInsertedMessage(opts, insertedRow)) {
+    if (isChatPushPipelineLogEnabled()) {
+      pushLog.info("chat_side_effects.skipped_non_conversation_message", {
+        type: normalizeMessageTypeForPush(
+          insertedRow?.type ?? opts?.type,
+          insertedRow?.attachments ?? opts?.attachments,
+          opts,
+        ),
+        suppressFlag: opts?.suppressChatSideEffects === true,
+      });
+    }
+    return;
+  }
+  try {
+    await bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTableHint);
+  } catch (e) {
+    console.warn("[MESSAGES unread bump before notify]", e?.message || e);
+  }
+  enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHint);
+  void emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableHint);
+}
+
 async function insertMessageToSupabase(opts) {
   const result = await _insertMessageToSupabaseCore(opts);
-  try {
-    if (!result?.error && result?.data) {
-      if (!isConversationalChatMessage(opts, result.data)) {
-        if (isChatPushPipelineLogEnabled()) {
-          pushLog.info("chat_side_effects.skipped_non_conversation_message", {
-            type: normalizeMessageTypeForPush(
-              result.data?.type ?? opts?.type,
-              result.data?.attachments ?? opts?.attachments,
-              opts,
-            ),
-            suppressFlag: opts?.suppressChatSideEffects === true,
-          });
-        }
-        return result;
-      }
-      // Unread counters must settle before push reads `chat_unread_from_*` for Expo `badge`;
-      // otherwise badge/unreadBadge stay 0 (race with increment RPC / column update).
-      try {
-        await bumpChatUnreadCountersAfterInsert(opts, result.data, result.insertedTable || "");
-      } catch (e) {
-        console.warn("[MESSAGES unread bump before notify]", e?.message || e);
-      }
-      enqueueChatMessagePushNotifications(opts, result.data, result.insertedTable || "");
-      void emitRealtimeChatMessageToThread(opts, result.data, result.insertedTable || "");
-    }
-  } catch (_) {}
+  if (!result?.error && result?.data && isConversationalChatMessage(opts, result.data)) {
+    void runChatMessageSideEffectsAfterInsert(opts, result.data, result.insertedTable || "").catch(
+      (e) => console.warn("[MESSAGES side effects]", e?.message || e),
+    );
+  }
   return result;
 }
 
@@ -44558,6 +44546,67 @@ async function resolvePatientIdFromMessageIdentifier(messageIdRaw) {
     .maybeSingle();
   if (!e2 && pm2?.patient_id) return String(pm2.patient_id);
 
+  if (UUID_RE.test(mid)) {
+    try {
+      const { data: om } = await supabase
+        .from("offer_messages")
+        .select("offer_id")
+        .eq("id", mid)
+        .maybeSingle();
+      const oid = om?.offer_id != null ? String(om.offer_id).trim() : "";
+      if (UUID_RE.test(oid)) {
+        const { data: off } = await supabase
+          .from("treatment_offers")
+          .select("request_id")
+          .eq("id", oid)
+          .maybeSingle();
+        const rid = off?.request_id != null ? String(off.request_id).trim() : "";
+        if (UUID_RE.test(rid)) {
+          const { data: tr } = await supabase
+            .from("treatment_requests")
+            .select("patient_id")
+            .eq("id", rid)
+            .maybeSingle();
+          if (tr?.patient_id) {
+            const resolved = await resolveMessagesPatientDbId(String(tr.patient_id));
+            if (resolved) return resolved;
+          }
+        }
+      }
+    } catch (_) {
+      /* offer_messages may be absent */
+    }
+  }
+
+  return null;
+}
+
+/** Skip full treatment-team scan when thread already assigns this doctor (socket join + reply). */
+async function doctorMessagingAccessFastPath(resolvedPatientId, req) {
+  const pid = String(resolvedPatientId || "").trim();
+  const clinicId = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+  const doctorUuid = String(req.doctor?.id || req.doctorId || "").trim();
+  if (!UUID_RE.test(pid) || !UUID_RE.test(clinicId) || !doctorUuid) return null;
+  try {
+    const { data } = await supabase
+      .from("patient_chat_threads")
+      .select("id, assigned_doctor_id")
+      .eq("patient_id", pid)
+      .eq("clinic_id", clinicId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const assigned = String(data?.assigned_doctor_id || "").trim();
+    if (assigned && (await compareDoctorIds(assigned, doctorUuid))) {
+      return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
+    }
+    const op = await resolveMessagingDoctorForPatientClinic(pid, clinicId);
+    if (op && (await compareDoctorIds(op, doctorUuid))) {
+      return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
+    }
+  } catch (_) {
+    return null;
+  }
   return null;
 }
 
@@ -48345,7 +48394,10 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: "message_not_found" });
     }
 
-    const access = await resolveDoctorPatientMessagingAccess(patientId, req, { forSend: true });
+    let access = await doctorMessagingAccessFastPath(patientId, req);
+    if (!access?.ok) {
+      access = await resolveDoctorPatientMessagingAccess(patientId, req, { forSend: true });
+    }
     if (!access.ok) {
       const payload = { ok: false, error: access.error };
       if (access.message) payload.message = access.message;
@@ -48354,10 +48406,20 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
 
     const msgType = String(req.body?.type || "text").trim() || "text";
     const doctorUuid = String(req.doctor?.id || "").trim();
+    const clinicIdForInsert = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+    const threadIdForInsert =
+      access.threadId && UUID_RE.test(String(access.threadId).trim())
+        ? String(access.threadId).trim()
+        : null;
 
     // Try the same simple path the admin endpoint uses — patient_messages table
-    // (doesn't require clinic_id on the patient row, which may not be populated yet)
-    const pmTry = await insertClinicMessageViaPatientMessages(patientId, text, msgType);
+    const pmTry = await insertClinicMessageViaPatientMessages(
+      patientId,
+      text,
+      msgType,
+      threadIdForInsert,
+      UUID_RE.test(clinicIdForInsert) ? clinicIdForInsert : null
+    );
     if (!pmTry.error && pmTry.data) {
       try {
         const ts = new Date().toISOString();
@@ -60317,7 +60379,7 @@ try {
         try {
           const { data } = await supabase
             .from("patient_chat_threads")
-            .select("id, patient_id")
+            .select("id, patient_id, assigned_doctor_id, clinic_id")
             .eq("id", threadIdJoined)
             .maybeSingle();
           threadRow = data;
@@ -60342,16 +60404,26 @@ try {
           const tokResolved = tokenPid ? await resolveMessagesPatientDbId(String(tokenPid)) : null;
           authorized = !!(tokResolved && tokResolved === threadPid);
         } else if (role === "DOCTOR") {
-          const fakeReq = {
-            doctorId: String(decoded.doctorId || decoded.id || ""),
-            clinicId: String(decoded.clinicId || "").trim(),
-            doctor: {
-              id: decoded.doctorId || decoded.id,
-              clinic_id: decoded.clinicId || null,
-            },
-          };
-          const access = await resolveDoctorPatientMessagingAccess(threadPid, fakeReq);
-          authorized = !!(access.ok && access.patientId === threadPid);
+          const doctorUuid = String(decoded.doctorId || decoded.id || "").trim();
+          const assigned = String(threadRow?.assigned_doctor_id || "").trim();
+          if (assigned && doctorUuid && (await compareDoctorIds(assigned, doctorUuid))) {
+            authorized = true;
+          } else {
+            const fakeReq = {
+              doctorId: doctorUuid,
+              clinicId: String(decoded.clinicId || threadRow?.clinic_id || "").trim(),
+              doctor: {
+                id: decoded.doctorId || decoded.id,
+                clinic_id: decoded.clinicId || threadRow?.clinic_id || null,
+              },
+            };
+            const fast = await doctorMessagingAccessFastPath(threadPid, fakeReq);
+            if (fast?.ok) authorized = true;
+            else {
+              const access = await resolveDoctorPatientMessagingAccess(threadPid, fakeReq);
+              authorized = !!(access.ok && access.patientId === threadPid);
+            }
+          }
         }
 
         if (!authorized) {
