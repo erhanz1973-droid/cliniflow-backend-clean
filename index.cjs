@@ -907,17 +907,34 @@ async function mapAndHydratePatientMessagesRows(pmRows) {
   const idSet = [...new Set(need.map((n) => n.oid))];
   const textById = new Map();
   const chunkSize = 40;
+  const offerHydrateSelectAttempts = [
+    "id, text, attachment_url",
+    "id, text",
+    "id",
+  ];
   for (let i = 0; i < idSet.length; i += chunkSize) {
     const chunk = idSet.slice(i, i + chunkSize);
-    const { data, error } = await supabase
-      .from("offer_messages")
-      .select("id, text, message_text, attachment_url")
-      .in("id", chunk);
-    if (error) {
-      console.warn("[MESSAGES] offer_messages hydrate:", error.message);
-      break;
+    let rows = null;
+    for (let s = 0; s < offerHydrateSelectAttempts.length; s++) {
+      const { data, error } = await supabase
+        .from("offer_messages")
+        .select(offerHydrateSelectAttempts[s])
+        .in("id", chunk);
+      if (!error) {
+        rows = data;
+        break;
+      }
+      const errMsg = String(error.message || "").toLowerCase();
+      const missingCol =
+        ["42703", "PGRST204", "PGRST205"].includes(String(error.code || "")) ||
+        errMsg.includes("does not exist") ||
+        errMsg.includes("column");
+      if (!missingCol) {
+        console.warn("[MESSAGES] offer_messages hydrate:", error.message);
+        break;
+      }
     }
-    for (const row of data || []) {
+    for (const row of rows || []) {
       const id = String(row.id || "").trim();
       const txt = extractOfferMessageTextFromRow(row);
       if (id && txt) textById.set(id, txt);
