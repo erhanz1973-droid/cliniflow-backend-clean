@@ -957,6 +957,34 @@ function extractOfferMessageTextFromRow(row) {
   return text;
 }
 
+/** DB may store ms, sec, ISO string, or null — always return finite epoch ms for mobile. */
+function normalizeMessageCreatedAtMs(createdRaw) {
+  if (createdRaw == null) return now();
+  if (typeof createdRaw === "number" && Number.isFinite(createdRaw)) {
+    const n = createdRaw;
+    if (n > 1e15) return Math.floor(n / 1000);
+    if (n > 0 && n < 1e11) return Math.floor(n * 1000);
+    return n;
+  }
+  if (createdRaw instanceof Date) {
+    const t = createdRaw.getTime();
+    return Number.isFinite(t) ? t : now();
+  }
+  if (typeof createdRaw === "string") {
+    const s = createdRaw.trim();
+    if (!s) return now();
+    const asNum = Number(s);
+    if (Number.isFinite(asNum) && /^\d+(\.\d+)?$/.test(s)) {
+      if (asNum > 1e15) return Math.floor(asNum / 1000);
+      if (asNum > 0 && asNum < 1e11) return Math.floor(asNum * 1000);
+      return asNum;
+    }
+    const parsed = Date.parse(s);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return now();
+}
+
 function mapDbMessageToLegacyMessage(row) {
   if (!row) return null;
   const senderRaw =
@@ -996,15 +1024,7 @@ function mapDbMessageToLegacyMessage(row) {
         }
       : rawAttachment;
   const type = deriveMessageType(row.type, attachment);
-  const createdRaw = row.created_at ?? row.createdAt;
-  let createdAt = now();
-  if (typeof createdRaw === "number") createdAt = createdRaw;
-  else if (typeof createdRaw === "string") {
-    const parsed = Date.parse(createdRaw);
-    if (!Number.isNaN(parsed)) createdAt = parsed;
-  } else if (createdRaw instanceof Date) {
-    createdAt = createdRaw.getTime();
-  }
+  const createdAt = normalizeMessageCreatedAtMs(row.created_at ?? row.createdAt);
   const readRaw =
     row.read_at ??
     row.readAt ??
@@ -1050,23 +1070,11 @@ function mapPatientMessagesRowToLegacy(row) {
       size: attachment.size != null ? attachment.size : 0,
     };
   }
-  const createdRaw = row.created_at ?? row.createdAt;
-  let createdAt = now();
-  if (typeof createdRaw === "number") createdAt = createdRaw;
-  else if (typeof createdRaw === "string") {
-    const parsed = Date.parse(createdRaw);
-    if (!Number.isNaN(parsed)) createdAt = parsed;
-  } else if (createdRaw instanceof Date) {
-    createdAt = createdRaw.getTime();
-  }
+  const createdAt = normalizeMessageCreatedAtMs(row.created_at ?? row.createdAt);
   let readAt = null;
   const readRaw = row.read_at ?? row.readAt ?? null;
   if (readRaw != null) {
-    if (typeof readRaw === "number") readAt = readRaw;
-    else if (typeof readRaw === "string") {
-      const p = Date.parse(readRaw);
-      if (!Number.isNaN(p)) readAt = p;
-    } else if (readRaw instanceof Date) readAt = readRaw.getTime();
+    readAt = normalizeMessageCreatedAtMs(readRaw);
   }
   let bodyText = extractMessageTextFromDbRow(row);
   const actorKind = String(row.actor_kind || row.message_source || "").toLowerCase();
@@ -1494,21 +1502,18 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
 
   let thr = null;
   try {
-    const { data, error } = await supabase
-      .from("patient_chat_threads")
-      .select("id, assigned_doctor_id, assigned_at, is_lead")
-      .eq("patient_id", patientResolvedId)
-      .eq("clinic_id", clinicId)
-      .maybeSingle();
-    if (!error && data?.id) thr = data;
-    else if (error && !isPatientChatThreadsTableUnavailable(error))
-      console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient thread:", error?.message || error);
+    thr = await loadPrimaryPatientChatThreadRow(patientResolvedId, clinicId);
   } catch (e) {
     if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient:", e?.message || e);
   }
 
   const threadDoctorIdRaw = thr?.assigned_doctor_id != null ? String(thr.assigned_doctor_id).trim() : "";
-  const threadDoctorId = threadDoctorIdRaw && UUID_RE.test(threadDoctorIdRaw) ? threadDoctorIdRaw : "";
+  let threadDoctorId = threadDoctorIdRaw && UUID_RE.test(threadDoctorIdRaw) ? threadDoctorIdRaw : "";
+  if (!threadDoctorId && threadDoctorIdRaw) {
+    const keys = await doctorKeysForUuidFkInQuery([threadDoctorIdRaw]);
+    const uuidKey = keys.find((k) => DOCTOR_FK_UUID_RE.test(String(k)));
+    if (uuidKey) threadDoctorId = String(uuidKey).trim();
+  }
 
   const threadDisp = threadDoctorId ? await hydrateDoctorDisplay(threadDoctorId) : null;
   const primDisp =
@@ -4713,22 +4718,66 @@ async function resolveClinicOutboundSenderLabel(resolvedPatientId, clinicUuid) {
   }
 }
 
+/** Prefer graduated thread (is_lead false) over stale lead row — same rule as inbox thread-summary. */
+function pickBetterPatientChatThreadRow(prev, next) {
+  if (!prev) return next;
+  if (!next) return prev;
+  const pLead = prev.is_lead === true;
+  const nLead = next.is_lead === true;
+  if (pLead && !nLead) return next;
+  if (!pLead && nLead) return prev;
+  const tsMs = (row) => {
+    const u = row?.updated_at != null ? Date.parse(String(row.updated_at)) : NaN;
+    return Number.isFinite(u) ? u : 0;
+  };
+  return tsMs(next) >= tsMs(prev) ? next : prev;
+}
+
+async function loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicUuid) {
+  const pid = String(resolvedPatientId || "").trim();
+  const cid = String(clinicUuid || "").trim();
+  if (!UUID_RE.test(pid) || !UUID_RE.test(cid) || !isSupabaseEnabled()) return null;
+  try {
+    const { data, error } = await supabase
+      .from("patient_chat_threads")
+      .select(
+        "id, is_lead, assigned_doctor_id, status, clinic_id, lifecycle_status, archived_at, updated_at, assigned_at",
+      )
+      .eq("patient_id", pid)
+      .eq("clinic_id", cid)
+      .order("updated_at", { ascending: false })
+      .limit(16);
+    if (error || !Array.isArray(data) || !data.length) return null;
+    let best = data[0];
+    for (let i = 1; i < data.length; i++) {
+      best = pickBetterPatientChatThreadRow(best, data[i]);
+    }
+    return best;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function doctorAssignedOnThreadMatchesReq(threadRow, req) {
+  const assigned = String(threadRow?.assigned_doctor_id || "").trim();
+  if (!assigned) return false;
+  const matchKeys = await getDoctorMatchKeysForReq(req);
+  const doctorUuid = String(req.doctor?.id || req.doctorId || "").trim();
+  if (assignedDoctorMatchesKeys(assigned, matchKeys) || doctorIdsMatchFast(assigned, doctorUuid)) {
+    return true;
+  }
+  return compareDoctorIds(assigned, doctorUuid);
+}
+
 /** Lead thread assigned doctor — used for push payload composer id (foreground self-send skip). */
 async function resolveLeadAssignedDoctorForPatientClinic(resolvedPatientId, clinicUuid) {
   const pid = String(resolvedPatientId || "").trim();
   const cid = String(clinicUuid || "").trim();
   if (!UUID_RE.test(pid) || !UUID_RE.test(cid) || !isSupabaseEnabled()) return null;
   try {
-    const { data } = await supabase
-      .from("patient_chat_threads")
-      .select("assigned_doctor_id")
-      .eq("patient_id", pid)
-      .eq("clinic_id", cid)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const aid = String(data?.assigned_doctor_id || "").trim();
-    return UUID_RE.test(aid) ? aid : null;
+    const row = await loadPrimaryPatientChatThreadRow(pid, cid);
+    const aid = String(row?.assigned_doctor_id || "").trim();
+    return aid || null;
   } catch (_) {
     return null;
   }
@@ -44651,24 +44700,11 @@ async function doctorMessagingAccessFastPath(resolvedPatientId, req) {
   const doctorUuid = String(req.doctor?.id || req.doctorId || "").trim();
   if (!UUID_RE.test(pid) || !UUID_RE.test(clinicId) || !doctorUuid) return null;
   try {
-    const matchKeys = await getDoctorMatchKeysForReq(req);
-    const { data } = await supabase
-      .from("patient_chat_threads")
-      .select("id, assigned_doctor_id")
-      .eq("patient_id", pid)
-      .eq("clinic_id", clinicId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const assigned = String(data?.assigned_doctor_id || "").trim();
-    if (
-      assigned &&
-      (assignedDoctorMatchesKeys(assigned, matchKeys) ||
-        doctorIdsMatchFast(assigned, doctorUuid) ||
-        (await compareDoctorIds(assigned, doctorUuid)))
-    ) {
+    const data = await loadPrimaryPatientChatThreadRow(pid, clinicId);
+    if (data && (await doctorAssignedOnThreadMatchesReq(data, req))) {
       return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
     }
+    const matchKeys = await getDoctorMatchKeysForReq(req);
     const op = await resolveMessagingDoctorForPatientClinic(pid, clinicId);
     if (
       op &&
@@ -44750,15 +44786,22 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
 
   let thread = null;
   try {
-    let q = supabase
-      .from("patient_chat_threads")
-      .select("id, is_lead, assigned_doctor_id, status, clinic_id, lifecycle_status, archived_at")
-      .eq("patient_id", resolvedPatientId);
     if (clinicId && UUID_RE.test(clinicId)) {
-      q = q.eq("clinic_id", clinicId);
+      thread = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicId);
     }
-    const { data, error } = await q.order("updated_at", { ascending: false }).limit(1).maybeSingle();
-    if (!error && data) thread = data;
+    if (!thread) {
+      let q = supabase
+        .from("patient_chat_threads")
+        .select("id, is_lead, assigned_doctor_id, status, clinic_id, lifecycle_status, archived_at")
+        .eq("patient_id", resolvedPatientId);
+      const { data, error } = await q.order("updated_at", { ascending: false }).limit(8);
+      if (!error && Array.isArray(data) && data.length) {
+        thread = data[0];
+        for (let i = 1; i < data.length; i++) {
+          thread = pickBetterPatientChatThreadRow(thread, data[i]);
+        }
+      }
+    }
   } catch (_) {
     thread = null;
   }
@@ -44784,9 +44827,12 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
   }
 
   if (thread?.assigned_doctor_id) {
-    const match = await compareDoctorIds(thread.assigned_doctor_id, req.doctorId);
-    if (match) {
-      return { ok: true, patientId: resolvedPatientId };
+    if (await doctorAssignedOnThreadMatchesReq(thread, req)) {
+      return {
+        ok: true,
+        patientId: resolvedPatientId,
+        threadId: thread?.id ? String(thread.id) : null,
+      };
     }
   } else if (thread?.is_lead) {
     // Lead thread exists but unassigned — treatment-team lane below
