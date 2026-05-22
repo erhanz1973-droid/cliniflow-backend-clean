@@ -17345,29 +17345,65 @@ app.post("/api/admin/approve", requireAdminAuth, async (req, res) => {
     // DB constraint patients_status_check allows PENDING, ACTIVE, INACTIVE, SUSPENDED — not APPROVED
     const patch = {
       status: "ACTIVE",
+      is_lead: false,
+      archived_at: null,
+      archive_reason: null,
       updated_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase
-      .from("patients")
-      .update(patch)
-      .eq("id", resolvedId)
-      .eq("clinic_id", req.clinicId);
-
-    if (error) {
+    const upApprove = await updatePatientRowWithColumnPruning(resolvedId, patch);
+    if (!upApprove.ok) {
+      const error = upApprove.error;
       console.error("[ADMIN APPROVE] Supabase update error:", {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
+        message: error?.message,
+        code: error?.code,
+        details: error?.details,
+        hint: error?.hint,
       });
       return res.status(500).json({
         ok: false,
         error: "approve_failed",
-        message: error.message || "Güncelleme başarısız",
-        code: error.code || null,
+        message: error?.message || "Güncelleme başarısız",
+        code: error?.code || null,
       });
     }
+
+    void markLeadConvertedToClinicPatient(resolvedId, req.clinicId).catch((e) =>
+      console.warn("[ADMIN APPROVE] lead convert flags:", e?.message || e),
+    );
+
+    try {
+      await reactivatePatientChatThreadOnClinicJoin(resolvedId, req.clinicId);
+    } catch (thEx) {
+      if (!isPatientChatThreadsTableUnavailable(thEx)) {
+        console.warn("[ADMIN APPROVE] thread reactivate:", thEx?.message || thEx);
+      }
+    }
+
+    let assignedDoctorId = null;
+    let assignPath = null;
+    try {
+      const assignResult = await assignDoctorOnPatientClinicJoin(resolvedId, req.clinicId);
+      if (assignResult.ok) {
+        assignedDoctorId = assignResult.doctorId ? String(assignResult.doctorId) : null;
+        assignPath = assignResult.path || null;
+        console.log("[ADMIN APPROVE] doctor assigned", {
+          patient_id: String(resolvedId).slice(0, 8),
+          clinic_id: String(req.clinicId).slice(0, 8),
+          path: assignPath,
+          doctor_id: assignedDoctorId ? assignedDoctorId.slice(0, 8) : null,
+        });
+      } else {
+        console.warn("[ADMIN APPROVE] doctor assign skipped", {
+          patient_id: String(resolvedId).slice(0, 8),
+          reason: assignResult.reason || assignResult.path,
+        });
+      }
+    } catch (assignEx) {
+      console.warn("[ADMIN APPROVE] doctor assign:", assignEx?.message || assignEx);
+    }
+
+    bumpUnreadCountsCache(req.clinicId);
 
     return res.json({
       ok: true,
@@ -17375,10 +17411,54 @@ app.post("/api/admin/approve", requireAdminAuth, async (req, res) => {
       id: resolvedId,
       status: "ACTIVE",
       approved: true,
+      assignedDoctorId,
+      doctorAssignPath: assignPath,
     });
   } catch (e) {
     console.error("[ADMIN APPROVE] exception:", e);
     return res.status(500).json({ ok: false, error: "internal_error", message: e?.message || String(e) });
+  }
+});
+
+/** Re-apply lead inbox routing doctor (e.g. Burhan) to an enrolled member — fixes missed assign on older approves. */
+app.post("/api/admin/patient/:patientId/sync-lead-routing-doctor", requireAdminAuth, async (req, res) => {
+  try {
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_required" });
+    }
+    const clinicId = String(req.clinicId || "").trim();
+    if (!UUID_RE.test(clinicId)) {
+      return res.status(403).json({ ok: false, error: "clinic_not_authenticated" });
+    }
+    const resolvedId = await resolveAdminPatientInternalId(req.params.patientId, clinicId);
+    if (!resolvedId) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+    try {
+      await reactivatePatientChatThreadOnClinicJoin(resolvedId, clinicId);
+    } catch (thEx) {
+      if (!isPatientChatThreadsTableUnavailable(thEx)) {
+        console.warn("[ADMIN sync-lead-routing-doctor] reactivate:", thEx?.message || thEx);
+      }
+    }
+    const assignResult = await assignDoctorOnPatientClinicJoin(resolvedId, clinicId);
+    bumpUnreadCountsCache(clinicId);
+    if (!assignResult.ok) {
+      return res.status(409).json({
+        ok: false,
+        error: assignResult.reason || "assign_failed",
+        path: assignResult.path || null,
+      });
+    }
+    return res.json({
+      ok: true,
+      patientId: resolvedId,
+      assignedDoctorId: assignResult.doctorId || null,
+      path: assignResult.path || null,
+    });
+  } catch (e) {
+    console.error("[ADMIN sync-lead-routing-doctor]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 
