@@ -463,6 +463,7 @@ const {
   ensureCoordinationOfferForRequest,
   resolveCoordinationOfferIdForPatientClinic,
   clinicHasMessagingDoctor,
+  batchClinicHasMessagingDoctor,
   CLINIC_DOCTOR_NOT_ASSIGNED,
 } = require("./lib/patientCoordinationChat");
 const {
@@ -47413,16 +47414,46 @@ async function fetchRecentPatientMessagesRowsForChunk(patientChunk, limitRows) {
   return [];
 }
 
-/** Latest offer_messages row per offer_id — scan chunk and keep max created_at per offer (not first row in global desc limit). */
+const OFFER_MSG_LATEST_SELECT = "id, offer_id, text, message_text, created_at, sender_role, sender_name";
+
+/** Latest offer_messages row per offer_id. Small lists use indexed limit-1 per offer; large lists use chunked scan. */
 async function fetchLatestOfferMessageByOfferIds(offerIds) {
   const map = new Map();
   const ids = [...new Set((offerIds || []).map((x) => String(x || "").trim()).filter((id) => UUID_RE.test(id)))];
+  if (!ids.length || !isSupabaseEnabled()) return map;
+
+  if (ids.length <= 56) {
+    const concurrency = 16;
+    for (let i = 0; i < ids.length; i += concurrency) {
+      const part = ids.slice(i, i + concurrency);
+      await Promise.all(
+        part.map(async (oid) => {
+          const { data, error } = await supabase
+            .from("offer_messages")
+            .select(OFFER_MSG_LATEST_SELECT)
+            .eq("offer_id", oid)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (error) {
+            if (!isOfferMessagesTableUnavailableError(error)) {
+              console.warn("[fetchLatestOfferMessageByOfferIds]", error.message);
+            }
+            return;
+          }
+          if (data?.offer_id) map.set(oid, data);
+        }),
+      );
+    }
+    return map;
+  }
+
   for (let i = 0; i < ids.length; i += 72) {
     const part = ids.slice(i, i + 72);
-    const rowLimit = Math.min(4000, Math.max(120, part.length * 24));
+    const rowLimit = Math.min(2400, Math.max(120, part.length * 16));
     const { data, error } = await supabase
       .from("offer_messages")
-      .select("id, offer_id, text, message_text, created_at, sender_role, sender_name")
+      .select(OFFER_MSG_LATEST_SELECT)
       .in("offer_id", part)
       .order("created_at", { ascending: false })
       .limit(rowLimit);
@@ -51347,7 +51378,7 @@ app.get('/api/doctor/encounters', requireDoctorAuth, async (req, res) => {
     }
 
     try {
-      const visible = await buildVisiblePatientIdSetForDoctor(req);
+      const visible = await getDoctorVisiblePatientIdSetCached(req);
       const patientKeys = [...visible].map((x) => String(x || "").trim()).filter(Boolean);
       for (let i = 0; i < patientKeys.length; i += 50) {
         const chunk = cleanUuids(patientKeys.slice(i, i + 50));
@@ -51913,30 +51944,11 @@ async function doctorHasTreatmentTeamAccessToEncounter(encounterId, req) {
 }
 
 /**
- * GET /api/doctor/patients ile aynı görünür hasta kimlikleri (tedavi ekibi + primary/assigned + işlem ataması + expand).
+ * GET /api/doctor/patients / getDoctorVisiblePatientIdSet ile aynı görünürlük kuralları.
+ * (Lead thread ataması + klinik lead inbox — aksi halde liste 200, diagnoses/treatments 403.)
  */
 async function buildVisiblePatientIdSetForDoctor(req) {
-  const doctorKeysRaw = [...new Set([
-    String(req?.doctor?.id || "").trim(),
-    String(req.doctorId || "").trim(),
-    String(req?.doctor?.doctor_id || "").trim(),
-  ].filter(Boolean))];
-  const out = new Set();
-  if (!doctorKeysRaw.length) return out;
-  const clinicId = req?.doctor?.clinic_id || req?.clinicId || null;
-  const clinicCodeVis = String(req?.doctor?.clinic_code || req?.doctor?.clinicCode || "").trim();
-  const [team, fromAssign, fromProcess, fromCal] = await Promise.all([
-    collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
-    collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
-    collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
-    collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCodeVis),
-  ]);
-  for (const x of team) out.add(x);
-  for (const x of fromAssign) out.add(x);
-  for (const x of fromProcess) out.add(x);
-  for (const x of fromCal) out.add(x);
-  await expandPatientIdSetForDoctorMatching(out);
-  return out;
+  return getDoctorVisiblePatientIdSet(req);
 }
 
 function patientRowAssignsDoctor(pat, doctorKeysRaw) {
@@ -51968,17 +51980,18 @@ async function doctorHasTreatmentTeamAccessToPatientId(encounterPatientIdRaw, re
     const raw = String(encounterPatientIdRaw || "").trim();
     if (!raw) return false;
 
+    const visible = await getDoctorVisiblePatientIdSetCached(req);
+    if (visible.has(raw)) return true;
+
     const pat = await resolvePatientRowForEncounterPatientId(raw);
     if (!pat?.id) return false;
 
     if (patientRowAssignsDoctor(pat, doctorKeysRaw)) return true;
 
-    const visible = await buildVisiblePatientIdSetForDoctor(req);
-    const inTeam =
-      visible.has(raw) ||
+    return (
       visible.has(String(pat.id).trim()) ||
-      (pat.patient_id != null && visible.has(String(pat.patient_id).trim()));
-    return inTeam;
+      (pat.patient_id != null && visible.has(String(pat.patient_id).trim()))
+    );
   } catch (e) {
     console.warn("[doctorHasTreatmentTeamAccessToPatientId]", e?.message || e);
     return false;
@@ -54412,71 +54425,69 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
       return res.json({ ok: true, requests: [] });
     }
 
-    let memberClinicId = null;
-    let memberIsLead = true;
-    if (resolvedUuid) {
-      try {
-        const { data: memRow } = await supabase
-          .from("patients")
-          .select("clinic_id, is_lead")
-          .eq("id", resolvedUuid)
-          .maybeSingle();
-        memberClinicId = memRow?.clinic_id != null ? String(memRow.clinic_id).trim() : null;
-        memberIsLead = memRow?.is_lead !== false;
-      } catch (_) {
-        /* non-fatal */
-      }
-    }
-
     const requestIds = requests.map((r) => r.id);
     const reqClinicIds = [...new Set(requests.map((r) => r.clinic_id).filter(Boolean))];
 
-    const { data: offers, error: offErr } = await supabase
-      .from('treatment_offers')
-      .select('*')
-      .in('request_id', requestIds)
-      .order('created_at', { ascending: true });
+    const memberQ = resolvedUuid
+      ? supabase.from("patients").select("clinic_id, is_lead").eq("id", resolvedUuid).maybeSingle()
+      : Promise.resolve({ data: null, error: null });
+    const offersQ = supabase
+      .from("treatment_offers")
+      .select("*")
+      .in("request_id", requestIds)
+      .order("created_at", { ascending: true });
 
-    if (offErr) console.warn('[TREATMENT-REQUESTS OFFERS]', offErr.message);
+    const [memResult, offersResult] = await Promise.all([memberQ, offersQ]);
+    let memberClinicId = null;
+    let memberIsLead = true;
+    try {
+      const memRow = memResult?.data;
+      memberClinicId = memRow?.clinic_id != null ? String(memRow.clinic_id).trim() : null;
+      memberIsLead = memRow?.is_lead !== false;
+    } catch (_) {
+      /* non-fatal */
+    }
+
+    const offers = offersResult?.data;
+    const offErr = offersResult?.error;
+    if (offErr) console.warn("[TREATMENT-REQUESTS OFFERS]", offErr.message);
 
     const offerDoctorIds = [...new Set((offers || []).map((o) => o.doctor_id).filter(Boolean))];
     const offerClinicIds = [...new Set((offers || []).map((o) => o.clinic_id).filter(Boolean))];
-    const doctorNameById = {};
-    if (offerDoctorIds.length > 0) {
-      const { data: docRows } = await supabase
-        .from('doctors')
-        .select('id, full_name, name')
-        .in('id', offerDoctorIds);
-      for (const d of docRows || []) {
-        if (d?.id) {
-          doctorNameById[String(d.id)] = String(d.full_name || d.name || '').trim() || null;
-        }
-      }
-    }
-    const clinicNameById = {};
-    const clinicCodeById = {};
-    const allClinicIds = [...new Set([...reqClinicIds, ...offerClinicIds].map((x) => String(x || '').trim()).filter(Boolean))];
-    if (allClinicIds.length > 0) {
-      const { data: clinicRows } = await supabase
-        .from('clinics')
-        .select('id, name, clinic_code')
-        .in('id', allClinicIds);
-      for (const c of clinicRows || []) {
-        if (!c?.id) continue;
-        const id = String(c.id);
-        clinicNameById[id] = c.name || null;
-        clinicCodeById[id] =
-          c.clinic_code != null && String(c.clinic_code).trim()
-            ? String(c.clinic_code).trim().toUpperCase()
-            : null;
-      }
-    }
-
+    const allClinicIds = [...new Set([...reqClinicIds, ...offerClinicIds].map((x) => String(x || "").trim()).filter(Boolean))];
     const allOfferIds = (offers || [])
       .map((o) => String(o.id || "").trim())
       .filter((id) => UUID_RE.test(id));
-    const latestMsgByOffer = await fetchLatestOfferMessageByOfferIds(allOfferIds);
-    const unreadDoctorByOffer = await countUnreadDoctorMessagesByOfferIds(allOfferIds);
+
+    const doctorNameById = {};
+    const clinicNameById = {};
+    const clinicCodeById = {};
+    const [docRowsResult, clinicRowsResult, latestMsgByOffer, unreadDoctorByOffer, clinicDoctorReady] =
+      await Promise.all([
+        offerDoctorIds.length > 0
+          ? supabase.from("doctors").select("id, full_name, name").in("id", offerDoctorIds)
+          : Promise.resolve({ data: [], error: null }),
+        allClinicIds.length > 0
+          ? supabase.from("clinics").select("id, name, clinic_code").in("id", allClinicIds)
+          : Promise.resolve({ data: [], error: null }),
+        fetchLatestOfferMessageByOfferIds(allOfferIds),
+        countUnreadDoctorMessagesByOfferIds(allOfferIds),
+        batchClinicHasMessagingDoctor(reqClinicIds),
+      ]);
+    for (const d of docRowsResult?.data || []) {
+      if (d?.id) {
+        doctorNameById[String(d.id)] = String(d.full_name || d.name || "").trim() || null;
+      }
+    }
+    for (const c of clinicRowsResult?.data || []) {
+      if (!c?.id) continue;
+      const id = String(c.id);
+      clinicNameById[id] = c.name || null;
+      clinicCodeById[id] =
+        c.clinic_code != null && String(c.clinic_code).trim()
+          ? String(c.clinic_code).trim().toUpperCase()
+          : null;
+    }
 
     const offersByRequest = {};
     const coordinationOfferByRequest = {};
@@ -54516,13 +54527,6 @@ app.get('/api/patient/treatment-requests', requireToken, async (req, res) => {
         last_message_role: latestRow?.sender_role || null,
         unread_count: oid ? unreadDoctorByOffer[oid] || 0 : 0,
       });
-    }
-
-    const clinicDoctorReady = {};
-    for (const cid of reqClinicIds) {
-      const id = String(cid || "").trim();
-      if (!UUID_RE.test(id)) continue;
-      clinicDoctorReady[id] = await clinicHasMessagingDoctor(id);
     }
 
     const result = requests.map((r) => {
