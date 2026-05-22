@@ -44565,19 +44565,56 @@ async function resolveDoctorCodeKeysToUuids(others) {
       if (id && DOCTOR_FK_UUID_RE.test(id)) out.push(id);
     }
   }
+  for (const k of arr) {
+    if (DOCTOR_FK_UUID_RE.test(k)) continue;
+    try {
+      const { data: one } = await supabase
+        .from("doctors")
+        .select("id")
+        .eq("doctor_id", k)
+        .maybeSingle();
+      const id = String(one?.id || "").trim();
+      if (id && DOCTOR_FK_UUID_RE.test(id)) out.push(id);
+    } catch (_) {
+      /* non-fatal */
+    }
+  }
   return [...new Set(out)];
 }
 
-/** Use for .in() / .eq() on uuid FK doctor columns — never pass d_… without resolving first. */
+/** Use for .in() / .eq() on uuid FK doctor columns — never pass SZ45 / d_… codes into uuid columns. */
 async function doctorKeysForUuidFkInQuery(doctorKeysRaw) {
   const arr = [...new Set((doctorKeysRaw || []).map((k) => String(k || "").trim()).filter(Boolean))];
   if (!arr.length) return [];
-  const cacheKey = arr.map((k) => k.toLowerCase()).sort().join("|");
+  const cacheKey = `uuid:${arr.map((k) => k.toLowerCase()).sort().join("|")}`;
   const hit = doctorFkKeysCache.get(cacheKey);
   if (hit && hit.expires > Date.now()) return hit.keys;
   const { uuids, others } = splitDoctorKeysUuidAndOther(arr);
   const resolved = await resolveDoctorCodeKeysToUuids(others);
-  const keys = [...new Set([...uuids, ...resolved, ...arr])];
+  const keys = doctorKeysForUuidFkColumns([...uuids, ...resolved]);
+  doctorFkKeysCache.set(cacheKey, { keys, expires: Date.now() + DOCTOR_FK_KEYS_CACHE_TTL_MS });
+  return keys;
+}
+
+/** Codes + UUID variants — compare `assigned_doctor_id` (may store doctors.id or doctors.doctor_id). */
+async function doctorIdentityMatchKeys(doctorKeysRaw) {
+  const arr = [...new Set((doctorKeysRaw || []).map((k) => String(k || "").trim()).filter(Boolean))];
+  if (!arr.length) return [];
+  const cacheKey = `id:${arr.map((k) => k.toLowerCase()).sort().join("|")}`;
+  const hit = doctorFkKeysCache.get(cacheKey);
+  if (hit && hit.expires > Date.now()) return hit.keys;
+  const uuidKeys = await doctorKeysForUuidFkInQuery(arr);
+  const out = new Set();
+  for (const k of arr) {
+    out.add(k);
+    out.add(k.toLowerCase());
+    out.add(k.toUpperCase());
+  }
+  for (const u of uuidKeys) {
+    out.add(u);
+    out.add(String(u).toLowerCase());
+  }
+  const keys = [...out];
   doctorFkKeysCache.set(cacheKey, { keys, expires: Date.now() + DOCTOR_FK_KEYS_CACHE_TTL_MS });
   return keys;
 }
@@ -44605,7 +44642,7 @@ async function compareDoctorIds(a, b) {
   return false;
 }
 
-/** Memoized on req in requireDoctorAuth — avoids repeated doctors lookups per HTTP request. */
+/** Memoized on req in requireDoctorAuth — identity keys for assigned_doctor_id string match. */
 async function getDoctorMatchKeysForReq(req) {
   if (req && Array.isArray(req._doctorMatchKeys) && req._doctorMatchKeys.length) {
     return req._doctorMatchKeys;
@@ -44614,8 +44651,9 @@ async function getDoctorMatchKeysForReq(req) {
     String(req?.doctorId || "").trim(),
     String(req?.doctor?.id || "").trim(),
     String(req?.doctor?.doctor_id || "").trim(),
+    String(req?.doctor?.doctorId || "").trim(),
   ].filter(Boolean);
-  const keys = await doctorKeysForUuidFkInQuery(raw);
+  const keys = await doctorIdentityMatchKeys(raw);
   if (req) req._doctorMatchKeys = keys;
   return keys;
 }
@@ -46435,14 +46473,19 @@ async function requireDoctorAuth(req, res, next) {
     }
 
     req.doctor = doctor;
-    req.doctorId = doctor.id || doctor.doctor_id || doctorIdFromToken;
     req.clinicId = doctor.clinic_id || String(decoded.clinicId || "").trim() || null;
-    req._doctorMatchKeys = await doctorKeysForUuidFkInQuery([
-      String(req.doctorId || "").trim(),
+    const authKeysRaw = [
       String(doctor.id || "").trim(),
       String(doctor.doctor_id || "").trim(),
       doctorIdFromToken,
-    ].filter(Boolean));
+    ].filter(Boolean);
+    const doctorUuidKeys = await doctorKeysForUuidFkInQuery(authKeysRaw);
+    req.doctorId =
+      (doctorUuidKeys[0] && DOCTOR_FK_UUID_RE.test(doctorUuidKeys[0]) ? doctorUuidKeys[0] : null) ||
+      (doctor.id && DOCTOR_FK_UUID_RE.test(String(doctor.id)) ? String(doctor.id).trim() : null) ||
+      doctorUuidKeys[0] ||
+      String(doctor.id || doctor.doctor_id || doctorIdFromToken).trim();
+    req._doctorMatchKeys = await doctorIdentityMatchKeys(authKeysRaw);
     next();
   } catch (error) {
     const code = error?.name === "TokenExpiredError" ? "token_expired" : "invalid_token";
