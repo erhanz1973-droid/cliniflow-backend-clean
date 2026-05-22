@@ -47200,6 +47200,102 @@ app.post("/api/doctor/me/chat/ack-open", requireDoctorAuth, async (req, res) => 
   }
 });
 
+function parseProfileCommaList(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => {
+        if (item == null) return "";
+        if (typeof item === "string") return item.trim();
+        if (typeof item === "object" && item.name != null) return String(item.name).trim();
+        return String(item).trim();
+      })
+      .filter(Boolean);
+  }
+  return String(raw)
+    .split(/[,،;|]\s*|\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function resolveLanguageIdsByNames(names) {
+  const ids = [];
+  for (const name of names) {
+    const trimmed = String(name || "").trim().slice(0, 120);
+    if (!trimmed) continue;
+    let lid = null;
+    const { data: existing } = await supabase.from("languages").select("id").eq("name", trimmed).maybeSingle();
+    if (existing?.id) lid = existing.id;
+    else {
+      const ins = await supabase.from("languages").insert({ name: trimmed }).select("id").maybeSingle();
+      if (ins.data?.id) lid = ins.data.id;
+      else {
+        const up = await supabase
+          .from("languages")
+          .upsert({ name: trimmed }, { onConflict: "name" })
+          .select("id")
+          .maybeSingle();
+        if (up.data?.id) lid = up.data.id;
+      }
+    }
+    if (lid) ids.push(String(lid));
+  }
+  return [...new Set(ids)];
+}
+
+async function resolveSpecialityIdsByNames(names) {
+  const ids = [];
+  for (const name of names) {
+    const trimmed = String(name || "").trim().slice(0, 120);
+    if (!trimmed) continue;
+    let sid = null;
+    const { data: existing } = await supabase.from("specialities").select("id").eq("name", trimmed).maybeSingle();
+    if (existing?.id) sid = existing.id;
+    else {
+      const ins = await supabase.from("specialities").insert({ name: trimmed }).select("id").maybeSingle();
+      if (ins.data?.id) sid = ins.data.id;
+      else {
+        const up = await supabase
+          .from("specialities")
+          .upsert({ name: trimmed }, { onConflict: "name" })
+          .select("id")
+          .maybeSingle();
+        if (up.data?.id) sid = up.data.id;
+      }
+    }
+    if (sid) ids.push(String(sid));
+  }
+  return [...new Set(ids)];
+}
+
+async function syncDoctorLanguagesByNames(docUuid, rawLanguages) {
+  const names = parseProfileCommaList(rawLanguages);
+  const { error: delErr } = await supabase.from("doctor_languages").delete().eq("doctor_id", docUuid);
+  if (delErr) throw delErr;
+  if (names.length === 0) return;
+  await ensureLanguagesSeededAdmin().catch(() => {});
+  const languageIds = await resolveLanguageIdsByNames(names);
+  if (languageIds.length > 0) {
+    const rows = languageIds.map((language_id) => ({ doctor_id: docUuid, language_id }));
+    const { error: insErr } = await supabase.from("doctor_languages").insert(rows);
+    if (insErr) throw insErr;
+  }
+}
+
+async function syncDoctorSpecialitiesByNames(docUuid, rawSpecialties) {
+  const names = parseProfileCommaList(rawSpecialties);
+  const { error: delErr } = await supabase.from("doctor_specialities").delete().eq("doctor_id", docUuid);
+  if (delErr) throw delErr;
+  if (names.length === 0) return;
+  await ensureSpecialitiesSeededAdmin().catch(() => {});
+  const specialityIds = await resolveSpecialityIdsByNames(names);
+  if (specialityIds.length > 0) {
+    const rows = specialityIds.map((speciality_id) => ({ doctor_id: docUuid, speciality_id }));
+    const { error: insErr } = await supabase.from("doctor_specialities").insert(rows);
+    if (insErr) throw insErr;
+  }
+}
+
 async function handleDoctorMeUpdateCliniflow(req, res) {
   try {
     if (!isSupabaseEnabled()) {
@@ -47234,6 +47330,22 @@ async function handleDoctorMeUpdateCliniflow(req, res) {
     if (error) {
       console.error("[PUT/PATCH /api/doctor/me]", error);
       return res.status(500).json({ ok: false, error: error.message || "update_failed" });
+    }
+
+    const docUuid = String(req.doctorId || req.doctor?.id || "").trim();
+    if (docUuid) {
+      try {
+        if (b.languages !== undefined) await syncDoctorLanguagesByNames(docUuid, b.languages);
+        if (b.specialties !== undefined) await syncDoctorSpecialitiesByNames(docUuid, b.specialties);
+        if (b.specialities !== undefined) await syncDoctorSpecialitiesByNames(docUuid, b.specialities);
+      } catch (syncErr) {
+        console.warn("[PUT/PATCH /api/doctor/me] languages/specialities sync:", syncErr?.message || syncErr);
+        return res.status(500).json({
+          ok: false,
+          error: "profile_lists_sync_failed",
+          message: syncErr?.message || "sync_failed",
+        });
+      }
     }
 
     return res.json({ ok: true, doctor });
