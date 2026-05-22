@@ -12261,6 +12261,7 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
           level2: null,
           level3: null,
         };
+      const referral_discount_percent = readReferralDiscountPercentFromClinicRow(clinicData || {});
       let clinicPayload = null;
       // Always attach clinic embed when we resolved clinic row (even if patients.clinic_id is null — embed/FK-only rows).
       if (clinicData?.id) {
@@ -12294,6 +12295,7 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
         clinicPlan,
         branding,
         referralLevels,
+        referral_discount_percent,
         financialSnapshot: {
           totalEstimatedCost: 0,
           totalPaid: 0,
@@ -34148,25 +34150,55 @@ app.get("/api/clinic/settings", requireToken, async (req, res) => {
     }
 
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const patientSelects = [
+      "id, patient_id, clinic_id, clinic_code",
+      "id, patient_id, clinic_id",
+      "id, patient_id, clinic_code",
+      "id, patient_id",
+    ];
     let patientRow = null;
-    if (UUID_RE.test(patientId)) {
-      const r1 = await supabase
-        .from("patients")
-        .select("id, patient_id, clinic_id")
-        .eq("id", patientId)
-        .maybeSingle();
-      patientRow = r1.data || null;
-    }
-    if (!patientRow) {
-      const r2 = await supabase
-        .from("patients")
-        .select("id, patient_id, clinic_id")
-        .eq("patient_id", patientId)
-        .maybeSingle();
-      patientRow = r2.data || null;
+    for (const sel of patientSelects) {
+      if (UUID_RE.test(patientId)) {
+        const r1 = await supabase.from("patients").select(sel).eq("id", patientId).maybeSingle();
+        if (!r1.error && r1.data) {
+          patientRow = r1.data;
+          break;
+        }
+      }
+      const r2 = await supabase.from("patients").select(sel).eq("patient_id", patientId).maybeSingle();
+      if (!r2.error && r2.data) {
+        patientRow = r2.data;
+        break;
+      }
+      const code = String(r2.error?.code || "");
+      if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
     }
 
-    const clinicId = patientRow?.clinic_id ? String(patientRow.clinic_id).trim() : "";
+    let clinicId = patientRow?.clinic_id ? String(patientRow.clinic_id).trim() : "";
+    const internalPatientId = patientRow?.id ? String(patientRow.id).trim() : "";
+
+    if (!clinicId && internalPatientId && UUID_RE.test(internalPatientId)) {
+      const ctx = await resolveClinicContextForPatientRow(internalPatientId);
+      if (ctx.clinicId && UUID_RE.test(ctx.clinicId)) clinicId = ctx.clinicId;
+      if (!clinicId && ctx.clinicCode) {
+        const resolved = await resolveClinicUuidFromClinicCode(ctx.clinicCode);
+        if (resolved && UUID_RE.test(resolved)) clinicId = resolved;
+      }
+    }
+
+    if (!clinicId && internalPatientId && UUID_RE.test(internalPatientId)) {
+      const thr = await resolveClinicFromPatientChatThread(internalPatientId);
+      if (thr.clinicId && UUID_RE.test(thr.clinicId)) clinicId = thr.clinicId;
+    }
+
+    const patientClinicCode = patientRow?.clinic_code
+      ? String(patientRow.clinic_code).trim().toUpperCase()
+      : "";
+    if (!clinicId && patientClinicCode) {
+      const resolved = await resolveClinicUuidFromClinicCode(patientClinicCode);
+      if (resolved && UUID_RE.test(resolved)) clinicId = resolved;
+    }
+
     if (!clinicId || !UUID_RE.test(clinicId)) {
       return res.json({
         success: true,
@@ -34175,12 +34207,24 @@ app.get("/api/clinic/settings", requireToken, async (req, res) => {
       });
     }
 
-    const { data: crow, error: cErr } = await supabase
-      .from("clinics")
-      .select("id, name, settings, default_inviter_discount_percent, default_invited_discount_percent")
-      .eq("id", clinicId)
-      .maybeSingle();
-    if (cErr) {
+    const clinicSelects = [
+      "id, name, settings, default_inviter_discount_percent, default_invited_discount_percent",
+      "id, name, settings",
+      "id, name",
+    ];
+    let crow = null;
+    let cErr = null;
+    for (const sel of clinicSelects) {
+      const r = await supabase.from("clinics").select(sel).eq("id", clinicId).maybeSingle();
+      cErr = r.error;
+      if (!r.error && r.data) {
+        crow = r.data;
+        break;
+      }
+      const code = String(r.error?.code || "");
+      if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
+    }
+    if (cErr && !crow) {
       console.warn("[GET /api/clinic/settings]", cErr.message);
       return res.status(500).json({ success: false, ok: false, error: "clinic_load_failed" });
     }
@@ -34204,7 +34248,7 @@ app.get("/api/clinic/settings", requireToken, async (req, res) => {
 // ================== CLINIC INFO ==================
 // GET /api/clinic (Public - mobile app için)
 // Supports ?code=XXX query parameter to get specific clinic from CLINICS_FILE
-app.get("/api/clinic", (req, res) => {
+app.get("/api/clinic", async (req, res) => {
   const codeParam = String(req.query.code || "").trim().toUpperCase();
 
   
@@ -34235,48 +34279,100 @@ app.get("/api/clinic", (req, res) => {
     }
   };
   
-  // If code parameter is provided, try to find clinic in CLINICS_FILE (multi-clinic mode)
+  // If code parameter is provided, try Supabase first (production), then file stores
   if (codeParam) {
+    if (isSupabaseEnabled()) {
+      try {
+        const clinicId = await resolveClinicUuidFromClinicCode(codeParam);
+        if (clinicId) {
+          const selects = [
+            "id, name, clinic_code, settings, default_inviter_discount_percent, default_invited_discount_percent",
+            "id, name, clinic_code, settings",
+            "id, name, clinic_code",
+          ];
+          for (const sel of selects) {
+            const { data, error } = await supabase.from("clinics").select(sel).eq("id", clinicId).maybeSingle();
+            if (!error && data) {
+              let settings = data.settings;
+              if (typeof settings === "string") {
+                try {
+                  settings = JSON.parse(settings);
+                } catch (_) {
+                  settings = {};
+                }
+              }
+              const referral_discount_percent = readReferralDiscountPercentFromClinicRow({
+                ...data,
+                settings: settings || {},
+                defaultInviterDiscountPercent: data.default_inviter_discount_percent,
+                defaultInvitedDiscountPercent: data.default_invited_discount_percent,
+              });
+              const referralLevels =
+                (settings && settings.referralLevels) ||
+                (referral_discount_percent > 0
+                  ? {
+                      level1: referral_discount_percent,
+                      level2: referral_discount_percent,
+                      level3: referral_discount_percent,
+                    }
+                  : { level1: null, level2: null, level3: null });
+              const { password, password_hash, ...pub } = data;
+              return res.json({
+                ...pub,
+                clinicCode: data.clinic_code || codeParam,
+                code: data.clinic_code || codeParam,
+                settings: settings || {},
+                referralLevels,
+                referral_discount_percent,
+                defaultInviterDiscountPercent:
+                  data.default_inviter_discount_percent ?? referral_discount_percent,
+                defaultInvitedDiscountPercent:
+                  data.default_invited_discount_percent ?? referral_discount_percent,
+              });
+            }
+            const errCode = String(error?.code || "");
+            if (!["42703", "PGRST204", "PGRST205"].includes(errCode)) break;
+          }
+        }
+      } catch (e) {
+        console.warn("[GET /api/clinic] supabase code lookup:", e?.message || e);
+      }
+    }
+
     const clinics = readJson(CLINICS_FILE, {});
-    for (const [clinicId, clinicData] of Object.entries(clinics)) {
+    for (const [, clinicData] of Object.entries(clinics)) {
       if (clinicData && (clinicData.clinicCode === codeParam || clinicData.code === codeParam)) {
-        // Don't return password hash or sensitive data
         const { password, ...publicClinic } = clinicData;
-        
-        // Validate and clean Google Maps URL
         if (publicClinic.googleMapsUrl) {
           publicClinic.googleMapsUrl = validateGoogleMapsUrl(publicClinic.googleMapsUrl);
         }
         if (publicClinic.googleMapLink) {
           publicClinic.googleMapLink = validateGoogleMapsUrl(publicClinic.googleMapLink);
         }
-        
         if (!publicClinic.referralLevels && publicClinic.settings?.referralLevels) {
           publicClinic.referralLevels = publicClinic.settings.referralLevels;
         }
-
+        publicClinic.referral_discount_percent = readReferralDiscountPercentFromClinicRow(publicClinic);
         return res.json(publicClinic);
       }
     }
 
-    // If not found in CLINICS_FILE, try CLINIC_FILE as fallback
     const singleClinic = readJson(CLINIC_FILE, {});
-    if (singleClinic && (singleClinic.clinicCode === codeParam || !codeParam)) {
-      
-      // Validate and clean Google Maps URL
+    if (singleClinic && (singleClinic.clinicCode === codeParam || singleClinic.code === codeParam)) {
       if (singleClinic.googleMapsUrl) {
         singleClinic.googleMapsUrl = validateGoogleMapsUrl(singleClinic.googleMapsUrl);
       }
       if (singleClinic.googleMapLink) {
         singleClinic.googleMapLink = validateGoogleMapsUrl(singleClinic.googleMapLink);
       }
-      
       if (!singleClinic.referralLevels && singleClinic.settings?.referralLevels) {
         singleClinic.referralLevels = singleClinic.settings.referralLevels;
       }
-
+      singleClinic.referral_discount_percent = readReferralDiscountPercentFromClinicRow(singleClinic);
       return res.json(singleClinic);
     }
+
+    return res.status(404).json({ ok: false, error: "clinic_not_found", code: codeParam });
   }
   
   // Default: read from CLINIC_FILE (single-clinic mode - for backward compatibility)
