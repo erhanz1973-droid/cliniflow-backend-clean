@@ -4373,9 +4373,11 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
       }),
     );
   }
+  /** Align with cliniflow-app lib/chatPushSound.ts + app.json expo-notifications sounds. */
   const channelId =
-    String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "default").trim() || "default";
-  const soundWhenOn = String(process.env.EXPO_PUSH_SOUND || "default").trim() || "default";
+    String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "chat_alerts").trim() || "chat_alerts";
+  const soundWhenOn =
+    String(process.env.EXPO_PUSH_SOUND || "notification.wav").trim() || "notification.wav";
   const rowGroups = partitionExpoTokenRowsForPushBatch(rows, kind, {
     traceId: expoTrace?.traceId,
     recipientId: u,
@@ -15241,6 +15243,99 @@ app.get("/api/admin/metrics/monthly-procedures", requireAdminAuth, async (req, r
   }
 });
 
+/** Admin patient cards: operational assignee from patient_chat_threads (+ name), not only patients.primary_doctor_id. */
+async function enrichAdminPatientsWithMessagingDoctor(clinicId, patients) {
+  const list = Array.isArray(patients) ? patients : [];
+  const cid = String(clinicId || "").trim();
+  if (!list.length || !UUID_RE.test(cid) || !isSupabaseEnabled()) return list;
+
+  const patientIds = [
+    ...new Set(
+      list
+        .map((p) => String(p.id || p.patient_id || p.patientId || "").trim())
+        .filter((id) => UUID_RE.test(id)),
+    ),
+  ];
+  if (!patientIds.length) return list;
+
+  const assignByPatient = new Map();
+  try {
+    const { data: threads, error } = await supabase
+      .from("patient_chat_threads")
+      .select("patient_id, assigned_doctor_id, updated_at")
+      .eq("clinic_id", cid)
+      .in("patient_id", patientIds)
+      .not("assigned_doctor_id", "is", null)
+      .order("updated_at", { ascending: false });
+    if (!error) {
+      for (const row of threads || []) {
+        const pid = String(row?.patient_id || "").trim();
+        const did = String(row?.assigned_doctor_id || "").trim();
+        if (!pid || !UUID_RE.test(did) || assignByPatient.has(pid)) continue;
+        assignByPatient.set(pid, did);
+      }
+    }
+  } catch (e) {
+    console.warn("[ADMIN PATIENTS] thread assignee lookup:", e?.message || e);
+  }
+
+  const doctorIds = [
+    ...new Set(
+      [
+        ...assignByPatient.values(),
+        ...list
+          .map((p) => String(p.primary_doctor_id || p.assigned_doctor_id || "").trim())
+          .filter((id) => UUID_RE.test(id)),
+      ],
+    ),
+  ];
+  const namesByDoctorId = new Map();
+  if (doctorIds.length) {
+    try {
+      const { data: docs } = await supabase
+        .from("doctors")
+        .select("id, name, full_name, display_name, first_name, last_name, email, doctor_id")
+        .eq("clinic_id", cid)
+        .in("id", doctorIds);
+      for (const d of docs || []) {
+        const id = String(d?.id || "").trim();
+        if (!id) continue;
+        const nm =
+          String(d.name || d.full_name || d.display_name || "").trim() ||
+          [d.first_name, d.last_name].filter(Boolean).join(" ").trim() ||
+          String(d.email || "").trim() ||
+          (d.doctor_id != null ? `Dr. ${String(d.doctor_id).trim()}` : "");
+        if (nm) namesByDoctorId.set(id, nm);
+      }
+    } catch (e) {
+      console.warn("[ADMIN PATIENTS] doctor name lookup:", e?.message || e);
+    }
+  }
+
+  return list.map((p) => {
+    const pid = String(p.id || p.patient_id || p.patientId || "").trim();
+    const threadDoctorId = assignByPatient.get(pid) || null;
+    const primaryId =
+      p.primary_doctor_id != null ? String(p.primary_doctor_id).trim() : "";
+    const patientRowAssigned =
+      p.assigned_doctor_id != null ? String(p.assigned_doctor_id).trim() : "";
+    const messagingDoctorId =
+      threadDoctorId ||
+      (UUID_RE.test(patientRowAssigned) ? patientRowAssigned : "") ||
+      (UUID_RE.test(primaryId) ? primaryId : "") ||
+      null;
+    const assignedDoctorName = messagingDoctorId
+      ? namesByDoctorId.get(messagingDoctorId) || null
+      : null;
+    return {
+      ...p,
+      assigned_doctor_id: threadDoctorId || patientRowAssigned || null,
+      messaging_doctor_id: messagingDoctorId,
+      assigned_doctor_name: assignedDoctorName,
+    };
+  });
+}
+
 app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
   const t0 = Date.now();
   logAdminQuery(req, "GET /api/admin/patients");
@@ -15295,6 +15390,7 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
         status: p.status,
         created_at: p.created_at,
         primary_doctor_id: p.primary_doctor_id || null,
+        assigned_doctor_id: p.assigned_doctor_id || null,
         patientId: p.patient_id || p.patientId || p.id,
         createdAt,
       };
@@ -15314,11 +15410,16 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
       return patient;
     });
 
+    const patientsEnriched = await enrichAdminPatientsWithMessagingDoctor(
+      req.clinicId,
+      patientsWithScores,
+    );
+
     console.log("[ADMIN PATIENTS] responding page", page, "of", totalPages, ", total", Date.now() - t0, "ms");
     res.json({
       ok: true,
-      patients: patientsWithScores,
-      list: patientsWithScores, // legacy compat
+      patients: patientsEnriched,
+      list: patientsEnriched, // legacy compat
       page,
       limit,
       total,
