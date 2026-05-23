@@ -5067,7 +5067,7 @@ async function deliverClinicInboundPatientNotifications(meta) {
 
   try {
     void sendPushNotification(patientLookupId, title, pv, {
-      url: "/(patient)/messages",
+      url: "/(tabs)/chat",
       data: pushData,
     });
   } catch (_) {}
