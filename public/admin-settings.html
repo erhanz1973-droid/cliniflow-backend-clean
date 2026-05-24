@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605185"></script>
-  <script src="/admin-i18n.js?v=43"></script>
+  <script src="/admin-i18n.js?v=44"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Admin – Clinic Settings</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605162"/>
@@ -240,34 +240,35 @@
       </div>
       <form id="clinicForm">
         <label data-i18n="settings.subscriptionPlan">Abonelik Paketi</label>
-        <div id="currentPlanReadonly">Mevcut Plan: —</div>
+        <div id="currentPlanReadonly">Current plan: —</div>
         <div id="usageReferrals" class="muted"></div>
         <div id="usagePatients" class="muted"></div>
         <div id="usagePeriodNote" class="muted" style="margin-top:6px;display:none;"></div>
         <div id="usageFreshnessNote" class="muted" style="margin-top:4px;display:none;font-size:12px;"></div>
-        <button type="button" id="planUpgradeButton">Planı Yükselt</button>
-        <div class="muted">Plan changes are done via the pricing page.</div>
+        <button type="button" id="planUpgradeButton" data-i18n="settings.planUpgrade">Upgrade plan</button>
+        <div class="muted" data-i18n="settings.planChangesNote">Plan changes are done via the pricing page.</div>
 
         <!-- ── Location: country + city (all plans) ── -->
         <div style="margin-top:24px; padding:16px 18px; background:linear-gradient(135deg,#eff6ff,#f0fdf4); border:1.5px solid #3b82f6; border-radius:12px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
             <span style="font-size:18px;">📍</span>
-            <span style="font-size:14px;font-weight:700;color:#1d4ed8;">Location</span>
-            <span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;">TÜM PLANLAR</span>
+            <span style="font-size:14px;font-weight:700;color:#1d4ed8;" data-i18n="settings.locationTitle">Location</span>
+            <span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;" data-i18n="settings.locationAllPlans">ALL PLANS</span>
           </div>
-          <label for="clinicCountry">Country</label>
+          <label for="clinicCountry" data-i18n="settings.countryLabel">Country</label>
           <select
             id="clinicCountry"
             style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #3b82f6;border-radius:8px;font-size:15px;font-weight:600;color:#1e3a5f;background:#fff;outline:none;"
           ></select>
-          <label for="clinicCity">City</label>
+          <label for="clinicCity" data-i18n="settings.cityLabel">City</label>
           <input
             type="text"
             id="clinicCity"
+            data-i18n-placeholder="settings.cityPlaceholder"
             placeholder="Antalya, Istanbul, London, Tbilisi..."
             style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #3b82f6;border-radius:8px;font-size:15px;font-weight:600;color:#1e3a5f;background:#fff;outline:none;"
           />
-          <div style="margin-top:6px;font-size:12px;color:#6b7280;">Patients can filter clinics by country and city on discovery.</div>
+          <div style="margin-top:6px;font-size:12px;color:#6b7280;" data-i18n="settings.locationDiscoveryHelp">Patients can filter clinics by country and city on discovery.</div>
         </div>
 
         <h2 style="margin-top: 32px; display: flex; align-items: center; gap: 8px;" data-i18n="settings.referralDiscounts">
@@ -446,17 +447,84 @@
     ["US", "United States"],
     ["UZ", "Uzbekistan"],
   ];
-  function initClinicCountrySelect() {
+  function initClinicCountrySelect(forceReload) {
     const sel = $("clinicCountry");
-    if (!sel || sel.getAttribute("data-options-loaded")) return;
+    if (!sel) return;
+    const saved = sel.value;
+    if (forceReload) sel.removeAttribute("data-options-loaded");
+    if (!forceReload && sel.getAttribute("data-options-loaded")) return;
     sel.setAttribute("data-options-loaded", "1");
     sel.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = ti("settings.selectCountry", "Select country");
+    sel.appendChild(empty);
     CLINIC_FORM_COUNTRY_OPTIONS.forEach(function (pair) {
+      if (!pair[0]) return;
       const o = document.createElement("option");
       o.value = pair[0];
       o.textContent = pair[1];
       sel.appendChild(o);
     });
+    if (saved) sel.value = saved;
+  }
+  function setCurrentPlanLabel(plan) {
+    const el = $("currentPlanReadonly");
+    if (!el) return;
+    const label = ti("settings.currentPlan", "Current plan: {plan}");
+    el.textContent = label.replace("{plan}", plan || "—");
+  }
+  function applySettingsPlaceholders() {
+    const city = $("clinicCity");
+    if (city) {
+      const ph = ti("settings.cityPlaceholder", "Antalya, Istanbul, London, Tbilisi...");
+      city.placeholder = ph;
+    }
+  }
+  let lastUsagePayload = null;
+  function renderSubscriptionUsage(data) {
+    const elR = $("usageReferrals");
+    const elPat = $("usagePatients");
+    const elPeriod = $("usagePeriodNote");
+    const elFresh = $("usageFreshnessNote");
+    if (!data) return;
+    const uu = data.unlimited || {};
+    if (elR) {
+      elR.textContent =
+        ti("settings.usageReferrals", "Referral invites (this UTC month)") +
+        ": " +
+        formatUsageLineSettings(data.usage && data.usage.referrals, data.limits && data.limits.referrals, uu.referrals === true);
+    }
+    if (elPat) {
+      elPat.textContent =
+        ti("settings.usagePatients", "Patients on roster") +
+        ": " +
+        formatUsageLineSettings(data.usage && data.usage.patients, data.limits && data.limits.patients, uu.patients === true);
+    }
+    if (elPeriod && data.period && data.period.label) {
+      elPeriod.style.display = "block";
+      elPeriod.textContent = ti("settings.usagePeriodNote", "Usage window (UTC month): {period}").replace(
+        "{period}",
+        String(data.period.label)
+      );
+    }
+    if (elFresh && data.last_updated_at) {
+      try {
+        var ts2 = String(data.last_updated_at);
+        var d2 = new Date(ts2);
+        var timeStr2 = isNaN(d2.getTime()) ? ts2 : d2.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
+        elFresh.style.display = "block";
+        elFresh.textContent = ti("settings.usageFreshness", "Snapshot time: {time}").replace("{time}", timeStr2);
+      } catch (_e2) {
+        elFresh.style.display = "none";
+      }
+    }
+  }
+  function refreshSettingsDynamicI18n() {
+    setCurrentPlanLabel(clinicPlan || "—");
+    applySettingsPlaceholders();
+    initClinicCountrySelect(true);
+    if (lastUsagePayload) renderSubscriptionUsage(lastUsagePayload);
   }
   function syncClinicCountryUi(savedCode) {
     initClinicCountrySelect();
@@ -553,37 +621,8 @@
         return;
       }
       const data = await res.json();
-      const uu = data.unlimited || {};
-      if (elR) {
-        elR.textContent =
-          ti("settings.usageReferrals", "Referral invites (this UTC month)") +
-          ": " +
-          formatUsageLineSettings(data.usage && data.usage.referrals, data.limits && data.limits.referrals, uu.referrals === true);
-      }
-      if (elPat) {
-        elPat.textContent =
-          ti("settings.usagePatients", "Patients on roster") +
-          ": " +
-          formatUsageLineSettings(data.usage && data.usage.patients, data.limits && data.limits.patients, uu.patients === true);
-      }
-      if (elPeriod && data.period && data.period.label) {
-        elPeriod.style.display = "block";
-        elPeriod.textContent = ti("settings.usagePeriodNote", "Usage window (UTC month): {period}").replace(
-          "{period}",
-          String(data.period.label)
-        );
-      }
-      if (elFresh && data.last_updated_at) {
-        try {
-          var ts2 = String(data.last_updated_at);
-          var d2 = new Date(ts2);
-          var timeStr2 = isNaN(d2.getTime()) ? ts2 : d2.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
-          elFresh.style.display = "block";
-          elFresh.textContent = ti("settings.usageFreshness", "Snapshot time: {time}").replace("{time}", timeStr2);
-        } catch (_e2) {
-          elFresh.style.display = "none";
-        }
-      }
+      lastUsagePayload = data;
+      renderSubscriptionUsage(data);
     } catch (e) {
       console.warn("[subscription usage]", e);
       if (elR) elR.textContent = ti("settings.usageLoadFailed", "Usage unavailable");
@@ -750,8 +789,7 @@
       });
       
       clinicPlan = loadedPlan;
-      const planRo = $("currentPlanReadonly");
-      if (planRo) planRo.textContent = "Mevcut Plan: " + loadedPlan;
+      setCurrentPlanLabel(loadedPlan);
       applyBrandingLock(clinicPlan);
       loadSubscriptionUsage(token);
 
@@ -763,6 +801,7 @@
       if ($("clinicAddress")) $("clinicAddress").value = branding.address || clinic.address || "";
       syncClinicCountryUi(clinic.country);
       if ($("clinicCity")) $("clinicCity").value = clinic.city || "";
+      applySettingsPlaceholders();
       if ($("chairCount")) {
         const loadedChairCount =
           clinic.settings?.chairCount ??
@@ -866,14 +905,14 @@
       initClinicCountrySelect();
       const countryVal = ($("clinicCountry")?.value || "").trim().toUpperCase();
       if (!countryVal) {
-        alert("Please select a country.");
+        alert(ti("settings.countryRequiredAlert", "Please select a country."));
         $("clinicCountry")?.focus();
         return;
       }
 
       const cityVal = ($("clinicCity")?.value || "").trim();
       if (!cityVal) {
-        alert("City is required.");
+        alert(ti("settings.cityRequiredAlert", "City is required."));
         $("clinicCity")?.focus();
         return;
       }
@@ -983,6 +1022,10 @@
 
   // Load settings on page load
   loadClinicSettings();
+
+  document.addEventListener("admin-language-changed", function () {
+    setTimeout(refreshSettingsDynamicI18n, 50);
+  });
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible") {
