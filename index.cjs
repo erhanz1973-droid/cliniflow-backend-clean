@@ -4296,6 +4296,28 @@ async function logDoctorNoExpoTokensDebug(ownerUuid, expoTrace) {
   });
 }
 
+/** HTTPS image for chat push banners (Android big picture; iOS needs NSE for remote image). */
+function resolveChatPushNotificationImageUrl() {
+  const envImg = String(process.env.PUSH_NOTIFICATION_IMAGE_URL || "").trim();
+  if (envImg.startsWith("https://")) return envImg;
+  const raw = String(
+    process.env.PUBLIC_API_URL ||
+      process.env.RAILWAY_PUBLIC_DOMAIN ||
+      process.env.PUBLIC_APP_URL ||
+      "",
+  ).trim();
+  let base = "";
+  if (raw) {
+    base = raw.startsWith("http://") || raw.startsWith("https://")
+      ? raw.replace(/\/$/, "")
+      : `https://${raw.replace(/^\/+/, "").replace(/\/$/, "")}`;
+  }
+  if (!base) {
+    base = "https://cliniflow-backend-clean-production.up.railway.app";
+  }
+  return `${base}/push-notification-logo.png`;
+}
+
 async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, expoTrace) {
   const u = (await resolveOwnerUuidForExpoPush(kind, uuidRaw)) || String(uuidRaw || "").trim();
   if (!u || (kind === "doctor" && !DOCTOR_FK_UUID_RE.test(u))) {
@@ -4378,6 +4400,7 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "chat_alerts").trim() || "chat_alerts";
   const soundWhenOn =
     String(process.env.EXPO_PUSH_SOUND || "notification.wav").trim() || "notification.wav";
+  const pushLogoUrl = resolveChatPushNotificationImageUrl();
   const rowGroups = partitionExpoTokenRowsForPushBatch(rows, kind, {
     traceId: expoTrace?.traceId,
     recipientId: u,
@@ -4435,6 +4458,10 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
       };
       if (useSound) msg.sound = soundWhenOn;
       msg.badge = badgeNum;
+      if (String(pushLogoUrl).startsWith("https://")) {
+        msg.image = pushLogoUrl;
+        msg.richContent = { image: pushLogoUrl };
+      }
       if (kind === "patient" && patientPushDiag) {
         console.log(
           "[patient-push-payload]",
@@ -35846,6 +35873,16 @@ app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
       safe.branding = { ...safe.branding, googleMapLink: mapsUrlNorm };
     }
 
+    if (!safe.country && safe.settings?.country) {
+      safe.country = String(safe.settings.country).trim().toUpperCase();
+    }
+    if (!safe.city && safe.settings?.city) {
+      safe.city = String(safe.settings.city).trim();
+    }
+    if (!safe.city_code && safe.settings?.city_code) {
+      safe.city_code = String(safe.settings.city_code).trim();
+    }
+
     res.json(safe);
   } catch (error) {
 
@@ -36060,6 +36097,15 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       clinicLogoUrl: persistedLogo || updatedBranding.clinicLogoUrl || "",
     };
     
+    const countryForPut =
+      body.country != null && String(body.country).trim()
+        ? String(body.country).trim().toUpperCase()
+        : existing.country ?? existing.settings?.country ?? null;
+    const cityForPut =
+      body.city != null && String(body.city).trim()
+        ? String(body.city).trim()
+        : existing.city ?? existing.settings?.city ?? null;
+
     const updated = {
       ...existing,
       clinicCode: String(body.clinicCode || existing.clinicCode || existing.code || "MOON").trim().toUpperCase(),
@@ -36069,7 +36115,8 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
       subscriptionPlan: rawPlan, // keep compatibility with older fields
       max_patients: computedMaxPatients,
       address: String(body.address || existing.address || ""),
-      city: body.city ? String(body.city).trim() : (existing.city || null),
+      country: countryForPut,
+      city: cityForPut,
       phone: String(body.phone || existing.phone || ""),
       email: String(existing.email || ""),
       website: String(body.website || existing.website || ""),
@@ -36110,6 +36157,14 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         sticky_assignment_enabled: inboundAutoAssignCfg.sticky_assignment_enabled,
         auto_assign_fallback_to_first_doctor: inboundAutoAssignCfg.auto_assign_fallback_to_first_doctor,
         auto_assign_fallback_mode: inboundAutoAssignCfg.auto_assign_fallback_mode,
+        country: countryForPut,
+        city: cityForPut,
+        city_code:
+          body.city_code != null && String(body.city_code).trim()
+            ? normalizeCity(String(body.city_code).trim())
+            : cityForPut
+              ? normalizeCity(cityForPut)
+              : existing.settings?.city_code ?? null,
       },
       googleReviews: Array.isArray(body.googleReviews) ? body.googleReviews : (existing.googleReviews || []),
       trustpilotReviews: Array.isArray(body.trustpilotReviews) ? body.trustpilotReviews : (existing.trustpilotReviews || []),
@@ -36121,18 +36176,7 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
     if (isSupabaseEnabled() && req.clinicId) {
       try {
 
-        const countryForGeoPut =
-          body.country != null && String(body.country).trim()
-            ? String(body.country).trim()
-            : existing.country;
-        if (!String(updated.address || "").trim()) {
-          return res.status(400).json({
-            ok: false,
-            error: "address_required",
-            message:
-              "Clinic address is required for maps and nearby search (Google Maps link is optional).",
-          });
-        }
+        const countryForGeoPut = countryForPut;
 
         const geoProbeClinic = {
           address: updated.address,
@@ -36303,7 +36347,11 @@ app.put("/api/admin/clinic", requireAdminAuth, async (req, res) => {
         
       } catch (supabaseError) {
         console.error(`[PUT /api/admin/clinic] ❌ Failed to update clinic in Supabase:`, supabaseError.message);
-        // Continue with file-based storage as fallback
+        return res.status(500).json({
+          ok: false,
+          error: "clinic_update_failed",
+          message: supabaseError?.message || "Failed to save clinic settings",
+        });
       }
     }
 

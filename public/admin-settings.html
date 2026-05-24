@@ -327,7 +327,7 @@
         <div class="muted" data-i18n="settings.clinicLogoUrlHelp">Pro plan için logo görüntülenir</div>
         
         <label data-i18n="settings.address">Clinic Address</label>
-        <input type="text" id="clinicAddress" required placeholder="Güzeloba, Havaalanı Cd. No:104 A, 07230 Muratpaşa/Antalya" />
+        <input type="text" id="clinicAddress" placeholder="Güzeloba, Havaalanı Cd. No:104 A, 07230 Muratpaşa/Antalya" />
         <div class="muted" data-i18n="settings.addressHelp">Pro plan için hasta ekranında görüntülenir</div>
 
         <label data-i18n="settings.chairCountLabel">Chair count</label>
@@ -950,7 +950,11 @@
       console.log("Submitted plan was:", payload.plan);
       
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || 'HTTP ' + res.status);
+        const errCode = data.error || '';
+        if (errCode === 'address_required') {
+          throw new Error('Klinik adresi gerekli. Ülke/şehir kaydı için adres alanını da doldurun.');
+        }
+        throw new Error(data.message || errCode || 'HTTP ' + res.status);
       }
 
       const successMsg = '✅ Ayarlar kaydedildi! (Settings sunucuya yazıldı.)';
