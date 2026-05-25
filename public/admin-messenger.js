@@ -54,7 +54,7 @@
   function clearSessionOAuthArtifacts() {
     try {
       const keys = [];
-      for (let i = 0; i sessionStorage.length; i += 1) {
+      for (let i = 0; i < sessionStorage.length; i += 1) {
         const k = sessionStorage.key(i);
         if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
       }
