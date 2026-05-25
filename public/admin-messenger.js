@@ -1,16 +1,42 @@
 (function () {
+  const STORAGE_PREFIX = "cliniflow_meta_";
   const token = localStorage.getItem("adminToken") || localStorage.getItem("token");
+
   const msgEl = document.getElementById("msg");
   const statusText = document.getElementById("statusText");
+  const debugEl = document.getElementById("debugState");
   const connectBtn = document.getElementById("connectBtn");
+  const connectForceBtn = document.getElementById("connectForceBtn");
+  const resetBtn = document.getElementById("resetStateBtn");
   const pagesCard = document.getElementById("pagesCard");
   const connectedList = document.getElementById("connectedList");
   const selectCard = document.getElementById("selectCard");
   const pageSelect = document.getElementById("pageSelect");
   const savePagesBtn = document.getElementById("savePagesBtn");
 
+  /** @type {Record<string, unknown>} */
+  const uiState = {
+    hasToken: Boolean(token),
+    serverEnabled: null,
+    serverConfigured: null,
+    connectedPageCount: 0,
+    activeConnections: [],
+    connectDisabledReason: null,
+    lastStatusFetch: null,
+    oauthReturn: null,
+    pendingPagePicker: false,
+  };
+
   function authHeaders() {
     return token ? { Authorization: "Bearer " + token, "Content-Type": "application/json" } : {};
+  }
+
+  function metaUiLog(event, detail) {
+    const line = { event, ...detail, ui: { ...uiState } };
+    console.log("[admin-messenger]", line);
+    if (debugEl) {
+      debugEl.textContent = JSON.stringify(line, null, 2);
+    }
   }
 
   function setMsg(text, isErr) {
@@ -18,39 +44,60 @@
     msgEl.className = isErr ? "err" : text ? "ok" : "muted";
   }
 
-  async function loadStatus() {
-    if (!token) {
-      statusText.textContent = "Please log in to the admin dashboard first.";
-      connectBtn.disabled = true;
-      return;
+  function clearOAuthUrlParams() {
+    const path = window.location.pathname || "/admin-messenger.html";
+    if (window.location.search) {
+      window.history.replaceState({}, "", path);
     }
-    const res = await fetch("/api/integrations/meta/status", { headers: authHeaders() });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json.ok) {
-      statusText.textContent = json.message || json.error || "Failed to load status";
-      return;
-    }
-    statusText.textContent = json.enabled
-      ? "Meta integration is configured."
-      : "Meta app credentials are not set on the server.";
-    connectBtn.disabled = !json.enabled;
+  }
 
-    const pages = json.pages || [];
-    if (pages.length) {
-      pagesCard.style.display = "block";
-      connectedList.innerHTML = pages
-        .map(
-          (p) =>
-            `<div class="page-row"><span><strong>${escapeHtml(p.pageName || p.pageId)}</strong><br><span class="muted">${p.pageId}</span></span>` +
-            `<button type="button" data-page-id="${escapeAttr(p.pageId)}" class="disconnect-btn">Disconnect</button></div>`,
-        )
-        .join("");
-      connectedList.querySelectorAll(".disconnect-btn").forEach((btn) => {
-        btn.addEventListener("click", () => disconnectPage(btn.getAttribute("data-page-id")));
-      });
-    } else {
-      pagesCard.style.display = "none";
+  function clearSessionOAuthArtifacts() {
+    try {
+      const keys = [];
+      for (let i = 0; i sessionStorage.length; i += 1) {
+        const k = sessionStorage.key(i);
+        if (k && k.startsWith(STORAGE_PREFIX)) keys.push(k);
+      }
+      keys.forEach((k) => sessionStorage.removeItem(k));
+    } catch (_e) {
+      /* ignore */
     }
+  }
+
+  function hidePagePicker() {
+    selectCard.style.display = "none";
+    selectCard._pages = null;
+    pageSelect.innerHTML = "";
+  }
+
+  /**
+   * Connect is only disabled when admin is not logged in or server Meta env is missing.
+   * "No pages" from Facebook never disables Connect.
+   */
+  function applyConnectButtonState() {
+    let reason = null;
+    let disabled = false;
+
+    if (!uiState.hasToken) {
+      disabled = true;
+      reason = "no_admin_token";
+    } else if (uiState.serverEnabled === false) {
+      disabled = true;
+      reason = "meta_not_configured_on_server";
+    } else {
+      disabled = false;
+      reason = uiState.connectedPageCount > 0 ? "ready_has_connections" : "ready_no_connections";
+    }
+
+    uiState.connectDisabledReason = reason;
+    connectBtn.disabled = disabled;
+    if (connectForceBtn) connectForceBtn.disabled = disabled;
+
+    metaUiLog("connect_buttons", {
+      disabled,
+      reason,
+      connectedPageCount: uiState.connectedPageCount,
+    });
   }
 
   function escapeHtml(s) {
@@ -59,23 +106,129 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
   }
+
   function escapeAttr(s) {
     return String(s || "").replace(/"/g, "&quot;");
   }
 
+  async function loadStatus() {
+    metaUiLog("loadStatus.start", {});
+
+    if (!uiState.hasToken) {
+      statusText.textContent = "Please log in to the admin dashboard first, then reopen this page.";
+      uiState.serverEnabled = false;
+      uiState.connectedPageCount = 0;
+      applyConnectButtonState();
+      return;
+    }
+
+    let res;
+    let json = {};
+    try {
+      res = await fetch("/api/integrations/meta/status", { headers: authHeaders() });
+      json = await res.json().catch(() => ({}));
+    } catch (e) {
+      statusText.textContent = "Could not reach server: " + (e?.message || "network_error");
+      uiState.serverEnabled = null;
+      uiState.lastStatusFetch = { ok: false, error: "network" };
+      applyConnectButtonState();
+      metaUiLog("loadStatus.network_error", { message: e?.message });
+      return;
+    }
+
+    uiState.lastStatusFetch = { ok: res.ok && json.ok, status: res.status, body: json };
+
+    if (!res.ok || !json.ok) {
+      statusText.textContent =
+        json.message || json.error || "Failed to load Meta status (" + res.status + ")";
+      uiState.serverEnabled = false;
+      uiState.connectedPageCount = 0;
+      applyConnectButtonState();
+      metaUiLog("loadStatus.failed", { status: res.status, error: json.error });
+      return;
+    }
+
+    uiState.serverEnabled = json.enabled === true;
+    uiState.serverConfigured = json.configured === true;
+
+    const pages = (json.pages || []).filter((p) => String(p.status || "active") === "active");
+    uiState.connectedPageCount = pages.length;
+    uiState.activeConnections = pages;
+
+    if (!json.enabled) {
+      statusText.textContent =
+        "Server Meta credentials are not configured (META_APP_ID / META_APP_SECRET on Railway).";
+    } else if (pages.length) {
+      statusText.textContent =
+        "Connected to " +
+        pages.length +
+        " Facebook Page(s). You can connect another Page or disconnect below.";
+    } else {
+      statusText.textContent =
+        "No Page linked yet. Click Connect Facebook — a previous “no Pages” message only means Facebook returned zero Pages for that login, not a permanent block.";
+    }
+
+    if (pages.length) {
+      pagesCard.style.display = "block";
+      connectedList.innerHTML = pages
+        .map(
+          (p) =>
+            `<div class="page-row"><span><strong>${escapeHtml(p.pageName || p.pageId)}</strong><br><span class="muted">${p.pageId}</span> · webhook: ${p.webhookSubscribed ? "yes" : "no"}</span></span>` +
+            `<button type="button" data-page-id="${escapeAttr(p.pageId)}" class="disconnect-btn">Disconnect</button></div>`,
+        )
+        .join("");
+      connectedList.querySelectorAll(".disconnect-btn").forEach((btn) => {
+        btn.addEventListener("click", () => disconnectPage(btn.getAttribute("data-page-id")));
+      });
+    } else {
+      pagesCard.style.display = "none";
+      connectedList.innerHTML = "";
+    }
+
+    applyConnectButtonState();
+    metaUiLog("loadStatus.ok", {
+      enabled: uiState.serverEnabled,
+      connectedPageCount: uiState.connectedPageCount,
+    });
+  }
+
+  function resetMetaConnectionState() {
+    metaUiLog("reset.start", {});
+    clearOAuthUrlParams();
+    clearSessionOAuthArtifacts();
+    hidePagePicker();
+    setMsg("");
+    uiState.oauthReturn = null;
+    uiState.pendingPagePicker = false;
+    void loadStatus();
+    metaUiLog("reset.done", {});
+  }
+
   async function startOAuth(forceReauth) {
     setMsg("");
-    const returnUrl = window.location.pathname + window.location.hash;
+    hidePagePicker();
+    metaUiLog("oauth.start_click", { forceReauth: Boolean(forceReauth) });
+
+    if (!uiState.hasToken) {
+      setMsg("Log in to admin first.", true);
+      return;
+    }
+
+    const returnUrl = window.location.pathname || "/admin-messenger.html";
     const forceQ = forceReauth ? "&force=1" : "";
     const res = await fetch(
       "/api/integrations/meta/oauth/start?returnUrl=" + encodeURIComponent(returnUrl) + forceQ,
       { headers: authHeaders() },
     );
     const json = await res.json().catch(() => ({}));
+    metaUiLog("oauth.start_response", { ok: res.ok, status: res.status, json });
+
     if (!res.ok || !json.authUrl) {
       setMsg(json.message || json.error || "OAuth start failed", true);
+      applyConnectButtonState();
       return;
     }
+
     window.location.href = json.authUrl;
   }
 
@@ -83,40 +236,66 @@
     const params = new URLSearchParams(window.location.search);
     const meta = params.get("meta");
     if (!meta) return;
+
+    uiState.oauthReturn = meta;
+    metaUiLog("oauth.return", { meta, scopes: params.get("scopes") });
+
     if (meta === "select_pages") {
       const payload = params.get("payload");
-      if (!payload) return;
+      clearOAuthUrlParams();
+      if (!payload) {
+        setMsg("Missing page list from Facebook. Try Connect again.", true);
+        applyConnectButtonState();
+        return;
+      }
       try {
         const data = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
-        showPagePicker(data.pages || []);
-        setMsg("Select the Pages you want to connect.");
+        const pages = data.pages || [];
+        metaUiLog("oauth.page_fetch_result", { pageCount: pages.length, pages: pages.map((p) => p.id) });
+        showPagePicker(pages);
+        setMsg(
+          pages.length
+            ? "Select the Page(s) to connect, then Save selected."
+            : "Facebook returned no Pages. Use Retry permissions or another Facebook account.",
+          !pages.length,
+        );
       } catch (e) {
-        setMsg("Invalid page selection payload", true);
+        setMsg("Invalid page selection payload. Use Reset, then Connect again.", true);
+        metaUiLog("oauth.payload_parse_error", { message: e?.message });
       }
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (meta === "no_pages") {
+      applyConnectButtonState();
+      return;
+    }
+
+    clearOAuthUrlParams();
+
+    if (meta === "no_pages") {
       const scopes = params.get("scopes") || "";
+      metaUiLog("oauth.page_fetch_result", { pageCount: 0, scopes });
       setMsg(
-        "No Facebook Pages found for this Facebook account.\n\n" +
-          "• Log in with the personal profile that is Admin on your clinic Page\n" +
+        "Facebook returned zero Pages for that account (not a permanent lock).\n\n" +
+          "• Use the Facebook profile that is Admin on your clinic Page\n" +
           "• Create a Page: https://www.facebook.com/pages/create\n" +
-          "• On reconnect, enable all permissions (Pages list, Messaging, Page settings)\n" +
+          "• Click Retry permissions and accept all Page permissions\n" +
           (scopes ? "• Granted scopes: " + scopes : ""),
         true,
       );
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (meta === "error") {
+      hidePagePicker();
+      applyConnectButtonState();
+      return;
+    }
+
+    if (meta === "error") {
       setMsg("Facebook connection failed: " + (params.get("reason") || "unknown"), true);
-      window.history.replaceState({}, "", window.location.pathname);
+      hidePagePicker();
+      applyConnectButtonState();
     }
   }
 
   function showPagePicker(pages) {
+    uiState.pendingPagePicker = pages.length > 0;
     if (!pages.length) {
-      setMsg(
-        "No Pages in this session. Click Connect again and accept Page permissions, or use Connect (retry permissions).",
-        true,
-      );
+      hidePagePicker();
       return;
     }
     selectCard.style.display = "block";
@@ -151,13 +330,18 @@
       }),
     });
     const json = await res.json().catch(() => ({}));
+    metaUiLog("page_connect.result", { ok: res.ok, connected: json.connected, failed: json.failed });
+
     if (!res.ok || !json.ok) {
       setMsg(json.message || json.error || "Connect failed", true);
+      applyConnectButtonState();
       return;
     }
-    selectCard.style.display = "none";
+
+    hidePagePicker();
+    uiState.pendingPagePicker = false;
     const lines = (json.connected || []).map((c) => {
-      const sub = c.webhookSubscribed ? "webhook subscribed" : "webhook NOT subscribed — check Railway [metaTrace] logs";
+      const sub = c.webhookSubscribed ? "webhook subscribed" : "webhook NOT subscribed — check Railway logs";
       const err = c.subscribeMeta?.subscribe_error;
       return `${c.pageName || c.pageId}: ${sub}${err ? " — " + err : ""}`;
     });
@@ -166,7 +350,7 @@
       ["Connected " + (json.connected || []).length + " page(s).", ...lines, ...failLines].join("\n"),
       (json.connected || []).some((c) => !c.webhookSubscribed),
     );
-    loadStatus();
+    await loadStatus();
   }
 
   async function disconnectPage(pageId) {
@@ -182,15 +366,19 @@
       return;
     }
     setMsg("Page disconnected.");
-    loadStatus();
+    hidePagePicker();
+    await loadStatus();
   }
 
   connectBtn.addEventListener("click", () => startOAuth(false));
-  const connectForceBtn = document.getElementById("connectForceBtn");
   if (connectForceBtn) {
     connectForceBtn.addEventListener("click", () => startOAuth(true));
   }
+  if (resetBtn) {
+    resetBtn.addEventListener("click", resetMetaConnectionState);
+  }
   savePagesBtn.addEventListener("click", saveSelectedPages);
+
   handleOAuthReturn();
-  loadStatus();
+  void loadStatus();
 })();

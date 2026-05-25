@@ -9,12 +9,28 @@
     .wrap { max-width: 720px; margin: 24px auto; padding: 0 16px; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
     .btn { display: inline-block; padding: 10px 18px; background: #1877f2; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .btn-secondary { background: #475569; }
+    .btn-outline { background: #fff; color: #334155; border: 1px solid #cbd5e1; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .muted { color: #64748b; font-size: 14px; }
     .page-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
-    .err { color: #b91c1c; }
-    .ok { color: #047857; }
+    .err { color: #b91c1c; white-space: pre-wrap; }
+    .ok { color: #047857; white-space: pre-wrap; }
     #pageSelect label { display: block; padding: 8px 0; cursor: pointer; }
+    #debugState {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 12px;
+      max-height: 200px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
   </style>
 </head>
 <body>
@@ -25,8 +41,12 @@
     <div class="card">
       <h2>Connection</h2>
       <p id="statusText" class="muted">Loading…</p>
-      <button type="button" class="btn" id="connectBtn">Connect Facebook</button>
-      <button type="button" class="btn" id="connectForceBtn" style="margin-left:8px;background:#475569;">Retry permissions</button>
+      <div class="btn-row">
+        <button type="button" class="btn" id="connectBtn">Connect Facebook</button>
+        <button type="button" class="btn btn-secondary" id="connectForceBtn">Retry permissions</button>
+        <button type="button" class="btn btn-outline" id="resetStateBtn">Reset connection state</button>
+      </div>
+      <pre id="debugState" class="muted">UI state will appear here…</pre>
     </div>
 
     <div class="card" id="pagesCard" style="display:none;">
@@ -42,6 +62,6 @@
 
     <p id="msg" class="muted"></p>
   </div>
-  <script src="/admin-messenger.js"></script>
+  <script src="/admin-messenger.js?v=2"></script>
 </body>
 </html>
