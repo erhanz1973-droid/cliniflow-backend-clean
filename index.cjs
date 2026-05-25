@@ -6389,7 +6389,9 @@ const {
   registerMetaMessengerWebhook,
   registerMetaIntegrationRoutes,
 } = require("./lib/omnichannel/registerMetaRoutes");
+const { registerWhatsAppWebhook } = require("./lib/omnichannel/registerWhatsAppRoutes");
 registerMetaMessengerWebhook(app);
+registerWhatsAppWebhook(app);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -61202,7 +61204,7 @@ app.get("/admin/ai-leads", (req, res) => {
 
 app.use(express.static(publicDir));
 
-// Meta Messenger webhook is registered once before express.json (see registerMetaMessengerWebhook above).
+// Meta Messenger + WhatsApp webhooks registered before express.json (registerMetaMessengerWebhook, registerWhatsAppWebhook).
 
 // ── Unmatched routes (LAST; must stay after static) ─────────────────
 app.use((req, res) => {
