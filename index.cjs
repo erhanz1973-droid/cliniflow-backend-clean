@@ -61512,5 +61512,14 @@ startHttpServerOnce(() => {
   postBootInit().catch((e) => {
     console.error("[POST-BOOT] postBootInit() failed (server keeps running):", e?.message || e);
   });
+
+  try {
+    const { scheduleMetaWebhookStartupDiagnostics } = require("./lib/omnichannel/metaWebhookDiagnostics");
+    void scheduleMetaWebhookStartupDiagnostics().catch((e) => {
+      console.warn("[metaWebhook] post-listen diagnostics failed:", e?.message || e);
+    });
+  } catch (_) {
+    /* optional */
+  }
 });
 // Deployment trigger - Mon Feb 16 22:01:03 +04 2026
