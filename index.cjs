@@ -61202,9 +61202,7 @@ app.get("/admin/ai-leads", (req, res) => {
 
 app.use(express.static(publicDir));
 
-// Meta Messenger webhook (re-register before 404 so production always has the route in the stack)
-const { registerMetaMessengerWebhook: mountMetaMessengerWebhook } = require("./lib/omnichannel/registerMetaRoutes");
-mountMetaMessengerWebhook(app);
+// Meta Messenger webhook is registered once before express.json (see registerMetaMessengerWebhook above).
 
 // ── Unmatched routes (LAST; must stay after static) ─────────────────
 app.use((req, res) => {
