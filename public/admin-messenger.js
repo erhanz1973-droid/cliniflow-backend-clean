@@ -63,11 +63,12 @@
     return String(s || "").replace(/"/g, "&quot;");
   }
 
-  async function startOAuth() {
+  async function startOAuth(forceReauth) {
     setMsg("");
     const returnUrl = window.location.pathname + window.location.hash;
+    const forceQ = forceReauth ? "&force=1" : "";
     const res = await fetch(
-      "/api/integrations/meta/oauth/start?returnUrl=" + encodeURIComponent(returnUrl),
+      "/api/integrations/meta/oauth/start?returnUrl=" + encodeURIComponent(returnUrl) + forceQ,
       { headers: authHeaders() },
     );
     const json = await res.json().catch(() => ({}));
@@ -93,6 +94,17 @@
         setMsg("Invalid page selection payload", true);
       }
       window.history.replaceState({}, "", window.location.pathname);
+    } else if (meta === "no_pages") {
+      const scopes = params.get("scopes") || "";
+      setMsg(
+        "No Facebook Pages found for this Facebook account.\n\n" +
+          "• Log in with the personal profile that is Admin on your clinic Page\n" +
+          "• Create a Page: https://www.facebook.com/pages/create\n" +
+          "• On reconnect, enable all permissions (Pages list, Messaging, Page settings)\n" +
+          (scopes ? "• Granted scopes: " + scopes : ""),
+        true,
+      );
+      window.history.replaceState({}, "", window.location.pathname);
     } else if (meta === "error") {
       setMsg("Facebook connection failed: " + (params.get("reason") || "unknown"), true);
       window.history.replaceState({}, "", window.location.pathname);
@@ -101,7 +113,10 @@
 
   function showPagePicker(pages) {
     if (!pages.length) {
-      setMsg("No Facebook Pages found on this account.", true);
+      setMsg(
+        "No Pages in this session. Click Connect again and accept Page permissions, or use Connect (retry permissions).",
+        true,
+      );
       return;
     }
     selectCard.style.display = "block";
@@ -170,7 +185,11 @@
     loadStatus();
   }
 
-  connectBtn.addEventListener("click", startOAuth);
+  connectBtn.addEventListener("click", () => startOAuth(false));
+  const connectForceBtn = document.getElementById("connectForceBtn");
+  if (connectForceBtn) {
+    connectForceBtn.addEventListener("click", () => startOAuth(true));
+  }
   savePagesBtn.addEventListener("click", saveSelectedPages);
   handleOAuthReturn();
   loadStatus();
