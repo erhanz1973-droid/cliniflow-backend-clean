@@ -6,73 +6,177 @@
   <title>WhatsApp — Clinifly</title>
   <link rel="stylesheet" href="/admin-layout.css" />
   <style>
-    .wrap { max-width: 900px; margin: 24px auto; padding: 0 16px; }
-    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-    .btn { display: inline-block; padding: 10px 18px; background: #25d366; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
-    .btn-secondary { background: #475569; }
-    .btn-outline { background: #fff; color: #334155; border: 1px solid #cbd5e1; }
-    .btn-danger { background: #dc2626; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-    .muted { color: #64748b; font-size: 14px; }
-    .conn-row { padding: 14px 0; border-bottom: 1px solid #f1f5f9; }
-    .conn-row:last-child { border-bottom: none; }
-    .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+    .wa-wrap { max-width: 920px; margin: 24px auto; padding: 0 16px 48px; }
+    .wa-card {
+      background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+      padding: 20px 22px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    }
+    .wa-card h2 { margin: 0 0 8px; font-size: 1.1rem; color: #0f172a; }
+    .wa-muted { color: #64748b; font-size: 14px; line-height: 1.5; margin: 0; }
+    .wa-notice {
+      background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px;
+      padding: 12px 14px; font-size: 14px; color: #14532d; line-height: 1.45; margin-bottom: 16px;
+    }
+    .wa-btn {
+      display: inline-flex; align-items: center; gap: 6px; padding: 10px 18px;
+      background: #25d366; color: #fff; border: none; border-radius: 8px;
+      font-weight: 600; cursor: pointer; font-size: 14px;
+    }
+    .wa-btn-secondary { background: #475569; }
+    .wa-btn-outline { background: #fff; color: #334155; border: 1px solid #cbd5e1; }
+    .wa-btn-danger { background: #dc2626; }
+    .wa-btn-meta { background: #1877f2; }
+    .wa-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .wa-btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .onboard-steps { list-style: none; padding: 0; margin: 12px 0 0; }
+    .onboard-steps li {
+      display: flex; align-items: flex-start; gap: 12px; padding: 10px 0;
+      border-bottom: 1px solid #f1f5f9; font-size: 14px;
+    }
+    .onboard-steps li:last-child { border-bottom: none; }
+    .step-num {
+      width: 28px; height: 28px; border-radius: 50%; background: #e2e8f0; color: #475569;
+      font-weight: 800; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .onboard-steps li.done .step-num { background: #22c55e; color: #fff; }
+    .onboard-steps li.current .step-num { background: #25d366; color: #fff; }
+    .step-body strong { display: block; color: #0f172a; margin-bottom: 2px; }
+    .badge {
+      display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px;
+      border-radius: 999px; margin-right: 6px; vertical-align: middle;
+    }
     .badge-active { background: #dcfce7; color: #166534; }
+    .badge-paused { background: #fef3c7; color: #92400e; }
     .badge-off { background: #f1f5f9; color: #64748b; }
+    .badge-ok { background: #dcfce7; color: #166534; }
+    .badge-warn { background: #fef3c7; color: #92400e; }
+    .badge-bad { background: #fee2e2; color: #991b1b; }
+    .conn-card { padding: 18px 0; border-bottom: 1px solid #f1f5f9; }
+    .conn-card:last-child { border-bottom: none; padding-bottom: 0; }
+    .conn-hd { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .conn-title { font-size: 1.05rem; font-weight: 800; color: #0f172a; margin: 0; }
+    .toggle-wrap {
+      display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; color: #334155;
+    }
+    .toggle-wrap input { width: 44px; height: 24px; accent-color: #25d366; cursor: pointer; }
+    .meta-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px;
+      margin: 12px 0; font-size: 13px;
+    }
+    @media (max-width: 560px) { .meta-grid { grid-template-columns: 1fr; } }
+    .meta-grid dt { color: #64748b; font-weight: 600; margin: 0; }
+    .meta-grid dd { margin: 0 0 6px; color: #0f172a; word-break: break-word; }
+    .health-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px;
+    }
+    @media (max-width: 640px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+    .stat-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; }
+    .stat-box .n { font-size: 20px; font-weight: 800; color: #0f172a; }
+    .stat-box .l { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+    .ai-mode-row { margin: 12px 0; }
+    .ai-mode-row select { width: 100%; max-width: 320px; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; }
+    .audit-list { margin-top: 10px; max-height: 200px; overflow-y: auto; font-size: 13px; }
+    .audit-item { padding: 8px 0; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; gap: 8px; }
+    .audit-item:last-child { border-bottom: none; }
+    .embed-box {
+      border: 2px dashed #cbd5e1; border-radius: 12px; padding: 20px; text-align: center;
+      background: #f8fafc; margin-top: 12px;
+    }
+    .embed-box p { margin: 8px 0 0; font-size: 13px; color: #64748b; }
+    #manualConnectPanel { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e2e8f0; }
     label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; color: #334155; }
-    input, select { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; }
+    input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
-    .err { color: #b91c1c; white-space: pre-wrap; }
-    .ok { color: #047857; white-space: pre-wrap; }
-    #connectForm { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
+    .test-result {
+      margin-top: 12px; padding: 12px; border-radius: 8px; background: #f8fafc;
+      border: 1px solid #e2e8f0; font-size: 13px; display: none;
+    }
+    .test-result.visible { display: block; }
+    .err { color: #b91c1c; }
+    .ok { color: #047857; }
+    details summary { cursor: pointer; font-weight: 600; color: #475569; font-size: 14px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <p><a href="/admin-settings.html">← Settings</a></p>
-    <h1>WhatsApp Business</h1>
-    <p class="muted">Communication Channels — map each WhatsApp phone number to this clinic. Inbound webhooks route by <code>phone_number_id</code> in the database.</p>
+  <div class="wa-wrap">
+    <p class="wa-muted"><a href="/admin-settings.html">← Settings</a> · <a href="/admin-ai-leads.html">Coordination inbox</a></p>
+    <h1 style="margin:8px 0 4px;font-size:1.5rem">WhatsApp for your clinic</h1>
+    <p class="wa-muted">Connect your business number so patients can message you on WhatsApp. Clinifly handles routing, coordination, and optional AI replies.</p>
 
-    <div class="card">
-      <h2>Status</h2>
-      <p id="statusText" class="muted">Loading…</p>
-      <div class="btn-row">
-        <button type="button" class="btn" id="showConnectBtn">Connect WhatsApp</button>
-        <button type="button" class="btn btn-outline" id="refreshBtn">Refresh</button>
+    <div class="wa-notice" role="note">
+      <strong>Your number stays yours.</strong>
+      Your WhatsApp number remains owned by your Meta Business account. Clinifly only receives authorized API access to send and receive messages on your behalf — we do not take ownership of your phone number.
+    </div>
+
+    <div class="wa-card" id="onboardingCard">
+      <h2>Setup checklist</h2>
+      <p class="wa-muted">Follow these steps to go live. You can pause WhatsApp anytime without losing your connection.</p>
+      <ol class="onboard-steps" id="onboardSteps">
+        <li data-step="connect"><span class="step-num">1</span><span class="step-body"><strong>Connect WhatsApp</strong><span class="wa-muted">Link your business phone number to this clinic.</span></span></li>
+        <li data-step="verifyWebhook"><span class="step-num">2</span><span class="step-body"><strong>Verify webhook</strong><span class="wa-muted" id="webhookHint">Meta must reach our webhook URL when patients message you.</span></span></li>
+        <li data-step="testMessage"><span class="step-num">3</span><span class="step-body"><strong>Send test message</strong><span class="wa-muted">Confirm outbound delivery to a test number.</span></span></li>
+        <li data-step="configureAi"><span class="step-num">4</span><span class="step-body"><strong>Configure AI</strong><span class="wa-muted">Choose how much automation you want per number.</span></span></li>
+        <li data-step="goLive"><span class="step-num">5</span><span class="step-body"><strong>Go live</strong><span class="wa-muted">Turn WhatsApp ON and set AI to Active when ready.</span></span></li>
+      </ol>
+    </div>
+
+    <div class="wa-card">
+      <h2>Connect WhatsApp</h2>
+      <p class="wa-muted">Recommended: one-click connect with Meta (coming soon). Until then, use advanced setup with IDs from WhatsApp Manager.</p>
+      <div class="embed-box" id="embeddedSignupBox">
+        <button type="button" class="wa-btn wa-btn-meta" id="btnMetaConnect" disabled title="Coming soon">
+          Connect with Meta
+        </button>
+        <p>Embedded Signup — authorize in a Meta popup, then you are done.<br><em>Available in a future release.</em></p>
       </div>
-      <div id="connectForm">
-        <h3 style="margin-top:0;font-size:16px;">Register number (manual / until Embedded Signup)</h3>
-        <p class="muted">Use IDs from Meta WhatsApp Manager → API setup. Same values as your working webhook.</p>
+      <div class="wa-btn-row">
+        <button type="button" class="wa-btn-outline wa-btn" id="btnToggleManual">Advanced setup (manual IDs)</button>
+      </div>
+      <div id="manualConnectPanel">
         <label>Phone number ID</label>
-        <input id="inpPhoneNumberId" placeholder="1123564784177382" />
+        <input id="inpPhoneNumberId" placeholder="From Meta → WhatsApp → API setup" />
         <div class="grid2">
-          <div>
-            <label>Display name</label>
-            <input id="inpDisplayName" placeholder="CEM Clinic WhatsApp" />
-          </div>
-          <div>
-            <label>Phone number (E.164)</label>
-            <input id="inpPhoneNumber" placeholder="+90…" />
-          </div>
+          <div><label>Display name (optional)</label><input id="inpDisplayName" placeholder="Clinic WhatsApp" /></div>
+          <div><label>Phone E.164 (optional)</label><input id="inpPhoneNumber" placeholder="+90…" /></div>
         </div>
         <label>WABA ID (optional)</label>
         <input id="inpWabaId" placeholder="WhatsApp Business Account ID" />
-        <div class="btn-row">
-          <button type="button" class="btn" id="saveConnectBtn">Save connection</button>
-          <button type="button" class="btn btn-outline" id="cancelConnectBtn">Cancel</button>
+        <div class="wa-btn-row">
+          <button type="button" class="wa-btn" id="saveConnectBtn">Save connection</button>
         </div>
       </div>
     </div>
 
-    <div class="card">
-      <h2>Connected numbers</h2>
-      <div id="connectionsList" class="muted">Loading…</div>
+    <div class="wa-card">
+      <h2>Your WhatsApp numbers</h2>
+      <p id="statusText" class="wa-muted">Loading…</p>
+      <div id="connectionsList" class="wa-muted">Loading…</div>
     </div>
 
-    <p id="msg" class="muted"></p>
+    <div class="wa-card">
+      <details>
+        <summary>Clinic-wide AI defaults (all channels)</summary>
+        <p class="wa-muted" style="margin-top:10px">Optional ceiling for automation across Messenger, web, and WhatsApp.</p>
+        <div class="wa-btn-row" style="margin-top:8px">
+          <label><input type="radio" name="clinicAiPreset" value="ACTIVE" /> AI active</label>
+          <label><input type="radio" name="clinicAiPreset" value="ASSIST" /> Draft / assist</label>
+          <label><input type="radio" name="clinicAiPreset" value="OFF" /> Human only</label>
+        </div>
+        <button type="button" class="wa-btn wa-btn-secondary" id="saveClinicAiBtn">Save clinic defaults</button>
+        <p id="clinicAiMsg" class="wa-muted" style="margin-top:8px"></p>
+      </details>
+    </div>
+
+    <div class="wa-card">
+      <h2>Activity history</h2>
+      <p class="wa-muted">Connection changes for your clinic (connect, pause, reassign, AI updates).</p>
+      <div id="clinicAuditList" class="audit-list wa-muted">Loading…</div>
+    </div>
+
+    <p id="msg" class="wa-muted"></p>
   </div>
-  <script src="/admin-whatsapp.js?v=1"></script>
+  <script src="/admin-whatsapp.js?v=3"></script>
 </body>
 </html>

@@ -368,6 +368,17 @@
       <div class="ops-filter-tabs" id="handlingFilterTabs"></div>
     </div>
 
+    <div class="ops-filter-section">
+      <div class="queue-section-hd">Channel</div>
+      <div class="ops-filter-tabs" id="channelFilterTabs">
+        <button type="button" class="ops-filter-btn active" data-channel="">All channels</button>
+        <button type="button" class="ops-filter-btn" data-channel="whatsapp">WhatsApp</button>
+        <button type="button" class="ops-filter-btn" data-channel="messenger">Messenger</button>
+        <button type="button" class="ops-filter-btn" data-channel="instagram">Instagram</button>
+        <button type="button" class="ops-filter-btn" data-channel="web">Web</button>
+      </div>
+    </div>
+
     <p class="scan-hint" data-coord-i18n="filters.quickScan">
       Quick scan: patient → treatment interest → blocker → who is waiting → next step.
     </p>
@@ -505,6 +516,7 @@
     let activeIntakeQueue = "";
     let activeOperationalFilter = "";
     let activeHandlingFilter = "";
+    let activeChannelFilter = "";
     let operationalFilterDefs = [];
     let handlingFilterDefs = [];
     let intakeQueueDefs = [];
@@ -532,6 +544,37 @@
       hot: "filters.highBooking",
       ai_unresolved: "filters.needsReview",
     };
+
+    const CHANNEL_FILTER_KEYS = {
+      whatsapp: ["whatsapp"],
+      messenger: ["messenger"],
+      instagram: ["instagram"],
+      web: ["in_app", "patient_chat", "offer_chat", "coordinator", "web", "web_chat"],
+    };
+
+    function leadMatchesChannelFilter(L) {
+      if (!activeChannelFilter) return true;
+      const ch = String(L.primaryChannel || L.primary_channel || "in_app")
+        .trim()
+        .toLowerCase();
+      const allowed = CHANNEL_FILTER_KEYS[activeChannelFilter];
+      if (!allowed) return true;
+      return allowed.includes(ch);
+    }
+
+    function wireChannelFilterTabs() {
+      const el = document.getElementById("channelFilterTabs");
+      if (!el) return;
+      el.querySelectorAll(".ops-filter-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          activeChannelFilter = btn.getAttribute("data-channel") || "";
+          el.querySelectorAll(".ops-filter-btn").forEach(function (b) {
+            b.classList.toggle("active", b === btn);
+          });
+          renderLeadList();
+        });
+      });
+    }
 
     const SIGNAL_FILTER_KEYS = {
       hot: "filters.hot",
@@ -863,10 +906,25 @@
       );
     }
 
+    function timelineChannelBadge(ev) {
+      const ch = String(ev.channel || ev.primaryChannel || "").trim().toLowerCase();
+      if (!ch) return "";
+      const labels = {
+        whatsapp: "WhatsApp",
+        messenger: "Messenger",
+        instagram: "Instagram",
+        in_app: "Web",
+        patient_chat: "Web",
+      };
+      const label = labels[ch] || ch.replace(/_/g, " ");
+      return channelSourceBadge({ channelBadge: label, primaryChannel: ch });
+    }
+
     function renderOperationalTimeline(events) {
       return (events || []).map(function (ev) {
         const label = ev.label || ev.eventType || 'Event';
         const meta = ev.eventMetadata || {};
+        const chBadge = timelineChannelBadge(ev);
         let body = '';
         if (ev.patientMessage) body += '<div class="tl-bubble tl-patient">' + esc(ev.patientMessage) + '</div>';
         if (ev.aiReply) body += '<div class="tl-bubble tl-ai">' + esc(ev.aiReply) + '</div>';
@@ -875,7 +933,7 @@
         if (!body && meta.angry !== undefined) body = '<div class="tl-system">Escalation detected</div>';
         if (!body && meta.documentType) body = '<div class="tl-system">' + esc(meta.documentType) + "</div>";
         if (!body && meta.flags) body = '<div class="tl-system">Intake gaps updated</div>';
-        return '<div class="tl-op"><div class="tl-op-hd"><span class="tl-op-label">' + esc(label) + '</span><span class="tl-op-time">' + esc(fmtTime(ev.createdAt)) + '</span></div>' + body + '</div>';
+        return '<div class="tl-op"><div class="tl-op-hd"><span class="tl-op-label">' + esc(label) + (chBadge ? " " + chBadge : "") + '</span><span class="tl-op-time">' + esc(fmtTime(ev.createdAt)) + '</span></div>' + body + '</div>';
       }).join('');
     }
 
@@ -1235,11 +1293,12 @@
       const el = document.getElementById("leadList");
       if (!el) return;
       renderOpsStatusStrip();
-      if (!leads.length) {
+      const visible = leads.filter(leadMatchesChannelFilter);
+      if (!visible.length) {
         el.innerHTML = '<div class="empty">' + esc(ct("detail.noCasesFilter")) + "</div>";
         return;
       }
-      el.innerHTML = leads
+      el.innerHTML = visible
         .map((L) => {
           const title = L.patientName || ct("common.patient");
           const interest = formatTreatmentInterest(L);
@@ -1631,6 +1690,9 @@
         if (activeHandlingFilter) {
           url += "&handling=" + encodeURIComponent(activeHandlingFilter);
         }
+        if (activeChannelFilter) {
+          url += "&channel=" + encodeURIComponent(activeChannelFilter);
+        }
         if (activeIntakeQueue) {
           url += "&queue=" + encodeURIComponent(activeIntakeQueue);
         } else if (activeWorkspace && activeWorkspace !== "recent") {
@@ -1738,6 +1800,8 @@
       if (document.hidden) return;
       loadLeads({ silent: true });
     }, 90000);
+
+    wireChannelFilterTabs();
 
     window.rerenderCoordinationCenter = function () {
       applyCoordinationStaticI18n();
