@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WhatsApp — Clinifly</title>
+  <link rel="stylesheet" href="/admin-layout.css" />
+  <style>
+    .wrap { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .btn { display: inline-block; padding: 10px 18px; background: #25d366; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .btn-secondary { background: #475569; }
+    .btn-outline { background: #fff; color: #334155; border: 1px solid #cbd5e1; }
+    .btn-danger { background: #dc2626; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .muted { color: #64748b; font-size: 14px; }
+    .conn-row { padding: 14px 0; border-bottom: 1px solid #f1f5f9; }
+    .conn-row:last-child { border-bottom: none; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+    .badge-active { background: #dcfce7; color: #166534; }
+    .badge-off { background: #f1f5f9; color: #64748b; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; color: #334155; }
+    input, select { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+    .err { color: #b91c1c; white-space: pre-wrap; }
+    .ok { color: #047857; white-space: pre-wrap; }
+    #connectForm { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <p><a href="/admin-settings.html">← Settings</a></p>
+    <h1>WhatsApp Business</h1>
+    <p class="muted">Communication Channels — map each WhatsApp phone number to this clinic. Inbound webhooks route by <code>phone_number_id</code> in the database.</p>
+
+    <div class="card">
+      <h2>Status</h2>
+      <p id="statusText" class="muted">Loading…</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="showConnectBtn">Connect WhatsApp</button>
+        <button type="button" class="btn btn-outline" id="refreshBtn">Refresh</button>
+      </div>
+      <div id="connectForm">
+        <h3 style="margin-top:0;font-size:16px;">Register number (manual / until Embedded Signup)</h3>
+        <p class="muted">Use IDs from Meta WhatsApp Manager → API setup. Same values as your working webhook.</p>
+        <label>Phone number ID</label>
+        <input id="inpPhoneNumberId" placeholder="1123564784177382" />
+        <div class="grid2">
+          <div>
+            <label>Display name</label>
+            <input id="inpDisplayName" placeholder="CEM Clinic WhatsApp" />
+          </div>
+          <div>
+            <label>Phone number (E.164)</label>
+            <input id="inpPhoneNumber" placeholder="+90…" />
+          </div>
+        </div>
+        <label>WABA ID (optional)</label>
+        <input id="inpWabaId" placeholder="WhatsApp Business Account ID" />
+        <div class="btn-row">
+          <button type="button" class="btn" id="saveConnectBtn">Save connection</button>
+          <button type="button" class="btn btn-outline" id="cancelConnectBtn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Connected numbers</h2>
+      <div id="connectionsList" class="muted">Loading…</div>
+    </div>
+
+    <p id="msg" class="muted"></p>
+  </div>
+  <script src="/admin-whatsapp.js?v=1"></script>
+</body>
+</html>

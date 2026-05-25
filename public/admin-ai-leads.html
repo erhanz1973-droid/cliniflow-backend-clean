@@ -1218,6 +1218,19 @@
       return ct("common.updated", { time: fmtTime(L.updatedAt) });
     }
 
+    function channelSourceBadge(L) {
+      const label = String(L.channelBadge || L.primaryChannel || "").trim();
+      if (!label) return "";
+      const styles = {
+        WhatsApp: "background:#dcfce7;color:#166534",
+        Messenger: "background:#dbeafe;color:#1e40af",
+        Instagram: "background:#fce7f3;color:#9d174d",
+        Web: "background:#f1f5f9;color:#475569",
+      };
+      const css = styles[label] || "background:#e2e8f0;color:#334155";
+      return '<span class="badge" style="' + css + '">' + esc(label) + "</span>";
+    }
+
     function renderLeadList() {
       const el = document.getElementById("leadList");
       if (!el) return;
@@ -1303,7 +1316,9 @@
             esc(lastActivityLabel(L)) +
             (L.appointmentStatus === "scheduled" ? " · <strong>" + esc(ct("detail.appointment")) + "</strong>" : "") +
             "</div>" +
-            (opsBadge || handlingBadge ? '<div class="lead-badges">' + opsBadge + handlingBadge + "</div>" : "") +
+            (opsBadge || handlingBadge || L.channelBadge
+              ? '<div class="lead-badges">' + channelSourceBadge(L) + opsBadge + handlingBadge + "</div>"
+              : '<div class="lead-badges">' + channelSourceBadge(L) + "</div>") +
             latestPreview +
             waHint +
             ownership +
@@ -1446,7 +1461,7 @@
           fieldHtml("Urgency", L.urgency) +
           fieldHtml("Booking readiness", L.bookingIntent) +
           fieldHtml("Budget", L.budgetSignal) +
-          fieldHtml("Channel", L.primaryChannel) +
+          fieldHtml("Channel", L.channelBadge || L.primaryChannel) +
           fieldHtml("Messages", L.messageCount) +
           "</div>";
 

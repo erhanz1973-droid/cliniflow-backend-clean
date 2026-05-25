@@ -61185,6 +61185,11 @@ app.get(["/admin-messenger.html", "/admin/settings/messenger"], (req, res) => {
   if (fs.existsSync(p)) return res.sendFile(p);
   return res.status(404).send("admin-messenger.html not found");
 });
+app.get(["/admin-whatsapp.html", "/admin/settings/whatsapp"], (req, res) => {
+  const p = path.join(publicDir, "admin-whatsapp.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-whatsapp.html not found");
+});
 app.get("/admin/ops-profile", (req, res) => {
   const p = path.join(publicDir, "admin-ops-profile.html");
   if (fs.existsSync(p)) return res.sendFile(p);
