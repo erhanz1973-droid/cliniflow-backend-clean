@@ -141,7 +141,16 @@
       return;
     }
     selectCard.style.display = "none";
-    setMsg("Connected " + (json.connected || []).length + " Page(s).");
+    const lines = (json.connected || []).map((c) => {
+      const sub = c.webhookSubscribed ? "webhook subscribed" : "webhook NOT subscribed — check Railway [metaTrace] logs";
+      const err = c.subscribeMeta?.subscribe_error;
+      return `${c.pageName || c.pageId}: ${sub}${err ? " — " + err : ""}`;
+    });
+    const failLines = (json.failed || []).map((f) => `${f.pageId}: ${f.error}`);
+    setMsg(
+      ["Connected " + (json.connected || []).length + " page(s).", ...lines, ...failLines].join("\n"),
+      (json.connected || []).some((c) => !c.webhookSubscribed),
+    );
     loadStatus();
   }
 
