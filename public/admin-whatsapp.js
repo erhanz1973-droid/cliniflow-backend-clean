@@ -6,6 +6,7 @@
   const msgEl = document.getElementById("msg");
   const clinicAuditList = document.getElementById("clinicAuditList");
   const onboardSteps = document.getElementById("onboardSteps");
+  let lastPreview = null;
 
   const AI_MODES = [
     { value: "AI_ACTIVE", label: "AI active — auto-reply when appropriate" },
@@ -123,23 +124,31 @@
 
     const meta =
       '<dl class="meta-grid">' +
-      "<dt>WABA ID</dt><dd>" +
-      escapeHtml(c.wabaId || c.waba_id || "—") +
-      "</dd>" +
-      "<dt>Display name</dt><dd>" +
+      "<dt>Name patients see</dt><dd>" +
       escapeHtml(c.displayName || c.display_name || "—") +
       "</dd>" +
-      "<dt>Phone line</dt><dd>" +
+      "<dt>Your WhatsApp line</dt><dd>" +
       escapeHtml(c.phoneNumber || c.phone_number || "—") +
       "</dd>" +
-      "<dt>Last inbound webhook</dt><dd>" +
-      formatTs(c.lastWebhookAt || c.last_webhook_at) +
+      "<dt>Last patient message</dt><dd>" +
+      formatTs(h.lastInboundMessageAt || c.lastWebhookAt || c.last_webhook_at) +
+      (h.lastMessageAgo ? " (" + escapeHtml(h.lastMessageAgo) + ")" : "") +
       "</dd>" +
-      "<dt>Last outbound success</dt><dd>" +
+      "<dt>Last successful reply</dt><dd>" +
       formatTs(h.lastOutboundSuccessAt) +
       (h.lastOutboundAgo ? " (" + escapeHtml(h.lastOutboundAgo) + ")" : "") +
       "</dd>" +
-      "</dl>";
+      "</dl>" +
+      '<details class="tech-details"><summary>Technical details</summary><div class="inner">' +
+      "<div><strong>Phone number ID:</strong> <code>" +
+      escapeHtml(c.phone_number_id) +
+      "</code></div>" +
+      (c.wabaId || c.waba_id
+        ? "<div style=\"margin-top:6px\"><strong>Business account ID:</strong> <code>" +
+          escapeHtml(c.wabaId || c.waba_id) +
+          "</code></div>"
+        : "<div style=\"margin-top:6px\" class=\"wa-muted\">Business account ID: detected on first webhook</div>") +
+      "</div></details>";
 
     const statsGrid =
       '<div class="stats-grid">' +
@@ -174,9 +183,10 @@
       " " +
       statusBadge(c) +
       "</h3>" +
-      '<p class="wa-muted" style="margin:4px 0 0">ID: <code>' +
-      escapeHtml(c.phone_number_id) +
-      "</code></p></div>" +
+      (c.phoneNumber || c.phone_number
+        ? '<p class="wa-muted" style="margin:4px 0 0">' + escapeHtml(c.phoneNumber || c.phone_number) + "</p>"
+        : "") +
+      "</div>" +
       toggle +
       "</div>" +
       healthRow +
@@ -424,20 +434,123 @@
     await loadClinicAudit();
   }
 
+  function setConnectMode(mode) {
+    document.querySelectorAll(".mode-tab").forEach(function (tab) {
+      const on = tab.getAttribute("data-mode") === mode;
+      tab.classList.toggle("active", on);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    document.getElementById("panelQuick").classList.toggle("active", mode === "quick");
+    document.getElementById("panelAdvanced").classList.toggle("active", mode === "advanced");
+  }
+
+  function renderPreviewCard(result) {
+    const el = document.getElementById("previewCard");
+    const saveBtn = document.getElementById("saveConnectBtn");
+    if (!el) return;
+    el.classList.remove("visible", "error");
+    if (!result) {
+      if (saveBtn) saveBtn.disabled = true;
+      return;
+    }
+    if (!result.ok) {
+      el.classList.add("visible", "error");
+      el.innerHTML =
+        "<h4>Could not verify</h4><p class=\"err\" style=\"margin:0\">" +
+        escapeHtml(result.message || result.error || "Verification failed") +
+        (result.code ? " (Meta code " + escapeHtml(result.code) + ")" : "") +
+        "</p>";
+      lastPreview = null;
+      if (saveBtn) saveBtn.disabled = true;
+      return;
+    }
+    const p = result.preview || {};
+    lastPreview = p;
+    const conflict = p.conflict;
+    let conflictHtml = "";
+    if (conflict && !conflict.sameClinic) {
+      conflictHtml =
+        '<p class="err" style="margin:8px 0 0">This number is already linked to <strong>' +
+        escapeHtml(conflict.clinicName || "another clinic") +
+        "</strong>. Contact support to reassign.</p>";
+    } else if (conflict && conflict.sameClinic) {
+      conflictHtml =
+        '<p class="ok" style="margin:8px 0 0">This number is already on your clinic — saving will refresh its settings.</p>';
+    }
+    el.classList.add("visible");
+    el.innerHTML =
+      "<h4>Connection preview</h4>" +
+      '<div class="preview-row"><span>Name patients see</span><span>' +
+      escapeHtml(p.displayName || "—") +
+      "</span></div>" +
+      '<div class="preview-row"><span>Your WhatsApp line</span><span>' +
+      escapeHtml(p.phoneNumber || "—") +
+      "</span></div>" +
+      '<div class="preview-row"><span>Meta verification</span><span>' +
+      (p.tokenValid ? "Verified" : "—") +
+      "</span></div>" +
+      (p.qualityRating
+        ? '<div class="preview-row"><span>Quality rating</span><span>' + escapeHtml(p.qualityRating) + "</span></div>"
+        : "") +
+      conflictHtml +
+      '<p class="helper" style="margin-top:10px">If this looks correct, click <strong>Confirm and connect</strong>.</p>';
+
+    document.getElementById("inpPhoneNumberId").value = p.phoneNumberId || "";
+    document.getElementById("inpDisplayName").value = p.displayName || "";
+    document.getElementById("inpPhoneNumber").value = p.phoneNumber || "";
+    if (saveBtn) {
+      saveBtn.disabled = Boolean(conflict && !conflict.sameClinic);
+    }
+  }
+
+  async function verifyBusinessNumber() {
+    const raw = document.getElementById("inpBusinessNumberId").value.trim().replace(/\s+/g, "");
+    document.getElementById("inpBusinessNumberId").value = raw;
+    document.getElementById("inpPhoneNumberId").value = raw;
+    if (!raw) {
+      setMsg("Paste your WhatsApp Business Number ID from Meta first.", true);
+      return;
+    }
+    const btn = document.getElementById("btnVerifyNumber");
+    const prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Checking with Meta…';
+    setMsg("", false);
+    const res = await fetch("/api/integrations/whatsapp/connections/preview", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        phoneNumberId: raw,
+        wabaId: document.getElementById("inpWabaId").value.trim() || null,
+      }),
+    });
+    const json = await res.json().catch(function () {
+      return {};
+    });
+    btn.disabled = false;
+    btn.textContent = prevLabel;
+    if (!res.ok || !json.ok) {
+      renderPreviewCard(json);
+      setMsg(json.message || json.error || "Verification failed", true);
+      return;
+    }
+    renderPreviewCard(json);
+    setMsg("Number verified with Meta. Review the preview, then confirm.", false);
+  }
+
   async function saveConnect() {
-    const phoneNumberId = document.getElementById("inpPhoneNumberId").value.trim();
-    if (!phoneNumberId) {
-      setMsg("Phone number ID is required.", true);
+    if (!lastPreview?.phoneNumberId) {
+      setMsg("Verify your number with Meta before connecting.", true);
       return;
     }
     const res = await fetch("/api/integrations/whatsapp/connections/connect", {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({
-        phoneNumberId,
-        displayName: document.getElementById("inpDisplayName").value.trim() || null,
-        phoneNumber: document.getElementById("inpPhoneNumber").value.trim() || null,
-        wabaId: document.getElementById("inpWabaId").value.trim() || null,
+        phoneNumberId: lastPreview.phoneNumberId,
+        displayName: lastPreview.displayName || document.getElementById("inpDisplayName").value.trim() || null,
+        phoneNumber: lastPreview.phoneNumber || document.getElementById("inpPhoneNumber").value.trim() || null,
+        wabaId: document.getElementById("inpWabaId").value.trim() || lastPreview.wabaId || null,
       }),
     });
     const json = await res.json().catch(function () {
@@ -447,8 +560,12 @@
       setMsg(json.error || "Could not save connection", true);
       return;
     }
-    setMsg("WhatsApp number connected. Complete the checklist above.");
-    document.getElementById("manualConnectPanel").style.display = "none";
+    setMsg("WhatsApp connected successfully. Continue the checklist above.");
+    lastPreview = null;
+    document.getElementById("previewCard").classList.remove("visible");
+    document.getElementById("inpBusinessNumberId").value = "";
+    document.getElementById("saveConnectBtn").disabled = true;
+    setConnectMode("quick");
     await refreshAll();
   }
 
@@ -584,9 +701,24 @@
     await loadClinicAudit();
   }
 
-  document.getElementById("btnToggleManual").addEventListener("click", function () {
-    const panel = document.getElementById("manualConnectPanel");
-    panel.style.display = panel.style.display === "block" ? "none" : "block";
+  document.querySelectorAll(".mode-tab").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      setConnectMode(tab.getAttribute("data-mode"));
+    });
+  });
+  document.getElementById("btnVerifyNumber").addEventListener("click", function () {
+    void verifyBusinessNumber();
+  });
+  document.getElementById("inpBusinessNumberId").addEventListener("input", function () {
+    lastPreview = null;
+    document.getElementById("saveConnectBtn").disabled = true;
+    document.getElementById("previewCard").classList.remove("visible");
+    document.getElementById("inpPhoneNumberId").value =
+      document.getElementById("inpBusinessNumberId").value.trim().replace(/\s+/g, "");
+  });
+  document.getElementById("inpWabaId").addEventListener("change", function () {
+    if (lastPreview) lastPreview = null;
+    document.getElementById("saveConnectBtn").disabled = true;
   });
   document.getElementById("saveConnectBtn").addEventListener("click", function () {
     void saveConnect();
