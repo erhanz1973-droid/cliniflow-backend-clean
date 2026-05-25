@@ -6385,6 +6385,12 @@ app.post(
   },
 );
 
+const {
+  registerMetaMessengerWebhook,
+  registerMetaIntegrationRoutes,
+} = require("./lib/omnichannel/registerMetaRoutes");
+registerMetaMessengerWebhook(app);
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(traceMiddleware);
@@ -61106,11 +61112,16 @@ setupOfferInboundOrchestration({
   },
 });
 setupTreatmentRequestOrchestration({ insertIntoTableWithColumnPruning });
-const inboundClinicMessageInsert = createOfferAwareClinicMessageInsert(
-  baseInboundClinicMessageInsert,
+const { createChannelAwareClinicMessageInsert } = require("./lib/omnichannel/outboundDelivery");
+const inboundClinicMessageInsert = createChannelAwareClinicMessageInsert(
+  createOfferAwareClinicMessageInsert(baseInboundClinicMessageInsert),
 );
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
+registerMetaIntegrationRoutes(app, {
+  requireAdminAuth,
+  afterPatientInboundMessage,
+});
 const { registerClinicalGuidanceRoutes } = require("./lib/clinicalGuidanceRoutes");
 registerClinicalGuidanceRoutes(app, {
   requireDoctorAuth,
@@ -61166,6 +61177,12 @@ app.get("/admin-ops-profile.html", (req, res) => {
   if (fs.existsSync(p)) return res.sendFile(p);
   return res.status(404).send("admin-ops-profile.html not found");
 });
+
+app.get(["/admin-messenger.html", "/admin/settings/messenger"], (req, res) => {
+  const p = path.join(publicDir, "admin-messenger.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-messenger.html not found");
+});
 app.get("/admin/ops-profile", (req, res) => {
   const p = path.join(publicDir, "admin-ops-profile.html");
   if (fs.existsSync(p)) return res.sendFile(p);
@@ -61184,6 +61201,10 @@ app.get("/admin/ai-leads", (req, res) => {
 });
 
 app.use(express.static(publicDir));
+
+// Meta Messenger webhook (re-register before 404 so production always has the route in the stack)
+const { registerMetaMessengerWebhook: mountMetaMessengerWebhook } = require("./lib/omnichannel/registerMetaRoutes");
+mountMetaMessengerWebhook(app);
 
 // ── Unmatched routes (LAST; must stay after static) ─────────────────
 app.use((req, res) => {

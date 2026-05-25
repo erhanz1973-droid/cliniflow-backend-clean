@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Messenger — Clinifly</title>
+  <link rel="stylesheet" href="/admin-layout.css" />
+  <style>
+    .wrap { max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .btn { display: inline-block; padding: 10px 18px; background: #1877f2; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .muted { color: #64748b; font-size: 14px; }
+    .page-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+    .err { color: #b91c1c; }
+    .ok { color: #047857; }
+    #pageSelect label { display: block; padding: 8px 0; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Facebook Messenger</h1>
+    <p class="muted">Connect a Facebook Page so patient messages flow into Clinifly AI coordination.</p>
+
+    <div class="card">
+      <h2>Connection</h2>
+      <p id="statusText" class="muted">Loading…</p>
+      <button type="button" class="btn" id="connectBtn">Connect Facebook</button>
+    </div>
+
+    <div class="card" id="pagesCard" style="display:none;">
+      <h2>Connected Pages</h2>
+      <div id="connectedList"></div>
+    </div>
+
+    <div class="card" id="selectCard" style="display:none;">
+      <h2>Select Pages</h2>
+      <div id="pageSelect"></div>
+      <button type="button" class="btn" id="savePagesBtn" style="margin-top:12px;">Save selected</button>
+    </div>
+
+    <p id="msg" class="muted"></p>
+  </div>
+  <script src="/admin-messenger.js"></script>
+</body>
+</html>
