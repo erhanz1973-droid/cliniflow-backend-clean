@@ -18,6 +18,10 @@
   </script>
   <style>
     :root { --bg:#111827; --card:#1f2937; --b:#374151; --p:#2563eb; --g:#16a34a; --r:#dc2626; --y:#f59e0b; --muted:#a7b2c8; }
+    .delivery-toast { margin: 8px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+    .delivery-toast.sent { background: rgba(22,163,74,0.15); border: 1px solid var(--g); color: #86efac; }
+    .delivery-toast.failed { background: rgba(220,38,38,0.15); border: 1px solid var(--r); color: #fca5a5; }
+    .delivery-toast.skipped { display: none; }
     body{ font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:#e6eaf2; }
     .wrap{ max-width:1200px; margin:0 auto; padding:20px; }
     header{ margin-bottom:20px; border-bottom:1px solid #1f2937; padding-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; }
@@ -286,6 +290,7 @@
             <!-- Messages will be loaded here -->
           </div>
 
+          <div id="deliveryStatus" class="delivery-toast skipped" role="status" aria-live="polite"></div>
           <div id="chatInputArea" class="chat-input-area" style="display:none;">
             <input type="text" id="messageInput" class="chat-input" data-i18n-placeholder="chat.placeholder" placeholder="Type a message..." />
             <button type="button" class="btn-primary" id="chatSendBtn" onclick="sendMessage()" data-i18n="chat.send">Send</button>
@@ -813,6 +818,31 @@
       // If user is scrolling up, don't force scroll - let them read old messages
     }
 
+    function showDeliveryStatus(delivery) {
+      const el = document.getElementById('deliveryStatus');
+      if (!el) return;
+      if (!delivery || delivery.status === 'skipped' || !delivery.channel || delivery.channel === 'in_app') {
+        el.className = 'delivery-toast skipped';
+        el.textContent = '';
+        return;
+      }
+      const ch = String(delivery.channel || '').toLowerCase();
+      if (delivery.status === 'sent' && delivery.delivered) {
+        el.className = 'delivery-toast sent';
+        el.textContent = 'Delivered to patient ' + ch + (delivery.externalMessageId ? ' ✓' : '');
+        return;
+      }
+      if (delivery.status === 'failed') {
+        el.className = 'delivery-toast failed';
+        const detail = delivery.detail || delivery.error || 'send failed';
+        el.textContent = ch + ' delivery failed: ' + detail + ' — check Messenger connection / diagnostics';
+        showError('Message saved in clinic inbox but not delivered to ' + ch + ': ' + detail);
+        return;
+      }
+      el.className = 'delivery-toast skipped';
+      el.textContent = '';
+    }
+
     async function sendMessage() {
       if (!selectedPatientId) {
         showError(t('chat.errSelectFirst'));
@@ -850,6 +880,8 @@
         if (!res.ok || !json.ok) {
           throw new Error(json.error || t('chat.errSend'));
         }
+
+        showDeliveryStatus(json.delivery);
 
         input.value = '';
         // After sending a message, always scroll to bottom to show the sent message

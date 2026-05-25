@@ -25601,11 +25601,12 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
       return res.status(400).json({ ok: false, error: "text_required", received: body });
     }
 
-    const respondSuccess = (legacyMsg, rawRow) =>
+    const respondSuccess = (legacyMsg, rawRow, delivery) =>
       res.json({
         ok: true,
         message: rawRow != null ? rawRow : legacyMsg,
         legacyMessage: legacyMsg,
+        delivery: delivery || null,
       });
 
     if (!isSupabaseEnabled()) {
@@ -25763,7 +25764,30 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
             pmTry.data,
             "patient_messages",
           );
-          return respondSuccess(leg, pmTry.data);
+          let delivery = null;
+          try {
+            const rpidOut = await resolveMessagesPatientDbId(patientId);
+            const cidOut =
+              clinicUuidNotify && UUID_RE.test(String(clinicUuidNotify).trim())
+                ? String(clinicUuidNotify).trim()
+                : null;
+            if (rpidOut && cidOut) {
+              const { deliverClinicReplyToExternalChannel } = require("./lib/omnichannel/outboundDelivery");
+              delivery = await deliverClinicReplyToExternalChannel({
+                patientId: rpidOut,
+                clinicId: cidOut,
+                text: String(text).trim(),
+                messageRole: "coordinator",
+              });
+              if (delivery?.status === "failed") {
+                console.warn("[admin messages/admin] external delivery failed", delivery);
+              }
+            }
+          } catch (delErr) {
+            console.warn("[admin messages/admin] external delivery error:", delErr?.message || delErr);
+            delivery = { channel: "unknown", status: "failed", delivered: false, error: "delivery_exception" };
+          }
+          return respondSuccess(leg, pmTry.data, delivery);
         }
         const { data, error, insertedTable } = await insertMessageToSupabase({
           patientId,
@@ -49347,7 +49371,25 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
         pmTry.data,
         "patient_messages"
       );
-      return res.json({ ok: true, message: pmTry.data, legacyMessage: leg });
+      let delivery = null;
+      if (UUID_RE.test(clinicIdForInsert)) {
+        try {
+          const { deliverClinicReplyToExternalChannel } = require("./lib/omnichannel/outboundDelivery");
+          delivery = await deliverClinicReplyToExternalChannel({
+            patientId,
+            clinicId: clinicIdForInsert,
+            text,
+            messageRole: "coordinator",
+          });
+          if (delivery?.status === "failed") {
+            console.warn("[POST /api/messages/:id/reply] external delivery failed", delivery);
+          }
+        } catch (delErr) {
+          console.warn("[POST /api/messages/:id/reply] external delivery:", delErr?.message || delErr);
+          delivery = { channel: "unknown", status: "failed", delivered: false, error: "delivery_exception" };
+        }
+      }
+      return res.json({ ok: true, message: pmTry.data, legacyMessage: leg, delivery });
     }
 
     // Fallback: full messages table path (handles clinic_id lookup, thread creation, etc.)

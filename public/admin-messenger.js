@@ -379,6 +379,38 @@
   }
   savePagesBtn.addEventListener("click", saveSelectedPages);
 
+  const diagBtn = document.getElementById("diagBtn");
+  if (diagBtn) {
+    diagBtn.addEventListener("click", async () => {
+      const pageId =
+        (uiState.activeConnections && uiState.activeConnections[0] && uiState.activeConnections[0].pageId) ||
+        "";
+      const q = pageId ? "?pageId=" + encodeURIComponent(pageId) : "";
+      setMsg("Running Graph self-test…");
+      try {
+        const res = await fetch("/api/integrations/meta/messenger/diagnostics" + q, {
+          headers: authHeaders(),
+        });
+        const json = await res.json().catch(() => ({}));
+        metaUiLog("messenger.diagnostics", { ok: res.ok, findings: json.report && json.report.findings });
+        if (!res.ok || !json.ok) {
+          setMsg(json.error || "Diagnostics failed", true);
+          return;
+        }
+        const findings = (json.report && json.report.findings) || [];
+        setMsg(
+          findings.length
+            ? "Diagnostics:\n• " + findings.join("\n• ")
+            : "Diagnostics OK — page token and probes look healthy.",
+          findings.length > 0,
+        );
+        if (debugEl) debugEl.textContent = JSON.stringify(json.report, null, 2);
+      } catch (e) {
+        setMsg(e.message || "Diagnostics request failed", true);
+      }
+    });
+  }
+
   handleOAuthReturn();
   void loadStatus();
 })();
