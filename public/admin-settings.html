@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605185"></script>
-  <script src="/admin-i18n.js?v=45"></script>
+  <script src="/admin-i18n.js?v=46"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Admin – Clinic Settings</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605201"/>
@@ -331,9 +331,12 @@
           <input type="radio" name="aiReplyMode" value="human_only" />
           <span data-i18n="settings.aiCommunication.humanOnly">Human-only (no AI auto-reply)</span>
         </label>
-        <label data-i18n="settings.aiCommunication.fallbackLabel">Fallback delay (minutes) — only if human does not reply</label>
-        <input type="range" id="aiFallbackMinutes" min="2" max="15" step="1" value="5" style="width:100%;" />
-        <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackMinutesLabel">5</span> <span data-i18n="settings.aiCommunication.minutesWord">minutes</span></div>
+        <p class="muted" style="margin:8px 0 12px;font-size:0.88rem;line-height:1.45;" data-i18n="settings.aiCommunication.timingHint">
+          AI sends the first greeting within seconds. Human takeover time applies in &quot;Wait for human&quot; mode, or when your team does not reply.
+        </p>
+        <label data-i18n="settings.aiCommunication.humanTakeoverLabel">Human representative takeover time (before AI steps in)</label>
+        <input type="range" id="aiFallbackSeconds" min="30" max="300" step="15" value="60" style="width:100%;" />
+        <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackSecondsLabel">60</span> <span data-i18n="settings.aiCommunication.secondsWord">sec</span></div>
         <label data-i18n="settings.aiCommunication.omniDelayLabel">Messenger/WhatsApp instant delay (ms)</label>
         <input type="number" id="aiOmniInstantMs" min="0" max="3000" step="50" value="200" />
         <button type="button" id="aiCommSaveBtn" data-i18n="settings.aiCommunication.save">Save AI communication</button>
@@ -1166,8 +1169,15 @@
     const formEl = $("aiCommForm");
     const msgEl = $("aiCommMsg");
     const saveBtn = $("aiCommSaveBtn");
-    const fallbackSlider = $("aiFallbackMinutes");
-    const fallbackLabel = $("aiFallbackMinutesLabel");
+    const fallbackSlider = $("aiFallbackSeconds");
+    const fallbackLabel = $("aiFallbackSecondsLabel");
+
+    function clampFallbackSeconds(sec) {
+      const n = Number(sec);
+      const base = Number.isFinite(n) && n > 0 ? n : 60;
+      const stepped = Math.round(base / 15) * 15;
+      return Math.min(300, Math.max(30, stepped));
+    }
     const omniMsInput = $("aiOmniInstantMs");
     if (!formEl || !saveBtn) return;
 
@@ -1206,9 +1216,14 @@
         document.querySelectorAll('input[name="aiReplyMode"]').forEach((el) => {
           el.checked = el.value === mode;
         });
-        const fbMin = Math.min(15, Math.max(2, Number(cfg.fallbackDelayMinutes) || 5));
-        if (fallbackSlider) fallbackSlider.value = String(fbMin);
-        if (fallbackLabel) fallbackLabel.textContent = String(fbMin);
+        let fbSec = Number(cfg.fallbackDelaySeconds);
+        if (!Number.isFinite(fbSec) || fbSec < 30) {
+          const legacyMin = Number(cfg.fallbackDelayMinutes);
+          fbSec = Number.isFinite(legacyMin) && legacyMin > 0 ? Math.round(legacyMin * 60) : 60;
+        }
+        fbSec = clampFallbackSeconds(fbSec);
+        if (fallbackSlider) fallbackSlider.value = String(fbSec);
+        if (fallbackLabel) fallbackLabel.textContent = String(fbSec);
         if (omniMsInput) {
           omniMsInput.value = String(
             Number(cfg.omnichannelInstantDelayMs) > 0 ? cfg.omnichannelInstantDelayMs : 200,
@@ -1236,7 +1251,7 @@
       try {
         const body = {
           replyMode: selectedReplyMode(),
-          fallbackDelayMinutes: Number(fallbackSlider?.value || 5),
+          fallbackDelaySeconds: clampFallbackSeconds(fallbackSlider?.value || 60),
           omnichannelInstantDelayMs: Number(omniMsInput?.value || 200),
         };
         const res = await fetch(API_BASE + "/api/admin/clinic/ai-communication", {
