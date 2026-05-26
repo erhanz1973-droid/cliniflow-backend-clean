@@ -674,7 +674,7 @@
           secondsWord: "sn",
           omniDelayLabel: "Anında yanıt gecikmesi (Messenger / WhatsApp)",
           omniDelayHelp:
-            "Önerilen: 0,2–1 sn. 2 sn üzeri hastaya yavaş hissedilir. Bu ayar yalnızca «Anında» modda geçerlidir.",
+            "Önerilen: 0,1–0,3 sn (çok hızlı). 1 sn üzeri yavaş hissedilir. Bu ayar yalnızca «Anında» modda geçerlidir.",
           fallbackHelp:
             "Yalnızca «İnsanı bekle» modunda: ekip bu süre içinde yazmazsa YZ ilk mesajı atar.",
           bookingModeLabel: "YZ takvim randevu modu",
@@ -2155,7 +2155,7 @@
           secondsWord: "sec",
           omniDelayLabel: "Instant reply delay (Messenger / WhatsApp)",
           omniDelayHelp:
-            "Typical: 0.2–1 s. Above ~2 s feels slow to patients. Only applies in Instant mode.",
+            "Recommended: 0.1–0.3 s for fastest replies. Above ~1 s feels slow. Only applies in Instant mode.",
           fallbackHelp:
             "Only in &quot;Wait for human&quot; mode: AI sends the first message if your team is silent for this long.",
           bookingModeLabel: "AI calendar booking mode",
