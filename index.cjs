@@ -61229,6 +61229,9 @@ registerMetaIntegrationRoutes(app, {
   requireAdminAuth,
   afterPatientInboundMessage,
 });
+const { setupWhatsAppInbound: bindWhatsAppAiInbound } = require("./lib/omnichannel/whatsappInbound");
+bindWhatsAppAiInbound({ afterPatientInboundMessage });
+console.log("[whatsapp] AI inbound hook bound after orchestration setup");
 const { registerClinicalGuidanceRoutes } = require("./lib/clinicalGuidanceRoutes");
 registerClinicalGuidanceRoutes(app, {
   requireDoctorAuth,
