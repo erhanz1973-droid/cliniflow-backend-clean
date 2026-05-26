@@ -2,9 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605185"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Messenger — Clinifly</title>
-  <link rel="stylesheet" href="/admin-layout.css" />
+  <link rel="stylesheet" href="/admin-layout.css?v=202605201" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      if (!t) window.location.href = "/admin-login.html";
+    })();
+  </script>
   <style>
     .wrap { max-width: 720px; margin: 24px auto; padding: 0 16px; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
@@ -63,6 +70,7 @@
 
     <p id="msg" class="muted"></p>
   </div>
+  <script src="/admin-layout.js?v=202605201"></script>
   <script src="/admin-messenger.js?v=3"></script>
 </body>
 </html>

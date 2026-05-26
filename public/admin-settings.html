@@ -6,7 +6,7 @@
   <script src="/admin-i18n.js?v=44"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Admin – Clinic Settings</title>
-  <link rel="stylesheet" href="/admin-layout.css?v=202605162"/>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605201"/>
   <script>
     // Token check - redirect to login if not authenticated
     (function() {
@@ -217,13 +217,91 @@
   body.al-ready .al-main .wrap .loading {
     color: var(--muted);
   }
+
+  .card-feature {
+    margin-bottom: 20px;
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .card-feature--training {
+    border: 2px solid rgba(13, 148, 136, 0.55);
+    background: linear-gradient(135deg, rgba(13, 148, 136, 0.18), rgba(37, 99, 235, 0.1));
+  }
+  .card-feature--ai {
+    border: 1px solid rgba(167, 139, 250, 0.45);
+    background: rgba(139, 92, 246, 0.12);
+  }
+  .card-feature--channels {
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(30, 41, 59, 0.55);
+  }
+  .card-feature h2 {
+    margin-top: 0;
+    font-size: 20px;
+    color: #f1f5f9;
+  }
+  .card-feature .muted,
+  .card-feature p {
+    color: var(--muted);
+  }
+  .card-feature strong {
+    color: #e2e8f0;
+  }
+  .settings-radio {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-weight: 500;
+    color: #e6eaf2;
+    cursor: pointer;
+  }
+  .settings-radio input {
+    width: auto;
+    margin: 0;
+  }
+  .settings-location-panel {
+    margin-top: 24px;
+    padding: 16px 18px;
+    background: rgba(37, 99, 235, 0.12);
+    border: 1.5px solid rgba(59, 130, 246, 0.45);
+    border-radius: 12px;
+  }
+  .settings-location-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #93c5fd;
+  }
+  .settings-location-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .settings-location-panel select,
+  .settings-location-panel input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 11px 14px;
+    border: 1.5px solid rgba(59, 130, 246, 0.5);
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #e6eaf2;
+    background: #111827;
+    outline: none;
+  }
+  #aiCommSaveBtn {
+    width: auto;
+    padding: 10px 18px;
+    margin-top: 12px;
+  }
   </style>
 </head>
 <body>
   <div class="wrap">
 
-    <div class="card" style="margin-bottom:20px;border:2px solid #0d9488;background:linear-gradient(135deg,#f0fdfa,#ecfeff,#f5f3ff);">
-      <h2 style="margin-top:0;font-size:20px;" data-i18n="settings.opsProfileCardTitle">Clinic AI Training</h2>
+    <div class="card card-feature card-feature--training">
+      <h2 data-i18n="settings.opsProfileCardTitle">Clinic AI Training</h2>
       <p class="muted" style="margin-bottom:14px;line-height:1.5;" data-i18n="settings.opsProfileCardDesc">
         Teach your AI how your clinic works — what it should know, how it should talk to patients, and when to bring in your team.
       </p>
@@ -233,21 +311,21 @@
       </a>
     </div>
 
-    <div class="card" style="margin-bottom:20px;border:1px solid #a78bfa;background:#faf5ff;">
-      <h2 style="margin-top:0;font-size:20px;">AI Communication</h2>
+    <div class="card card-feature card-feature--ai">
+      <h2>AI Communication</h2>
       <p class="muted" style="margin-bottom:14px;line-height:1.5;">
         Control how fast the AI replies on Messenger and WhatsApp. <strong>Instant</strong> sends within seconds when AI is active.
         <strong>Wait for human</strong> only uses AI after your team does not reply within the fallback window.
       </p>
       <div id="aiCommLoading" class="muted">Loading…</div>
       <div id="aiCommForm" style="display:none;">
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <label class="settings-radio">
           <input type="radio" name="aiReplyMode" value="instant" /> Instant AI replies (1–5 sec on Messenger/WhatsApp)
         </label>
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <label class="settings-radio">
           <input type="radio" name="aiReplyMode" value="wait_human" /> Wait for human before AI
         </label>
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+        <label class="settings-radio">
           <input type="radio" name="aiReplyMode" value="human_only" /> Human-only (no AI auto-reply)
         </label>
         <label>Fallback delay (minutes) — only if human does not reply</label>
@@ -255,13 +333,13 @@
         <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackMinutesLabel">5</span> minutes</div>
         <label>Messenger/WhatsApp instant delay (ms)</label>
         <input type="number" id="aiOmniInstantMs" min="0" max="3000" step="50" value="200" />
-        <button type="button" id="aiCommSaveBtn" class="btn-primary" style="margin-top:12px;width:auto;padding:10px 18px;">Save AI communication</button>
+        <button type="button" id="aiCommSaveBtn">Save AI communication</button>
         <p id="aiCommMsg" class="muted" style="margin-top:8px;"></p>
       </div>
     </div>
 
-    <div class="card" style="margin-bottom:20px;border:1px solid #cbd5e1;background:#f8fafc;">
-      <h2 style="margin-top:0;font-size:20px;">Communication Channels</h2>
+    <div class="card card-feature card-feature--channels">
+      <h2>Communication Channels</h2>
       <p class="muted" style="margin-bottom:16px;line-height:1.5;">
         Connect external channels so patient messages appear in your AI coordinator inbox with source badges (WhatsApp, Messenger, Instagram, Web).
       </p>
@@ -291,26 +369,22 @@
         <div class="muted" data-i18n="settings.planChangesNote">Plan changes are done via the pricing page.</div>
 
         <!-- ── Location: country + city (all plans) ── -->
-        <div style="margin-top:24px; padding:16px 18px; background:linear-gradient(135deg,#eff6ff,#f0fdf4); border:1.5px solid #3b82f6; border-radius:12px;">
+        <div class="settings-location-panel">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
             <span style="font-size:18px;">📍</span>
-            <span style="font-size:14px;font-weight:700;color:#1d4ed8;" data-i18n="settings.locationTitle">Location</span>
+            <span class="settings-location-title" data-i18n="settings.locationTitle">Location</span>
             <span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;" data-i18n="settings.locationAllPlans">ALL PLANS</span>
           </div>
           <label for="clinicCountry" data-i18n="settings.countryLabel">Country</label>
-          <select
-            id="clinicCountry"
-            style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #3b82f6;border-radius:8px;font-size:15px;font-weight:600;color:#1e3a5f;background:#fff;outline:none;"
-          ></select>
+          <select id="clinicCountry"></select>
           <label for="clinicCity" data-i18n="settings.cityLabel">City</label>
           <input
             type="text"
             id="clinicCity"
             data-i18n-placeholder="settings.cityPlaceholder"
             placeholder="Antalya, Istanbul, London, Tbilisi..."
-            style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #3b82f6;border-radius:8px;font-size:15px;font-weight:600;color:#1e3a5f;background:#fff;outline:none;"
           />
-          <div style="margin-top:6px;font-size:12px;color:#6b7280;" data-i18n="settings.locationDiscoveryHelp">Patients can filter clinics by country and city on discovery.</div>
+          <div class="settings-location-hint" data-i18n="settings.locationDiscoveryHelp">Patients can filter clinics by country and city on discovery.</div>
         </div>
 
         <h2 style="margin-top: 32px; display: flex; align-items: center; gap: 8px;" data-i18n="settings.referralDiscounts">

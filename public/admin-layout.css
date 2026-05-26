@@ -509,3 +509,139 @@ body.al-ready {
   }
   .page-hdr { flex-direction: column; align-items: stretch; }
 }
+
+/* ================================================================
+   DARK MAIN — legacy light component CSS inside admin shell
+   ================================================================ */
+body.al-ready .al-main {
+  background: #111827;
+  color: #e6eaf2;
+}
+
+body.al-ready .al-main h1,
+body.al-ready .al-main h2,
+body.al-ready .al-main h3,
+body.al-ready .al-main h4,
+body.al-ready .al-main summary {
+  color: #f1f5f9;
+}
+
+body.al-ready .al-main label {
+  color: #e6eaf2;
+}
+
+body.al-ready .al-main .muted,
+body.al-ready .al-main .wa-muted,
+body.al-ready .al-main .helper,
+body.al-ready .al-main .quick-steps,
+body.al-ready .al-main .lead {
+  color: #94a3b8;
+}
+
+body.al-ready .al-main .wa-card,
+body.al-ready .al-main .wrap > .card,
+body.al-ready .al-main .wrap .card,
+body.al-ready .al-main .card,
+body.al-ready .al-main .embed-box,
+body.al-ready .al-main .example-box,
+body.al-ready .al-main #debugState {
+  background: #1f2937 !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  color: #e6eaf2;
+}
+
+body.al-ready .al-main .wa-notice {
+  background: rgba(16, 185, 129, 0.12) !important;
+  border-color: rgba(52, 211, 153, 0.35) !important;
+  color: #6ee7b7 !important;
+}
+
+body.al-ready .al-main .preview-card {
+  background: rgba(16, 185, 129, 0.1) !important;
+  border-color: rgba(52, 211, 153, 0.35) !important;
+}
+body.al-ready .al-main .preview-card.error {
+  background: rgba(220, 38, 38, 0.12) !important;
+  border-color: rgba(248, 113, 113, 0.4) !important;
+}
+body.al-ready .al-main .preview-card h4 {
+  color: #6ee7b7 !important;
+}
+body.al-ready .al-main .preview-card.error h4 {
+  color: #fca5a5 !important;
+}
+body.al-ready .al-main .preview-row span:last-child {
+  color: #e6eaf2 !important;
+}
+
+body.al-ready .al-main .mode-tabs {
+  border-color: rgba(148, 163, 184, 0.35) !important;
+}
+body.al-ready .al-main .mode-tab {
+  background: rgba(30, 41, 59, 0.85) !important;
+  color: #94a3b8 !important;
+}
+body.al-ready .al-main .mode-tab.active {
+  background: #1f2937 !important;
+  color: #f1f5f9 !important;
+}
+
+body.al-ready .al-main input,
+body.al-ready .al-main select,
+body.al-ready .al-main textarea {
+  background: #111827 !important;
+  color: #e6eaf2 !important;
+  border-color: rgba(148, 163, 184, 0.4) !important;
+}
+
+body.al-ready .al-main .wa-btn-outline,
+body.al-ready .al-main .btn-outline {
+  background: transparent !important;
+  color: #e6eaf2 !important;
+  border: 1px solid rgba(148, 163, 184, 0.45) !important;
+}
+
+body.al-ready .al-main .helper a {
+  color: #6aa6ff;
+}
+
+body.al-ready .al-main .helper code,
+body.al-ready .al-main pre {
+  background: rgba(15, 23, 42, 0.85) !important;
+  color: #cbd5e1 !important;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+body.al-ready .al-main .page-row {
+  border-bottom-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+body.al-ready .al-main .err {
+  color: #fca5a5 !important;
+}
+body.al-ready .al-main .ok {
+  color: #6ee7b7 !important;
+}
+
+/* Beat leftover inline light panels on settings / channel pages */
+body.al-ready .al-main [style*="background:#faf5ff"],
+body.al-ready .al-main [style*="background:#f8fafc"],
+body.al-ready .al-main [style*="background:linear-gradient(135deg,#f0fdfa"],
+body.al-ready .al-main [style*="background:linear-gradient(135deg,#eff6ff"] {
+  background: rgba(30, 41, 59, 0.65) !important;
+}
+
+body.al-ready .al-main [style*="color:#1d4ed8"],
+body.al-ready .al-main [style*="color:#1e3a5f"] {
+  color: #93c5fd !important;
+}
+
+body.al-ready .al-main [style*="color:#6b7280"] {
+  color: #94a3b8 !important;
+}
+
+body.al-ready .al-main select[style*="background:#fff"],
+body.al-ready .al-main input[style*="background:#fff"] {
+  background: #111827 !important;
+  color: #e6eaf2 !important;
+}
