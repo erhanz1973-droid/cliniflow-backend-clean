@@ -5,10 +5,10 @@
   <script src="/api-base.js?v=202605185"></script>
   <script src="/admin-layout.js?v=202605184"></script>
   <script src="/admin-i18n.js?v=37"></script>
-  <script src="/admin-coordination-i18n.js?v=202605261"></script>
+  <script src="/admin-coordination-i18n.js?v=202605262"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-coord-i18n="hero.title">Coordination Center — Clinifly Admin</title>
-  <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
+  <link rel="stylesheet" href="/admin-layout.css?v=202605201" />
   <script>
     (function () {
       const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
@@ -381,9 +381,113 @@
     .lead-status-line {
       font-size: 0.75rem; font-weight: 700; color: #0369a1; margin-top: 6px;
     }
+    /* Dark admin shell — coordination center detail panel */
+    body.al-ready .ai-wrap { color: #e2e8f0; }
+    body.al-ready .panel { background: #0f172a; border-color: #334155; }
+    body.al-ready .panel-hd { color: #f1f5f9; border-color: #334155; }
+    body.al-ready .lead-item { border-color: #1e293b; }
+    body.al-ready .lead-item:hover { background: #1e293b; }
+    body.al-ready .lead-item.active { background: #172554; border-left-color: #3b82f6; }
+    body.al-ready .lead-headline { color: #f8fafc; }
+    body.al-ready .lead-context,
+    body.al-ready .lead-score-row,
+    body.al-ready .lead-ai-line,
+    body.al-ready .lead-gaps { color: #94a3b8; }
+    body.al-ready .lead-status-line { color: #e2e8f0; }
+    body.al-ready .lead-next-text { color: #f1f5f9; }
+    body.al-ready .lead-patient-sub { color: #64748b; }
+    body.al-ready .field {
+      background: #1e293b; border-color: #334155;
+    }
+    body.al-ready .field label { color: #94a3b8; }
+    body.al-ready .field div { color: #f1f5f9; }
+    body.al-ready .summary-box {
+      background: #14532d; border-color: #166534; color: #dcfce7;
+    }
+    body.al-ready .mission-control {
+      background: #172554; border-color: #1e40af;
+    }
+    body.al-ready .mission-control .mc-title { color: #93c5fd; }
+    body.al-ready .mission-cell label { color: #94a3b8; }
+    body.al-ready .mission-cell div { color: #e2e8f0; }
+    body.al-ready .sla-strip {
+      background: #1e293b; border-color: #334155;
+    }
+    body.al-ready .sla-cell label { color: #94a3b8; }
+    body.al-ready .sla-cell div { color: #e2e8f0; }
+    body.al-ready .delegation-bar {
+      background: #1e293b; border-color: #334155;
+    }
+    body.al-ready .delegation-status { color: #f1f5f9; }
+    body.al-ready .delegation-note { color: #94a3b8; }
+    body.al-ready .delegation-note a { color: #60a5fa; }
+    body.al-ready .delegation-btn {
+      background: #0f172a; border-color: #475569; color: #e2e8f0;
+    }
+    body.al-ready .delegation-btn.active {
+      background: #1e3a8a; border-color: #3b82f6; color: #dbeafe;
+    }
+    body.al-ready .intake-pipeline {
+      background: #1e293b; border-color: #334155;
+    }
+    body.al-ready .intake-pipeline .pipe-hd { color: #94a3b8; }
+    body.al-ready .pipe-title { color: #f1f5f9; }
+    body.al-ready .pipe-sub { color: #94a3b8; }
+    body.al-ready .pipeline-step.current { background: #172554; }
+    body.al-ready .readiness-box {
+      background: #0c4a6e; border-color: #0369a1; color: #e0f2fe;
+    }
+    body.al-ready .readiness-box strong { color: #f0f9ff; }
+    body.al-ready .intake-flags-box {
+      background: #422006; border-color: #b45309; color: #fde68a;
+    }
+    body.al-ready .intake-flags-box strong { color: #fef3c7; }
+    body.al-ready .visit-plan-box {
+      background: #2e1065; border-color: #6d28d9; color: #e9d5ff;
+    }
+    body.al-ready .visit-plan-box .disclaimer { color: #ddd6fe; }
+    body.al-ready .suggest-box {
+      background: #172554; border-color: #2563eb; color: #dbeafe;
+    }
+    body.al-ready .send-reply-box {
+      background: #1e293b; border-color: #334155; color: #e2e8f0;
+    }
+    body.al-ready .send-reply-box textarea,
+    body.al-ready .suggest-box textarea,
+    body.al-ready .placeholder-reply textarea {
+      background: #0f172a; border-color: #475569; color: #f1f5f9;
+    }
+    body.al-ready .placeholder-reply { color: #94a3b8; border-color: #475569; }
+    body.al-ready .tl-bubble.tl-patient {
+      background: #1e3a8a; border-color: #3b82f6; color: #dbeafe;
+    }
+    body.al-ready .tl-bubble.tl-ai {
+      background: #1e293b; border-color: #475569; color: #e2e8f0;
+    }
+    body.al-ready .tl-system { color: #94a3b8; }
+    body.al-ready .tl-op-label { color: #60a5fa; }
+    body.al-ready .section-hd { color: #f1f5f9; }
+    body.al-ready .scan-hint { background: #1e293b; border-color: #334155; color: #94a3b8; }
+    body.al-ready .ops-filter-btn,
+    body.al-ready .queue-btn,
+    body.al-ready .ws-btn,
+    body.al-ready .filter-btn {
+      background: #1e293b; border-color: #475569; color: #e2e8f0;
+    }
+    body.al-ready .ops-filter-btn.active { background: #334155; color: #fff; border-color: #64748b; }
+    body.al-ready .queue-btn.active { background: #14532d; color: #bbf7d0; border-color: #22c55e; }
+    body.al-ready .ws-btn.active { background: #1e3a8a; color: #dbeafe; border-color: #3b82f6; }
+    body.al-ready .filter-btn.active { background: #1e3a8a; color: #dbeafe; border-color: #3b82f6; }
+    body.al-ready .ops-pill { background: #334155; color: #e2e8f0; border-color: #475569; }
+    body.al-ready .doc-row { border-color: #334155; color: #e2e8f0; }
+    body.al-ready .task-list { color: #e2e8f0; }
+    body.al-ready .empty { color: #94a3b8; }
+    body.al-ready .intake-flags-box[style*="f8fafc"] {
+      background: #1e293b !important; border-color: #475569 !important; color: #e2e8f0 !important;
+    }
   </style>
 </head>
-<body>
+<body class="al-ready">
   <div class="ai-wrap">
     <div class="ai-header">
       <h1 data-coord-i18n="hero.title">Coordination Center</h1>
@@ -837,9 +941,7 @@
     function renderMissionControl(L) {
       const p = L.operationalProjection || {};
       const status = L.operationalStatus || p.operationalStatus || "in_progress";
-      const statusLabel = L.operationalStatusLabel || p.operationalStatusLabel || status;
-      const latest = L.latestMessagePreview || p.latestMessagePreview;
-      const role = L.latestMessageRole || p.latestMessageRole;
+      const statusLabel = leadPrimaryStatusLabel(L) || p.operationalStatusLabel || status;
       const appt =
         p.appointmentStatus === "scheduled" || L.appointmentStatus === "scheduled"
           ? ct("mission.scheduled") +
@@ -848,9 +950,9 @@
               : "")
           : ct("common.dash");
       const aiLabel =
+        L.aiStatusLabel ||
         (L.delegation && L.delegation.statusLabel) ||
         p.aiStatusLabel ||
-        L.aiStatusLabel ||
         (L.coordinationMode === "human_active" ? ct("ai.humanOnly") : ct("ai.assisting"));
       const proposal = p.proposalStatus || L.proposalStatus;
       const hasWa = L.hasWhatsapp === true || p.hasWhatsapp === true;
@@ -915,13 +1017,6 @@
         (proposal
           ? '<div class="mission-cell"><label>' + esc(ct("mission.proposal")) + '</label><' + 'div>' + esc(proposal) + "</div></div>"
           : "") +
-        (latest
-          ? '<div class="mission-latest">' + esc(ct("mission.latest", { text: latest })) +
-            (role
-              ? ' <span style="font-style:normal;color:var(--muted)">(' + esc(role) + ")</span>"
-              : "") +
-            "</div>"
-          : "") +
         "</div>"
       );
     }
@@ -931,6 +1026,7 @@
       const waitClass = sla.isWaiting4h ? "critical" : sla.isWaiting1h ? "warn" : "";
       const dash = ct("common.dash");
       const aiStat =
+        L.aiStatusLabel ||
         (L.delegation && L.delegation.statusLabel) ||
         (L.coordinationMode === "human_active" ? ct("ai.humanOnly") : ct("ai.assisting"));
       return (
@@ -1072,7 +1168,11 @@
       const missing = r.missing || f.readinessMissing || [];
       const barW = Math.min(100, Math.max(0, Number(pct) || 0));
       let html =
-        '<div class="readiness-box"><strong>Operational readiness</strong> <span style="font-size:0.75rem;color:var(--muted)">(not clinical eligibility)</span>';
+        '<div class="readiness-box"><strong>' +
+        esc(ct("detail.operationalReadiness")) +
+        '</strong> <span style="font-size:0.75rem;opacity:0.85">(' +
+        esc(ct("detail.notClinicalEligibility")) +
+        ")</span>";
       if (f.journeyStageLabel) {
         html +=
           ' <span class="badge badge-journey">' + esc(f.journeyStageLabel) + "</span>";
@@ -1087,7 +1187,9 @@
       }
       if (missing.length) {
         html +=
-          '<div style="font-size:0.8rem;margin-top:6px"><strong>Still needed:</strong><ul style="margin:4px 0 0;padding-left:18px">' +
+          '<div style="font-size:0.8rem;margin-top:6px"><strong>' +
+          esc(ct("detail.stillNeeded")) +
+          '</strong><ul style="margin:4px 0 0;padding-left:18px">' +
           missing.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") +
           "</ul></div>";
       }
@@ -1107,11 +1209,24 @@
       const j = journey || {};
       if (!j.steps || !j.steps.length) return "";
       const pct = j.readinessPercent != null ? j.readinessPercent : null;
-      let hd =
-        '<strong>Intake pipeline</strong> — operational workflow (not clinical diagnosis).';
-      if (pct != null) hd += " Readiness: <strong>" + esc(pct) + "%</strong>.";
+      let hd = j.disclaimer ? esc(j.disclaimer) : "";
+      if (!hd) {
+        hd =
+          "<strong>" +
+          esc(ct("detail.intakePipeline")) +
+          "</strong> " +
+          esc(ct("detail.intakePipelineHint"));
+      }
+      if (pct != null) {
+        hd += " " + esc(ct("detail.readiness")) + ": <strong>" + esc(pct) + "%</strong>.";
+      }
       if (j.journeyStageLabel) {
-        hd += ' Stage: <span class="badge badge-journey">' + esc(j.journeyStageLabel) + "</span>.";
+        hd +=
+          " " +
+          esc(ct("detail.stage")) +
+          ': <span class="badge badge-journey">' +
+          esc(j.journeyStageLabel) +
+          "</span>.";
       }
       const stepsHtml = j.steps
         .map(function (step) {
@@ -1136,23 +1251,31 @@
     function renderIntakeFlags(flags) {
       const f = flags || {};
       const missing = [];
-      if (f.missingXray) missing.push("Panoramic X-ray / imaging");
-      if (f.missingSmilePhotos) missing.push("Smile / intraoral photos");
-      if (f.missingTravelTimeline) missing.push("Travel timeline");
-      if (f.missingTreatmentPreference) missing.push("Treatment goals");
+      if (f.missingXray) missing.push(ct("detail.missingXray"));
+      if (f.missingSmilePhotos) missing.push(ct("detail.missingPhotos"));
+      if (f.missingTravelTimeline) missing.push(ct("detail.missingTravel"));
+      if (f.missingTreatmentPreference) missing.push(ct("detail.missingTreatment"));
       if (!missing.length && !f.doctorReviewNeeded && !(f.patientReportedTags || []).length) return "";
       let html =
-        '<div class="intake-flags-box"><strong>Intake gaps</strong> — patient-reported / operational only.';
+        '<div class="intake-flags-box"><strong>' +
+        esc(ct("detail.intakeGaps")) +
+        "</strong> " +
+        esc(ct("detail.intakeGapsHint"));
       if (missing.length) {
         html += "<ul>" + missing.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") + "</ul>";
       }
       if (f.doctorReviewNeeded) {
-        html += '<p style="margin:8px 0 0"><span class="badge badge-doc-review">Doctor review needed</span></p>';
+        html +=
+          '<p style="margin:8px 0 0"><span class="badge badge-doc-review">' +
+          esc(ct("detail.doctorReviewNeeded")) +
+          "</span></p>";
       }
       const tags = f.patientReportedTags || [];
       if (tags.length) {
         html +=
-          '<p style="margin:8px 0 0;font-size:0.78rem"><strong>Patient-reported tags</strong> ' +
+          '<p style="margin:8px 0 0;font-size:0.78rem"><strong>' +
+          esc(ct("detail.patientReportedTags")) +
+          "</strong> " +
           tags.map(function (t) { return '<span class="tag-pill">' + esc(t) + "</span>"; }).join("") +
           "</p>";
       }
@@ -1161,7 +1284,7 @@
 
     function renderDocuments(docs) {
       if (!docs || !docs.length) {
-        return '<div style="font-size:0.82rem;color:var(--muted)">No patient documents uploaded yet.</div>';
+        return '<div style="font-size:0.82rem;color:var(--muted)">' + esc(ct("detail.noDocuments")) + "</div>";
       }
       return (
         '<div class="docs-box">' +
@@ -1237,7 +1360,7 @@
 
     function renderTasks(tasks) {
       if (!tasks || !tasks.length) {
-        return '<div class="tasks-empty">No operational tasks yet.</div>';
+        return '<div class="tasks-empty">' + esc(ct("empty.noTasks")) + "</div>";
       }
       return '<ul class="task-list">' + tasks.map(function (t) {
         return "<li><strong>" + esc(t.title) + '</strong> <span class="task-type">' + esc(t.taskType) +
@@ -1523,29 +1646,35 @@
       const responder = L.responderMode || "HYBRID";
       const escalated = responder === "ESCALATED" || !!(L.aiEscalationRequired || d.aiEscalationRequired);
       const responderModes = [
-        { id: "AI_ACTIVE", label: "AI Coordinator" },
-        { id: "HYBRID", label: "Hybrid" },
-        { id: "HUMAN_ACTIVE", label: "Human" },
-        { id: "ESCALATED", label: "Escalated" },
+        { id: "AI_ACTIVE", label: ct("ops.responder.AI_ACTIVE") },
+        { id: "HYBRID", label: ct("delegation.hybrid") },
+        { id: "HUMAN_ACTIVE", label: ct("delegation.humanOnly") },
+        { id: "ESCALATED", label: ct("detail.escalated") },
       ];
       const primaryOptions = [
-        { id: "ai_coordinator", label: "AI Coordinator" },
-        { id: "doctor", label: "Doctor" },
-        { id: "shared_queue", label: "Shared queue" },
+        { id: "ai_coordinator", label: ct("ops.primaryResponder.ai_coordinator") },
+        { id: "doctor", label: ct("ops.primaryResponder.doctor") },
+        { id: "shared_queue", label: ct("ops.primaryResponder.shared_queue") },
       ];
       const statusClass = escalated ? " delegation-status escalation" : " delegation-status";
       let html =
         '<div class="delegation-bar" id="delegationBar">' +
-        '<div class="delegation-hd">Hybrid coordination <span style="font-weight:500;text-transform:none;color:var(--muted)">(this patient)</span></div>' +
+        '<div class="delegation-hd">' +
+        esc(ct("delegation.title")) +
+        ' <span style="font-weight:500;text-transform:none;opacity:0.85">(' +
+        esc(ct("delegation.subtitle")) +
+        ")</span></div>" +
         '<div class="' +
         statusClass.trim() +
         '">' +
-        esc(L.primaryResponderLabel || "AI Coordinator") +
+        esc(L.primaryResponderLabel || ct("ops.primaryResponder.ai_coordinator")) +
         " · " +
-        esc(L.responderModeLabel || d.statusLabel || L.aiStatusLabel || "—") +
+        esc(L.responderModeLabel || d.statusLabel || L.aiStatusLabel || ct("common.dash")) +
         (L.handlingStateLabel ? " · " + esc(L.handlingStateLabel) : "") +
         "</div>" +
-        '<p class="delegation-note" style="margin:6px 0 8px">Primary responder — operational ownership (not “assign bot”).</p>' +
+        '<p class="delegation-note" style="margin:6px 0 8px">' +
+        esc(ct("detail.primaryResponderNote")) +
+        "</p>" +
         '<div class="delegation-tabs" id="primaryResponderTabs">';
       primaryOptions.forEach(function (m) {
         const active =
@@ -1574,19 +1703,39 @@
       });
       html +=
         "</div>" +
-        '<p class="delegation-note"><strong>Clinic-wide max:</strong> ' +
-        esc(policy.ceilingLabel || "—") +
-        ' — <a href="/admin-ops-profile.html">Clinic AI Training</a>. AI never claims a named doctor reviewed imaging — only “our clinic team”.</p>' +
+        '<p class="delegation-note"><strong>' +
+        esc(ct("detail.clinicMax")) +
+        ":</strong> " +
+        esc(policy.ceilingLabel || ct("common.dash")) +
+        ' — <a href="/admin-ops-profile.html">' +
+        esc(ct("detail.clinicAiTraining")) +
+        "</a>. " +
+        esc(ct("detail.aiNeverClaims")) +
+        "</p>" +
         '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
-        '<button type="button" class="refresh-btn" id="btnTakeOver" style="background:#1d4ed8;font-size:0.75rem;padding:6px 10px">Take over</button>' +
-        '<button type="button" class="refresh-btn" id="btnPauseAi" style="background:#64748b;font-size:0.75rem;padding:6px 10px">Pause AI</button>' +
-        '<button type="button" class="refresh-btn" id="btnResumeAi" style="background:#059669;font-size:0.75rem;padding:6px 10px">Resume AI</button>' +
-        '<button type="button" class="refresh-btn" id="btnDoctorReview" style="background:#b45309;font-size:0.75rem;padding:6px 10px">Escalate</button>' +
+        '<button type="button" class="refresh-btn" id="btnTakeOver" style="background:#1d4ed8;font-size:0.75rem;padding:6px 10px">' +
+        esc(ct("delegation.takeover")) +
+        "</button>" +
+        '<button type="button" class="refresh-btn" id="btnPauseAi" style="background:#64748b;font-size:0.75rem;padding:6px 10px">' +
+        esc(ct("delegation.pause")) +
+        "</button>" +
+        '<button type="button" class="refresh-btn" id="btnResumeAi" style="background:#059669;font-size:0.75rem;padding:6px 10px">' +
+        esc(ct("delegation.resume")) +
+        "</button>" +
+        '<button type="button" class="refresh-btn" id="btnDoctorReview" style="background:#b45309;font-size:0.75rem;padding:6px 10px">' +
+        esc(ct("detail.escalate")) +
+        "</button>" +
         "</div>";
       if (escalated) {
         html +=
-          '<p class="delegation-note" style="color:#b91c1c"><strong>Needs takeover</strong> — AI paused until a clinician resumes.</p>' +
-          '<button type="button" class="refresh-btn" id="btnClearEscalation" style="margin-top:8px;background:#64748b">Mark reviewed &amp; resume hybrid</button>';
+          '<p class="delegation-note" style="color:#fca5a5"><strong>' +
+          esc(ct("detail.needsTakeover")) +
+          "</strong> " +
+          esc(ct("detail.needsTakeoverHint")) +
+          "</p>" +
+          '<button type="button" class="refresh-btn" id="btnClearEscalation" style="margin-top:8px;background:#64748b">' +
+          esc(ct("detail.markReviewedResume")) +
+          "</button>";
       }
       html += "</div>";
       return html;
@@ -1606,8 +1755,8 @@
       selectedId = id;
       renderLeadList();
       const body = document.getElementById("detailBody");
-      body.innerHTML = '<div class="empty">Loading conversation…</div>';
-      document.getElementById("detailTitle").textContent = "Patient detail";
+      body.innerHTML = '<div class="empty">' + esc(ct("detail.loadingConversation")) + "</div>";
+      document.getElementById("detailTitle").textContent = ct("detail.patientDetail");
 
       try {
         const res = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id));
@@ -1617,7 +1766,7 @@
         if (json.clinicPolicy) clinicPolicyGlobal = json.clinicPolicy;
         const L = json.lead;
         document.getElementById("detailTitle").textContent =
-          L.patientName || formatTreatmentInterest(L) || "Patient detail";
+          L.patientName || formatTreatmentInterest(L) || ct("detail.patientDetail");
 
         const delegationHtml = renderDelegationBar(L);
         const canDraft =
@@ -1626,70 +1775,111 @@
           L.aiMode === "AI_DRAFT" ||
           L.aiMode === "HUMAN_ONLY";
 
+        const budgetDisplay =
+          String(L.budgetSignal || "").toLowerCase() === "not_discussed"
+            ? ct("detail.budgetNotDiscussed")
+            : L.budgetSignal;
+
         const grid =
           '<div class="grid2">' +
-          fieldHtml("Treatment", L.treatmentInterest) +
-          fieldHtml("Country", L.country) +
-          fieldHtml("Language", L.preferredLanguage) +
-          fieldHtml("Travel", L.travelTimeline) +
-          fieldHtml("Urgency", L.urgency) +
-          fieldHtml("Booking readiness", L.bookingIntent) +
-          fieldHtml("Budget", L.budgetSignal) +
-          fieldHtml("Channel", L.channelBadge || L.primaryChannel) +
-          fieldHtml("Messages", L.messageCount) +
+          fieldHtml(ct("detail.treatment"), L.treatmentInterest) +
+          fieldHtml(ct("detail.country"), L.country) +
+          fieldHtml(ct("detail.language"), L.preferredLanguage) +
+          fieldHtml(ct("detail.travel"), L.travelTimeline) +
+          fieldHtml(ct("detail.urgency"), L.urgency) +
+          fieldHtml(ct("detail.bookingReadiness"), L.bookingIntent) +
+          fieldHtml(ct("detail.budget"), budgetDisplay) +
+          fieldHtml(ct("detail.channel"), L.channelBadge || L.primaryChannel) +
+          fieldHtml(ct("detail.messages"), L.messageCount) +
           "</div>";
 
         const summary = L.conversationSummary
-          ? '<div class="summary-box"><strong>Conversation summary</strong><br/>' +
+          ? '<div class="summary-box"><strong>' +
+            esc(ct("detail.conversationSummary")) +
+            "</strong><br/>" +
             esc(L.conversationSummary) +
             "</div>"
           : "";
 
         const blockDetail = L.blockingReason
-          ? '<div class="intake-flags-box" style="background:#f8fafc;border-color:#cbd5e1"><strong>Current blocker</strong><br/>' +
+          ? '<div class="intake-flags-box"><strong>' +
+            esc(ct("detail.currentBlocker")) +
+            "</strong><br/>" +
             esc(L.blockingReason) +
             (L.waitingPartyLabel ? "<br/><em>" + esc(L.waitingPartyLabel) + "</em>" : "") +
-            (L.nextAction ? "<br/><strong>Next:</strong> " + esc(L.nextAction) : "") +
+            (L.nextAction
+              ? "<br/><strong>" + esc(ct("detail.nextColon")) + "</strong> " + esc(L.nextAction)
+              : "") +
             "</div>"
           : "";
 
         const escRow =
           '<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">' +
           escalationBadges(L.escalationFlags) +
-          (L.aiUnresolved ? '<span class="badge badge-unresolved">Needs review</span>' : "") +
-          (L.hasVisitPlanDraft ? '<span class="badge badge-visit-plan">Visit plan draft</span>' : "") +
-          (L.needsDoctorDocumentReview ? '<span class="badge badge-doc-review">Doctor review</span>' : "") +
-          (L.hasMissingIntake ? '<span class="badge badge-missing-intake">Missing intake</span>' : "") +
+          (L.aiUnresolved
+            ? '<span class="badge badge-unresolved">' + esc(ct("detail.needsReview")) + "</span>"
+            : "") +
+          (L.hasVisitPlanDraft
+            ? '<span class="badge badge-visit-plan">' + esc(ct("detail.visitPlanDraft")) + "</span>"
+            : "") +
+          (L.needsDoctorDocumentReview
+            ? '<span class="badge badge-doc-review">' + esc(ct("detail.doctorReview")) + "</span>"
+            : "") +
+          (L.hasMissingIntake
+            ? '<span class="badge badge-missing-intake">' + esc(ct("detail.missingIntake")) + "</span>"
+            : "") +
           "</div>";
 
         const suggestHtml = canDraft
           ? '<div class="suggest-box">' +
-            "<strong>Reply draft assistant</strong> (does not auto-send to patient)" +
-            '<button type="button" class="refresh-btn" id="btnSuggest">Draft reply</button>' +
-            '<textarea id="suggestDraft" placeholder="Click Draft reply to generate a starting message…"></textarea>' +
+            "<strong>" +
+            esc(ct("detail.draftReplyAssistant")) +
+            "</strong> " +
+            esc(ct("detail.draftReplyHint")) +
+            '<button type="button" class="refresh-btn" id="btnSuggest">' +
+            esc(ct("cta.suggestReply")) +
+            "</button>" +
+            '<textarea id="suggestDraft" placeholder="' +
+            esc(ct("detail.draftReplyPlaceholder")) +
+            '"></textarea>' +
             '<div id="suggestErr" class="err" style="display:none"></div>' +
             "</div>"
-          : '<div class="placeholder-reply"><strong>AI drafts paused</strong> — choose Draft only, Assisting, or Human only to compose replies.</div>';
+          : '<div class="placeholder-reply"><strong>' +
+            esc(ct("detail.aiDraftsPaused")) +
+            "</strong> " +
+            esc(ct("detail.aiDraftsPausedHint")) +
+            "</div>";
 
         const ch = String(L.primaryChannel || L.channelBadge || "").toLowerCase();
         const externalCh = ch === "messenger" || ch === "whatsapp" || ch === "instagram";
         const pid = L.patientId ? String(L.patientId).trim() : "";
-        const chatLink =
-          pid
-            ? '<a class="chat-link" href="/admin-chat.html" target="_blank" rel="noopener">Member chat (admin-chat) ↗</a>'
-            : "";
+        const chatLink = pid
+          ? '<a class="chat-link" href="/admin-chat.html" target="_blank" rel="noopener">' +
+            esc(ct("detail.memberChatLink")) +
+            "</a>"
+          : "";
         const sendReplyHtml =
           '<div class="send-reply-box">' +
-          "<strong>Send reply to patient</strong>" +
+          "<strong>" +
+          esc(ct("detail.sendReplyTitle")) +
+          "</strong>" +
           (externalCh
-            ? ' <span class="muted">— delivers to ' + esc(ch) + " when connected</span>"
-            : ' <span class="muted">— in-app / registered members</span>') +
+            ? ' <span class="muted">' +
+              esc(ct("detail.sendReplyDeliverTo", { channel: ch })) +
+              "</span>"
+            : ' <span class="muted">' + esc(ct("detail.sendReplyInApp")) + "</span>") +
           chatLink +
-          '<textarea id="leadReplyText" placeholder="Type your reply to the patient…"></textarea>' +
-          '<button type="button" class="refresh-btn" id="btnSendLeadReply">Send to patient</button>' +
+          '<textarea id="leadReplyText" placeholder="' +
+          esc(ct("detail.sendReplyPlaceholder")) +
+          '"></textarea>' +
+          '<button type="button" class="refresh-btn" id="btnSendLeadReply">' +
+          esc(ct("detail.sendToPatient")) +
+          "</button>" +
           '<div id="leadSendErr" class="err" style="display:none"></div>' +
           '<div id="leadDeliveryHint" class="delivery-hint" style="display:none"></div>' +
-          '<p class="muted" style="font-size:0.78rem;margin:8px 0 0">New leads (Messenger, WhatsApp) are managed here. <code>admin-chat</code> is for clinic member patients.</p>' +
+          '<p class="muted" style="font-size:0.78rem;margin:8px 0 0">' +
+          esc(ct("detail.leadsVsChatNote")) +
+          "</p>" +
           "</div>";
 
         body.innerHTML =
@@ -1701,19 +1891,19 @@
           grid +
           summary +
           (json.visitPlanDraft
-            ? '<div class="section-hd">Visit plan estimate (operational)</div>' + renderVisitPlan(json.visitPlanDraft)
+            ? '<div class="section-hd">' + esc(ct("detail.visitPlanSection")) + "</div>" + renderVisitPlan(json.visitPlanDraft)
             : "") +
           renderIntakePipeline(json.intakeJourney) +
           renderReadiness(json.readiness, json.operationalIntakeFlags) +
           renderIntakeFlags(json.operationalIntakeFlags) +
-          '<div class="section-hd">Patient documents</div>' +
+          '<div class="section-hd">' + esc(ct("detail.documentsSection")) + "</div>" +
           renderDocuments(json.documents) +
-          '<div class="section-hd">Operational tasks</div>' +
+          '<div class="section-hd">' + esc(ct("detail.tasksSection")) + "</div>" +
           renderTasks(json.tasks) +
-          '<div class="section-hd">Timeline</div>' +
+          '<div class="section-hd">' + esc(ct("detail.timelineSection")) + "</div>" +
           '<div class="timeline">' +
           (renderOperationalTimeline(json.operationalTimeline || json.events) ||
-            '<div class="empty">No events yet.</div>') +
+            '<div class="empty">' + esc(ct("empty.noEvents")) + "</div>") +
           "</div>" +
           suggestHtml +
           sendReplyHtml;
@@ -1764,12 +1954,12 @@
             if (!text) {
               if (errEl) {
                 errEl.style.display = "block";
-                errEl.textContent = "Enter a reply message first.";
+                errEl.textContent = ct("detail.sendEnterMessage");
               }
               return;
             }
             btnSendLead.disabled = true;
-            btnSendLead.textContent = "Sending…";
+            btnSendLead.textContent = ct("detail.sending");
             try {
               const sRes = await adminFetch(
                 "/api/admin/ai-leads/" + encodeURIComponent(id) + "/send-reply",
@@ -1850,7 +2040,7 @@
               }
             } finally {
               btnSendLead.disabled = false;
-              btnSendLead.textContent = "Send to patient";
+              btnSendLead.textContent = ct("detail.sendToPatient");
             }
           });
         }
@@ -1862,7 +2052,7 @@
             const ta = document.getElementById("suggestDraft");
             if (errEl) errEl.style.display = "none";
             btnSuggest.disabled = true;
-            btnSuggest.textContent = "Generating…";
+            btnSuggest.textContent = ct("detail.generating");
             try {
               const sRes = await adminFetch("/api/admin/ai-leads/" + encodeURIComponent(id) + "/suggest-reply", {
                 method: "POST",
@@ -1879,7 +2069,7 @@
               }
             } finally {
               btnSuggest.disabled = false;
-              btnSuggest.textContent = "Draft reply";
+              btnSuggest.textContent = ct("cta.suggestReply");
             }
           });
         }

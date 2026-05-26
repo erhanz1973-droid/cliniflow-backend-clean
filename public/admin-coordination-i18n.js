@@ -13,7 +13,7 @@
     ru: "ru-RU",
     ka: "ka-GE",
   };
-  var CACHE_VERSION = "202605261";
+  var CACHE_VERSION = "202605262";
   var loaded = Object.create(null);
   var currentLang = "en";
   var messages = {};
