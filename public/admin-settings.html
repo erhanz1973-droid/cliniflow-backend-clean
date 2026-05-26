@@ -354,6 +354,27 @@
             Only used in &quot;Wait for human&quot; mode: if your team does not reply within this time, AI sends the first message.
           </p>
         </div>
+        <label data-i18n="settings.aiCommunication.clinicHoursLabel">Clinic weekday hours (AI scheduling)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px;">
+          <div>
+            <span class="muted" style="font-size:0.82rem;" data-i18n="settings.aiCommunication.clinicOpenLabel">Opens</span>
+            <input type="time" id="clinicWeekdayStart" value="08:00" style="width:100%;margin-top:4px;padding:8px;" />
+          </div>
+          <div>
+            <span class="muted" style="font-size:0.82rem;" data-i18n="settings.aiCommunication.clinicCloseLabel">Closes</span>
+            <input type="time" id="clinicWeekdayEnd" value="18:00" style="width:100%;margin-top:4px;padding:8px;" />
+          </div>
+        </div>
+        <label data-i18n="settings.aiCommunication.clinicTimezoneLabel">Clinic timezone</label>
+        <select id="clinicTimezone" style="width:100%;margin-bottom:12px;padding:8px;">
+          <option value="Europe/Istanbul">Europe/Istanbul</option>
+          <option value="Europe/London">Europe/London</option>
+          <option value="Europe/Berlin">Europe/Berlin</option>
+          <option value="Asia/Tbilisi">Asia/Tbilisi</option>
+          <option value="Asia/Dubai">Asia/Dubai</option>
+          <option value="UTC">UTC</option>
+        </select>
+        <p class="muted" style="margin:0 0 12px;font-size:0.85rem;line-height:1.45;" data-i18n="settings.aiCommunication.clinicHoursHint">AI only offers appointment slots within these hours (clinic local time). Example: open 08:00 — not 07:00.</p>
         <label data-i18n="settings.aiCommunication.bookingModeLabel">AI calendar booking mode</label>
         <select id="aiBookingMode" style="width:100%;margin-bottom:12px;padding:8px;">
           <option value="draft_booking" data-i18n="settings.aiCommunication.bookingDraft">Draft booking (pending staff approval) — recommended</option>
@@ -1207,6 +1228,9 @@
     const fallbackBlock = $("aiFallbackBlock");
     const timingHintEl = $("aiTimingHint");
     const bookingModeSelect = $("aiBookingMode");
+    const clinicWeekdayStart = $("clinicWeekdayStart");
+    const clinicWeekdayEnd = $("clinicWeekdayEnd");
+    const clinicTimezone = $("clinicTimezone");
     if (!formEl || !saveBtn) return;
 
     function authToken() {
@@ -1307,6 +1331,16 @@
         if (bookingModeSelect) {
           bookingModeSelect.value = booking.mode || "draft_booking";
         }
+        const hours = data.clinicHours || {};
+        if (clinicWeekdayStart && hours.weekdays?.start) {
+          clinicWeekdayStart.value = String(hours.weekdays.start).slice(0, 5);
+        }
+        if (clinicWeekdayEnd && hours.weekdays?.end) {
+          clinicWeekdayEnd.value = String(hours.weekdays.end).slice(0, 5);
+        }
+        if (clinicTimezone && hours.timezone) {
+          clinicTimezone.value = hours.timezone;
+        }
         if (loadingEl) loadingEl.style.display = "none";
         formEl.style.display = "block";
       } catch (e) {
@@ -1338,6 +1372,9 @@
           fallbackDelaySeconds: clampFallbackSeconds(fallbackSlider?.value || 60),
           omnichannelInstantDelayMs: omniSecToMs(omniSecSlider?.value || 0.15),
           aiBookingMode: bookingModeSelect?.value || "draft_booking",
+          clinicWeekdayStart: clinicWeekdayStart?.value || "08:00",
+          clinicWeekdayEnd: clinicWeekdayEnd?.value || "18:00",
+          clinicTimezone: clinicTimezone?.value || "Europe/Istanbul",
         };
         const res = await fetch(API_BASE + "/api/admin/clinic/ai-communication", {
           method: "PATCH",
