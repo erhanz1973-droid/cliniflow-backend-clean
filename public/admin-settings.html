@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605185"></script>
-  <script src="/admin-i18n.js?v=47"></script>
+  <script src="/admin-i18n.js?v=48"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Admin – Clinic Settings</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605201"/>
@@ -331,14 +331,29 @@
           <input type="radio" name="aiReplyMode" value="human_only" />
           <span data-i18n="settings.aiCommunication.humanOnly">Human-only (no AI auto-reply)</span>
         </label>
-        <p class="muted" style="margin:8px 0 12px;font-size:0.88rem;line-height:1.45;" data-i18n="settings.aiCommunication.timingHint">
-          AI sends the first greeting within seconds. Human takeover time applies in &quot;Wait for human&quot; mode, or when your team does not reply.
+        <p id="aiTimingHint" class="muted" style="margin:8px 0 12px;font-size:0.88rem;line-height:1.45;" data-i18n="settings.aiCommunication.timingHintInstant">
+          In Instant mode, AI replies in about 1–5 seconds. The delay below fine-tunes that speed (not the 30+ second human fallback).
         </p>
-        <label data-i18n="settings.aiCommunication.humanTakeoverLabel">Human representative takeover time (before AI steps in)</label>
-        <input type="range" id="aiFallbackSeconds" min="30" max="300" step="15" value="60" style="width:100%;" />
-        <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackSecondsLabel">60</span> <span data-i18n="settings.aiCommunication.secondsWord">sec</span></div>
-        <label data-i18n="settings.aiCommunication.omniDelayLabel">Messenger/WhatsApp instant delay (ms)</label>
-        <input type="number" id="aiOmniInstantMs" min="0" max="3000" step="50" value="200" />
+        <div id="aiInstantDelayBlock">
+          <label data-i18n="settings.aiCommunication.omniDelayLabel">Instant reply delay (Messenger / WhatsApp)</label>
+          <input type="range" id="aiOmniInstantSec" min="0.2" max="5" step="0.1" value="0.2" style="width:100%;" />
+          <div class="muted" style="margin-bottom:12px;">
+            <span id="aiOmniInstantSecLabel">0.2</span>
+            <span data-i18n="settings.aiCommunication.secondsWord">sec</span>
+            <span id="aiOmniInstantMsHint" class="muted" style="margin-left:6px;">(200 ms)</span>
+          </div>
+          <p class="muted" style="margin:0 0 12px;font-size:0.82rem;line-height:1.4;" data-i18n="settings.aiCommunication.omniDelayHelp">
+            Typical: 0.2–1 s. Values above ~2 s feel slow to patients. This setting does not apply in &quot;Wait for human&quot; mode.
+          </p>
+        </div>
+        <div id="aiFallbackBlock" style="display:none;">
+          <label data-i18n="settings.aiCommunication.humanTakeoverLabel">Team silence before AI steps in</label>
+          <input type="range" id="aiFallbackSeconds" min="30" max="300" step="15" value="60" style="width:100%;" />
+          <div class="muted" style="margin-bottom:8px;"><span id="aiFallbackSecondsLabel">60</span> <span data-i18n="settings.aiCommunication.secondsWord">sec</span></div>
+          <p class="muted" style="margin:0 0 12px;font-size:0.82rem;line-height:1.4;" data-i18n="settings.aiCommunication.fallbackHelp">
+            Only used in &quot;Wait for human&quot; mode: if your team does not reply within this time, AI sends the first message.
+          </p>
+        </div>
         <label data-i18n="settings.aiCommunication.bookingModeLabel">AI calendar booking mode</label>
         <select id="aiBookingMode" style="width:100%;margin-bottom:12px;padding:8px;">
           <option value="draft_booking" data-i18n="settings.aiCommunication.bookingDraft">Draft booking (pending staff approval) — recommended</option>
@@ -1185,7 +1200,12 @@
       const stepped = Math.round(base / 15) * 15;
       return Math.min(300, Math.max(30, stepped));
     }
-    const omniMsInput = $("aiOmniInstantMs");
+    const omniSecSlider = $("aiOmniInstantSec");
+    const omniSecLabel = $("aiOmniInstantSecLabel");
+    const omniMsHint = $("aiOmniInstantMsHint");
+    const instantDelayBlock = $("aiInstantDelayBlock");
+    const fallbackBlock = $("aiFallbackBlock");
+    const timingHintEl = $("aiTimingHint");
     const bookingModeSelect = $("aiBookingMode");
     if (!formEl || !saveBtn) return;
 
@@ -1196,6 +1216,52 @@
     function selectedReplyMode() {
       const checked = document.querySelector('input[name="aiReplyMode"]:checked');
       return checked ? checked.value : "instant";
+    }
+
+    function omniSecToMs(sec) {
+      const n = Number(sec);
+      if (!Number.isFinite(n) || n < 0) return 200;
+      return Math.min(10000, Math.max(0, Math.round(n * 1000)));
+    }
+
+    function omniMsToSec(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n) || n <= 0) return 0.2;
+      return Math.min(5, Math.max(0.2, Math.round((n / 1000) * 10) / 10));
+    }
+
+    function updateOmniSecLabel() {
+      if (!omniSecSlider || !omniSecLabel) return;
+      const sec = Number(omniSecSlider.value);
+      omniSecLabel.textContent = String(sec);
+      if (omniMsHint) omniMsHint.textContent = "(" + omniSecToMs(sec) + " ms)";
+    }
+
+    function syncAiCommunicationUi() {
+      const mode = selectedReplyMode();
+      if (instantDelayBlock) {
+        instantDelayBlock.style.display = mode === "instant" ? "block" : "none";
+      }
+      if (fallbackBlock) {
+        fallbackBlock.style.display = mode === "wait_human" ? "block" : "none";
+      }
+      if (timingHintEl) {
+        const key =
+          mode === "wait_human"
+            ? "settings.aiCommunication.timingHintWait"
+            : mode === "human_only"
+              ? "settings.aiCommunication.timingHintHumanOnly"
+              : "settings.aiCommunication.timingHintInstant";
+        timingHintEl.setAttribute("data-i18n", key);
+        timingHintEl.textContent = ti(
+          key,
+          mode === "wait_human"
+            ? "If your team does not reply within the time below, AI sends the first message. No instant auto-greeting."
+            : mode === "human_only"
+              ? "AI will not auto-reply on Messenger or WhatsApp. Your team handles every message."
+              : "Instant mode: AI greets patients in about 1–5 seconds. The delay slider below is seconds, not the 30+ s team fallback.",
+        );
+      }
     }
 
     window.__refreshAiCommunicationLabels = function () {
@@ -1232,11 +1298,11 @@
         fbSec = clampFallbackSeconds(fbSec);
         if (fallbackSlider) fallbackSlider.value = String(fbSec);
         if (fallbackLabel) fallbackLabel.textContent = String(fbSec);
-        if (omniMsInput) {
-          omniMsInput.value = String(
-            Number(cfg.omnichannelInstantDelayMs) > 0 ? cfg.omnichannelInstantDelayMs : 200,
-          );
+        if (omniSecSlider) {
+          omniSecSlider.value = String(omniMsToSec(cfg.omnichannelInstantDelayMs || 200));
+          updateOmniSecLabel();
         }
+        syncAiCommunicationUi();
         const booking = data.aiBooking || {};
         if (bookingModeSelect) {
           bookingModeSelect.value = booking.mode || "draft_booking";
@@ -1254,6 +1320,12 @@
         fallbackLabel.textContent = fallbackSlider.value;
       });
     }
+    if (omniSecSlider) {
+      omniSecSlider.addEventListener("input", updateOmniSecLabel);
+    }
+    document.querySelectorAll('input[name="aiReplyMode"]').forEach((el) => {
+      el.addEventListener("change", syncAiCommunicationUi);
+    });
 
     saveBtn.addEventListener("click", async function () {
       const token = authToken();
@@ -1264,7 +1336,7 @@
         const body = {
           replyMode: selectedReplyMode(),
           fallbackDelaySeconds: clampFallbackSeconds(fallbackSlider?.value || 60),
-          omnichannelInstantDelayMs: Number(omniMsInput?.value || 200),
+          omnichannelInstantDelayMs: omniSecToMs(omniSecSlider?.value || 0.2),
           aiBookingMode: bookingModeSelect?.value || "draft_booking",
         };
         const res = await fetch(API_BASE + "/api/admin/clinic/ai-communication", {

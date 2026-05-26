@@ -664,10 +664,19 @@
           instant: "Anında YZ yanıtları (Messenger/WhatsApp'ta ~1–5 sn)",
           waitHuman: "YZ'den önce insanı bekle",
           humanOnly: "Yalnızca insan (otomatik YZ yanıtı yok)",
-          timingHint: "YZ ilk karşılama mesajını anında gönderir. İnsan temsilci devralma süresi yalnızca «İnsanı bekle» modunda veya ekip yanıt vermezse geçerlidir.",
-          humanTakeoverLabel: "İnsan temsilci devralma süresi (YZ devreye girmeden önce)",
+          timingHintInstant:
+            "Anında mod: YZ hasta yazdıktan sonra yaklaşık 1–5 saniye içinde yanıtlar. Aşağıdaki gecikme (saniye) bunu ince ayarlar — 30 sn’lik «ekip sessizliği» ayarı bu modda kullanılmaz.",
+          timingHintWait:
+            "«İnsanı bekle» modunda ekip belirtilen süre içinde yazmazsa YZ ilk mesajı gönderir. Anında karşılama yoktur.",
+          timingHintHumanOnly:
+            "Messenger ve WhatsApp’ta otomatik YZ yanıtı kapalıdır; tüm mesajları ekibiniz yanıtlar.",
+          humanTakeoverLabel: "Ekip yanıtlamazsa YZ devreye girsin (bekleme süresi)",
           secondsWord: "sn",
-          omniDelayLabel: "Messenger/WhatsApp anında gecikme (ms)",
+          omniDelayLabel: "Anında yanıt gecikmesi (Messenger / WhatsApp)",
+          omniDelayHelp:
+            "Önerilen: 0,2–1 sn. 2 sn üzeri hastaya yavaş hissedilir. Bu ayar yalnızca «Anında» modda geçerlidir.",
+          fallbackHelp:
+            "Yalnızca «İnsanı bekle» modunda: ekip bu süre içinde yazmazsa YZ ilk mesajı atar.",
           bookingModeLabel: "YZ takvim randevu modu",
           bookingDraft: "Taslak randevu (ekip onayı) — önerilen",
           bookingSuggest: "Yalnızca saat öner (takvime yazma)",
@@ -2136,10 +2145,19 @@
           instant: "Instant AI replies (~1–5 sec on Messenger/WhatsApp)",
           waitHuman: "Wait for human before AI",
           humanOnly: "Human-only (no AI auto-reply)",
-          timingHint: "AI sends the first greeting right away. Human takeover time applies in &quot;Wait for human&quot; mode, or when your team does not reply.",
-          humanTakeoverLabel: "Human representative takeover time (before AI steps in)",
+          timingHintInstant:
+            "Instant mode: AI replies in about 1–5 seconds. The delay below (seconds) fine-tunes that speed — not the 30+ second team-silence setting.",
+          timingHintWait:
+            "Wait for human: if your team does not reply within the time below, AI sends the first message. No instant auto-greeting.",
+          timingHintHumanOnly:
+            "No automatic AI replies on Messenger or WhatsApp — your team handles every message.",
+          humanTakeoverLabel: "Team silence before AI steps in",
           secondsWord: "sec",
-          omniDelayLabel: "Messenger/WhatsApp instant delay (ms)",
+          omniDelayLabel: "Instant reply delay (Messenger / WhatsApp)",
+          omniDelayHelp:
+            "Typical: 0.2–1 s. Above ~2 s feels slow to patients. Only applies in Instant mode.",
+          fallbackHelp:
+            "Only in &quot;Wait for human&quot; mode: AI sends the first message if your team is silent for this long.",
           bookingModeLabel: "AI calendar booking mode",
           bookingDraft: "Draft booking (staff approval) — recommended",
           bookingSuggest: "Suggest only (no calendar write)",
