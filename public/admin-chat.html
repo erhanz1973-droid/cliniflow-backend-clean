@@ -19,9 +19,15 @@
   <style>
     :root { --bg:#111827; --card:#1f2937; --b:#374151; --p:#2563eb; --g:#16a34a; --r:#dc2626; --y:#f59e0b; --muted:#a7b2c8; }
     .delivery-toast { margin: 8px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
-    .delivery-toast.sent { background: rgba(22,163,74,0.15); border: 1px solid var(--g); color: #86efac; }
+    .delivery-toast.accepted { background: rgba(37,99,235,0.15); border: 1px solid var(--p); color: #93c5fd; }
+    .delivery-toast.delivered { background: rgba(22,163,74,0.15); border: 1px solid var(--g); color: #86efac; }
     .delivery-toast.failed { background: rgba(220,38,38,0.15); border: 1px solid var(--r); color: #fca5a5; }
     .delivery-toast.skipped { display: none; }
+    .msg-delivery-badge { display: inline-block; margin-top: 4px; font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+    .msg-delivery-badge.failed { background: rgba(220,38,38,0.2); color: #fca5a5; border: 1px solid var(--r); }
+    .msg-delivery-badge.accepted { background: rgba(37,99,235,0.2); color: #93c5fd; border: 1px solid var(--p); }
+    .msg-delivery-badge.delivered { background: rgba(22,163,74,0.2); color: #86efac; border: 1px solid var(--g); }
+    .btn-resend-failed { margin-top: 6px; font-size: 12px; padding: 4px 10px; background: var(--r); color: #fff; border: none; border-radius: 6px; cursor: pointer; }
     body{ font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; margin:0; background:var(--bg); color:#e6eaf2; }
     .wrap{ max-width:1200px; margin:0 auto; padding:20px; }
     header{ margin-bottom:20px; border-bottom:1px solid #1f2937; padding-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; }
@@ -801,6 +807,7 @@
             ${text ? `<div>${escapeHtml(text)}</div>` : ''}
             ${attachmentHtml}
             ${ctaButton}
+            ${fromClass === 'CLINIC' ? messageDeliveryBadgeHtml(msg) : ''}
             ${time ? `<div class="message-time">${escapeHtml(time)}</div>` : ''}
           </div>
         `;
@@ -818,29 +825,75 @@
       // If user is scrolling up, don't force scroll - let them read old messages
     }
 
+    let lastFailedMessengerSend = null;
+
+    function deliveryStatusLabel(st) {
+      const s = String(st || '').toLowerCase();
+      if (s === 'delivered') return 'Delivered on Messenger';
+      if (s === 'accepted_by_meta') return 'Accepted by Meta (awaiting delivery receipt)';
+      if (s === 'failed') return 'Messenger delivery failed';
+      if (s === 'sending' || s === 'queued') return 'Sending to Messenger…';
+      return '';
+    }
+
     function showDeliveryStatus(delivery) {
       const el = document.getElementById('deliveryStatus');
       if (!el) return;
       if (!delivery || delivery.status === 'skipped' || !delivery.channel || delivery.channel === 'in_app') {
         el.className = 'delivery-toast skipped';
-        el.textContent = '';
+        el.innerHTML = '';
         return;
       }
       const ch = String(delivery.channel || '').toLowerCase();
-      if (delivery.status === 'sent' && delivery.delivered) {
-        el.className = 'delivery-toast sent';
-        el.textContent = 'Delivered to patient ' + ch + (delivery.externalMessageId ? ' ✓' : '');
+      const st = String(delivery.deliveryStatus || delivery.status || '').toLowerCase();
+      const accepted =
+        delivery.delivered === true &&
+        (st === 'accepted_by_meta' || st === 'delivered' || st === 'sent');
+      if (accepted) {
+        el.className = st === 'delivered' ? 'delivery-toast delivered' : 'delivery-toast accepted';
+        el.textContent =
+          deliveryStatusLabel(st) +
+          (delivery.externalMessageId ? ' · id ' + String(delivery.externalMessageId).slice(0, 16) : '');
+        lastFailedMessengerSend = null;
         return;
       }
-      if (delivery.status === 'failed') {
+      if (st === 'failed' || delivery.status === 'failed') {
         el.className = 'delivery-toast failed';
         const detail = delivery.detail || delivery.error || 'send failed';
-        el.textContent = ch + ' delivery failed: ' + detail + ' — check Messenger connection / diagnostics';
+        lastFailedMessengerSend = {
+          text: document.getElementById('messageInput')?.value?.trim() || '',
+          patientMessageId: delivery.patientMessageId || null,
+          outboundDeliveryId: delivery.outboundDeliveryId || null,
+        };
+        el.innerHTML =
+          ch +
+          ' delivery failed: ' +
+          escapeHtml(detail) +
+          ' — <button type="button" class="btn-resend-failed" onclick="resendFailedMessenger()">Resend</button>';
         showError('Message saved in clinic inbox but not delivered to ' + ch + ': ' + detail);
         return;
       }
       el.className = 'delivery-toast skipped';
-      el.textContent = '';
+      el.innerHTML = '';
+    }
+
+    async function resendFailedMessenger() {
+      if (!selectedPatientId || !lastFailedMessengerSend?.text) return;
+      const token = getAdminToken();
+      if (!token) return;
+      const input = document.getElementById('messageInput');
+      if (input && !input.value.trim()) input.value = lastFailedMessengerSend.text;
+      await sendMessage();
+    }
+
+    function messageDeliveryBadgeHtml(msg) {
+      const om = msg.metadata?.omnichannel || msg.omnichannel || null;
+      const st = String(om?.delivery_status || msg.deliveryStatus || '').toLowerCase();
+      if (!st || st === 'queued') return '';
+      const label = deliveryStatusLabel(st);
+      if (!label) return '';
+      const cls = st === 'failed' ? 'failed' : st === 'delivered' ? 'delivered' : 'accepted';
+      return '<div class="msg-delivery-badge ' + cls + '">' + escapeHtml(label) + '</div>';
     }
 
     async function sendMessage() {
@@ -882,6 +935,14 @@
         }
 
         showDeliveryStatus(json.delivery);
+        if (json.delivery) {
+          json.delivery.patientMessageId =
+            json.message?.message_id || json.message?.id || json.legacyMessage?.id || null;
+        }
+
+        if (json.delivery && (json.delivery.status === 'failed' || json.delivery.deliveryStatus === 'failed')) {
+          throw new Error(json.delivery.detail || json.delivery.error || 'Messenger delivery failed');
+        }
 
         input.value = '';
         // After sending a message, always scroll to bottom to show the sent message

@@ -19395,7 +19395,8 @@ app.put('/api/admin/patients/assign-doctor', requireAdminAuth, async (req, res) 
     /** Explicit admin action: align lead-thread messaging assignee with chosen doctor (not a read-path silent sync). */
     let leadThreadSync = { ok: false };
     try {
-      leadThreadSync = await syncPatientLeadThreadAssignedDoctor(patientUuid, clinicId, canonicalDoctorUuid);
+      const { syncPatientLeadThreadAssignedDoctor: syncLeadThreadDoctor } = require("./lib/doctorLeadThreadSync");
+      leadThreadSync = await syncLeadThreadDoctor(patientUuid, clinicId, canonicalDoctorUuid);
       if (leadThreadSync.ok) {
         console.log("[ASSIGN DOCTOR] lead thread sync:", leadThreadSync.threadId || leadThreadSync.mode || "ok");
       } else if (!leadThreadSync.skipped) {
@@ -25601,13 +25602,22 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
       return res.status(400).json({ ok: false, error: "text_required", received: body });
     }
 
-    const respondSuccess = (legacyMsg, rawRow, delivery) =>
-      res.json({
-        ok: true,
+    const respondSuccess = (legacyMsg, rawRow, delivery) => {
+      const failed =
+        delivery &&
+        delivery.channel &&
+        delivery.channel !== "in_app" &&
+        (delivery.status === "failed" || delivery.deliveryStatus === "failed");
+      return res.status(failed ? 502 : 200).json({
+        ok: !failed,
         message: rawRow != null ? rawRow : legacyMsg,
         legacyMessage: legacyMsg,
         delivery: delivery || null,
+        warning: failed
+          ? "Message saved in clinic inbox but external channel delivery failed."
+          : null,
       });
+    };
 
     if (!isSupabaseEnabled()) {
       if (!canUseFileFallback()) return res.status(500).json(supabaseDisabledPayload("messages"));
@@ -25772,14 +25782,21 @@ app.post("/api/patient/:patientId/messages/admin", (req, res) => {
                 ? String(clinicUuidNotify).trim()
                 : null;
             if (rpidOut && cidOut) {
-              const { deliverClinicReplyToExternalChannel } = require("./lib/omnichannel/outboundDelivery");
-              delivery = await deliverClinicReplyToExternalChannel({
+              const {
+                deliverOutboundMessage,
+                formatClinicReplyDelivery,
+              } = require("./lib/omnichannel/outboundDelivery");
+              const patientMessageId =
+                pmTry.data?.message_id || pmTry.data?.id || leg?.id || null;
+              const ext = await deliverOutboundMessage({
                 patientId: rpidOut,
                 clinicId: cidOut,
                 text: String(text).trim(),
                 messageRole: "coordinator",
+                patientMessageId,
               });
-              if (delivery?.status === "failed") {
+              delivery = formatClinicReplyDelivery({ ...ext, deliverExternal: ext.delivered });
+              if (delivery?.status === "failed" || delivery?.deliveryStatus === "failed") {
                 console.warn("[admin messages/admin] external delivery failed", delivery);
               }
             }
@@ -47554,19 +47571,26 @@ async function getDoctorVisiblePatientIdSet(req) {
       String(req?.doctor?.doctor_id || "").trim(),
     ].filter(Boolean)),
   ];
-  const [teamPatientIds, fromPatientTableAssign, fromLeadThreads, fromProcessAssign, fromCalendar] =
+  const {
+    collectPatientIdsFromLeadProfileDoctorAssignments,
+  } = require("./lib/doctorLeadThreadSync");
+  const [teamPatientIds, fromPatientTableAssign, fromLeadThreads, fromProcessAssign, fromCalendar, fromLeadProfiles] =
     await Promise.all([
     collectPatientIdsFromTreatmentTeam(doctorKeysRaw),
     collectPatientIdsFromPatientTableDoctorAssignments(doctorKeysRaw),
       collectPatientIdsFromLeadThreadAssignments(doctorKeysRaw),
     collectPatientIdsFromProcessAndAppointmentAssignments(doctorKeysRaw, clinicId),
     collectPatientIdsFromClinicCalendarTodayTomorrow(clinicId, doctorKeysRaw, clinicCode),
+    clinicId && UUID_RE.test(String(clinicId).trim())
+      ? collectPatientIdsFromLeadProfileDoctorAssignments(doctorKeysRaw, clinicId)
+      : Promise.resolve(new Set()),
   ]);
   const visiblePatientIds = new Set(teamPatientIds);
   for (const pid of fromPatientTableAssign) visiblePatientIds.add(pid);
   for (const pid of fromLeadThreads) visiblePatientIds.add(pid);
   for (const pid of fromProcessAssign) visiblePatientIds.add(pid);
   for (const pid of fromCalendar) visiblePatientIds.add(pid);
+  for (const pid of fromLeadProfiles) visiblePatientIds.add(pid);
   if (clinicId && UUID_RE.test(String(clinicId).trim())) {
     const clinicLeadPatients = await collectPatientIdsFromClinicLeadThreads(clinicId);
     for (const pid of clinicLeadPatients) visiblePatientIds.add(pid);
@@ -48461,6 +48485,35 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       }
     }
     break;
+  }
+
+  if (clinicId && UUID_RE.test(String(clinicId).trim()) && uuidList.length) {
+    const cidNorm = String(clinicId).trim();
+    const needPreview = uuidList.filter((pid) => !latestByPid.get(pid));
+    for (let i = 0; i < needPreview.length; i += 90) {
+      const chunk = needPreview.slice(i, i + 90);
+      const { data: profs } = await supabase
+        .from("ai_coordinator_lead_profiles")
+        .select("patient_id, last_patient_message, last_patient_message_at, primary_channel")
+        .eq("clinic_id", cidNorm)
+        .in("patient_id", chunk);
+      for (const pr of profs || []) {
+        const text = String(pr.last_patient_message || "").trim();
+        if (!text) continue;
+        const pid = String(pr.patient_id || "").trim();
+        const ts = pr.last_patient_message_at
+          ? Date.parse(String(pr.last_patient_message_at))
+          : NaN;
+        ingestLatestLegacyMessage(latestByPid, {
+          patientId: pid,
+          text,
+          from: "PATIENT",
+          type: "text",
+          createdAt: Number.isFinite(ts) ? ts : Date.now(),
+          id: `lead_preview_${pid.slice(0, 8)}`,
+        });
+      }
+    }
   }
 
   const leadThreadByPatient = new Map();
@@ -49374,14 +49427,21 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       let delivery = null;
       if (UUID_RE.test(clinicIdForInsert)) {
         try {
-          const { deliverClinicReplyToExternalChannel } = require("./lib/omnichannel/outboundDelivery");
-          delivery = await deliverClinicReplyToExternalChannel({
+          const {
+            deliverOutboundMessage,
+            formatClinicReplyDelivery,
+          } = require("./lib/omnichannel/outboundDelivery");
+          const patientMessageId =
+            pmTry.data?.message_id || pmTry.data?.id || null;
+          const ext = await deliverOutboundMessage({
             patientId,
             clinicId: clinicIdForInsert,
             text,
             messageRole: "coordinator",
+            patientMessageId,
           });
-          if (delivery?.status === "failed") {
+          delivery = formatClinicReplyDelivery({ ...ext, deliverExternal: ext.delivered });
+          if (delivery?.status === "failed" || delivery?.deliveryStatus === "failed") {
             console.warn("[POST /api/messages/:id/reply] external delivery failed", delivery);
           }
         } catch (delErr) {
@@ -61125,9 +61185,6 @@ app.get("/api/discovery/clinics", async (req, res) => {
   }
 });
 
-const { registerAiCoordinatorAdminRoutes } = require("./lib/aiCoordinatorAdminRoutes");
-registerAiCoordinatorAdminRoutes(app, { requireAdminAuth });
-
 const { registerTreatmentProposalAdminRoutes } = require("./lib/treatmentProposalAdminRoutes");
 registerTreatmentProposalAdminRoutes(app, { requireAdminAuth });
 
@@ -61157,9 +61214,13 @@ setupOfferInboundOrchestration({
 });
 setupTreatmentRequestOrchestration({ insertIntoTableWithColumnPruning });
 const { createChannelAwareClinicMessageInsert } = require("./lib/omnichannel/outboundDelivery");
-const inboundClinicMessageInsert = createChannelAwareClinicMessageInsert(
-  createOfferAwareClinicMessageInsert(baseInboundClinicMessageInsert),
-);
+const insertClinicMessageForInApp = createOfferAwareClinicMessageInsert(baseInboundClinicMessageInsert);
+const inboundClinicMessageInsert = createChannelAwareClinicMessageInsert(insertClinicMessageForInApp);
+const { registerAiCoordinatorAdminRoutes } = require("./lib/aiCoordinatorAdminRoutes");
+registerAiCoordinatorAdminRoutes(app, {
+  requireAdminAuth,
+  insertClinicMessageForLeadReply: insertClinicMessageForInApp,
+});
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
 registerMetaIntegrationRoutes(app, {

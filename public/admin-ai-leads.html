@@ -125,6 +125,18 @@
       width: 100%; min-height: 72px; margin-top: 8px; border-radius: 8px; border: 1px solid var(--border);
       padding: 8px; font-family: inherit; resize: vertical; background: #f1f5f9;
     }
+    .send-reply-box {
+      margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: #fff;
+    }
+    .send-reply-box textarea {
+      width: 100%; min-height: 80px; margin: 8px 0; border-radius: 8px; border: 1px solid var(--border);
+      padding: 8px; font-family: inherit; resize: vertical;
+    }
+    .delivery-hint { font-size: 0.8rem; margin-top: 6px; }
+    .delivery-hint.ok { color: #15803d; }
+    .delivery-hint.fail { color: var(--red); }
+    .chat-link { font-size: 0.82rem; margin-left: 8px; }
     .err { color: var(--red); font-size: 0.85rem; margin-top: 8px; }
     .empty { padding: 24px; text-align: center; color: var(--muted); font-size: 0.9rem; }
     .refresh-btn {
@@ -1556,6 +1568,27 @@
             "</div>"
           : '<div class="placeholder-reply"><strong>AI drafts paused</strong> — choose Draft only, Assisting, or Human only to compose replies.</div>';
 
+        const ch = String(L.primaryChannel || L.channelBadge || "").toLowerCase();
+        const externalCh = ch === "messenger" || ch === "whatsapp" || ch === "instagram";
+        const pid = L.patientId ? String(L.patientId).trim() : "";
+        const chatLink =
+          pid
+            ? '<a class="chat-link" href="/admin-chat.html" target="_blank" rel="noopener">Member chat (admin-chat) ↗</a>'
+            : "";
+        const sendReplyHtml =
+          '<div class="send-reply-box">' +
+          "<strong>Send reply to patient</strong>" +
+          (externalCh
+            ? ' <span class="muted">— delivers to ' + esc(ch) + " when connected</span>"
+            : ' <span class="muted">— in-app / registered members</span>') +
+          chatLink +
+          '<textarea id="leadReplyText" placeholder="Type your reply to the patient…"></textarea>' +
+          '<button type="button" class="refresh-btn" id="btnSendLeadReply">Send to patient</button>' +
+          '<div id="leadSendErr" class="err" style="display:none"></div>' +
+          '<div id="leadDeliveryHint" class="delivery-hint" style="display:none"></div>' +
+          '<p class="muted" style="font-size:0.78rem;margin:8px 0 0">New leads (Messenger, WhatsApp) are managed here. <code>admin-chat</code> is for clinic member patients.</p>' +
+          "</div>";
+
         body.innerHTML =
           renderMissionControl(L) +
           slaStrip(L) +
@@ -1579,7 +1612,8 @@
           (renderOperationalTimeline(json.operationalTimeline || json.events) ||
             '<div class="empty">No events yet.</div>') +
           "</div>" +
-          suggestHtml;
+          suggestHtml +
+          sendReplyHtml;
 
         if (json.visitPlanDraft && json.visitPlanDraft.id) {
           wireVisitPlanHandlers(id, json.visitPlanDraft.id);
@@ -1611,6 +1645,110 @@
         if (btnClearEsc) {
           btnClearEsc.addEventListener("click", async () => {
             await setAiDelegation(id, { action: "resumeAi", responderMode: "HYBRID", clearEscalation: true });
+          });
+        }
+
+        const btnSendLead = document.getElementById("btnSendLeadReply");
+        if (btnSendLead) {
+          btnSendLead.addEventListener("click", async function () {
+            const errEl = document.getElementById("leadSendErr");
+            const hintEl = document.getElementById("leadDeliveryHint");
+            const ta = document.getElementById("leadReplyText");
+            const draftTa = document.getElementById("suggestDraft");
+            const text = String((ta && ta.value) || (draftTa && draftTa.value) || "").trim();
+            if (errEl) errEl.style.display = "none";
+            if (hintEl) hintEl.style.display = "none";
+            if (!text) {
+              if (errEl) {
+                errEl.style.display = "block";
+                errEl.textContent = "Enter a reply message first.";
+              }
+              return;
+            }
+            btnSendLead.disabled = true;
+            btnSendLead.textContent = "Sending…";
+            try {
+              const sRes = await adminFetch(
+                "/api/admin/ai-leads/" + encodeURIComponent(id) + "/send-reply",
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ text: text }),
+                },
+              );
+              const sJson = await sRes.json();
+              if (!sRes.ok || !sJson.ok) {
+                const msg = sJson.warning || sJson.detail || sJson.message || sJson.error || "Send failed";
+                if (hintEl && sJson.delivery) {
+                  hintEl.style.display = "block";
+                  hintEl.className = "delivery-hint fail";
+                  hintEl.textContent = msg;
+                }
+                throw new Error(msg);
+              }
+              if (ta) ta.value = "";
+              if (hintEl && sJson.delivery) {
+                hintEl.style.display = "block";
+                const ds = String(sJson.delivery.deliveryStatus || sJson.delivery.status || "").toLowerCase();
+                if (sJson.delivery.delivered && (ds === "accepted_by_meta" || ds === "delivered" || ds === "sent")) {
+                  hintEl.className = "delivery-hint ok";
+                  hintEl.textContent =
+                    ds === "delivered"
+                      ? "Delivered on Messenger."
+                      : "Accepted by Meta — awaiting delivery receipt.";
+                } else if (sJson.delivery.status === "skipped") {
+                  hintEl.className = "delivery-hint ok";
+                  hintEl.textContent = "Saved in clinic inbox (in-app only).";
+                } else if (ds === "failed" || sJson.delivery.status === "failed") {
+                  hintEl.className = "delivery-hint fail";
+                  hintEl.innerHTML =
+                    "Messenger delivery failed: " +
+                    escapeHtml(sJson.delivery.detail || sJson.delivery.error || "unknown") +
+                    ' <button type="button" class="btn btn-secondary btn-sm" id="btnResendMessenger">Resend</button>';
+                  const btnResend = document.getElementById("btnResendMessenger");
+                  if (btnResend) {
+                    btnResend.onclick = async function () {
+                      btnResend.disabled = true;
+                      try {
+                        const rRes = await adminFetch(
+                          "/api/admin/ai-leads/" + encodeURIComponent(id) + "/resend-messenger",
+                          {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              text: text,
+                              patientMessageId: sJson.patientMessageId || null,
+                              outboundDeliveryId: sJson.delivery.outboundDeliveryId || null,
+                            }),
+                          },
+                        );
+                        const rJson = await rRes.json();
+                        if (!rRes.ok || !rJson.ok) throw new Error(rJson.detail || rJson.error || "Resend failed");
+                        hintEl.className = "delivery-hint ok";
+                        hintEl.textContent = "Resent — accepted by Meta.";
+                        await loadDetail(id);
+                      } catch (re) {
+                        hintEl.textContent = "Resend failed: " + re.message;
+                      } finally {
+                        btnResend.disabled = false;
+                      }
+                    };
+                  }
+                } else {
+                  hintEl.className = "delivery-hint ok";
+                  hintEl.textContent = "Saved in clinic inbox.";
+                }
+              }
+              await loadDetail(id);
+            } catch (err) {
+              if (errEl) {
+                errEl.style.display = "block";
+                errEl.textContent = err.message;
+              }
+            } finally {
+              btnSendLead.disabled = false;
+              btnSendLead.textContent = "Send to patient";
+            }
           });
         }
 
