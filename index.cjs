@@ -61221,6 +61221,8 @@ registerAiCoordinatorAdminRoutes(app, {
   requireAdminAuth,
   insertClinicMessageForLeadReply: insertClinicMessageForInApp,
 });
+const { registerClinicAiCommunicationRoutes } = require("./lib/clinicAiCommunicationRoutes");
+registerClinicAiCommunicationRoutes(app, { requireAdminAuth });
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
 registerMetaIntegrationRoutes(app, {

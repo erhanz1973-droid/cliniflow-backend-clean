@@ -233,6 +233,33 @@
       </a>
     </div>
 
+    <div class="card" style="margin-bottom:20px;border:1px solid #a78bfa;background:#faf5ff;">
+      <h2 style="margin-top:0;font-size:20px;">AI Communication</h2>
+      <p class="muted" style="margin-bottom:14px;line-height:1.5;">
+        Control how fast the AI replies on Messenger and WhatsApp. <strong>Instant</strong> sends within seconds when AI is active.
+        <strong>Wait for human</strong> only uses AI after your team does not reply within the fallback window.
+      </p>
+      <div id="aiCommLoading" class="muted">Loading…</div>
+      <div id="aiCommForm" style="display:none;">
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <input type="radio" name="aiReplyMode" value="instant" /> Instant AI replies (1–5 sec on Messenger/WhatsApp)
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <input type="radio" name="aiReplyMode" value="wait_human" /> Wait for human before AI
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+          <input type="radio" name="aiReplyMode" value="human_only" /> Human-only (no AI auto-reply)
+        </label>
+        <label>Fallback delay (minutes) — only if human does not reply</label>
+        <input type="range" id="aiFallbackMinutes" min="2" max="15" step="1" value="5" style="width:100%;" />
+        <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackMinutesLabel">5</span> minutes</div>
+        <label>Messenger/WhatsApp instant delay (ms)</label>
+        <input type="number" id="aiOmniInstantMs" min="0" max="3000" step="50" value="200" />
+        <button type="button" id="aiCommSaveBtn" class="btn-primary" style="margin-top:12px;width:auto;padding:10px 18px;">Save AI communication</button>
+        <p id="aiCommMsg" class="muted" style="margin-top:8px;"></p>
+      </div>
+    </div>
+
     <div class="card" style="margin-bottom:20px;border:1px solid #cbd5e1;background:#f8fafc;">
       <h2 style="margin-top:0;font-size:20px;">Communication Channels</h2>
       <p class="muted" style="margin-bottom:16px;line-height:1.5;">
@@ -1038,6 +1065,103 @@
 
   // Load settings on page load
   loadClinicSettings();
+
+  (function initAiCommunicationSettings() {
+    const loadingEl = $("aiCommLoading");
+    const formEl = $("aiCommForm");
+    const msgEl = $("aiCommMsg");
+    const saveBtn = $("aiCommSaveBtn");
+    const fallbackSlider = $("aiFallbackMinutes");
+    const fallbackLabel = $("aiFallbackMinutesLabel");
+    const omniMsInput = $("aiOmniInstantMs");
+    if (!formEl || !saveBtn) return;
+
+    function authToken() {
+      return localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+    }
+
+    function selectedReplyMode() {
+      const checked = document.querySelector('input[name="aiReplyMode"]:checked');
+      return checked ? checked.value : "instant";
+    }
+
+    async function loadAiCommunication() {
+      const token = authToken();
+      if (!token) {
+        if (loadingEl) loadingEl.textContent = "Sign in to configure AI communication.";
+        return;
+      }
+      try {
+        const res = await fetch(API_BASE + "/api/admin/clinic/ai-communication", {
+          headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+        });
+        if (!res.ok) {
+          if (loadingEl) loadingEl.textContent = "Could not load AI communication settings.";
+          return;
+        }
+        const data = await res.json();
+        const cfg = data.aiReplies || {};
+        const mode = cfg.replyMode || "instant";
+        document.querySelectorAll('input[name="aiReplyMode"]').forEach((el) => {
+          el.checked = el.value === mode;
+        });
+        const fbMin = Math.min(15, Math.max(2, Number(cfg.fallbackDelayMinutes) || 5));
+        if (fallbackSlider) fallbackSlider.value = String(fbMin);
+        if (fallbackLabel) fallbackLabel.textContent = String(fbMin);
+        if (omniMsInput) {
+          omniMsInput.value = String(
+            Number(cfg.omnichannelInstantDelayMs) > 0 ? cfg.omnichannelInstantDelayMs : 200,
+          );
+        }
+        if (loadingEl) loadingEl.style.display = "none";
+        formEl.style.display = "block";
+      } catch (e) {
+        console.warn("[ai-communication load]", e);
+        if (loadingEl) loadingEl.textContent = "Could not load AI communication settings.";
+      }
+    }
+
+    if (fallbackSlider && fallbackLabel) {
+      fallbackSlider.addEventListener("input", function () {
+        fallbackLabel.textContent = fallbackSlider.value;
+      });
+    }
+
+    saveBtn.addEventListener("click", async function () {
+      const token = authToken();
+      if (!token) return;
+      saveBtn.disabled = true;
+      if (msgEl) msgEl.textContent = "Saving…";
+      try {
+        const body = {
+          replyMode: selectedReplyMode(),
+          fallbackDelayMinutes: Number(fallbackSlider?.value || 5),
+          omnichannelInstantDelayMs: Number(omniMsInput?.value || 200),
+        };
+        const res = await fetch(API_BASE + "/api/admin/clinic/ai-communication", {
+          method: "PATCH",
+          headers: {
+            Authorization: "Bearer " + token,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (msgEl) msgEl.textContent = "Save failed: " + (data.error || res.status);
+          return;
+        }
+        if (msgEl) msgEl.textContent = "Saved. Messenger/WhatsApp will use these reply timings.";
+      } catch (e) {
+        if (msgEl) msgEl.textContent = "Save failed: " + (e?.message || e);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    loadAiCommunication();
+  })();
 
   document.addEventListener("admin-language-changed", function () {
     setTimeout(refreshSettingsDynamicI18n, 50);
