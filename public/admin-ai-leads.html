@@ -5,7 +5,7 @@
   <script src="/api-base.js?v=202605185"></script>
   <script src="/admin-layout.js?v=202605184"></script>
   <script src="/admin-i18n.js?v=37"></script>
-  <script src="/admin-coordination-i18n.js?v=202605191"></script>
+  <script src="/admin-coordination-i18n.js?v=202605261"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-coord-i18n="hero.title">Coordination Center — Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605171" />
@@ -55,10 +55,35 @@
     }
     .lead-item:hover { background: #f8fafc; }
     .lead-item.active { background: var(--blue-l); border-left: 3px solid var(--blue); }
-    .lead-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
-    .lead-title { font-weight: 700; font-size: 0.88rem; color: var(--text); }
-    .lead-interest { font-size: 0.78rem; color: #334155; margin-top: 3px; font-weight: 600; }
-    .lead-meta { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+    .lead-headline {
+      font-size: 0.94rem; font-weight: 800; color: var(--text); line-height: 1.3;
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+    }
+    .lead-context { font-size: 0.72rem; color: var(--muted); margin: 4px 0 8px; line-height: 1.35; }
+    .lead-score-row { font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 8px; }
+    .lead-status-line {
+      display: flex; align-items: center; gap: 7px; font-size: 0.8rem; font-weight: 700;
+      color: #0f172a; margin-bottom: 8px; line-height: 1.3;
+    }
+    .lead-status-dot {
+      width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: #94a3b8;
+    }
+    .lead-status-line.is-patient .lead-status-dot { background: #eab308; box-shadow: 0 0 0 2px #fef9c3; }
+    .lead-status-line.is-clinic .lead-status-dot { background: #f97316; box-shadow: 0 0 0 2px #ffedd5; }
+    .lead-status-line.is-urgent .lead-status-dot { background: #ef4444; box-shadow: 0 0 0 2px #fee2e2; }
+    .lead-next-block { margin-bottom: 8px; }
+    .lead-next-label {
+      font-size: 0.66rem; font-weight: 800; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--muted);
+    }
+    .lead-next-text { font-size: 0.8rem; font-weight: 600; color: #1e293b; margin-top: 2px; line-height: 1.35; }
+    .lead-ai-line { font-size: 0.72rem; color: #475569; margin-bottom: 6px; line-height: 1.35; }
+    .lead-gaps { font-size: 0.72rem; color: #64748b; margin-top: 4px; line-height: 1.35; }
+    .lead-gaps-label { font-weight: 800; color: #475569; margin-bottom: 3px; }
+    .lead-gaps ul { margin: 0; padding-left: 16px; }
+    .lead-gaps li { margin: 1px 0; }
+    .lead-patient-sub { font-size: 0.7rem; color: var(--muted); margin-top: 8px; }
+    .lead-urgent-inline { flex-shrink: 0; }
     .lead-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .badge {
       display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem;
@@ -1301,6 +1326,164 @@
       return '<span class="badge" style="' + css + '">' + esc(label) + "</span>";
     }
 
+    function countryFlagEmoji(L) {
+      const cc = String(L.countryCode || L.country_code || "")
+        .trim()
+        .toUpperCase();
+      if (cc.length === 2 && /^[A-Z]{2}$/.test(cc)) {
+        return String.fromCodePoint(
+          ...cc.split("").map(function (c) {
+            return 0x1f1e6 - 65 + c.charCodeAt(0);
+          }),
+        );
+      }
+      const name = String(L.country || "").toLowerCase();
+      const map = {
+        turkey: "TR",
+        türkiye: "TR",
+        germany: "DE",
+        "united kingdom": "GB",
+        uk: "GB",
+        georgia: "GE",
+        russia: "RU",
+      };
+      const guess = map[name];
+      if (guess) return countryFlagEmoji({ countryCode: guess });
+      return "";
+    }
+
+    function leadContextLine(L) {
+      const parts = [];
+      const flag = countryFlagEmoji(L);
+      if (L.country) parts.push((flag ? flag + " " : "") + String(L.country));
+      const ch = String(L.channelBadge || L.primaryChannel || "").trim();
+      if (ch) parts.push(ch.replace(/_/g, " "));
+      return parts.join(" • ");
+    }
+
+    function leadStatusToneClass(L) {
+      if (L.escalationFlags && L.escalationFlags.emergency) return "is-urgent";
+      const st = String(L.operationalStatus || "");
+      if (
+        L.waitingParty === "clinic" ||
+        st === "waiting_for_clinic_reply" ||
+        st === "ai_unresolved" ||
+        st === "waiting_for_quote" ||
+        (L.operationalIntakeFlags && L.operationalIntakeFlags.doctorReviewNeeded)
+      ) {
+        return "is-clinic";
+      }
+      if (L.waitingParty === "patient" || st.indexOf("waiting_for_") === 0) return "is-patient";
+      return "is-neutral";
+    }
+
+    function leadPrimaryStatusLabel(L) {
+      const flags = L.operationalIntakeFlags || {};
+      if (flags.doctorReviewNeeded) return ct("ops.status.doctor_approval_required");
+      if (L.operationalStatus === "waiting_for_patient" && L.waitingParty === "patient") {
+        return ct("card.patientWaiting");
+      }
+      return L.operationalStatusLabel || ct("detail.active");
+    }
+
+    function compactAiStatusLine(L) {
+      const sla = L.sla || {};
+      const aiAt = sla.lastAiReplyAt ? new Date(sla.lastAiReplyAt).getTime() : 0;
+      const humanAt = sla.lastHumanReplyAt ? new Date(sla.lastHumanReplyAt).getTime() : 0;
+      let timeLabel = "";
+      if (sla.waitingDurationLabel) {
+        timeLabel = sla.waitingDurationLabel + " " + ct("detail.ago");
+      } else if (aiAt) {
+        timeLabel = fmtTime(sla.lastAiReplyAt);
+      }
+      if (L.aiPaused) return "🤖 " + ct("ai.paused");
+      if (aiAt && aiAt >= humanAt) {
+        return "🤖 " + ct("card.aiReplied", { time: timeLabel || ct("common.dash") });
+      }
+      if (humanAt) {
+        const ht =
+          sla.waitingDurationLabel && sla.lastHumanReplyAt
+            ? sla.waitingDurationLabel + " " + ct("detail.ago")
+            : fmtTime(sla.lastHumanReplyAt);
+        return "👤 " + ct("card.humanReplied", { time: ht });
+      }
+      if (L.coordinationMode === "human_active") return "👤 " + ct("ai.humanCoordinator");
+      const mode = L.responderModeLabel || L.aiStatusLabel;
+      if (mode) return "🤖 " + mode;
+      return "";
+    }
+
+    function collectLeadGaps(L) {
+      const gaps = [];
+      const st = String(L.operationalStatus || "");
+      const flags = L.operationalIntakeFlags || {};
+      if (L.whatsappMissing) gaps.push(ct("detail.whatsappNotShared"));
+      if (flags.missingXray && st !== "waiting_for_xray") gaps.push(ct("detail.missingXray"));
+      if (flags.missingSmilePhotos && st !== "waiting_for_photos") gaps.push(ct("detail.missingPhotos"));
+      if (flags.missingTravelTimeline && st !== "travel_pending") gaps.push(ct("detail.missingTravel"));
+      if (flags.missingTreatmentPreference && st !== "waiting_for_patient") {
+        gaps.push(ct("detail.missingTreatment"));
+      }
+      return gaps;
+    }
+
+    function renderLeadCard(L) {
+      const headline = formatTreatmentInterest(L);
+      const context = leadContextLine(L);
+      const score =
+        L.readinessPercent != null
+          ? ct("card.leadScore", { score: L.readinessPercent })
+          : "";
+      const statusLabel = leadPrimaryStatusLabel(L);
+      const statusClass = leadStatusToneClass(L);
+      const nextAction = String(L.nextAction || "").trim();
+      const aiLine = compactAiStatusLine(L);
+      const gaps = collectLeadGaps(L);
+      const patientName = String(L.patientName || "").trim();
+      const showPatient =
+        patientName && patientName.toLowerCase() !== String(headline).toLowerCase();
+      const emergency =
+        L.escalationFlags && L.escalationFlags.emergency
+          ? '<span class="badge badge-esc-emergency lead-urgent-inline">' + esc(ct("detail.urgent")) + "</span>"
+          : "";
+      const slaUrgent = slaBadge(L);
+
+      let html =
+        '<div class="lead-headline"><span>' + esc(headline) + "</span>" + emergency + "</div>";
+      if (context) html += '<div class="lead-context">' + esc(context) + "</div>";
+      if (score) html += '<div class="lead-score-row">' + esc(score) + "</div>";
+      html +=
+        '<div class="lead-status-line ' +
+        statusClass +
+        '"><span class="lead-status-dot" aria-hidden="true"></span>' +
+        esc(statusLabel) +
+        "</div>";
+      if (nextAction) {
+        html +=
+          '<div class="lead-next-block"><div class="lead-next-label">' +
+          esc(ct("card.nextStepLabel")) +
+          '</div><div class="lead-next-text">' +
+          esc(nextAction) +
+          "</div></div>";
+      }
+      if (aiLine) html += '<div class="lead-ai-line">' + esc(aiLine) + "</div>";
+      if (gaps.length) {
+        html +=
+          '<div class="lead-gaps"><div class="lead-gaps-label">' +
+          esc(ct("card.missingInfo")) +
+          "</div><ul>" +
+          gaps.map(function (g) {
+            return "<li>" + esc(g) + "</li>";
+          }).join("") +
+          "</ul></div>";
+      }
+      if (slaUrgent) html += '<div class="lead-badges">' + slaUrgent + "</div>";
+      if (showPatient) {
+        html += '<div class="lead-patient-sub">' + esc(patientName) + "</div>";
+      }
+      return html;
+    }
+
     function renderLeadList() {
       const el = document.getElementById("leadList");
       if (!el) return;
@@ -1312,93 +1495,13 @@
       }
       el.innerHTML = visible
         .map((L) => {
-          const title = L.patientName || ct("common.patient");
-          const interest = formatTreatmentInterest(L);
-          const blockUrgent =
-            L.operationalIntakeFlags?.doctorReviewNeeded || (L.sla && L.sla.isWaiting4h);
-          const ownership =
-            L.waitingParty === "patient"
-              ? '<div class="lead-ownership wait-patient">' + esc(ct("badges.waitPatient")) + "</div>"
-              : L.waitingParty === "clinic"
-                ? '<div class="lead-ownership wait-clinic">' + esc(ct("badges.waitClinic")) + "</div>"
-                : "";
-          const blockHtml = L.blockingReason
-            ? '<div class="lead-block' + (blockUrgent ? " urgent" : "") + '">' + esc(L.blockingReason) + "</div>"
-            : "";
-          const nextHtml = L.nextAction
-            ? '<div class="lead-next">' + esc(L.nextAction) + "</div>"
-            : "";
-          const timing = leadTimingLabel(L);
-          const badges = slaBadge(L);
-          const opsBadge = L.operationalStatusLabel
-            ? '<span class="' +
-              opsStatusBadgeClass(L.operationalStatus) +
-              '">' +
-              esc(L.operationalStatusLabel) +
-              "</span>"
-            : "";
-          const handlingBadge = L.handlingStateLabel
-            ? '<span class="badge" style="background:#e0e7ff;color:#3730a3">' + esc(L.handlingStateLabel) + "</span>"
-            : "";
-          const waHint =
-            L.hasWhatsapp
-              ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#047857;margin-top:4px">' + esc(ct("detail.whatsappOnFile")) + "</div>"
-              : L.whatsappMissing
-                ? '<div class="lead-wa-hint" style="font-size:0.72rem;color:#b45309;margin-top:4px">' + esc(ct("detail.whatsappNotShared")) + "</div>"
-                : "";
-          const latestPreview = L.latestMessagePreview
-            ? '<div class="lead-latest">“' + esc(L.latestMessagePreview) + "”</div>"
-            : "";
-          const emergency =
-            L.escalationFlags && L.escalationFlags.emergency
-              ? ' <span class="badge badge-esc-emergency">' + esc(ct("detail.urgent")) + "</span>"
-              : "";
           return (
             '<div class="lead-item' +
             (L.id === selectedId ? " active" : "") +
             '" data-id="' +
             esc(L.id) +
             '">' +
-            '<div class="lead-top">' +
-            '<div class="lead-title">' +
-            esc(title) +
-            emergency +
-            "</div>" +
-            '<span class="score" title="' + esc(ct("detail.intakeReadiness")) + '">' +
-            (L.readinessPercent != null ? L.readinessPercent + "%" : "—") +
-            "</span>" +
-            "</div>" +
-            '<div class="lead-interest">' + esc(interest) + "</div>" +
-            '<div class="lead-status-line">' + esc(L.operationalStatusLabel || ct("detail.active")) + "</div>" +
-            '<div class="lead-meta-row"><strong>' +
-            esc(ct("mission.blocker")) +
-            ":</strong> " +
-            esc(L.blockingReason || ct("common.none")) +
-            " · <strong>" +
-            esc(ct("mission.nextStep")) +
-            ":</strong> " +
-            esc(L.nextAction || ct("common.dash")) +
-            "</div>" +
-            '<div class="lead-meta-row"><strong>' +
-            esc(ct("detail.ownerLabel")) +
-            ":</strong> " +
-            esc(ownershipAssignLabel(L)) +
-            " · " +
-            esc(lastActivityLabel(L)) +
-            (L.appointmentStatus === "scheduled" ? " · <strong>" + esc(ct("detail.appointment")) + "</strong>" : "") +
-            "</div>" +
-            (opsBadge || handlingBadge || L.channelBadge
-              ? '<div class="lead-badges">' + channelSourceBadge(L) + opsBadge + handlingBadge + "</div>"
-              : '<div class="lead-badges">' + channelSourceBadge(L) + "</div>") +
-            latestPreview +
-            waHint +
-            ownership +
-            blockHtml +
-            nextHtml +
-            (badges ? '<div class="lead-badges">' + badges + "</div>" : "") +
-            '<div class="lead-timing">' +
-            esc(timing) +
-            "</div>" +
+            renderLeadCard(L) +
             "</div>"
           );
         })

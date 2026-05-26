@@ -61315,6 +61315,28 @@ app.get("/admin/ai-leads", (req, res) => {
   return res.status(404).send("admin-ai-leads.html not found");
 });
 
+/** Coordination Center UI strings for admin-coordination-i18n.js (same source as API X-UI-Language). */
+app.get("/locales/:lang/coordination.js", (req, res) => {
+  try {
+    const { MESSAGES, normalizeUiLang } = require("./lib/i18n/coordinationLocales");
+    const lang = normalizeUiLang(req.params.lang);
+    const payload = MESSAGES[lang] || MESSAGES.en;
+    res.type("application/javascript");
+    res.set("Cache-Control", "public, max-age=300");
+    res.send(
+      "window.__cliniflowCoordinationLocales=window.__cliniflowCoordinationLocales||{};" +
+        "window.__cliniflowCoordinationLocales." +
+        lang +
+        "=" +
+        JSON.stringify(payload) +
+        ";",
+    );
+  } catch (e) {
+    console.warn("[locales/coordination]", e?.message || e);
+    res.status(500).type("application/javascript").send("// coordination locale load failed");
+  }
+});
+
 app.use(express.static(publicDir));
 
 // Meta Messenger + WhatsApp webhooks registered before express.json (registerMetaMessengerWebhook, registerWhatsAppWebhook).
