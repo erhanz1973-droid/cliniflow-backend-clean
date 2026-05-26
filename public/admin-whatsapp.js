@@ -647,7 +647,18 @@
       return {};
     });
     if (!res.ok || !json.ok) {
-      setMsg((json.message || json.error || "Test failed") + (json.code ? " (code " + json.code + ")" : ""), true);
+      let errText = json.message || json.error || "Test failed";
+      if (json.code != null) errText += " (code " + json.code + ")";
+      if (json.detail) errText += "\n\n" + json.detail;
+      if (Array.isArray(json.steps) && json.steps.length) {
+        errText += "\n\n" + json.steps.map(function (s, i) { return (i + 1) + ". " + s; }).join("\n");
+      } else if (json.hint) {
+        errText += "\n\n" + json.hint;
+      }
+      if (json.diagnosticsPath) {
+        errText += "\n\nDiagnostics: " + json.diagnosticsPath;
+      }
+      setMsg(errText, true);
       await loadConnections();
       return;
     }
