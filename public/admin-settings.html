@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605185"></script>
-  <script src="/admin-i18n.js?v=44"></script>
+  <script src="/admin-i18n.js?v=45"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Admin – Clinic Settings</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605201"/>
@@ -312,42 +312,45 @@
     </div>
 
     <div class="card card-feature card-feature--ai">
-      <h2>AI Communication</h2>
-      <p class="muted" style="margin-bottom:14px;line-height:1.5;">
+      <h2 data-i18n="settings.aiCommunication.title">AI Communication</h2>
+      <p class="muted" style="margin-bottom:14px;line-height:1.5;" data-i18n="settings.aiCommunication.desc">
         Control how fast the AI replies on Messenger and WhatsApp. <strong>Instant</strong> sends within seconds when AI is active.
         <strong>Wait for human</strong> only uses AI after your team does not reply within the fallback window.
       </p>
-      <div id="aiCommLoading" class="muted">Loading…</div>
+      <div id="aiCommLoading" class="muted" data-i18n="settings.aiCommunication.loading">Loading…</div>
       <div id="aiCommForm" style="display:none;">
         <label class="settings-radio">
-          <input type="radio" name="aiReplyMode" value="instant" /> Instant AI replies (1–5 sec on Messenger/WhatsApp)
+          <input type="radio" name="aiReplyMode" value="instant" />
+          <span data-i18n="settings.aiCommunication.instant">Instant AI replies (1–5 sec on Messenger/WhatsApp)</span>
         </label>
         <label class="settings-radio">
-          <input type="radio" name="aiReplyMode" value="wait_human" /> Wait for human before AI
+          <input type="radio" name="aiReplyMode" value="wait_human" />
+          <span data-i18n="settings.aiCommunication.waitHuman">Wait for human before AI</span>
         </label>
         <label class="settings-radio">
-          <input type="radio" name="aiReplyMode" value="human_only" /> Human-only (no AI auto-reply)
+          <input type="radio" name="aiReplyMode" value="human_only" />
+          <span data-i18n="settings.aiCommunication.humanOnly">Human-only (no AI auto-reply)</span>
         </label>
-        <label>Fallback delay (minutes) — only if human does not reply</label>
+        <label data-i18n="settings.aiCommunication.fallbackLabel">Fallback delay (minutes) — only if human does not reply</label>
         <input type="range" id="aiFallbackMinutes" min="2" max="15" step="1" value="5" style="width:100%;" />
-        <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackMinutesLabel">5</span> minutes</div>
-        <label>Messenger/WhatsApp instant delay (ms)</label>
+        <div class="muted" style="margin-bottom:12px;"><span id="aiFallbackMinutesLabel">5</span> <span data-i18n="settings.aiCommunication.minutesWord">minutes</span></div>
+        <label data-i18n="settings.aiCommunication.omniDelayLabel">Messenger/WhatsApp instant delay (ms)</label>
         <input type="number" id="aiOmniInstantMs" min="0" max="3000" step="50" value="200" />
-        <button type="button" id="aiCommSaveBtn">Save AI communication</button>
+        <button type="button" id="aiCommSaveBtn" data-i18n="settings.aiCommunication.save">Save AI communication</button>
         <p id="aiCommMsg" class="muted" style="margin-top:8px;"></p>
       </div>
     </div>
 
     <div class="card card-feature card-feature--channels">
-      <h2>Communication Channels</h2>
-      <p class="muted" style="margin-bottom:16px;line-height:1.5;">
+      <h2 data-i18n="settings.communicationChannels.title">Communication Channels</h2>
+      <p class="muted" style="margin-bottom:16px;line-height:1.5;" data-i18n="settings.communicationChannels.desc">
         Connect external channels so patient messages appear in your AI coordinator inbox with source badges (WhatsApp, Messenger, Instagram, Web).
       </p>
       <div style="display:flex;flex-wrap:wrap;gap:12px;">
-        <a href="/admin-whatsapp.html" style="display:inline-block;padding:12px 20px;background:#25d366;color:#fff;border-radius:8px;font-weight:700;text-decoration:none;font-size:15px;">
+        <a href="/admin-whatsapp.html" style="display:inline-block;padding:12px 20px;background:#25d366;color:#fff;border-radius:8px;font-weight:700;text-decoration:none;font-size:15px;" data-i18n="settings.communicationChannels.whatsapp">
           WhatsApp →
         </a>
-        <a href="/admin-messenger.html" style="display:inline-block;padding:12px 20px;background:#1877f2;color:#fff;border-radius:8px;font-weight:700;text-decoration:none;font-size:15px;">
+        <a href="/admin-messenger.html" style="display:inline-block;padding:12px 20px;background:#1877f2;color:#fff;border-radius:8px;font-weight:700;text-decoration:none;font-size:15px;" data-i18n="settings.communicationChannels.messenger">
           Messenger →
         </a>
       </div>
@@ -642,6 +645,9 @@
     applySettingsPlaceholders();
     initClinicCountrySelect(true);
     if (lastUsagePayload) renderSubscriptionUsage(lastUsagePayload);
+    if (typeof initializeColorPalettes === "function") initializeColorPalettes();
+    if (typeof renderPrices === "function" && PROCEDURE_TYPES && PROCEDURE_TYPES.length) renderPrices();
+    if (typeof window.__refreshAiCommunicationLabels === "function") window.__refreshAiCommunicationLabels();
   }
   function syncClinicCountryUi(savedCode) {
     initClinicCountrySelect();
@@ -702,6 +708,21 @@
       }
     } catch (_e) {}
     return fallback != null ? fallback : key;
+  }
+  function tv(key, params, fallback) {
+    try {
+      if (window.i18n && typeof window.i18n.t === "function") {
+        const v = window.i18n.t(key, params || {});
+        if (v && typeof v === "string" && v !== key) return v;
+      }
+    } catch (_e) {}
+    let s = fallback != null ? fallback : key;
+    if (params) {
+      Object.keys(params).forEach((k) => {
+        s = String(s).replace(new RegExp("\\{" + k + "\\}", "g"), params[k]);
+      });
+    }
+    return s;
   }
   function formatLimitSettings(v, unlimitedFlag) {
     if (unlimitedFlag === true || v == null || v === "" || v === -1) return ti("dashboard.unlimited", "Unlimited");
@@ -1159,10 +1180,16 @@
       return checked ? checked.value : "instant";
     }
 
+    window.__refreshAiCommunicationLabels = function () {
+      if (loadingEl && loadingEl.style.display !== "none") {
+        loadingEl.textContent = ti("settings.aiCommunication.loading", "Loading…");
+      }
+    };
+
     async function loadAiCommunication() {
       const token = authToken();
       if (!token) {
-        if (loadingEl) loadingEl.textContent = "Sign in to configure AI communication.";
+        if (loadingEl) loadingEl.textContent = ti("settings.aiCommunication.signInRequired", "Sign in to configure AI communication.");
         return;
       }
       try {
@@ -1170,7 +1197,7 @@
           headers: { Authorization: "Bearer " + token, Accept: "application/json" },
         });
         if (!res.ok) {
-          if (loadingEl) loadingEl.textContent = "Could not load AI communication settings.";
+          if (loadingEl) loadingEl.textContent = ti("settings.aiCommunication.loadFailed", "Could not load AI communication settings.");
           return;
         }
         const data = await res.json();
@@ -1191,7 +1218,7 @@
         formEl.style.display = "block";
       } catch (e) {
         console.warn("[ai-communication load]", e);
-        if (loadingEl) loadingEl.textContent = "Could not load AI communication settings.";
+        if (loadingEl) loadingEl.textContent = ti("settings.aiCommunication.loadFailed", "Could not load AI communication settings.");
       }
     }
 
@@ -1205,7 +1232,7 @@
       const token = authToken();
       if (!token) return;
       saveBtn.disabled = true;
-      if (msgEl) msgEl.textContent = "Saving…";
+      if (msgEl) msgEl.textContent = ti("settings.aiCommunication.saving", "Saving…");
       try {
         const body = {
           replyMode: selectedReplyMode(),
@@ -1223,12 +1250,24 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          if (msgEl) msgEl.textContent = "Save failed: " + (data.error || res.status);
+          if (msgEl) {
+            msgEl.textContent = tv(
+              "settings.aiCommunication.saveFailed",
+              { error: data.error || res.status },
+              "Save failed: {error}",
+            );
+          }
           return;
         }
-        if (msgEl) msgEl.textContent = "Saved. Messenger/WhatsApp will use these reply timings.";
+        if (msgEl) msgEl.textContent = ti("settings.aiCommunication.saved", "Saved. Messenger/WhatsApp will use these reply timings.");
       } catch (e) {
-        if (msgEl) msgEl.textContent = "Save failed: " + (e?.message || e);
+        if (msgEl) {
+          msgEl.textContent = tv(
+            "settings.aiCommunication.saveFailed",
+            { error: e?.message || e },
+            "Save failed: {error}",
+          );
+        }
       } finally {
         saveBtn.disabled = false;
       }
@@ -1371,19 +1410,19 @@
     const idAttr = v.id ? ` data-variant-id="${escapeHtml(String(v.id))}"` : "";
     return `<div class="price-variant-card" data-vrow="${procType}_${idx}"${idAttr}>
       <div class="variant-card-header">
-        <strong>Brand variant ${n}</strong>
-        <button type="button" class="btn-variants" data-remove-vrow="${procType}_${idx}">Remove</button>
+        <strong>${escapeHtml(tv("settings.variants.brandVariantTitle", { n: String(n) }, "Brand variant " + n))}</strong>
+        <button type="button" class="btn-variants" data-remove-vrow="${procType}_${idx}">${escapeHtml(ti("settings.variants.remove", "Remove"))}</button>
       </div>
       <div class="variant-card-grid">
-        <div><label>Brand *</label><input data-vf="brand" value="${escapeHtml(v.brand_name || "")}" placeholder="Straumann" /></div>
-        <div><label>Country of origin</label><input data-vf="country" value="${escapeHtml(v.origin_country || "")}" placeholder="Switzerland" /></div>
-        <div><label>Segment / tier</label><select data-vf="tier"><option value="">—</option>${tierOptionsHtml(v.tier || "")}</select></div>
-        <div><label>Price from</label><input data-vf="min" type="number" step="0.01" value="${v.price_min != null ? v.price_min : ""}" placeholder="900" /></div>
-        <div><label>Price to</label><input data-vf="max" type="number" step="0.01" value="${v.price_max != null ? v.price_max : ""}" placeholder="1200" /></div>
-        <div><label>Currency</label><input data-vf="currency" value="${escapeHtml(v.currency || defaultCurrency)}" /></div>
+        <div><label>${escapeHtml(ti("settings.variants.brand", "Brand *"))}</label><input data-vf="brand" value="${escapeHtml(v.brand_name || "")}" placeholder="Straumann" /></div>
+        <div><label>${escapeHtml(ti("settings.variants.country", "Country of origin"))}</label><input data-vf="country" value="${escapeHtml(v.origin_country || "")}" placeholder="Switzerland" /></div>
+        <div><label>${escapeHtml(ti("settings.variants.tier", "Segment / tier"))}</label><select data-vf="tier"><option value="">—</option>${tierOptionsHtml(v.tier || "")}</select></div>
+        <div><label>${escapeHtml(ti("settings.variants.priceFrom", "Price from"))}</label><input data-vf="min" type="number" step="0.01" value="${v.price_min != null ? v.price_min : ""}" placeholder="900" /></div>
+        <div><label>${escapeHtml(ti("settings.variants.priceTo", "Price to"))}</label><input data-vf="max" type="number" step="0.01" value="${v.price_max != null ? v.price_max : ""}" placeholder="1200" /></div>
+        <div><label>${escapeHtml(ti("settings.variants.currency", "Currency"))}</label><input data-vf="currency" value="${escapeHtml(v.currency || defaultCurrency)}" /></div>
       </div>
-      <div class="variant-card-notes"><label>AI notes</label><textarea data-vf="notes" rows="2" placeholder="e.g. Swiss premium implant system with strong international recognition.">${escapeHtml(v.ai_notes || "")}</textarea></div>
-      <label class="variant-default-check"><input type="checkbox" data-vf="default" ${v.is_default ? "checked" : ""}/> Default option for this treatment</label>
+      <div class="variant-card-notes"><label>${escapeHtml(ti("settings.variants.aiNotes", "AI notes"))}</label><textarea data-vf="notes" rows="2" placeholder="e.g. Swiss premium implant system with strong international recognition.">${escapeHtml(v.ai_notes || "")}</textarea></div>
+      <label class="variant-default-check"><input type="checkbox" data-vf="default" ${v.is_default ? "checked" : ""}/> ${escapeHtml(ti("settings.variants.defaultOption", "Default option for this treatment"))}</label>
     </div>`;
   }
 
@@ -1396,12 +1435,12 @@
     const inputs = langs
       .map((code) => {
         const val = labels[code] || defaults[code] || "";
-        return `<div><label>${code.toUpperCase()}</label><input data-label-i18n="${procType}_${code}" value="${escapeHtml(val)}" placeholder="Optional AI display name" /></div>`;
+        return `<div><label>${code.toUpperCase()}</label><input data-label-i18n="${procType}_${code}" value="${escapeHtml(val)}" placeholder="${escapeHtml(ti("settings.variants.labelPlaceholder", "Optional AI display name"))}" /></div>`;
       })
       .join("");
     return `<div id="labels_panel_${procType}" class="price-label-panel" style="display:none">
-      <div class="panel-title">AI display names (optional translations)</div>
-      <p class="panel-hint">Localized treatment names for multilingual AI replies — not brand or pricing variants.</p>
+      <div class="panel-title">${escapeHtml(ti("settings.variants.labelsPanelTitle", "AI display names (optional translations)"))}</div>
+      <p class="panel-hint">${escapeHtml(ti("settings.variants.labelsPanelHint", "Localized treatment names for multilingual AI replies — not brand or pricing variants."))}</p>
       <div class="label-i18n-grid">${inputs}</div>
     </div>`;
   }
@@ -1422,10 +1461,10 @@
     const proc = PROCEDURE_TYPES.find((p) => p.type === procType);
     const procLabel = proc ? safeLang(proc.name || { en: procType }, currentLanguage()) : procType;
     return `<div id="variants_panel_${procType}" class="price-variant-panel" style="display:none">
-      <div class="panel-title">${escapeHtml(procLabel)} — brand / material variants</div>
-      <p class="panel-hint">Each variant is a brand + origin + segment + price range (e.g. Straumann / Switzerland / Premium / 900–1200 EUR). AI uses estimate language only.</p>
+      <div class="panel-title">${escapeHtml(tv("settings.variants.panelTitle", { treatment: procLabel }, procLabel + " — brand / material variants"))}</div>
+      <p class="panel-hint">${escapeHtml(ti("settings.variants.panelHint", "Each variant is a brand + origin + segment + price range (e.g. Straumann / Switzerland / Premium / 900–1200 EUR). AI uses estimate language only."))}</p>
       <div id="variants_rows_${procType}">${rows}</div>
-      <button type="button" class="btn-variants btn-add-variant" data-add-variant="${procType}">+ Add variant</button>
+      <button type="button" class="btn-variants btn-add-variant" data-add-variant="${procType}">${escapeHtml(ti("settings.variants.addVariant", "+ Add variant"))}</button>
     </div>`;
   }
 
@@ -1473,7 +1512,9 @@
         panel.style.display = open ? "block" : "none";
         if (open && labels) labels.style.display = "none";
         const n = (document.getElementById("variants_rows_" + t)?.querySelectorAll(".price-variant-card").length) || 0;
-        btn.textContent = open ? "Hide variants" + (n ? " (" + n + ")" : "") : "Variants" + (n ? " (" + n + ")" : "");
+        const hideLbl = ti("settings.variants.btnHide", "Hide variants");
+        const showLbl = ti("settings.variants.btn", "Variants");
+        btn.textContent = open ? hideLbl + (n ? " (" + n + ")" : "") : showLbl + (n ? " (" + n + ")" : "");
       };
     });
     document.querySelectorAll("[data-toggle-labels]").forEach((btn) => {
@@ -1485,7 +1526,7 @@
         const open = panel.style.display === "none";
         panel.style.display = open ? "block" : "none";
         if (open && variants) variants.style.display = "none";
-        btn.textContent = open ? "Hide names" : "AI names";
+        btn.textContent = open ? ti("settings.variants.aiNamesHide", "Hide names") : ti("settings.variants.aiNamesBtn", "AI names");
       };
     });
     document.querySelectorAll("[data-add-variant]").forEach((btn) => {
@@ -1605,7 +1646,7 @@
       html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 130px;">${_t('settings.tableHeaders.duration')}</th>`;
       html += `<th style="text-align: right; padding: 12px; font-size: 14px; font-weight: 600; width: 120px;">${_t('settings.tableHeaders.breakMin')}</th>`;
       html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 100px;">${_t('settings.tableHeaders.active')}</th>`;
-      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 140px;">Options</th>`;
+      html += `<th style="text-align: center; padding: 12px; font-size: 14px; font-weight: 600; width: 140px;">${_t('settings.tableHeaders.options')}</th>`;
       html += `</tr></thead><tbody>`;
       
       byCategory[category].forEach(proc => {
@@ -1642,8 +1683,8 @@
         html += `</td>`;
         const vCount = (priceVariants[proc.type] || []).length;
         html += `<td style="padding: 12px; text-align: center;"><div class="price-row-actions">`;
-        html += `<button type="button" class="btn-variants" data-toggle-variants="${proc.type}">Variants${vCount ? " (" + vCount + ")" : ""}</button>`;
-        html += `<button type="button" class="btn-variants" data-toggle-labels="${proc.type}">AI names</button>`;
+        html += `<button type="button" class="btn-variants" data-toggle-variants="${proc.type}">${escapeHtml(ti("settings.variants.btn", "Variants"))}${vCount ? " (" + vCount + ")" : ""}</button>`;
+        html += `<button type="button" class="btn-variants" data-toggle-labels="${proc.type}">${escapeHtml(ti("settings.variants.aiNamesBtn", "AI names"))}</button>`;
         html += `</div></td>`;
         html += `</tr>`;
         html += `<tr><td colspan="7">${variantPanelHtml(proc.type)}${localizationPanelHtml(proc.type)}</td></tr>`;
@@ -1961,7 +2002,7 @@
 
       const titleDiv = document.createElement('div');
       titleDiv.className = 'color-category-title';
-      titleDiv.textContent = category.name;
+      titleDiv.textContent = ti("settings.colorCategories." + categoryKey, category.name);
       categoryDiv.appendChild(titleDiv);
 
       const colorsDiv = document.createElement('div');

@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v35');
+  console.log('I18N FILE VERSION:', 'v45');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -616,7 +616,7 @@
       settings: {
         title: "⚙️ Clinic Settings",
         pageTitle: "⚙️ Clinifly Admin – Settings",
-        clinicInformation: "Clinic Information",
+        clinicInformation: "Klinik Bilgileri",
         brandingNotice: "Branding ayarları yalnızca PRO plan için kullanılabilir.",
         subscriptionPlan: "Abonelik Paketi",
         subscriptionPlanHelp: "FREE / BASIC / PRO paketini buradan değiştirebilirsiniz.",
@@ -642,22 +642,76 @@
         cityRequiredAlert: "Şehir gereklidir.",
         plan: "Plan",
         branding: "Branding",
-        clinicName: "Clinic Name",
-        clinicLogoUrl: "Clinic Logo URL",
+        clinicName: "Klinik Adı",
+        clinicLogoUrl: "Klinik Logo URL",
         clinicLogoUrlHelp: "Pro plan için logo görüntülenir",
         chairCountLabel: "Koltuk sayısı",
         chairCountHelp: "Randevu ekranında gösterilecek koltuk sayısı (örn: 1, 2, 3).",
-        address: "Clinic Address",
+        address: "Klinik Adresi",
         addressHelp: "Zorunlu (tüm planlar). Yakındaki klinik araması ve konum; adres Google ile geocode edilir.",
-        googleMapLink: "Google Maps Link",
+        googleMapLink: "Google Haritalar Bağlantısı",
         googleMapLinkHelp: "İsteğe bağlı (tüm planlar). Varsa bağlantıdan koordinat alınır; yoksa yalnızca adres kullanılır.",
-        welcomeMessage: "Welcome Message",
-        primaryColor: "Primary Color (Hex)",
-        secondaryColor: "Secondary Color (Hex)",
-        referralDiscounts: "🎁 Referral Discounts",
-        referralDiscountsHelp: "Configure discount percentages for successful referrals. Both the referrer and the referred patient receive these discounts.",
-        referralDiscount: "Referral Discount (%)",
-        referralDiscountHelp: "Discount applied to both referrer and referred patient",
+        welcomeMessage: "Karşılama Mesajı",
+        primaryColor: "Birincil Renk (Hex)",
+        secondaryColor: "İkincil Renk (Hex)",
+        referralDiscounts: "🎁 Referans İndirimleri",
+        referralDiscountsHelp: "Başarılı referanslar için indirim yüzdelerini ayarlayın. Hem davet eden hem de davet edilen hasta bu indirimleri alır.",
+        referralDiscount: "Referans İndirimi (%)",
+        referralDiscountHelp: "Hem davet eden hem davet edilen hastaya uygulanan indirim",
+        aiCommunication: {
+          title: "YZ İletişimi",
+          desc: "Messenger ve WhatsApp'ta YZ'nin ne kadar hızlı yanıt vereceğini ayarlayın. <strong>Anında</strong>, YZ aktifken saniyeler içinde gönderir. <strong>İnsanı bekle</strong> yalnızca ekibiniz geri dönüş süresi içinde yanıtlamazsa devreye girer.",
+          instant: "Anında YZ yanıtları (Messenger/WhatsApp'ta 1–5 sn)",
+          waitHuman: "YZ'den önce insanı bekle",
+          humanOnly: "Yalnızca insan (otomatik YZ yanıtı yok)",
+          fallbackLabel: "Geri dönüş gecikmesi (dakika) — yalnızca insan yanıtlamazsa",
+          minutesWord: "dakika",
+          omniDelayLabel: "Messenger/WhatsApp anında gecikme (ms)",
+          save: "YZ iletişimini kaydet",
+          loading: "Yükleniyor…",
+          signInRequired: "YZ iletişimini yapılandırmak için giriş yapın.",
+          loadFailed: "YZ iletişim ayarları yüklenemedi.",
+          saving: "Kaydediliyor…",
+          saveFailed: "Kaydetme başarısız: {error}",
+          saved: "Kaydedildi. Messenger/WhatsApp bu yanıt zamanlamasını kullanacak.",
+        },
+        communicationChannels: {
+          title: "İletişim Kanalları",
+          desc: "Harici kanalları bağlayın; hasta mesajları YZ koordinatör gelen kutunuzda kaynak rozetleriyle görünsün (WhatsApp, Messenger, Instagram, Web).",
+          whatsapp: "WhatsApp →",
+          messenger: "Messenger →",
+        },
+        colorCategories: {
+          blue: "Mavi / Güven",
+          green: "Yeşil / Sağlık",
+          purple: "Mor / Premium",
+          orange: "Turuncu / Aksiyon",
+          red: "Kırmızı / Kampanya",
+          neutral: "Nötr / Kurumsal",
+        },
+        variants: {
+          options: "Seçenekler",
+          btn: "Varyantlar",
+          btnHide: "Varyantları gizle",
+          aiNamesBtn: "YZ adları",
+          aiNamesHide: "YZ adlarını gizle",
+          brandVariantTitle: "Marka varyantı {n}",
+          remove: "Kaldır",
+          brand: "Marka *",
+          country: "Menşe ülkesi",
+          tier: "Segment / kademe",
+          priceFrom: "Fiyat (min)",
+          priceTo: "Fiyat (max)",
+          currency: "Para birimi",
+          aiNotes: "YZ notları",
+          defaultOption: "Bu tedavi için varsayılan seçenek",
+          panelTitle: "{treatment} — marka / malzeme varyantları",
+          panelHint: "Her varyant marka + menşe + segment + fiyat aralığıdır (ör. Straumann / İsviçre / Premium / 900–1200 EUR). YZ yalnızca tahmini dil kullanır.",
+          addVariant: "+ Varyant ekle",
+          labelsPanelTitle: "YZ görünen adları (isteğe bağlı çeviriler)",
+          labelsPanelHint: "Çok dilli YZ yanıtları için yerelleştirilmiş tedavi adları — marka veya fiyat varyantı değildir.",
+          labelPlaceholder: "İsteğe bağlı YZ görünen adı",
+        },
         referralLevel1: "Seviye 1 (%)",
         referralLevel1Help: "1. başarılı referral sonrası toplam indirim",
         referralSettings: "🎯 Referral Ayarları",
@@ -687,7 +741,7 @@
         save: "💾 Ayarları Kaydet",
         saveLoading: "Kaydediliyor...",
         treatmentPriceList: "💰 Tedavi Fiyat Listesi",
-        treatmentPriceListHelp: "Kliniğinizin tedavi fiyatlarını belirleyin. Bu fiyatlar hasta tedavi planları oluşturulurken kullanılacaktır.",
+        treatmentPriceListHelp: "Randevu fiyatlandırması ve YZ koordinatör yanıtları için tek kaynak. Marka/malzeme/fiyat seçenekleri için <strong>Varyantlar</strong> kullanın (ör. Straumann, Megagen). <strong>YZ adları</strong> yalnızca isteğe bağlı çok dilli tedavi etiketleri içindir — markalar için değil.",
         currency: "Para Birimi",
         loadingPrices: "Fiyatlar yükleniyor...",
         saveAllPrices: "💾 Tüm Fiyatları Kaydet",
@@ -715,7 +769,8 @@
           recommended: "Önerilen",
           duration: "Süre (dk)",
           breakMin: "Mola (dk)",
-          active: "Aktif"
+          active: "Aktif",
+          options: "Seçenekler",
         },
         recommendedDuration: "~{minutes} dk",
         minutes: "dk",
@@ -2069,6 +2124,60 @@
         referralDiscountsHelp: "Discount levels used in the referral system",
         referralDiscount: "Referral Discount (%)",
         referralDiscountHelp: "Discount applied to both referrer and referred patient",
+        aiCommunication: {
+          title: "AI Communication",
+          desc: "Control how fast the AI replies on Messenger and WhatsApp. <strong>Instant</strong> sends within seconds when AI is active. <strong>Wait for human</strong> only uses AI after your team does not reply within the fallback window.",
+          instant: "Instant AI replies (1–5 sec on Messenger/WhatsApp)",
+          waitHuman: "Wait for human before AI",
+          humanOnly: "Human-only (no AI auto-reply)",
+          fallbackLabel: "Fallback delay (minutes) — only if human does not reply",
+          minutesWord: "minutes",
+          omniDelayLabel: "Messenger/WhatsApp instant delay (ms)",
+          save: "Save AI communication",
+          loading: "Loading…",
+          signInRequired: "Sign in to configure AI communication.",
+          loadFailed: "Could not load AI communication settings.",
+          saving: "Saving…",
+          saveFailed: "Save failed: {error}",
+          saved: "Saved. Messenger/WhatsApp will use these reply timings.",
+        },
+        communicationChannels: {
+          title: "Communication Channels",
+          desc: "Connect external channels so patient messages appear in your AI coordinator inbox with source badges (WhatsApp, Messenger, Instagram, Web).",
+          whatsapp: "WhatsApp →",
+          messenger: "Messenger →",
+        },
+        colorCategories: {
+          blue: "Blue / Trust",
+          green: "Green / Health",
+          purple: "Purple / Premium",
+          orange: "Orange / Action",
+          red: "Red / Campaign",
+          neutral: "Neutral / Corporate",
+        },
+        variants: {
+          options: "Options",
+          btn: "Variants",
+          btnHide: "Hide variants",
+          aiNamesBtn: "AI names",
+          aiNamesHide: "Hide names",
+          brandVariantTitle: "Brand variant {n}",
+          remove: "Remove",
+          brand: "Brand *",
+          country: "Country of origin",
+          tier: "Segment / tier",
+          priceFrom: "Price from",
+          priceTo: "Price to",
+          currency: "Currency",
+          aiNotes: "AI notes",
+          defaultOption: "Default option for this treatment",
+          panelTitle: "{treatment} — brand / material variants",
+          panelHint: "Each variant is a brand + origin + segment + price range (e.g. Straumann / Switzerland / Premium / 900–1200 EUR). AI uses estimate language only.",
+          addVariant: "+ Add variant",
+          labelsPanelTitle: "AI display names (optional translations)",
+          labelsPanelHint: "Localized treatment names for multilingual AI replies — not brand or pricing variants.",
+          labelPlaceholder: "Optional AI display name",
+        },
         referralLevel1: "Level 1 (%)",
         referralLevel1Help: "Total discount after 1 successful referral",
         referralLevel2: "Level 2 (%)",
@@ -2090,7 +2199,7 @@
         save: "💾 Save Settings",
         saveLoading: "Saving...",
         treatmentPriceList: "💰 Treatment Price List",
-        treatmentPriceListHelp: "Define your clinic's treatment prices. These prices will be used when creating patient treatment plans.",
+        treatmentPriceListHelp: "Single source of truth for appointment pricing and AI coordinator replies. Use <strong>Variants</strong> for brand/material/pricing options (e.g. Straumann, Megagen). Use <strong>AI names</strong> only for optional multilingual treatment display labels — not for brands.",
         currency: "Currency",
         loadingPrices: "Loading prices...",
         saveAllPrices: "💾 Save All Prices",
@@ -2118,7 +2227,8 @@
           recommended: "Recommended",
           duration: "Duration (min)",
           breakMin: "Break (min)",
-          active: "Active"
+          active: "Active",
+          options: "Options",
         },
         recommendedDuration: "~{minutes} min",
         minutes: "min",
@@ -3290,7 +3400,8 @@
           recommended: "Рекомендуется",
           duration: "Длительность (мин)",
           breakMin: "Перерыв (мин)",
-          active: "Активно"
+          active: "Активно",
+          options: "Опции",
         },
         categoryLabels: {
           EVENTS: "События",
@@ -4395,7 +4506,8 @@
           recommended: "რეკომენდებული",
           duration: "ხანგრძლივობა (წთ)",
           breakMin: "შესვენება (წთ)",
-          active: "აქტიური"
+          active: "აქტიური",
+          options: "პარამეტრები",
         },
         categoryLabels: {
           EVENTS: "შეხვედრები / დიაგნოსტიკა",
@@ -5479,7 +5591,12 @@
             console.error("[i18n] Failed to parse data-i18n-params:", e, { key });
             params = {};
           }
-          el.textContent = this.t(key, params);
+          const translated = this.t(key, params);
+          if (/<[a-z][^>]*>/i.test(translated)) {
+            el.innerHTML = translated;
+          } else {
+            el.textContent = translated;
+          }
           const text = (el.textContent || '').trim();
           if (text === 'Dashboard' || text === 'Kaydet') {
             console.warn('Hardcoded string detected');
