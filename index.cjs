@@ -8831,8 +8831,11 @@ async function runPatientRegister(req, res, route, otpMode) {
       validatedClinicCode = code;
 
     } else {
-      // Clinic not found - return error
-
+      console.warn("[REGISTER] clinic_not_found", {
+        code,
+        supabase: isSupabaseEnabled(),
+        route,
+      });
       return res.status(404).json({
         ok: false,
         error: "clinic_not_found",
@@ -33086,6 +33089,7 @@ app.post('/api/chat/smile-simulation', requireToken, async (req, res) => {
   const jobId = crypto.randomUUID();
   _simJobs.set(jobId, {
     status: 'pending',
+    patientId,
     url: null,
     variations: [],
     failReason: null,
@@ -33154,6 +33158,9 @@ app.post('/api/chat/smile-simulation', requireToken, async (req, res) => {
 app.get('/api/chat/sim-status/:jobId', requireToken, (req, res) => {
   const job = _simJobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, error: 'job_not_found' });
+  if (job.patientId && req.patientId && String(job.patientId) !== String(req.patientId)) {
+    return res.status(403).json({ ok: false, error: 'job_patient_mismatch' });
+  }
 
   if (job.status === 'pending') {
     return res.json({
@@ -33230,6 +33237,7 @@ app.post('/api/chat/smile-scenarios', requireToken, async (req, res) => {
   const jobId = crypto.randomUUID();
   _simJobs.set(jobId, {
     status: 'pending', type: 'scenarios',
+    patientId,
     url: null, variations: [], scenarios: null, analysis: null,
     failReason: null, createdAt: Date.now(),
   });
@@ -34380,6 +34388,14 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
         });
       } catch (loadErr) {
         const code = loadErr?.code || 'image_fetch_failed';
+        if (code === 'image_patient_mismatch') {
+          logAI('warn', 'image_patient_mismatch', { patientId, imageUrl: String(imageUrl).slice(0, 120) });
+          return res.status(403).json({
+            ok: false,
+            error: 'image_patient_mismatch',
+            message: 'This photo does not belong to your account. Please upload your own photo again.',
+          });
+        }
         if (code === 'image_fetch_timeout') {
           logAI('warn', 'remote_image_timeout', { patientId, imageUrl: String(imageUrl).slice(0, 120) });
           return res.status(504).json({
@@ -48153,6 +48169,16 @@ async function mirrorPatientClinicMessageToOfferThread(opts) {
   const ctx = await loadOfferMessagingContext(offerId);
   if (!ctx?.tr?.patient_id) return null;
 
+  const {
+    offerMessageThreadFields,
+    touchThreadLastMessageAt,
+    getThreadIdForPatientClinic,
+  } = require("./lib/patientClinicChatThread");
+  const threadId =
+    ctx.tr.thread_id ||
+    (await getThreadIdForPatientClinic(String(ctx.tr.patient_id), String(ctx.tr.clinic_id))) ||
+    null;
+
   const insertRow = {
     offer_id: offerId,
     sender_id: String(ctx.tr.patient_id),
@@ -48161,6 +48187,10 @@ async function mirrorPatientClinicMessageToOfferThread(opts) {
     text: text || (attachmentUrl ? "📎" : null),
     attachment_url: attachmentUrl || null,
     attachment_type: attachmentType || null,
+    ...offerMessageThreadFields({
+      threadId,
+      treatmentRequestId: ctx.tr.id,
+    }),
   };
 
   const { data: inserted, error: insErr } = await insertIntoTableWithColumnPruning(
@@ -48171,6 +48201,10 @@ async function mirrorPatientClinicMessageToOfferThread(opts) {
   if (insErr || !inserted) {
     console.warn("[offer-mirror-patient] insert failed:", insErr?.message || insErr);
     return null;
+  }
+
+  if (threadId) {
+    void touchThreadLastMessageAt(threadId, inserted.created_at || new Date().toISOString());
   }
 
   const message = {
@@ -55441,12 +55475,14 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
     });
 
     let coordinationOfferId = null;
+    let coordinationThreadId = null;
     if (row.id != null) {
       const coordQuick = await ensureCoordinationOfferForRequest(String(row.id), {
         createIfMissing: true,
       });
       if (coordQuick.ok && coordQuick.offerId) {
         coordinationOfferId = coordQuick.offerId;
+        coordinationThreadId = coordQuick.threadId || null;
       }
       void orchestrateTreatmentRequestCreated({
         requestRow: {
@@ -55469,6 +55505,7 @@ app.post('/api/patient/treatment-requests', requireToken, async (req, res) => {
       request: {
         id: row.id != null ? String(row.id) : null,
         clinic_id: row.clinic_id || clinicId,
+        thread_id: coordinationThreadId || row.thread_id || null,
         description: row.description != null ? row.description : description,
         budget: row.budget != null ? row.budget : budget,
         preferred_treatment: row.preferred_treatment != null ? row.preferred_treatment : preferred,
@@ -55551,8 +55588,10 @@ app.post(
         enrolled: result.enrolled === true,
         offer_id: result.offerId,
         coordination_offer_id: result.offerId,
+        thread_id: result.threadId || null,
         has_formal_offer: result.hasFormalOffer === true,
         offer_created: result.offerCreated === true,
+        reused_shared_offer: result.reusedSharedOffer === true,
         clinic_id: result.clinicId || tr.clinic_id || null,
         patient_id: result.patientId || tr.patient_id || null,
         request_id: requestId,
@@ -56591,7 +56630,7 @@ async function loadOfferMessagingContext(offerId) {
 
   const { data: tr, error: tErr } = await supabase
     .from("treatment_requests")
-    .select("id, patient_id, clinic_id")
+    .select("id, patient_id, clinic_id, thread_id")
     .eq("id", requestId)
     .maybeSingle();
 
