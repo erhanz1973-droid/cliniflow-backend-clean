@@ -15,16 +15,26 @@
   <style>
     .wrap { max-width: 720px; margin: 24px auto; padding: 0 16px; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-    .btn { display: inline-block; padding: 10px 18px; background: #1877f2; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .intro { color: #475569; font-size: 15px; line-height: 1.5; margin: 0 0 16px; max-width: 52ch; }
+    .intro-note { color: #64748b; font-size: 14px; margin: 0 0 20px; }
+    .status-line { font-size: 15px; font-weight: 500; color: #0f172a; margin: 0 0 16px; }
+    .status-line.muted-state { font-weight: 400; color: #64748b; }
+    .btn { display: inline-block; padding: 10px 18px; background: #1877f2; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 15px; }
+    .btn-primary-lg { padding: 12px 22px; font-size: 16px; }
     .btn-secondary { background: #475569; }
-    .btn-outline { background: #fff; color: #334155; border: 1px solid #cbd5e1; }
+    .btn-outline { background: #fff; color: #334155; border: 1px solid #cbd5e1; font-weight: 500; }
+    .btn-link { background: none; border: none; color: #2563eb; padding: 8px 0; font-size: 14px; font-weight: 500; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+    .btn-link:hover { color: #1d4ed8; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .cta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 8px; }
+    .tools-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #f1f5f9; }
     .muted { color: #64748b; font-size: 14px; }
     .page-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
     .err { color: #b91c1c; white-space: pre-wrap; }
     .ok { color: #047857; white-space: pre-wrap; }
     #pageSelect label { display: block; padding: 8px 0; cursor: pointer; }
+    details.advanced { margin-top: 12px; font-size: 13px; color: #64748b; }
+    details.advanced summary { cursor: pointer; user-select: none; }
     #debugState {
       font-family: ui-monospace, monospace;
       font-size: 11px;
@@ -32,45 +42,169 @@
       border: 1px solid #e2e8f0;
       border-radius: 8px;
       padding: 10px;
-      margin-top: 12px;
-      max-height: 200px;
+      margin-top: 8px;
+      max-height: 160px;
       overflow: auto;
       white-space: pre-wrap;
       word-break: break-all;
+    }
+    /* Help modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(15, 23, 42, 0.45);
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-panel {
+      background: #fff;
+      border-radius: 12px;
+      max-width: 520px;
+      width: 100%;
+      max-height: min(88vh, 640px);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.18);
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .modal-header h2 { margin: 0; font-size: 18px; }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 24px;
+      line-height: 1;
+      color: #64748b;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+    .modal-body {
+      padding: 16px 20px 20px;
+      overflow-y: auto;
+      font-size: 14px;
+      line-height: 1.55;
+      color: #334155;
+    }
+    .modal-body h3 { font-size: 15px; margin: 18px 0 8px; color: #0f172a; }
+    .modal-body h3:first-child { margin-top: 0; }
+    .modal-body ul { margin: 0 0 12px; padding-left: 1.25rem; }
+    .modal-body li { margin-bottom: 6px; }
+    .modal-callout {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 12px 0;
+      font-size: 13px;
+      color: #475569;
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Facebook Messenger</h1>
-    <p class="muted">Connect a Facebook Page so patient messages flow into Clinifly AI coordination.</p>
+    <p class="intro">
+      Connect your clinic Facebook Page to receive Messenger conversations inside Clinifly AI Coordination.
+    </p>
+    <p class="intro-note">You must sign in with a Facebook account that manages the Page.</p>
 
     <div class="card">
-      <h2>Connection</h2>
-      <p id="statusText" class="muted">Loading…</p>
-      <div class="btn-row">
-        <button type="button" class="btn" id="connectBtn">Connect Facebook</button>
-        <button type="button" class="btn btn-secondary" id="connectForceBtn">Retry permissions</button>
-        <button type="button" class="btn btn-outline" id="resetStateBtn">Reset connection state</button>
-        <button type="button" class="btn btn-outline" id="diagBtn">Messenger diagnostics</button>
+      <p id="statusText" class="status-line muted-state">Loading…</p>
+
+      <div class="cta-row">
+        <button type="button" class="btn btn-primary-lg" id="connectBtn">Connect Facebook</button>
+        <button type="button" class="btn btn-link" id="helpBtn">Need help connecting?</button>
       </div>
-      <pre id="debugState" class="muted">UI state will appear here…</pre>
+
+      <div class="tools-row">
+        <button type="button" class="btn btn-outline" id="connectForceBtn">Retry permissions</button>
+        <button type="button" class="btn btn-outline" id="diagBtn">Messenger diagnostics</button>
+        <button type="button" class="btn btn-outline" id="resetStateBtn">Reset state</button>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced / debug</summary>
+        <pre id="debugState" class="muted">UI state will appear here when actions run…</pre>
+      </details>
     </div>
 
     <div class="card" id="pagesCard" style="display:none;">
-      <h2>Connected Pages</h2>
+      <h2 style="margin-top:0;font-size:17px;">Connected Pages</h2>
       <div id="connectedList"></div>
     </div>
 
     <div class="card" id="selectCard" style="display:none;">
-      <h2>Select Pages</h2>
+      <h2 style="margin-top:0;font-size:17px;">Select Pages</h2>
+      <p class="muted" style="margin:0 0 12px;">Choose which Page(s) to link to this clinic, then save.</p>
       <div id="pageSelect"></div>
       <button type="button" class="btn" id="savePagesBtn" style="margin-top:12px;">Save selected</button>
     </div>
 
     <p id="msg" class="muted"></p>
   </div>
+
+  <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="helpModalTitle">Connecting Facebook Messenger</h2>
+        <button type="button" class="modal-close" id="helpModalClose" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <h3>Page admin requirements</h3>
+        <ul>
+          <li>Use a Facebook profile that is <strong>Admin</strong> (or has full control) on your clinic Page.</li>
+          <li>Business Manager access alone is not enough unless that profile can manage the Page in Meta settings.</li>
+          <li>If you manage multiple clinics, connect the Page that matches this Clinifly clinic.</li>
+        </ul>
+
+        <h3>Messenger must be enabled</h3>
+        <ul>
+          <li>Your Facebook Page should have Messenger turned on (default for most Pages).</li>
+          <li>In Meta Page settings, check Inbox / Messaging is available for the Page.</li>
+        </ul>
+
+        <h3>Retry permissions</h3>
+        <p>
+          Click <strong>Retry permissions</strong> if you previously denied access or need to grant Page permissions again.
+          Meta will show the consent screen a second time — accept all requested Page and messaging permissions.
+        </p>
+
+        <h3>“No Pages found” — usually not a hard error</h3>
+        <div class="modal-callout">
+          If Facebook returns no Pages to select, it usually means one of the following — not a permanent Clinifly block:
+        </div>
+        <ul>
+          <li>You signed in with the <strong>wrong Facebook account</strong> (personal profile that does not manage the clinic Page).</li>
+          <li>Your account is missing <strong>Page admin</strong> role on the clinic Page.</li>
+          <li>Permissions were <strong>denied or partially accepted</strong> during OAuth — use Retry permissions.</li>
+          <li>The Page was never created — create one at facebook.com/pages/create, then connect again.</li>
+        </ul>
+
+        <h3>Troubleshooting</h3>
+        <ul>
+          <li><strong>Connect Facebook</strong> — start or add another Page connection.</li>
+          <li><strong>Retry permissions</strong> — re-authorize after changing roles or denying scopes.</li>
+          <li><strong>Messenger diagnostics</strong> — checks whether the stored Page token can reach Meta (after a Page is connected).</li>
+          <li><strong>Reset state</strong> — clears stuck OAuth UI on this browser only; does not remove a connected Page from the server.</li>
+        </ul>
+        <p class="muted" style="margin-bottom:0;">
+          Patient messages already appear in Clinifly only after a Page is connected and webhooks are subscribed successfully.
+        </p>
+      </div>
+    </div>
+  </div>
+
   <script src="/admin-layout.js?v=202605201"></script>
-  <script src="/admin-messenger.js?v=4"></script>
+  <script src="/admin-messenger.js?v=5"></script>
 </body>
 </html>

@@ -13,6 +13,9 @@
   const selectCard = document.getElementById("selectCard");
   const pageSelect = document.getElementById("pageSelect");
   const savePagesBtn = document.getElementById("savePagesBtn");
+  const helpBtn = document.getElementById("helpBtn");
+  const helpModal = document.getElementById("helpModal");
+  const helpModalClose = document.getElementById("helpModalClose");
 
   /** @type {Record<string, unknown>} */
   const uiState = {
@@ -111,11 +114,29 @@
     return String(s || "").replace(/"/g, "&quot;");
   }
 
+  function openHelpModal() {
+    if (!helpModal) return;
+    helpModal.classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeHelpModal() {
+    if (!helpModal) return;
+    helpModal.classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  function setStatusLine(text, variant) {
+    if (!statusText) return;
+    statusText.textContent = text || "";
+    statusText.className = "status-line" + (variant === "connected" ? "" : " muted-state");
+  }
+
   async function loadStatus() {
     metaUiLog("loadStatus.start", {});
 
     if (!uiState.hasToken) {
-      statusText.textContent = "Please log in to the admin dashboard first, then reopen this page.";
+      setStatusLine("Please log in to the admin dashboard first, then reopen this page.");
       uiState.serverEnabled = false;
       uiState.connectedPageCount = 0;
       applyConnectButtonState();
@@ -128,7 +149,7 @@
       res = await fetch("/api/integrations/meta/status", { headers: authHeaders() });
       json = await res.json().catch(() => ({}));
     } catch (e) {
-      statusText.textContent = "Could not reach server: " + (e?.message || "network_error");
+      setStatusLine("Could not reach server: " + (e?.message || "network_error"));
       uiState.serverEnabled = null;
       uiState.lastStatusFetch = { ok: false, error: "network" };
       applyConnectButtonState();
@@ -139,8 +160,7 @@
     uiState.lastStatusFetch = { ok: res.ok && json.ok, status: res.status, body: json };
 
     if (!res.ok || !json.ok) {
-      statusText.textContent =
-        json.message || json.error || "Failed to load Meta status (" + res.status + ")";
+      setStatusLine(json.message || json.error || "Failed to load Meta status (" + res.status + ")");
       uiState.serverEnabled = false;
       uiState.connectedPageCount = 0;
       applyConnectButtonState();
@@ -156,16 +176,20 @@
     uiState.activeConnections = pages;
 
     if (!json.enabled) {
-      statusText.textContent =
-        "Server Meta credentials are not configured (META_APP_ID / META_APP_SECRET on Railway).";
+      setStatusLine(
+        "Server Meta credentials are not configured (META_APP_ID / META_APP_SECRET on Railway).",
+      );
     } else if (pages.length) {
-      statusText.textContent =
+      setStatusLine(
         "Connected to " +
-        pages.length +
-        " Facebook Page(s). You can connect another Page or disconnect below.";
+          pages.length +
+          " Facebook Page" +
+          (pages.length === 1 ? "" : "s") +
+          ". You can connect another Page or remove one below.",
+        "connected",
+      );
     } else {
-      statusText.textContent =
-        "No Page linked yet. Click Connect Facebook — a previous “no Pages” message only means Facebook returned zero Pages for that login, not a permanent block.";
+      setStatusLine("No Facebook Page connected yet.");
     }
 
     if (pages.length) {
@@ -256,9 +280,10 @@
         setMsg(
           pages.length
             ? "Select the Page(s) to connect, then Save selected."
-            : "Facebook returned no Pages. Use Retry permissions or another Facebook account.",
+            : "No Pages returned from Facebook — this is usually account or permissions, not a permanent error. See Need help connecting?",
           !pages.length,
         );
+        if (!pages.length) openHelpModal();
       } catch (e) {
         setMsg("Invalid page selection payload. Use Reset, then Connect again.", true);
         metaUiLog("oauth.payload_parse_error", { message: e?.message });
@@ -273,13 +298,12 @@
       const scopes = params.get("scopes") || "";
       metaUiLog("oauth.page_fetch_result", { pageCount: 0, scopes });
       setMsg(
-        "Facebook returned zero Pages for that account (not a permanent lock).\n\n" +
-          "• Use the Facebook profile that is Admin on your clinic Page\n" +
-          "• Create a Page: https://www.facebook.com/pages/create\n" +
-          "• Click Retry permissions and accept all Page permissions\n" +
-          (scopes ? "• Granted scopes: " + scopes : ""),
+        "No Pages found for that Facebook login — usually wrong account, missing Page admin role, or permissions denied.\n" +
+          "Click Need help connecting? for steps, or Retry permissions.\n" +
+          (scopes ? "Granted scopes: " + scopes : ""),
         true,
       );
+      openHelpModal();
       hidePagePicker();
       applyConnectButtonState();
       return;
@@ -365,9 +389,24 @@
       setMsg(json.error || "Disconnect failed", true);
       return;
     }
-    setMsg("Page disconnected.");
+    setMsg("Page removed from Clinifly.");
     hidePagePicker();
     await loadStatus();
+  }
+
+  if (helpBtn) {
+    helpBtn.addEventListener("click", openHelpModal);
+  }
+  if (helpModalClose) {
+    helpModalClose.addEventListener("click", closeHelpModal);
+  }
+  if (helpModal) {
+    helpModal.addEventListener("click", (e) => {
+      if (e.target === helpModal) closeHelpModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && helpModal.classList.contains("open")) closeHelpModal();
+    });
   }
 
   connectBtn.addEventListener("click", () => startOAuth(false));
