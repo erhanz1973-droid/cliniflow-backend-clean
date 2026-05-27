@@ -397,13 +397,19 @@
           setMsg(json.error || "Diagnostics failed", true);
           return;
         }
-        const findings = (json.report && json.report.findings) || [];
-        setMsg(
-          findings.length
-            ? "Diagnostics:\n• " + findings.join("\n• ")
-            : "Diagnostics OK — page token and probes look healthy.",
-          findings.length > 0,
-        );
+        const report = json.report || {};
+        const findings = report.findings || [];
+        const actionRequired = String(report.actionRequired || "").trim();
+        let diagText = "";
+        if (actionRequired) {
+          diagText += "⚠ " + actionRequired + "\n\n";
+        }
+        if (findings.length) {
+          diagText += "Diagnostics:\n• " + findings.join("\n• ");
+        } else if (!actionRequired) {
+          diagText = "Diagnostics OK — page token and probes look healthy.";
+        }
+        setMsg(diagText.trim() || "Diagnostics finished.", findings.length > 0 || Boolean(actionRequired));
         if (debugEl) debugEl.textContent = JSON.stringify(json.report, null, 2);
       } catch (e) {
         setMsg(e.message || "Diagnostics request failed", true);
