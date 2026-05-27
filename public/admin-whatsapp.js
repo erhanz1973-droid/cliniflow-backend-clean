@@ -9,7 +9,16 @@
   const waHelpBtn = document.getElementById("waHelpBtn");
   const waHelpModal = document.getElementById("waHelpModal");
   const waHelpModalClose = document.getElementById("waHelpModalClose");
+  const btnMetaConnect = document.getElementById("btnMetaConnect");
+  const metaConnectSoon = document.getElementById("metaConnectSoon");
   let lastPreview = null;
+  /** @type {{ available?: boolean, appId?: string, configId?: string, graphApiVersion?: string }|null} */
+  let embeddedSignupConfig = null;
+  let pendingEmbeddedCode = null;
+  /** @type {Record<string, unknown>|null} */
+  let pendingEmbeddedData = null;
+  let fbSdkLoading = false;
+  let waEmbeddedMessageBound = false;
 
   function openWaHelpModal() {
     if (!waHelpModal) return;
@@ -21,6 +30,204 @@
     if (!waHelpModal) return;
     waHelpModal.classList.remove("open");
     document.body.style.overflow = "";
+  }
+
+  function applyMetaConnectButtonState() {
+    if (!btnMetaConnect) return;
+    const ready = Boolean(embeddedSignupConfig?.available && embeddedSignupConfig?.configId);
+    btnMetaConnect.disabled = !token;
+    if (metaConnectSoon) {
+      if (ready) {
+        metaConnectSoon.style.display = "none";
+      } else {
+        metaConnectSoon.style.display = "inline-block";
+        metaConnectSoon.textContent = "Manual setup";
+        metaConnectSoon.title = "Use Advanced tab until Embedded Signup is configured on Railway";
+      }
+    }
+    btnMetaConnect.title = ready
+      ? "Sign in with Meta and select your WhatsApp Business number"
+      : "Opens Advanced manual setup — Embedded Signup not configured on server yet";
+  }
+
+  async function loadEmbeddedSignupConfig() {
+    if (!token) {
+      embeddedSignupConfig = null;
+      applyMetaConnectButtonState();
+      return;
+    }
+    try {
+      const res = await fetch("/api/integrations/whatsapp/embedded-signup/config", {
+        headers: authHeaders(),
+      });
+      const json = await res.json().catch(function () {
+        return {};
+      });
+      embeddedSignupConfig =
+        res.ok && json.ok
+          ? {
+              available: json.available === true,
+              appId: json.appId || null,
+              configId: json.configId || null,
+              graphApiVersion: json.graphApiVersion || "v21.0",
+              hint: json.hint || null,
+            }
+          : { available: false, hint: json.error || json.hint };
+    } catch (_e) {
+      embeddedSignupConfig = { available: false };
+    }
+    applyMetaConnectButtonState();
+  }
+
+  function bindWaEmbeddedSignupListener() {
+    if (waEmbeddedMessageBound) return;
+    waEmbeddedMessageBound = true;
+    window.addEventListener("message", function (event) {
+      if (!event.origin || !String(event.origin).includes("facebook.com")) return;
+      let payload;
+      try {
+        payload = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+      } catch (_e) {
+        return;
+      }
+      if (!payload || payload.type !== "WA_EMBEDDED_SIGNUP") return;
+      if (payload.event === "CANCEL") {
+        setMsg("Meta signup cancelled.", false);
+        pendingEmbeddedCode = null;
+        pendingEmbeddedData = null;
+        return;
+      }
+      if (payload.event === "FINISH" || payload.event === "FINISH_ONLY_WABA") {
+        pendingEmbeddedData = payload.data && typeof payload.data === "object" ? payload.data : {};
+        void tryCompleteEmbeddedSignup();
+      }
+    });
+  }
+
+  function ensureFacebookSdk(appId, version) {
+    return new Promise(function (resolve, reject) {
+      if (window.FB && typeof window.FB.init === "function") {
+        resolve(window.FB);
+        return;
+      }
+      if (fbSdkLoading) {
+        const wait = setInterval(function () {
+          if (window.FB) {
+            clearInterval(wait);
+            resolve(window.FB);
+          }
+        }, 100);
+        setTimeout(function () {
+          clearInterval(wait);
+          if (window.FB) resolve(window.FB);
+          else reject(new Error("Facebook SDK load timeout"));
+        }, 15000);
+        return;
+      }
+      fbSdkLoading = true;
+      window.fbAsyncInit = function () {
+        window.FB.init({
+          appId: appId,
+          cookie: true,
+          xfbml: false,
+          version: version || "v21.0",
+        });
+        resolve(window.FB);
+      };
+      const existing = document.getElementById("facebook-jssdk");
+      if (existing && window.FB) {
+        resolve(window.FB);
+        return;
+      }
+      const js = document.createElement("script");
+      js.id = "facebook-jssdk";
+      js.async = true;
+      js.defer = true;
+      js.crossOrigin = "anonymous";
+      js.src = "https://connect.facebook.net/en_US/sdk.js";
+      js.onerror = function () {
+        reject(new Error("Could not load Facebook SDK"));
+      };
+      document.body.appendChild(js);
+    });
+  }
+
+  async function tryCompleteEmbeddedSignup() {
+    const phoneNumberId = String(
+      pendingEmbeddedData?.phone_number_id || pendingEmbeddedData?.phoneNumberId || "",
+    ).trim();
+    if (!pendingEmbeddedCode || !phoneNumberId) return;
+
+    setMsg("Saving WhatsApp connection…");
+    const res = await fetch("/api/integrations/whatsapp/embedded-signup/complete", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        code: pendingEmbeddedCode,
+        phoneNumberId: phoneNumberId,
+        wabaId: pendingEmbeddedData?.waba_id || pendingEmbeddedData?.wabaId || null,
+        signupPayload: pendingEmbeddedData,
+      }),
+    });
+    const json = await res.json().catch(function () {
+      return {};
+    });
+    pendingEmbeddedCode = null;
+    pendingEmbeddedData = null;
+
+    if (!res.ok || !json.ok) {
+      setMsg(json.message || json.error || "Could not complete Meta signup", true);
+      return;
+    }
+    setMsg("WhatsApp connected via Meta. Continue the checklist above.", false);
+    await refreshAll();
+  }
+
+  async function launchEmbeddedSignup() {
+    bindWaEmbeddedSignupListener();
+
+    if (!embeddedSignupConfig?.available || !embeddedSignupConfig.configId) {
+      setMsg(
+        (embeddedSignupConfig?.hint ||
+          "Quick Connect is not configured on the server yet.") +
+          " Use Advanced manual setup below.",
+        true,
+      );
+      setConnectMode("advanced");
+      openWaHelpModal();
+      return;
+    }
+
+    pendingEmbeddedCode = null;
+    pendingEmbeddedData = null;
+    setMsg("Opening Meta signup…");
+
+    try {
+      const FB = await ensureFacebookSdk(
+        embeddedSignupConfig.appId,
+        embeddedSignupConfig.graphApiVersion || "v21.0",
+      );
+      FB.login(
+        function (response) {
+          if (response?.authResponse?.code) {
+            pendingEmbeddedCode = response.authResponse.code;
+            void tryCompleteEmbeddedSignup();
+            return;
+          }
+          if (response?.status === "not_authorized" || response?.status === "unknown") {
+            setMsg("Meta login was not completed. Try again or use Advanced setup.", true);
+          }
+        },
+        {
+          config_id: embeddedSignupConfig.configId,
+          response_type: "code",
+          override_default_response_type: true,
+          extras: { sessionInfoVersion: 3 },
+        },
+      );
+    } catch (e) {
+      setMsg(e?.message || "Could not start Meta signup", true);
+    }
   }
 
   const AI_MODES = [
@@ -721,6 +928,7 @@
   }
 
   async function refreshAll() {
+    await loadEmbeddedSignupConfig();
     await loadStatus();
     await loadConnections();
     await loadOnboarding();
@@ -752,6 +960,12 @@
   document.getElementById("saveClinicAiBtn").addEventListener("click", function () {
     void saveClinicAi();
   });
+
+  if (btnMetaConnect) {
+    btnMetaConnect.addEventListener("click", function () {
+      void launchEmbeddedSignup();
+    });
+  }
 
   if (waHelpBtn) {
     waHelpBtn.addEventListener("click", openWaHelpModal);

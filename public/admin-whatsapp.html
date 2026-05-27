@@ -204,10 +204,10 @@
           Sign in to Meta, pick your business and phone number — Clinifly imports everything automatically.
         </p>
         <div class="cta-row">
-          <button type="button" class="wa-btn wa-btn-meta wa-btn-primary-lg" id="btnMetaConnect" disabled>
+          <button type="button" class="wa-btn wa-btn-meta wa-btn-primary-lg" id="btnMetaConnect">
             Connect with Meta
           </button>
-          <span class="soon-inline" aria-hidden="true">Coming soon</span>
+          <span class="soon-inline" id="metaConnectSoon" aria-hidden="true">Coming soon</span>
           <button type="button" class="btn-link" id="waHelpBtn">Need help connecting?</button>
         </div>
         <p class="helper">
@@ -307,8 +307,9 @@
           <li>We import display name, routing, and webhooks — done</li>
         </ol>
         <div class="modal-callout">
-          <strong>Coming soon:</strong> One-click Connect with Meta is rolling out. Until then, use
-          <strong>Advanced manual setup</strong> on this page with your Phone number ID from Meta.
+          <strong>Connect with Meta</strong> uses Meta Embedded Signup when
+          <code>WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID</code> is set on Railway. Otherwise use
+          <strong>Advanced manual setup</strong> with your Phone number ID from Meta.
         </div>
 
         <h3>Requirements</h3>
@@ -336,6 +337,6 @@
   </div>
 
   <script src="/admin-layout.js?v=202605201"></script>
-  <script src="/admin-whatsapp.js?v=5"></script>
+  <script src="/admin-whatsapp.js?v=6"></script>
 </body>
 </html>
