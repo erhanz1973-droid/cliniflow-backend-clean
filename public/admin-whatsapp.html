@@ -45,16 +45,49 @@
     .mode-tab.active { background: #fff; color: #0f172a; box-shadow: inset 0 -2px 0 #25d366; }
     .mode-panel { display: none; margin-top: 16px; }
     .mode-panel.active { display: block; }
-    .quick-steps {
-      margin: 12px 0 0; padding-left: 20px; color: #475569; font-size: 14px; line-height: 1.6;
-    }
-    .embed-box {
-      border: 2px solid #bfdbfe; border-radius: 12px; padding: 22px; text-align: center;
-      background: linear-gradient(180deg, #f0f9ff 0%, #f8fafc 100%);
-    }
-    .embed-box .soon {
-      display: inline-block; margin-top: 8px; padding: 4px 10px; border-radius: 999px;
+    .wa-intro { color: #475569; font-size: 15px; line-height: 1.5; margin: 0 0 16px; max-width: 52ch; }
+    .cta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 12px; }
+    .wa-btn-primary-lg { padding: 12px 22px; font-size: 16px; }
+    .soon-inline {
+      display: inline-block; padding: 4px 10px; border-radius: 999px;
       background: #dbeafe; color: #1e40af; font-size: 12px; font-weight: 700;
+    }
+    .btn-link {
+      background: none; border: none; color: #2563eb; padding: 8px 0; font-size: 14px;
+      font-weight: 500; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+    }
+    .btn-link:hover { color: #1d4ed8; }
+    .modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(15, 23, 42, 0.45); align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-panel {
+      background: #fff; border-radius: 12px; max-width: 520px; width: 100%;
+      max-height: min(88vh, 640px); overflow: hidden; display: flex; flex-direction: column;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.18);
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px; border-bottom: 1px solid #e2e8f0;
+    }
+    .modal-header h2 { margin: 0; font-size: 18px; }
+    .modal-close {
+      background: none; border: none; font-size: 24px; line-height: 1;
+      color: #64748b; cursor: pointer; padding: 4px 8px;
+    }
+    .modal-body {
+      padding: 16px 20px 20px; overflow-y: auto; font-size: 14px;
+      line-height: 1.55; color: #334155;
+    }
+    .modal-body h3 { font-size: 15px; margin: 18px 0 8px; color: #0f172a; }
+    .modal-body h3:first-child { margin-top: 0; }
+    .modal-body ol { margin: 0 0 12px; padding-left: 1.35rem; }
+    .modal-body li { margin-bottom: 8px; }
+    .modal-body ul { margin: 0 0 12px; padding-left: 1.25rem; }
+    .modal-callout {
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+      padding: 12px 14px; margin: 12px 0; font-size: 13px; color: #475569;
     }
     .helper {
       font-size: 13px; color: #64748b; line-height: 1.5; margin: 6px 0 0;
@@ -137,8 +170,8 @@
 <body>
   <div class="wa-wrap">
     <p class="wa-muted"><a href="/admin-settings.html">← Settings</a> · <a href="/admin-ai-leads.html">Coordination inbox</a></p>
-    <h1 style="margin:8px 0 4px;font-size:1.5rem">WhatsApp for your clinic</h1>
-    <p class="wa-muted">Connect the number your patients already use. You do not need to be technical — we guide you step by step.</p>
+    <h1 style="margin:8px 0 4px;font-size:1.5rem">WhatsApp</h1>
+    <p class="wa-muted">Connect your clinic WhatsApp number so patient messages flow into Clinifly AI Coordination.</p>
 
     <div class="wa-notice" role="note">
       <strong>Your number stays yours.</strong>
@@ -167,19 +200,20 @@
       </div>
 
       <div id="panelQuick" class="mode-panel active" role="tabpanel">
-        <div class="embed-box">
-          <p style="margin:0 0 12px;font-size:15px;color:#0f172a;font-weight:700">One click with Meta</p>
-          <p class="wa-muted" style="margin:0 0 16px">Sign in to Meta, pick your business and phone number — Clinifly imports everything automatically.</p>
-          <button type="button" class="wa-btn wa-btn-meta" id="btnMetaConnect" disabled>Connect with Meta</button>
-          <div class="soon">Coming soon</div>
-          <ol class="quick-steps" style="text-align:left;max-width:420px;margin:16px auto 0">
-            <li>Meta popup opens</li>
-            <li>You log in and approve Clinifly</li>
-            <li>You select your WhatsApp Business account and phone number</li>
-            <li>We import display name, routing, and webhooks — done</li>
-          </ol>
+        <p class="wa-intro">
+          Sign in to Meta, pick your business and phone number — Clinifly imports everything automatically.
+        </p>
+        <div class="cta-row">
+          <button type="button" class="wa-btn wa-btn-meta wa-btn-primary-lg" id="btnMetaConnect" disabled>
+            Connect with Meta
+          </button>
+          <span class="soon-inline" aria-hidden="true">Coming soon</span>
+          <button type="button" class="btn-link" id="waHelpBtn">Need help connecting?</button>
         </div>
-        <p class="helper" style="margin-top:14px">Need to connect today? Switch to <strong>Advanced manual setup</strong> — only if Meta gave you a setup code from WhatsApp Manager.</p>
+        <p class="helper">
+          Need to connect today? Switch to <strong>Advanced manual setup</strong> — use your Phone number ID from
+          <a href="https://business.facebook.com/wa/manage/home/" target="_blank" rel="noopener">WhatsApp Manager</a>.
+        </p>
       </div>
 
       <div id="panelAdvanced" class="mode-panel" role="tabpanel">
@@ -257,7 +291,51 @@
 
     <p id="msg" class="wa-muted"></p>
   </div>
+
+  <div class="modal-backdrop" id="waHelpModal" role="dialog" aria-modal="true" aria-labelledby="waHelpModalTitle">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="waHelpModalTitle">Connect WhatsApp with Meta</h2>
+        <button type="button" class="modal-close" id="waHelpModalClose" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <h3>Quick Connect (recommended)</h3>
+        <ol>
+          <li>Meta popup opens</li>
+          <li>You log in and approve Clinifly</li>
+          <li>You select your WhatsApp Business account and phone number</li>
+          <li>We import display name, routing, and webhooks — done</li>
+        </ol>
+        <div class="modal-callout">
+          <strong>Coming soon:</strong> One-click Connect with Meta is rolling out. Until then, use
+          <strong>Advanced manual setup</strong> on this page with your Phone number ID from Meta.
+        </div>
+
+        <h3>Requirements</h3>
+        <ul>
+          <li>A <strong>Meta Business</strong> account with WhatsApp Business Platform (Cloud API) access.</li>
+          <li>A phone number added in <a href="https://business.facebook.com/wa/manage/home/" target="_blank" rel="noopener">WhatsApp Manager</a>.</li>
+          <li>Admin access to that business — same Facebook login you use in Meta Business Suite.</li>
+        </ul>
+
+        <h3>Advanced manual setup</h3>
+        <ul>
+          <li>Open WhatsApp Manager → <strong>API setup</strong> (or your number → API).</li>
+          <li>Copy the numeric <strong>Phone number ID</strong> (not your public +90 line).</li>
+          <li>Paste it here → <strong>Verify with Meta</strong> → <strong>Confirm and connect</strong>.</li>
+        </ul>
+
+        <h3>Troubleshooting</h3>
+        <ul>
+          <li><strong>Verify failed</strong> — wrong ID, token not set on server, or number not in your Meta app.</li>
+          <li><strong>No messages in Clinifly</strong> — check webhook is subscribed and WhatsApp routing is ON for the number.</li>
+          <li><strong>Your number stays yours</strong> — Clinifly only gets API access; we do not take ownership of the line.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
   <script src="/admin-layout.js?v=202605201"></script>
-  <script src="/admin-whatsapp.js?v=4"></script>
+  <script src="/admin-whatsapp.js?v=5"></script>
 </body>
 </html>

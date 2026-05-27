@@ -6,7 +6,22 @@
   const msgEl = document.getElementById("msg");
   const clinicAuditList = document.getElementById("clinicAuditList");
   const onboardSteps = document.getElementById("onboardSteps");
+  const waHelpBtn = document.getElementById("waHelpBtn");
+  const waHelpModal = document.getElementById("waHelpModal");
+  const waHelpModalClose = document.getElementById("waHelpModalClose");
   let lastPreview = null;
+
+  function openWaHelpModal() {
+    if (!waHelpModal) return;
+    waHelpModal.classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeWaHelpModal() {
+    if (!waHelpModal) return;
+    waHelpModal.classList.remove("open");
+    document.body.style.overflow = "";
+  }
 
   const AI_MODES = [
     { value: "AI_ACTIVE", label: "AI active — auto-reply when appropriate" },
@@ -330,7 +345,7 @@
         ? live.length + " number(s) live. Paused numbers still receive webhooks but won't route to inbox or AI."
         : rows.length
           ? rows.length + " number(s) connected — turn WhatsApp ON when ready."
-          : "No number connected yet. Complete step 1 below."
+          : "No WhatsApp number connected yet."
       : "WhatsApp is not configured on the server. Contact Clinifly support.";
   }
 
@@ -590,7 +605,7 @@
       setMsg(json.error || "Disconnect failed", true);
       return;
     }
-    setMsg("Number disconnected.");
+    setMsg("WhatsApp number removed from Clinifly.");
     await refreshAll();
   }
 
@@ -737,6 +752,21 @@
   document.getElementById("saveClinicAiBtn").addEventListener("click", function () {
     void saveClinicAi();
   });
+
+  if (waHelpBtn) {
+    waHelpBtn.addEventListener("click", openWaHelpModal);
+  }
+  if (waHelpModalClose) {
+    waHelpModalClose.addEventListener("click", closeWaHelpModal);
+  }
+  if (waHelpModal) {
+    waHelpModal.addEventListener("click", function (e) {
+      if (e.target === waHelpModal) closeWaHelpModal();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && waHelpModal.classList.contains("open")) closeWaHelpModal();
+    });
+  }
 
   if (!token) {
     setMsg("Log in to admin first.", true);
