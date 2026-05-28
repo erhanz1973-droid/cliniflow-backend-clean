@@ -56811,7 +56811,8 @@ app.get("/api/offer-messages", async (req, res, next) => {
       sender_id: String(m.sender_id || ""),
       sender_role: m.sender_role,
       sender_name: m.sender_name || "",
-      text: m.text,
+      // Some production schemas store body in message/message_text/content/body instead of text.
+      text: extractOfferMessageTextFromRow(m),
       attachment_url: normalizeOfferAttachmentUrl(req, m.attachment_url) || m.attachment_url,
       attachment_type: m.attachment_type,
       created_at: m.created_at,
@@ -56964,6 +56965,10 @@ app.post("/api/offer-messages", async (req, res) => {
       sender_role,
       sender_name,
       text: text || null,
+      message: text || null,
+      message_text: text || null,
+      body: text || null,
+      content: text || null,
       attachment_url: attachmentUrlStored,
       attachment_type: attachment_type || null,
     };
