@@ -15429,6 +15429,26 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
       };
     });
 
+    try {
+      const { resolvePatientDisplayLabels, looksLikeOpaquePatientId } = require("./lib/appointmentCoordinationSync");
+      const needLabelIds = normalized
+        .filter((p) => {
+          const n = String(p.name || "").trim();
+          return !n || looksLikeOpaquePatientId(n);
+        })
+        .map((p) => String(p.id || "").trim())
+        .filter(Boolean);
+      if (needLabelIds.length) {
+        const labels = await resolvePatientDisplayLabels(needLabelIds, req.clinicId);
+        for (const row of normalized) {
+          const better = labels.get(String(row.id || "").trim());
+          if (better) row.name = better;
+        }
+      }
+    } catch (labelErr) {
+      console.warn("[ADMIN PATIENTS] display label enrich skipped:", labelErr?.message || labelErr);
+    }
+
     // Oral health scores are file-based (sync) — safe on Render ephemeral FS
     const patientsWithScores = normalized.map((patient) => {
       const patientId = patient.patientId || "";
@@ -38784,51 +38804,10 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
   /** @type {Map<string,string>} */
   const patientMap = new Map();
   if (patientIds.size) {
-    const pidList = [...patientIds].slice(0, 800);
-    for (const run of [
-      () => supabase.from("patients").select("id,name,full_name").in("id", pidList),
-      () => supabase.from("patients").select("id,name,full_name").in("patient_id", pidList),
-    ]) {
-      const { data, error } = await run();
-      if (error) continue;
-      for (const p of data || []) {
-        const id = String(p?.id || "").trim();
-        const label = String(p?.full_name || p?.name || id).trim();
-        if (id) patientMap.set(id, label || id);
-      }
-      break;
-    }
-    if ((clinicCode || cid) && patientMap.size < patientIds.size) {
-      try {
-        const codeUpper = String(clinicCode || "").trim().toUpperCase();
-        const q = supabase.from("patients").select("id,name,full_name,patient_id").eq("clinic_id", cid).limit(800);
-        const { data, error } = await q;
-        if (!error && Array.isArray(data)) {
-          for (const p of data) {
-            const id = String(p?.id || "").trim();
-            const label = String(p?.full_name || p?.name || id).trim();
-            if (id) patientMap.set(id, label || id);
-            const lp = String(p?.patient_id || "").trim();
-            if (lp) patientMap.set(lp, label || lp);
-          }
-        }
-        if (codeUpper && patientMap.size < patientIds.size) {
-          const { data: d2, error: e2 } = await supabase
-            .from("patients")
-            .select("id,name,full_name,patient_id")
-            .eq("clinic_code", codeUpper)
-            .limit(800);
-          if (!e2 && Array.isArray(d2)) {
-            for (const p of d2) {
-              const id = String(p?.id || "").trim();
-              const label = String(p?.full_name || p?.name || id).trim();
-              if (id) patientMap.set(id, label || id);
-              const lp = String(p?.patient_id || "").trim();
-              if (lp) patientMap.set(lp, label || lp);
-            }
-          }
-        }
-      } catch (_) {}
+    const { resolvePatientDisplayLabels } = require("./lib/appointmentCoordinationSync");
+    const labels = await resolvePatientDisplayLabels([...patientIds], cid);
+    for (const [pid, label] of labels.entries()) {
+      patientMap.set(pid, label);
     }
   }
 
@@ -38870,10 +38849,16 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     if (!pid) continue;
     const startAt = toIsoSafe(row.scheduled_at);
     if (!startAt) continue;
-    const assignDoc = String(row.assigned_doctor_id || row.doctor_id || row.created_by_doctor_id || "").trim();
+    const assignDoc = String(
+      row.assigned_doctor_id || row.doctor_id || row.created_by_doctor_id || "",
+    ).trim();
     const procType = String(row.procedure_type || "TREATMENT").trim();
     const treatmentLabel =
-      procType === "CONSULT" || procType === "CONSULTATION" ? "Consultation" : procType;
+      procType === "CONSULT" || procType === "CONSULTATION"
+        ? "Consultation"
+        : procType === "MUAYENE"
+          ? "Muayene"
+          : procType;
     const toothRaw = row.tooth_number;
     const tooth_number = (() => {
       if (toothRaw == null || toothRaw === "") return "";
@@ -38890,16 +38875,28 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     } catch (_) {
       /* keep UTC slice */
     }
+    let scheduledLocalTime = null;
+    try {
+      scheduledLocalTime = formatInTimeZone(new Date(startAt), tz, "HH:mm");
+    } catch (_) {
+      /* ignore */
+    }
+    const doctorLabel = assignDoc ? doctorMap.get(assignDoc) || "" : "";
+    const chairLabel = String(row.chair || "").trim() || "";
     out.push({
-      doctor: doctorMap.get(assignDoc) || assignDoc || "",
+      doctor: doctorLabel,
       patient: patientMap.get(pid) || pid,
-      chair: String(row.chair || "").trim(),
+      chair: chairLabel,
       startAt,
       endAt: null,
+      scheduledAtUtc: startAt,
+      clinicTimezone: tz,
+      scheduledLocalTime,
       status: st || "PLANNED",
       treatment: treatmentLabel,
+      eventType: "APPOINTMENT",
       ...(tooth_number ? { tooth_number } : {}),
-      duration_minutes: 0,
+      duration_minutes: 30,
       break_minutes: 0,
       _appointmentDate: appointmentDate,
       _source: "encounter_treatments",

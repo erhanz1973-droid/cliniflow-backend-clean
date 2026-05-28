@@ -389,7 +389,28 @@
       return `${M[start.getMonth()]} ${start.getDate()} - ${M[end.getMonth()]} ${end.getDate()}`;
     }
 
-    function fmtTime(startAt, endAt, lang) {
+    function formatCalendarPatientLabel(name) {
+      const s = String(name || '').trim();
+      if (!s) return 'Hasta';
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return 'WhatsApp Hasta';
+      if (/^p_[0-9a-f-]{36}$/i.test(s)) return 'WhatsApp Hasta';
+      return s.length > 32 ? `${s.slice(0, 30)}…` : s;
+    }
+
+    function formatCalendarTreatmentLabel(treatment) {
+      const raw = String(treatment || '').trim();
+      if (!raw) return 'Muayene';
+      const u = raw.toUpperCase();
+      if (u === 'CONSULT' || u === 'CONSULTATION') return 'Muayene';
+      return raw;
+    }
+
+    function fmtTime(startAt, endAt, lang, scheduledLocalTime) {
+      const hm = String(scheduledLocalTime || '').trim();
+      if (/^\d{1,2}:\d{2}$/.test(hm)) {
+        const parts = hm.split(':');
+        return `${parts[0].padStart(2, '0')}:${parts[1]}`;
+      }
       const L = lang !== undefined ? lang : currentLanguage();
       const loc = localeMap[L] || 'en-US';
       const s = safeDate(startAt);
@@ -677,6 +698,8 @@
         eventType,
         duration_minutes: parseMinuteValue(rawItem?.duration_minutes ?? rawItem?.durationMinutes ?? rawItem?.duration ?? rawItem?.estimated_duration_minutes ?? rawItem?.estimatedDurationMinutes, 0),
         break_minutes: parseMinuteValue(rawItem?.break_minutes ?? rawItem?.breakMinutes ?? rawItem?.rest_minutes ?? rawItem?.break_duration, 0),
+        scheduledLocalTime: rawItem?.scheduledLocalTime || rawItem?.scheduled_local_time || null,
+        clinicTimezone: rawItem?.clinicTimezone || rawItem?.clinic_timezone || null,
         _doctorNorm: normalizeDoctorName(doctor),
         _chairNorm: normalizeChairText(chair),
         _source: rawItem?._source || 'appointments',
@@ -834,14 +857,16 @@
           const cards = (map[key] || []).map((entry) => {
             const item = entry.item;
             if (!entry.isStart) return '';
-            const compactTime = fmtTime(item.startAt, item.endAt, lang);
-            const procAndTooth = `${item.treatment || '-'}` + (item.tooth ? ` • 🦷 ${item.tooth}` : '');
-            const chairTxt = normalizeChairText(item.chair) || '-';
-            const doctorTxt = item.doctor || '-';
-            const patientTxt = item.patient || '-';
+            const compactTime = fmtTime(item.startAt, item.endAt, lang, item.scheduledLocalTime);
+            const procLabel = formatCalendarTreatmentLabel(item.treatment);
+            const procAndTooth = `${procLabel}` + (item.tooth ? ` • 🦷 ${item.tooth}` : '');
+            const chairTxt = normalizeChairText(item.chair) || '';
+            const doctorTxt = String(item.doctor || '').trim() || 'Atanmadı';
+            const patientTxt = formatCalendarPatientLabel(item.patient);
             const visualSpanSlots = Math.max(MIN_VISUAL_CARD_SPAN_SLOTS, Number(entry?.spanSlots) || 1);
             const visualMinHeight = (visualSpanSlots * 34) - 2;
-            const cardTitle = `Hasta: ${patientTxt} | Doktor: ${doctorTxt} | Saat: ${compactTime} | Islem: ${procAndTooth} | Koltuk: ${chairTxt}`;
+            const chairPart = chairTxt ? `Koltuk ${chairTxt}` : 'Koltuk atanmadı';
+            const cardTitle = `Hasta: ${patientTxt} | Doktor: ${doctorTxt} | Saat: ${compactTime} | İşlem: ${procAndTooth} | ${chairPart}`;
             return `
             <div class="appt-card" style="min-height:${visualMinHeight}px;" title="${cardTitle}">
               <div class="appt-time">${compactTime}</div>
@@ -851,8 +876,8 @@
                   <span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span>
                 </div>
                 <div class="appt-meta">
-                  <span class="appt-meta-text">${procAndTooth}${chairTxt ? ` • Chair ${chairTxt}` : ''}</span>
-                  <span class="appt-meta-text">Dr. ${doctorTxt}</span>
+                  <span class="appt-meta-text">${procAndTooth}${chairTxt ? ` • Koltuk ${chairTxt}` : ' • Koltuk —'}</span>
+                  <span class="appt-meta-text">${doctorTxt === 'Atanmadı' ? 'Doktor atanmadı' : `Dr. ${doctorTxt}`}</span>
                 </div>
               </div>
               <div class="appt-chevron">›</div>
