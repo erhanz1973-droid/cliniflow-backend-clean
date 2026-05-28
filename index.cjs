@@ -38684,6 +38684,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
   rangeStartIso,
   rangeEndExclusiveIso,
   clinicPatientIds = null,
+  clinicTimezone = "Europe/Istanbul",
 }) {
   const cid = clinicId ? String(clinicId).trim() : "";
   if (!cid) return [];
@@ -38871,6 +38872,8 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     if (!startAt) continue;
     const assignDoc = String(row.assigned_doctor_id || row.doctor_id || row.created_by_doctor_id || "").trim();
     const procType = String(row.procedure_type || "TREATMENT").trim();
+    const treatmentLabel =
+      procType === "CONSULT" || procType === "CONSULTATION" ? "Consultation" : procType;
     const toothRaw = row.tooth_number;
     const tooth_number = (() => {
       if (toothRaw == null || toothRaw === "") return "";
@@ -38880,7 +38883,13 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
       if (Number.isFinite(n) && n >= 11 && n <= 48) return String(n);
       return s;
     })();
-    const appointmentDate = startAt.slice(0, 10);
+    const tz = String(clinicTimezone || "Europe/Istanbul").trim() || "Europe/Istanbul";
+    let appointmentDate = startAt.slice(0, 10);
+    try {
+      appointmentDate = formatInTimeZone(new Date(startAt), tz, "yyyy-MM-dd");
+    } catch (_) {
+      /* keep UTC slice */
+    }
     out.push({
       doctor: doctorMap.get(assignDoc) || assignDoc || "",
       patient: patientMap.get(pid) || pid,
@@ -38888,7 +38897,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
       startAt,
       endAt: null,
       status: st || "PLANNED",
-      treatment: procType,
+      treatment: treatmentLabel,
       ...(tooth_number ? { tooth_number } : {}),
       duration_minutes: 0,
       break_minutes: 0,
@@ -38943,14 +38952,14 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
       });
     }
 
-    const dayStartIso = `${rangeStartDate}T00:00:00.000Z`;
-    const rangeEndIsoBase = `${rangeEndDate}T00:00:00.000Z`;
-    const dayEndDate = new Date(rangeEndIsoBase);
-    if (Number.isNaN(dayEndDate.getTime()) || Number.isNaN(Date.parse(dayStartIso))) {
+    const clinicTz = await resolveClinicIanaTzForScheduledWrites(req.clinicId, req.clinicCode);
+    const { clinicDateRangeToUtcBounds } = require("./lib/appointmentCoordinationSync");
+    const rangeBounds = clinicDateRangeToUtcBounds(rangeStartDate, rangeEndDate, clinicTz);
+    const dayStartIso = rangeBounds.start;
+    const dayEndIso = rangeBounds.endExclusive;
+    if (!dayStartIso || !dayEndIso || Number.isNaN(Date.parse(dayStartIso))) {
       return res.status(400).json({ ok: false, error: "invalid_date" });
     }
-    dayEndDate.setUTCDate(dayEndDate.getUTCDate() + 1);
-    const dayEndIso = dayEndDate.toISOString();
 
     const clinicPatientIds = new Set();
     try {
@@ -39284,6 +39293,7 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
         rangeStartIso: dayStartIso,
         rangeEndExclusiveIso: dayEndIso,
         clinicPatientIds,
+        clinicTimezone: clinicTz,
       });
       const dedupeEt = new Set(
         appointments.map((a) => `${a.startAt}|${String(a.patient || "")}|${String(a.treatment || "")}`)
