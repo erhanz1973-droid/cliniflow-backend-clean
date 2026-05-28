@@ -812,26 +812,42 @@
           body: JSON.stringify(requestData),
         });
         
-        const json = await res.json();
+        let json = {};
+        try {
+          json = await res.json();
+        } catch (_parseErr) {
+          showAlert("Sunucudan geçersiz yanıt alındı. Lütfen tekrar deneyin.");
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Kayıt Ol";
+          return;
+        }
         
         if (!res.ok) {
-          let errorMsg = json.message || json.error || "Kayıt başarısız";
+          let errorMsg =
+            json.message ||
+            (json.error === "clinic_not_found" || json.error === "invalid_clinic_code"
+              ? `"${clinicCode}" geçerli bir klinik kodu değil. Kliniğinizden aldığınız kodu girin (şehir adı değil).`
+              : null) ||
+            (res.status >= 500
+              ? "İşlem tamamlanamadı. Bilgilerinizi kontrol edip tekrar deneyin."
+              : "Kayıt başarısız. Lütfen bilgilerinizi kontrol edin.");
+          if (json.hint) errorMsg += "\n\n" + json.hint;
           if (json.error === "missing_required_fields") {
             errorMsg = "Zorunlu alanlar eksik: " + Object.keys(json.details || {}).filter(key => !json.details[key]).join(", ");
           } else if (json.error === "phone_already_registered") {
             errorMsg = json.message || "Bu telefon numarası başka bir hesaba bağlı. Farklı bir numara kullanın veya kayıtlı e-postanızla giriş yapın.";
           } else if (json.error === "email_not_configured" || json.error === "otp_email_failed") {
             errorMsg = json.message || "Doğrulama e-postası gönderilemiyor. Lütfen daha sonra tekrar deneyin.";
-          } else if (json.error === "register_failed") {
-            errorMsg = json.message || "Kayıt tamamlanamadı. Lütfen tekrar deneyin.";
-          } else if (json.error === "clinic_not_found") {
-            errorMsg = json.message || "Klinik kodu bulunamadı.";
+          } else if (json.error === "register_failed" || json.error === "internal_error" || json.error === "supabase_crash") {
+            errorMsg = json.message || "Kayıt tamamlanamadı. Lütfen bilgilerinizi kontrol edip tekrar deneyin.";
+          } else if (json.error === "clinic_not_found" || json.error === "invalid_clinic_code") {
+            errorMsg = json.message || `"${clinicCode}" ile eşleşen klinik bulunamadı.`;
           } else if (json.error === "invalid_referral_code") {
             errorMsg = json.message || "Geçersiz referans kodu.";
           } else if (json.error === "invalid_email") {
             errorMsg = json.message || "Geçersiz e-posta adresi.";
           } else if (json.error === "invalid_phone") {
-            errorMsg = json.message || "Geçersiz telefon numarası.";
+            errorMsg = json.message || "Geçersiz telefon numarası. Ülke kodu ile girin (ör. +905321234567).";
           } else if (json.error === "first_name_required") {
             errorMsg = json.message || "Ad gereklidir.";
           }
@@ -888,7 +904,9 @@
         
       } catch (error) {
         console.error("[REGISTER] Error:", error);
-        showAlert("Kayıt sırasında hata oluştu: " + error.message);
+        showAlert(
+          "Bağlantı hatası. İnternet bağlantınızı kontrol edip tekrar deneyin."
+        );
         submitBtn.disabled = false;
         submitBtn.textContent = "Kayıt Ol";
       }

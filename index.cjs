@@ -543,12 +543,15 @@ const REGISTER_USER_MSG = {
   referralCreateFailed: "Referans kaydı oluşturulamadı. Lütfen tekrar deneyin.",
   invalidReferralCode: (code) =>
     `"${code}" referans kodu geçersiz veya bulunamadı. Lütfen kontrol edip tekrar deneyin.`,
+  /** @deprecated prefer sendRegisterUserError — kept for legacy callers */
   oauthLinkIncomplete:
     "OAuth hesabını bağlamak için hem giriş sağlayıcısı (google/apple) hem de geçerli oturum belirteci gereklidir.",
   emailOauthMismatch:
     "Kayıt e-postası, Apple/Google hesabınızdaki e-posta ile aynı olmalıdır.",
   oauthAlreadyRegistered: "Bu Apple/Google hesabı zaten kayıtlı. Lütfen giriş yapın.",
 };
+
+const { sendRegisterUserError } = require("./lib/registerUserErrors");
 
 function buildRegisterOtpSuccessJson({
   patientId,
@@ -5686,7 +5689,13 @@ async function createLeadFromPublicContact({ clinicCode, name, email, phone, tex
   }
   const clinic = await getClinicByCode(code);
   if (!clinic?.id) {
-    return { ok: false, status: 404, error: "clinic_not_found" };
+    const { messageForRegisterError } = require("./lib/registerUserErrors");
+    return {
+      ok: false,
+      status: 400,
+      error: "clinic_not_found",
+      message: messageForRegisterError("clinic_not_found", "tr", { clinicCode: code }),
+    };
   }
   const clinicId = String(clinic.id);
   const displayName = String(name || "").trim() || "Lead";
@@ -8712,10 +8721,9 @@ async function runPatientRegister(req, res, route, otpMode) {
       console.error("🔥 SUPABASE THREW (" + label + "):", e);
       if (e && e.stack) console.error(e.stack);
       if (!res.headersSent) {
-        res.status(500).json({
-          ok: false,
-          error: "supabase_crash",
-          message: e?.message || String(e),
+        sendRegisterUserError(res, "supabase_crash", {
+          language: body.language,
+          details: e?.message || String(e),
         });
       }
       return { ok: false, out: null };
@@ -8739,26 +8747,18 @@ async function runPatientRegister(req, res, route, otpMode) {
   console.log("[REGISTER] REGISTER_START", { route });
 
   // Email is required for registration
+  const patientLanguage = normalizePatientLanguage(language);
+
   if (!email || !String(email).trim()) {
-    return res.status(400).json({
-      ok: false,
-      error: "email_required",
-      message: REGISTER_USER_MSG.emailRequired,
-    });
+    return sendRegisterUserError(res, "email_required", { language: patientLanguage });
   }
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const emailNormalized = normalizeRegisterEmailLib(email);
   if (!emailRegex.test(emailNormalized)) {
-    return res.status(400).json({
-      ok: false,
-      error: "invalid_email",
-      message: REGISTER_USER_MSG.invalidEmail,
-    });
+    return sendRegisterUserError(res, "invalid_email", { language: patientLanguage });
   }
-
-  const patientLanguage = normalizePatientLanguage(language);
 
   // Phone is OPTIONAL (email-only OTP). If present, validate and normalize to E.164 for storage + SMS.
   const phoneTrimmed = String(phone || "").trim();
@@ -8766,11 +8766,7 @@ async function runPatientRegister(req, res, route, otpMode) {
   // DB `patients.phone` often stores national/international digits only (e.g. 9955…) — must match for unique + preflight
   const phoneDigits = phoneNormalized.replace(/\D/g, "");
   if (phoneTrimmed && (!phoneNormalized || phoneDigits.length < 8)) {
-    return res.status(400).json({
-      ok: false,
-      error: "invalid_phone",
-      message: REGISTER_USER_MSG.invalidPhone,
-    });
+    return sendRegisterUserError(res, "invalid_phone", { language: patientLanguage });
   }
 
   // Klinik kodu isteğe bağlı — yalnızca gönderilmiş ve boş değilse doğrulanır
@@ -8836,10 +8832,9 @@ async function runPatientRegister(req, res, route, otpMode) {
         supabase: isSupabaseEnabled(),
         route,
       });
-      return res.status(404).json({
-        ok: false,
-        error: "clinic_not_found",
-        message: REGISTER_USER_MSG.clinicNotFound(code),
+      return sendRegisterUserError(res, "clinic_not_found", {
+        language: patientLanguage,
+        clinicCode: code,
       });
     }
   } else {
@@ -9130,10 +9125,7 @@ async function runPatientRegister(req, res, route, otpMode) {
   const { first_name, last_name, name } = normalizeIncomingPatientNameForDb(body);
 
   if (!first_name) {
-    return res.status(400).json({
-      ok: false,
-      error: "first_name_required",
-    });
+    return sendRegisterUserError(res, "first_name_required", { language: patientLanguage });
   }
 
   if (REGISTER_DEBUG_TRACE) {
@@ -10056,10 +10048,9 @@ async function runPatientRegister(req, res, route, otpMode) {
     console.error("🔥 REGISTER CRASH:", regErr);
     console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
-      res.status(500).json({
-        ok: false,
-        error: "internal_error",
-        message: String(regErr?.message || regErr || "Unknown error"),
+      sendRegisterUserError(res, "internal_error", {
+        language: req.body?.language,
+        details: regErr?.message || String(regErr),
       });
     }
   }
@@ -10071,10 +10062,9 @@ app.post("/api/register", async (req, res) => {
     console.error("🔥 REGISTER CRASH:", regErr);
     console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
-      res.status(500).json({
-        ok: false,
-        error: "internal_error",
-        message: String(regErr?.message || regErr || "Unknown error"),
+      sendRegisterUserError(res, "internal_error", {
+        language: req.body?.language,
+        details: regErr?.message || String(regErr),
       });
     }
   }
@@ -10088,10 +10078,9 @@ async function postRegisterPatientWithHashedOtp(req, res) {
     console.error("🔥 REGISTER CRASH (postRegisterPatientWithHashedOtp):", e);
     console.error("🔥 STACK:", e?.stack);
     if (!res.headersSent) {
-      return res.status(500).json({
-        ok: false,
-        error: "internal_error",
-        message: String(e?.message || e || "Unknown error"),
+      sendRegisterUserError(res, "internal_error", {
+        language: req.body?.language,
+        details: e?.message || String(e),
       });
     }
   }
@@ -10118,10 +10107,9 @@ app.post("/api/patient/register", async (req, res) => {
     console.error("🔥 REGISTER CRASH:", regErr);
     console.error("🔥 STACK:", regErr?.stack);
     if (!res.headersSent) {
-      res.status(500).json({
-        ok: false,
-        error: "internal_error",
-        message: String(regErr?.message || regErr || "Unknown error"),
+      sendRegisterUserError(res, "internal_error", {
+        language: req.body?.language,
+        details: regErr?.message || String(regErr),
       });
     }
   }
@@ -10139,9 +10127,16 @@ app.post("/api/lead-contact", async (req, res) => {
     const result = await createLeadFromPublicContact({ clinicCode, name, email, phone, text });
     if (!result.ok) {
       const code = result.status || 400;
+      if (result.error === "clinic_not_found" && result.message) {
+        return sendRegisterUserError(res, "clinic_not_found", {
+          clinicCode,
+          message: result.message,
+        });
+      }
       return res.status(code).json({
         ok: false,
         error: result.error || "lead_contact_failed",
+        message: result.message || undefined,
         ...(result.details ? { details: result.details } : {}),
       });
     }
