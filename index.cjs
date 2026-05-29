@@ -49345,9 +49345,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     let offerArchived = [];
     let coordinatorArchived = [];
-    const doctorClinicForOffers = String(
-      req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
-    ).trim();
+    const doctorClinicForOffers = await resolveDoctorPatientMessagesClinicId(pid, req);
     try {
       offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
         offerLimit: wantFull ? 400 : 180,
@@ -49365,10 +49363,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       console.warn("[DOCTOR patient messages] coordinator merge:", coordMergeErr?.message || coordMergeErr);
     }
 
-    let messages = mergeUnifiedDoctorPatientMessages(
-      mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived),
-      coordinatorArchived,
-    );
+    let messages = mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived, coordinatorArchived);
     const tailN = wantFull
       ? null
       : Number.isFinite(limN) && limN > 0
@@ -56238,37 +56233,43 @@ function mapOfferMessageRowToUnifiedLegacy(row) {
 }
 
 /** WhatsApp/Messenger lead history in coordinator tables — not always mirrored to patient_messages. */
-async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clinicId) {
-  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || "")) || !UUID_RE.test(String(clinicId || ""))) {
-    return [];
+function coordinatorChannelRoleToLegacyFrom(messageRole) {
+  const r = String(messageRole || "").toLowerCase();
+  if (r === "patient" || r === "user" || r === "human" || r === "lead") return "PATIENT";
+  return "CLINIC";
+}
+
+async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req) {
+  let cid = String(
+    req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
+  ).trim();
+  if (UUID_RE.test(cid)) return cid;
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || ""))) return "";
+  try {
+    const { data: prow } = await supabase
+      .from("patients")
+      .select("clinic_id")
+      .eq("id", resolvedPatientId)
+      .maybeSingle();
+    cid = String(prow?.clinic_id || "").trim();
+    if (UUID_RE.test(cid)) return cid;
+    const { data: threads } = await supabase
+      .from("patient_chat_threads")
+      .select("clinic_id")
+      .eq("patient_id", resolvedPatientId)
+      .order("updated_at", { ascending: false })
+      .limit(4);
+    for (const row of threads || []) {
+      const tc = String(row?.clinic_id || "").trim();
+      if (UUID_RE.test(tc)) return tc;
+    }
+  } catch (_) {
+    /* optional */
   }
-  const pid = String(resolvedPatientId).trim();
-  const cid = String(clinicId).trim();
+  return "";
+}
 
-  const { data: profile } = await supabase
-    .from("ai_coordinator_lead_profiles")
-    .select("id")
-    .eq("patient_id", pid)
-    .eq("clinic_id", cid)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!profile?.id) return [];
-
-  const profileId = String(profile.id).trim();
-  const out = [];
-  const seen = new Set();
-
-  const pushLeg = (leg) => {
-    if (!leg) return;
-    const id = String(leg.id || "").trim();
-    if (!id || seen.has(id)) return;
-    const text = String(leg.text || "").trim();
-    if (!text && !leg.attachment) return;
-    seen.add(id);
-    out.push(leg);
-  };
-
+async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
   const channelSelectAttempts = [
     "id, message_role, body, created_at, metadata",
     "id, message_role, body, created_at",
@@ -56295,7 +56296,7 @@ async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clini
   }
   for (const row of chRows || []) {
     const role = String(row.message_role || "").toLowerCase();
-    const from = role === "patient" ? "PATIENT" : "CLINIC";
+    const from = coordinatorChannelRoleToLegacyFrom(role);
     const text = String(row.body || "").trim();
     if (!text) continue;
     const leg = {
@@ -56313,14 +56314,10 @@ async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clini
           : {};
       const metaSource = String(meta.source || "").trim();
       const doctorLabel = String(meta.doctor_name || meta.doctorName || "").trim();
-      if (
-        role === "staff" ||
-        role === "doctor" ||
-        metaSource === "doctor_patient_chat"
-      ) {
+      if (role === "staff" || role === "doctor" || metaSource === "doctor_patient_chat") {
         leg.inboundKind = "doctor";
         leg.senderName = doctorLabel || "Doktor";
-      } else if (role === "assistant" || role === "ai") {
+      } else if (role === "assistant" || role === "ai" || role === "system") {
         leg.inboundKind = "clinic";
         leg.senderName = "AI";
       } else {
@@ -56379,6 +56376,41 @@ async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clini
         sourceCoordinatorEvent: true,
       });
     }
+  }
+}
+
+async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clinicId) {
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || "")) || !UUID_RE.test(String(clinicId || ""))) {
+    return [];
+  }
+  const pid = String(resolvedPatientId).trim();
+  const cid = String(clinicId).trim();
+
+  const { data: profiles } = await supabase
+    .from("ai_coordinator_lead_profiles")
+    .select("id")
+    .eq("patient_id", pid)
+    .eq("clinic_id", cid)
+    .order("updated_at", { ascending: false })
+    .limit(12);
+  const profileIds = [...new Set((profiles || []).map((p) => String(p?.id || "").trim()).filter(Boolean))];
+  if (!profileIds.length) return [];
+
+  const out = [];
+  const seen = new Set();
+
+  const pushLeg = (leg) => {
+    if (!leg) return;
+    const id = String(leg.id || "").trim();
+    if (!id || seen.has(id)) return;
+    const text = String(leg.text || "").trim();
+    if (!text && !leg.attachment) return;
+    seen.add(id);
+    out.push(leg);
+  };
+
+  for (const profileId of profileIds) {
+    await fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg);
   }
 
   return out;
@@ -56472,12 +56504,14 @@ async function fetchDoctorPatientArchivedOfferMessages(resolvedPatientId, req, o
   return archived;
 }
 
-function mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived) {
+function mergeUnifiedDoctorPatientMessages(...sources) {
   const byId = new Map();
-  for (const m of [...(offerArchived || []), ...(clinicMessages || [])]) {
-    const id = String(m?.id || "").trim();
-    if (!id) continue;
-    if (!byId.has(id)) byId.set(id, m);
+  for (const list of sources) {
+    for (const m of list || []) {
+      const id = String(m?.id || "").trim();
+      if (!id) continue;
+      byId.set(id, m);
+    }
   }
   return [...byId.values()].sort((a, b) => {
     const ta = Number(a?.createdAt) || 0;
