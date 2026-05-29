@@ -350,6 +350,7 @@ const {
   normalizeRegisterEmail: normalizeRegisterEmailLib,
   phoneSearchVariants,
 } = require("./lib/phoneIdentity.cjs");
+const { respondDoctorClinicalPatientGate } = require("./lib/patientClinicEnrollment");
 
 const app = express();
 /** Process boot time for /api/health uptime (ms since epoch). */
@@ -17820,6 +17821,10 @@ async function resolvePatientRowWithAdminFallback(patient_id, clinicId, logPrefi
   const originalPid = String(patient_id || "").trim();
   if (!originalPid) return null;
 
+  const verboseResolve =
+    process.env.DOCTOR_PATIENT_RESOLVE_VERBOSE === "1" ||
+    process.env.LOG_DOCTOR_PATIENT_RESOLVE === "1";
+
   const cid = String(clinicId || "").trim();
   let resolvedId = null;
   if (cid) {
@@ -17827,8 +17832,10 @@ async function resolvePatientRowWithAdminFallback(patient_id, clinicId, logPrefi
     if (resolvedId) resolvedId = String(resolvedId).trim();
   }
 
-  console.log(`${logPrefix} incoming patient_id:`, patient_id);
-  console.log(`${logPrefix} resolved patient_id:`, resolvedId || "(none via admin resolver)");
+  if (verboseResolve) {
+    console.log(`${logPrefix} incoming patient_id:`, patient_id);
+    console.log(`${logPrefix} resolved patient_id:`, resolvedId || "(none via admin resolver)");
+  }
 
   const keys = [];
   if (resolvedId) keys.push(resolvedId);
@@ -17842,7 +17849,9 @@ async function resolvePatientRowWithAdminFallback(patient_id, clinicId, logPrefi
     try {
       const row = await getPatientById(k);
       if (row?.id) {
-        console.log(`${logPrefix} matched patients.id:`, row.id, "via key:", k);
+        if (verboseResolve) {
+          console.log(`${logPrefix} matched patients.id:`, row.id, "via key:", k);
+        }
         return row;
       }
     } catch (_) {}
@@ -49578,10 +49587,7 @@ app.get('/api/doctor/patient/:patientId', requireDoctorAuth, async (req, res) =>
     }
 
     const patient = lookup.patient;
-    const statusRaw = String(patient?.status || '').toUpperCase();
-    if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
-      return res.status(404).json({ ok: false, error: 'patient_not_found' });
-    }
+    if (!respondDoctorClinicalPatientGate(res, patient)) return;
 
     // Encounter ile tutarlı: tedavi ekibi + tablo ataması + expand (doctorHasTreatmentTeamAccessToPatientId),
     // ayrıca bu hastanın bir muayenesini bu doktor açtıysa (resolveDoctorEncounterAccess owner).
@@ -53287,14 +53293,9 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
     const docCid = String(req.doctor?.clinic_id || req.clinicId || "").trim();
     const patient = await resolvePatientRowWithAdminFallback(patientId, docCid, "[DOCTOR PATIENT TREATMENTS POST]");
     console.timeLog('doctor-save', 'after patient lookup');
-    if (!patient?.id) {
+    if (!respondDoctorClinicalPatientGate(res, patient)) {
       endDoctorSaveTimer();
-      return res.status(404).json({ ok: false, error: 'patient_not_found' });
-    }
-    const statusRaw = String(patient?.status || '').toUpperCase();
-    if (statusRaw && statusRaw !== 'ACTIVE' && statusRaw !== 'APPROVED') {
-      endDoctorSaveTimer();
-      return res.status(404).json({ ok: false, error: 'patient_not_found' });
+      return;
     }
 
     const patientKeyForAccess = String(patient?.id || patient?.patient_id || patientId).trim();
