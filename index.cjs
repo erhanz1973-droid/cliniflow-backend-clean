@@ -477,6 +477,7 @@ const {
   assignDoctorOnPatientClinicJoin,
   resolveEligibleDoctorKey,
 } = require("./lib/autoAssignRespondingDoctor");
+const { mirrorDoctorReplyToCoordinatorChannel } = require("./lib/doctorPatientChatMirror");
 const {
   setupTreatmentRequestOrchestration,
   orchestrateTreatmentRequestCreated,
@@ -2185,7 +2186,19 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     attachment: null,
     ...(clinicFk ? { clinic_id: clinicFk } : {}),
   };
-  const fromRoles = ["admin", "clinic", "CLINIC", "clinic_staff"];
+  const senderName = String(opts.senderName || opts.doctorName || "").trim();
+  if (senderName) {
+    baseRow.sender_name = senderName;
+    baseRow.doctor_name = senderName;
+    baseRow.sender_display_name = senderName;
+  }
+  if (opts.threadId && UUID_RE.test(String(opts.threadId).trim())) {
+    baseRow.thread_id = String(opts.threadId).trim();
+  }
+  const preferredRole = String(opts.fromRole || "").trim().toLowerCase();
+  const fromRoles = preferredRole
+    ? [preferredRole, "doctor", "admin", "clinic", "CLINIC", "clinic_staff"]
+    : ["doctor", "admin", "clinic", "CLINIC", "clinic_staff"];
   let lastError = null;
   const payloadsToTry =
     clinicFk && Object.prototype.hasOwnProperty.call(baseRow, "clinic_id")
@@ -2199,7 +2212,8 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     const insertPayload = {
       ...rowIns,
       from_role,
-      message: String(rowIns.text || "").trim(),
+      message: String(rowIns.text || rowIns.message || "").trim(),
+      ...(senderName ? { sender_name: senderName } : {}),
     };
     const pr = await insertIntoTableWithColumnPruning("patient_messages", insertPayload);
     if (!pr.error && pr.data) return { data: pr.data, error: null };
@@ -49450,9 +49464,16 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
         : null;
 
     // Try the same simple path the admin endpoint uses — patient_messages table
+    const doctorDisplayName = String(
+      req.doctor?.full_name || req.doctor?.name || req.doctor?.display_name || "",
+    ).trim();
     const pmTry = await insertClinicMessageViaPatientMessages(patientId, text, msgType, {
       preResolvedPatientId: patientId,
       clinicId: UUID_RE.test(clinicIdForInsert) ? clinicIdForInsert : null,
+      fromRole: "doctor",
+      senderName: doctorDisplayName || "Doktor",
+      doctorName: doctorDisplayName || "Doktor",
+      threadId: threadIdForInsert,
     });
     if (!pmTry.error && pmTry.data) {
       void supabase
@@ -49470,7 +49491,24 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
           console.warn("[autoAssignRespondingDoctor] doctor_reply:", e?.message || e),
         );
       }
-      const leg = mapPatientMessagesRowToLegacy(pmTry.data) || { text, from: "CLINIC", createdAt: now() };
+      const leg =
+        mapPatientMessagesRowToLegacy(pmTry.data) || {
+          text,
+          from: "CLINIC",
+          createdAt: now(),
+          inboundKind: "doctor",
+          senderName: doctorDisplayName || "Doktor",
+        };
+      if (doctorDisplayName && leg && !leg.senderName) leg.senderName = doctorDisplayName;
+      if (leg && !leg.inboundKind) leg.inboundKind = "doctor";
+      void mirrorDoctorReplyToCoordinatorChannel({
+        patientId,
+        clinicId: clinicIdForInsert,
+        text,
+        doctorName: doctorDisplayName || "Doktor",
+      }).catch((e) =>
+        console.warn("[POST /api/messages/:id/reply] coordinator mirror:", e?.message || e),
+      );
       void emitRealtimeChatMessageToThread(
         {
           patientId,
@@ -49547,6 +49585,21 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     }
     const leg =
       legacyMessageFromInsertedRow(data, insertedTable) || { text, from: "CLINIC", createdAt: now() };
+    const doctorDisplayNameFallback = String(
+      req.doctor?.full_name || req.doctor?.name || req.doctor?.display_name || "",
+    ).trim();
+    if (leg && !leg.inboundKind) leg.inboundKind = "doctor";
+    if (doctorDisplayNameFallback && leg && !leg.senderName) {
+      leg.senderName = doctorDisplayNameFallback;
+    }
+    void mirrorDoctorReplyToCoordinatorChannel({
+      patientId,
+      clinicId: clinicIdForInsert,
+      text,
+      doctorName: doctorDisplayNameFallback || "Doktor",
+    }).catch((e) =>
+      console.warn("[POST /api/messages/:id/reply] coordinator mirror (fallback):", e?.message || e),
+    );
     return res.json({ ok: true, message: data, legacyMessage: leg });
   } catch (e) {
     console.error("[POST /api/messages/:id/reply]", e?.message || e);
@@ -56192,12 +56245,27 @@ async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clini
     out.push(leg);
   };
 
-  const { data: chRows, error: chErr } = await supabase
-    .from("ai_coordinator_channel_messages")
-    .select("id, message_role, body, created_at")
-    .eq("profile_id", profileId)
-    .order("created_at", { ascending: true })
-    .limit(300);
+  const channelSelectAttempts = [
+    "id, message_role, body, created_at, metadata",
+    "id, message_role, body, created_at",
+  ];
+  let chRows = null;
+  let chErr = null;
+  for (const sel of channelSelectAttempts) {
+    const { data, error } = await supabase
+      .from("ai_coordinator_channel_messages")
+      .select(sel)
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: true })
+      .limit(300);
+    chErr = error;
+    if (!error) {
+      chRows = data;
+      break;
+    }
+    const code = String(error.code || "");
+    if (!["42703", "PGRST204", "PGRST205"].includes(code)) break;
+  }
   if (chErr) {
     console.warn("[DOCTOR patient messages] channel_messages:", chErr.message);
   }
@@ -56215,8 +56283,26 @@ async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clini
       sourceCoordinatorChannel: true,
     };
     if (from === "CLINIC") {
-      leg.inboundKind = "clinic";
-      leg.senderName = role === "assistant" || role === "ai" ? "AI" : "Care Team";
+      const meta =
+        row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+          ? row.metadata
+          : {};
+      const metaSource = String(meta.source || "").trim();
+      const doctorLabel = String(meta.doctor_name || meta.doctorName || "").trim();
+      if (
+        role === "staff" ||
+        role === "doctor" ||
+        metaSource === "doctor_patient_chat"
+      ) {
+        leg.inboundKind = "doctor";
+        leg.senderName = doctorLabel || "Doktor";
+      } else if (role === "assistant" || role === "ai") {
+        leg.inboundKind = "clinic";
+        leg.senderName = "AI";
+      } else {
+        leg.inboundKind = "clinic";
+        leg.senderName = "Care Team";
+      }
     }
     pushLeg(leg);
   }
