@@ -15422,6 +15422,7 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
         name: p.name || "",
         phone: p.phone || "",
         status: p.status,
+        is_lead: p.is_lead === true,
         created_at: p.created_at,
         primary_doctor_id: p.primary_doctor_id || null,
         assigned_doctor_id: p.assigned_doctor_id || null,

@@ -1070,6 +1070,7 @@
               </div>
               <div style="flex-shrink:0;">
                 ${status === 'PENDING' ? `<span class="status ${status}">${window.i18n ? window.i18n.t('patients.status.PENDING') : 'PENDING'}</span>` : ''}
+                ${p.is_lead === true ? `<span class="status PENDING" title="Messenger / lead">LEAD</span>` : ''}
                 ${(status === 'APPROVED' || status === 'ACTIVE') ? `<span class="status APPROVED">${window.i18n ? window.i18n.t('patients.status.APPROVED') : 'APPROVED'}</span>` : ''}
               </div>
               </div>
