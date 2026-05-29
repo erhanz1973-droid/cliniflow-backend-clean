@@ -18962,11 +18962,13 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
     }
     const patientUuid = String(trRow.id).trim();
     const base = isPlainObject(trRow.treatments) ? trRow.treatments : {};
-    console.log("[MIRROR_BEFORE]", {
-      patientId: patientUuid || null,
-      procedureId: mirrorProcedureId,
-      treatmentsJson: base,
-    });
+    if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
+      console.log("[MIRROR_BEFORE]", {
+        patientId: patientUuid || null,
+        procedureId: mirrorProcedureId,
+        treatmentsJson: base,
+      });
+    }
     const publicPid =
       canonicalPatientPublicId(base.patientId) ||
       canonicalPatientPublicId(trRow?.patient_id) ||
@@ -18990,11 +18992,13 @@ async function mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, t
       encounter_id: treatmentRow.encounter_id || eid,
     };
     mergeEncounterTreatmentRowsIntoPatientTeethPayload(payload, [rowForMerge]);
-    console.log("[MIRROR_AFTER]", {
-      patientId: patientUuid || null,
-      procedureId: mirrorProcedureId,
-      updatedTreatmentsJson: payload,
-    });
+    if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
+      console.log("[MIRROR_AFTER]", {
+        patientId: patientUuid || null,
+        procedureId: mirrorProcedureId,
+        updatedTreatmentsJson: payload,
+      });
+    }
     const mirrorProcCount = (payload.teeth || []).reduce(
       (sum, t) => sum + (Array.isArray(t?.procedures) ? t.procedures.length : 0),
       0
@@ -53016,8 +53020,9 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
       });
     }
 
-    const { planId: procDbgPlanId, planTreatmentIdCol: procDbgPlanTid } = await resolveTreatmentPlanIdForEncounter(encounterId);
     if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
+      const { planId: procDbgPlanId, planTreatmentIdCol: procDbgPlanTid } =
+        await resolveTreatmentPlanIdForEncounter(encounterId);
       console.log("PROCEDURE CREATE DEBUG", {
         encounterId,
         treatmentPlanId: procDbgPlanId,
@@ -53025,19 +53030,12 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
         assignedDoctorId: assigned_doctor_id ? String(assigned_doctor_id) : null,
       });
     }
-    const procSync = await syncTreatmentDoctorFromProcedureAssign(encounterId, assigned_doctor_id);
-    if (assigned_doctor_id && !procSync.ok && !procSync.skipped && !procSync.noPlan && !procSync.doctorUnresolved) {
-      console.warn("[PROCEDURE CREATE] treatment_doctors sync failed", procSync.error);
-    }
-    const docForTdLog = await resolveDoctorsIdByClinicDoctorCode(String(assigned_doctor_id || ""));
-    const docLogId = docForTdLog || (DOCTOR_ROW_UUID_RE.test(String(assigned_doctor_id || "")) ? String(assigned_doctor_id).trim() : "");
-    if (docLogId) {
-      const { data: tdRowsBurhan } = await supabase
-        .from("treatment_doctors")
-        .select("treatment_id, doctor_id, role")
-        .eq("doctor_id", docLogId)
-        .limit(40);
-      console.log("TREATMENT_DOCTORS FOR DOCTOR", { doctorId: docLogId, rows: tdRowsBurhan });
+    if (assigned_doctor_id) {
+      void syncTreatmentDoctorFromProcedureAssign(encounterId, assigned_doctor_id).then((procSync) => {
+        if (!procSync.ok && !procSync.skipped && !procSync.noPlan && !procSync.doctorUnresolved) {
+          console.warn("[PROCEDURE CREATE] treatment_doctors sync failed", procSync.error);
+        }
+      }).catch((e) => console.warn("[PROCEDURE CREATE] treatment_doctors async:", e?.message || e));
     }
 
     let price = null;
@@ -53053,9 +53051,10 @@ async function doctorPostEncounterTreatmentInner(encounterId, req, res) {
       if (priceRow) price = { price: priceRow.price, currency: priceRow.currency };
     }
 
-    await mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, data);
-    console.timeLog('doctor-save', 'after mirror update');
     bumpTreatmentsCache();
+    void mirrorEncounterTreatmentRowToPatientTreatmentsJson(encounterId, data).catch((e) =>
+      console.warn("[ENCOUNTER TREATMENT MIRROR] async failed:", e?.message || e)
+    );
     console.timeLog('doctor-save', 'before response');
     return res.json({
       ok: true,
@@ -53190,17 +53189,20 @@ async function handleDoctorEncounterTreatmentPut(req, res) {
       return res.status(404).json({ ok: false, error: 'treatment_not_found' });
     }
 
-    await mirrorEncounterTreatmentRowToPatientTreatmentsJson(encId, data);
     bumpTreatmentsCache();
+    void mirrorEncounterTreatmentRowToPatientTreatmentsJson(encId, data).catch((e) =>
+      console.warn("[ENCOUNTER TREATMENT MIRROR] async failed:", e?.message || e)
+    );
 
     if (assigned_doctor_id !== undefined && assigned_doctor_id !== null && String(assigned_doctor_id).trim() !== "") {
-      const putSync = await syncTreatmentDoctorFromProcedureAssign(encId, assigned_doctor_id);
-      if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
-        console.log("PROCEDURE ASSIGN DEBUG", { encounterId: encId, assignedDoctorId: assigned_doctor_id, sync: putSync });
-      }
-      if (!putSync.ok && !putSync.skipped && !putSync.noPlan && !putSync.doctorUnresolved) {
-        console.warn("[DOCTOR TREATMENTS PUT] treatment_doctors sync failed", putSync.error);
-      }
+      void syncTreatmentDoctorFromProcedureAssign(encId, assigned_doctor_id).then((putSync) => {
+        if (String(process.env.DOCTOR_ASSIGN_DEBUG || "").trim() === "1") {
+          console.log("PROCEDURE ASSIGN DEBUG", { encounterId: encId, assignedDoctorId: assigned_doctor_id, sync: putSync });
+        }
+        if (!putSync.ok && !putSync.skipped && !putSync.noPlan && !putSync.doctorUnresolved) {
+          console.warn("[DOCTOR TREATMENTS PUT] treatment_doctors sync failed", putSync.error);
+        }
+      }).catch((e) => console.warn("[DOCTOR TREATMENTS PUT] treatment_doctors async:", e?.message || e));
     }
 
     return res.json({ ok: true, treatment: data });
@@ -53368,15 +53370,15 @@ app.post('/api/doctor/patients/:patientId/treatments', requireDoctorAuth, async 
     const patientKeyForAccess = String(patient?.id || patient?.patient_id || patientId).trim();
     let isAssigned = false;
     try {
-      isAssigned = await doctorHasTreatmentTeamAccessToPatientId(patientKeyForAccess, req);
+      isAssigned = await doctorOwnsAnyEncounterForPatient(patient, req);
     } catch (e) {
-      console.error('[DOCTOR PATIENT TREATMENTS POST] access check failed:', e?.message || e);
+      console.error('[DOCTOR PATIENT TREATMENTS POST] encounter owner check failed:', e?.message || e);
     }
     if (!isAssigned) {
       try {
-        isAssigned = await doctorOwnsAnyEncounterForPatient(patient, req);
+        isAssigned = await doctorHasTreatmentTeamAccessToPatientId(patientKeyForAccess, req);
       } catch (e) {
-        console.error('[DOCTOR PATIENT TREATMENTS POST] encounter owner check failed:', e?.message || e);
+        console.error('[DOCTOR PATIENT TREATMENTS POST] access check failed:', e?.message || e);
       }
     }
 
