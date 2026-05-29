@@ -45406,6 +45406,26 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
     // Lead thread exists but unassigned — treatment-team lane below
   }
 
+  /** WhatsApp/Messenger clinic leads: inbox lists all is_lead threads; any eligible clinic doctor may read. */
+  if (
+    thread?.is_lead === true &&
+    !thread?.assigned_doctor_id &&
+    clinicId &&
+    UUID_RE.test(clinicId)
+  ) {
+    const rowCid = thread.clinic_id != null ? String(thread.clinic_id).trim() : "";
+    if (!rowCid || rowCid === clinicId) {
+      const eligible = await getEligibleDoctorIdForInboundAssignment(req.doctorId, clinicId);
+      if (eligible) {
+        return {
+          ok: true,
+          patientId: resolvedPatientId,
+          threadId: thread?.id ? String(thread.id) : null,
+        };
+      }
+    }
+  }
+
   const teamAllowed = await doctorHasTreatmentTeamAccessToPatientId(resolvedPatientId, req);
   if (teamAllowed) {
     return { ok: true, patientId: resolvedPatientId };
@@ -49325,7 +49345,9 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     let offerArchived = [];
     let coordinatorArchived = [];
-    const doctorClinicForOffers = String(req.query?.clinic_id || req.query?.clinicId || req.clinicId || "").trim();
+    const doctorClinicForOffers = String(
+      req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
+    ).trim();
     try {
       offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
         offerLimit: wantFull ? 400 : 180,
