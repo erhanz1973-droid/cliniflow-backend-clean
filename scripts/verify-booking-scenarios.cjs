@@ -10,6 +10,8 @@ const {
   readDurableBookingState,
   buildCanonicalBookingRecord,
   buildClosedBookingPatch,
+  buildRescheduleIsolationPatch,
+  hasStaleBookingProposalVsActiveAppointment,
   preserveBookingStateInFlags,
   hasCompletedCanonicalBooking,
   isBookingFlowInProgress,
@@ -519,6 +521,90 @@ test("reschedule: rejection reply keeps existing time", () => {
 
 test("reschedule: pure evet is not new reschedule intent", () => {
   assert.strictEqual(patientRescheduleIntent("Evet", ACTIVE_APPT_FLAGS), false);
+});
+
+test("reschedule: move it to 11:30 intent", () => {
+  assert.ok(patientRescheduleIntent("Move it to 11:30", ACTIVE_APPT_FLAGS));
+});
+
+test("reschedule: target time uses existing day not stale offered slots", () => {
+  const existing = {
+    startAt: "2026-06-03T07:15:00.000Z",
+    dateYmd: "2026-06-03",
+    time: "10:15",
+  };
+  const scheduling = { timezone: "Europe/Istanbul" };
+  const slot = resolveRescheduleTargetSlot(
+    "Move it to 11:30",
+    existing,
+    scheduling,
+    [],
+    (dateYmd, timeMin) =>
+      buildSlotFromPreferredDateTime(
+        dateYmd,
+        timeMin,
+        scheduling,
+        { mode: "full_auto" },
+        "Consultation",
+        "en",
+      ),
+  );
+  assert.ok(slot?.startAt, "target slot resolved");
+  assert.ok(slot.startAt.includes("08:30"), "June 3 11:30 Istanbul => 08:30Z");
+  assert.ok(!slot.startAt.includes("2026-05-30"), "must not pick stale May 30 slot");
+});
+
+const STALE_CONTAMINATION_FLAGS = {
+  activeAppointment: {
+    id: "appt-june",
+    startAt: "2026-06-03T07:15:00.000Z",
+    status: "scheduled",
+    label: "3 Jun 10:15",
+  },
+  aiBooking: {
+    stage: "awaiting_slot_confirm",
+    bookingActive: true,
+    rescheduleMode: false,
+    pendingAction: "confirm_booking",
+    selectedSlot: {
+      startAt: "2026-05-30T12:45:00.000Z",
+      label: "30 May 15:45",
+    },
+    offeredSlots: [{ startAt: "2026-05-30T12:45:00.000Z", label: "30 May 15:45" }],
+    slotListId: "sl_stale_test",
+  },
+};
+
+test("stale: detects abandoned booking proposal vs active appointment", () => {
+  assert.ok(hasStaleBookingProposalVsActiveAppointment(STALE_CONTAMINATION_FLAGS));
+});
+
+test("stale: reschedule mode is not flagged as stale", () => {
+  const flags = {
+    ...STALE_CONTAMINATION_FLAGS,
+    aiBooking: {
+      ...STALE_CONTAMINATION_FLAGS.aiBooking,
+      rescheduleMode: true,
+      selectedSlot: { startAt: "2026-06-03T08:30:00.000Z", label: "3 Jun 11:30" },
+    },
+  };
+  assert.strictEqual(hasStaleBookingProposalVsActiveAppointment(flags), false);
+});
+
+test("stale: hasCompletedCanonicalBooking with activeAppointment only", () => {
+  const flags = {
+    activeAppointment: { startAt: "2026-06-03T07:15:00.000Z", status: "scheduled" },
+    aiBooking: { stage: "awaiting_slot_confirm", bookingActive: true },
+  };
+  assert.ok(hasCompletedCanonicalBooking(flags));
+});
+
+test("isolation: buildRescheduleIsolationPatch clears stale proposal fields", () => {
+  const patch = buildRescheduleIsolationPatch();
+  assert.deepStrictEqual(patch.offeredSlots, []);
+  assert.strictEqual(patch.slotListId, null);
+  assert.strictEqual(patch.selectedSlot, null);
+  assert.strictEqual(patch.pendingAction, null);
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

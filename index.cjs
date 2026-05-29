@@ -5493,10 +5493,23 @@ function threadChatRoomId(threadId) {
 }
 
 async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableHint) {
+  const result = {
+    emitted: false,
+    thread_id: null,
+    roomId: null,
+    legacyMessageId: null,
+    reason: null,
+  };
   try {
-    if (!chatSocketIo || !insertedRow) return;
+    if (!chatSocketIo || !insertedRow) {
+      result.reason = !chatSocketIo ? "socket_not_ready" : "no_inserted_row";
+      return result;
+    }
     let legacy = legacyMessageFromInsertedRow(insertedRow, insertedTableHint);
-    if (!legacy) return;
+    if (!legacy) {
+      result.reason = "legacy_map_failed";
+      return result;
+    }
     const optText = String(opts?.message || "").trim();
     if (optText && !String(legacy.text || "").trim()) {
       legacy = { ...legacy, text: optText };
@@ -5542,9 +5555,18 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
       }
     }
 
-    if (!tid) return;
+    if (!tid) {
+      result.reason = "thread_id_unresolved";
+      return result;
+    }
+    result.thread_id = tid;
     const roomId = threadChatRoomId(tid);
-    if (!roomId) return;
+    if (!roomId) {
+      result.reason = "invalid_room";
+      return result;
+    }
+    result.roomId = roomId;
+    result.legacyMessageId = String(legacy?.id || "").trim() || null;
 
     void (async () => {
       try {
@@ -5561,8 +5583,12 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
       legacyMessageId: legacy?.id,
     });
     chatSocketIo.to(roomId).emit("new_message", legacy);
+    result.emitted = true;
+    return result;
   } catch (e) {
     console.warn("[chat-socket] emit failed:", e?.message || e);
+    result.reason = e?.message || "emit_exception";
+    return result;
   }
 }
 
@@ -49569,6 +49595,54 @@ app.post("/api/doctor/patient/:patientId/messages/read", requireDoctorAuth, asyn
 });
 
 // POST /api/messages/:id/reply — doctor replies in patient chat (lead: must be assigned doctor)
+function logDoctorOutbound(payload) {
+  try {
+    console.log(
+      "[DOCTOR_OUTBOUND]",
+      JSON.stringify({
+        at: new Date().toISOString(),
+        ...payload,
+      }),
+    );
+  } catch (e) {
+    console.warn("[DOCTOR_OUTBOUND] log_failed:", e?.message || e);
+  }
+}
+
+function logDoctorOutboundThread(payload) {
+  try {
+    console.log(
+      "[DOCTOR_OUTBOUND_THREAD]",
+      JSON.stringify({
+        at: new Date().toISOString(),
+        ...payload,
+      }),
+    );
+  } catch (e) {
+    console.warn("[DOCTOR_OUTBOUND_THREAD] log_failed:", e?.message || e);
+  }
+}
+
+/** Resolve patient_chat_threads.id for outbound doctor reply + socket room. */
+async function resolveDoctorOutboundThreadId(patientId, clinicId, accessThreadId) {
+  const accessTid =
+    accessThreadId && UUID_RE.test(String(accessThreadId).trim())
+      ? String(accessThreadId).trim()
+      : null;
+  if (accessTid) return accessTid;
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(patientId || ""))) return null;
+  try {
+    let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", patientId);
+    const cid = String(clinicId || "").trim();
+    if (UUID_RE.test(cid)) tq = tq.eq("clinic_id", cid);
+    const { data: thr } = await tq.order("updated_at", { ascending: false }).limit(1).maybeSingle();
+    if (thr?.id && UUID_RE.test(String(thr.id).trim())) return String(thr.id).trim();
+  } catch (_) {
+    /* optional */
+  }
+  return null;
+}
+
 app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
   try {
     const messageId = String(req.params.id || "").trim();
@@ -49598,10 +49672,18 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     const msgType = String(req.body?.type || "text").trim() || "text";
     const doctorUuid = String(req.doctor?.id || "").trim();
     const clinicIdForInsert = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
-    const threadIdForInsert =
-      access.threadId && UUID_RE.test(String(access.threadId).trim())
-        ? String(access.threadId).trim()
-        : null;
+    const threadIdForInsert = await resolveDoctorOutboundThreadId(
+      patientId,
+      clinicIdForInsert,
+      access.threadId,
+    );
+    logDoctorOutboundThread({
+      patient_id: patientId,
+      clinic_id: clinicIdForInsert || null,
+      thread_id: access.threadId || null,
+      resolved_thread_id: threadIdForInsert || null,
+      doctor_id: doctorUuid || null,
+    });
 
     // Try the same simple path the admin endpoint uses — patient_messages table
     const doctorDisplayName = String(
@@ -49649,7 +49731,7 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       }).catch((e) =>
         console.warn("[POST /api/messages/:id/reply] coordinator mirror:", e?.message || e),
       );
-      void emitRealtimeChatMessageToThread(
+      const socketResult = await emitRealtimeChatMessageToThread(
         {
           patientId,
           sender: "clinic",
@@ -49659,8 +49741,23 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
           threadId: threadIdForInsert,
         },
         pmTry.data,
-        "patient_messages"
+        "patient_messages",
       );
+      logDoctorOutbound({
+        patient_id: patientId,
+        clinic_id: clinicIdForInsert || null,
+        thread_id: socketResult?.thread_id || threadIdForInsert || null,
+        message_id: String(pmTry.data?.message_id || pmTry.data?.id || "").trim() || null,
+        db_row_id: String(pmTry.data?.id || "").trim() || null,
+        storage_table: "patient_messages",
+        from_role: String(pmTry.data?.from_role || "doctor").trim() || null,
+        persisted: true,
+        socket_emitted: socketResult?.emitted === true,
+        socket_room: socketResult?.roomId || null,
+        socket_legacy_id: socketResult?.legacyMessageId || null,
+        socket_skip_reason: socketResult?.reason || null,
+        whatsapp_patient_message_id: pmTry.data?.message_id || null,
+      });
       let delivery = null;
       if (UUID_RE.test(clinicIdForInsert)) {
         try {
@@ -49740,6 +49837,45 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     }).catch((e) =>
       console.warn("[POST /api/messages/:id/reply] coordinator mirror (fallback):", e?.message || e),
     );
+    const fallbackThreadId = await resolveDoctorOutboundThreadId(
+      patientId,
+      clinicIdForInsert,
+      access.threadId,
+    );
+    logDoctorOutboundThread({
+      patient_id: patientId,
+      clinic_id: clinicIdForInsert || null,
+      thread_id: access.threadId || null,
+      resolved_thread_id: fallbackThreadId || null,
+      doctor_id: doctorUuid || null,
+      path: "fallback_messages",
+    });
+    const socketResult = await emitRealtimeChatMessageToThread(
+      {
+        patientId,
+        sender: "clinic",
+        message: text,
+        senderId: doctorUuid,
+        contextClinicId: req.clinicId || clinicIdForInsert || null,
+        threadId: fallbackThreadId,
+      },
+      data,
+      insertedTable || "messages",
+    );
+    logDoctorOutbound({
+      patient_id: patientId,
+      clinic_id: clinicIdForInsert || null,
+      thread_id: socketResult?.thread_id || fallbackThreadId || null,
+      message_id: String(data?.message_id || data?.id || "").trim() || null,
+      db_row_id: String(data?.id || "").trim() || null,
+      storage_table: insertedTable || "messages",
+      persisted: true,
+      socket_emitted: socketResult?.emitted === true,
+      socket_room: socketResult?.roomId || null,
+      socket_legacy_id: socketResult?.legacyMessageId || null,
+      socket_skip_reason: socketResult?.reason || null,
+      path: "fallback_messages",
+    });
     return res.json({ ok: true, message: data, legacyMessage: leg });
   } catch (e) {
     console.error("[POST /api/messages/:id/reply]", e?.message || e);
@@ -56365,6 +56501,19 @@ async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req) {
   if (UUID_RE.test(cid)) return cid;
   if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || ""))) return "";
   try {
+    const doctorId = String(req.doctorId || req?.doctor?.id || "").trim();
+    if (UUID_RE.test(doctorId)) {
+      const { data: assignedThread } = await supabase
+        .from("patient_chat_threads")
+        .select("clinic_id")
+        .eq("patient_id", resolvedPatientId)
+        .eq("assigned_doctor_id", doctorId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const assignedClinic = String(assignedThread?.clinic_id || "").trim();
+      if (UUID_RE.test(assignedClinic)) return assignedClinic;
+    }
     const { data: prow } = await supabase
       .from("patients")
       .select("clinic_id")
