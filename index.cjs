@@ -49356,8 +49356,17 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       console.warn("[DOCTOR patient messages] offer archive merge:", mergeErr?.message || mergeErr);
     }
     try {
-      if (UUID_RE.test(doctorClinicForOffers)) {
-        coordinatorArchived = await fetchDoctorLeadCoordinatorLegacyMessages(pid, doctorClinicForOffers);
+      coordinatorArchived = await fetchDoctorLeadCoordinatorLegacyMessages(pid, doctorClinicForOffers);
+      if (
+        !coordinatorArchived.length &&
+        clinicMessages.length === 0 &&
+        String(process.env.DOCTOR_CHAT_DEBUG || "").trim() === "1"
+      ) {
+        console.warn("[DOCTOR patient messages] empty unified thread", {
+          patientId: pid.slice(0, 8),
+          clinicId: doctorClinicForOffers ? String(doctorClinicForOffers).slice(0, 8) : null,
+          offerArchiveCount: offerArchived.length,
+        });
       }
     } catch (coordMergeErr) {
       console.warn("[DOCTOR patient messages] coordinator merge:", coordMergeErr?.message || coordMergeErr);
@@ -56263,10 +56272,85 @@ async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req) {
       const tc = String(row?.clinic_id || "").trim();
       if (UUID_RE.test(tc)) return tc;
     }
+    const { data: leadProfiles } = await supabase
+      .from("ai_coordinator_lead_profiles")
+      .select("clinic_id")
+      .eq("patient_id", resolvedPatientId)
+      .order("updated_at", { ascending: false })
+      .limit(6);
+    for (const row of leadProfiles || []) {
+      const lc = String(row?.clinic_id || "").trim();
+      if (UUID_RE.test(lc)) return lc;
+    }
+    const { data: identities } = await supabase
+      .from("channel_identities")
+      .select("clinic_id")
+      .eq("patient_id", resolvedPatientId)
+      .order("updated_at", { ascending: false })
+      .limit(4);
+    for (const row of identities || []) {
+      const ic = String(row?.clinic_id || "").trim();
+      if (UUID_RE.test(ic)) return ic;
+    }
   } catch (_) {
     /* optional */
   }
   return "";
+}
+
+/** Lead WhatsApp/Messenger history lives on coordinator profiles — resolve all relevant profile ids. */
+async function resolveCoordinatorProfileIdsForDoctorPatient(resolvedPatientId, clinicId) {
+  const pid = String(resolvedPatientId || "").trim();
+  const cid = String(clinicId || "").trim();
+  if (!isSupabaseEnabled() || !UUID_RE.test(pid)) return [];
+
+  const profileIds = new Set();
+
+  const addProfileRow = (row) => {
+    const id = String(row?.id || row || "").trim();
+    if (UUID_RE.test(id)) profileIds.add(id);
+  };
+
+  if (UUID_RE.test(cid)) {
+    const { data: strictRows } = await supabase
+      .from("ai_coordinator_lead_profiles")
+      .select("id")
+      .eq("patient_id", pid)
+      .eq("clinic_id", cid)
+      .order("updated_at", { ascending: false })
+      .limit(12);
+    for (const row of strictRows || []) addProfileRow(row);
+  }
+
+  const { data: byPatientRows } = await supabase
+    .from("ai_coordinator_lead_profiles")
+    .select("id, clinic_id")
+    .eq("patient_id", pid)
+    .order("updated_at", { ascending: false })
+    .limit(16);
+  for (const row of byPatientRows || []) {
+    const pc = String(row?.clinic_id || "").trim();
+    if (!UUID_RE.test(cid) || !pc || pc === cid) addProfileRow(row);
+  }
+
+  if (UUID_RE.test(cid)) {
+    try {
+      const { data: identityRows } = await supabase
+        .from("channel_identities")
+        .select("profile_id")
+        .eq("patient_id", pid)
+        .eq("clinic_id", cid)
+        .limit(8);
+      for (const row of identityRows || []) {
+        const prid = String(row?.profile_id || "").trim();
+        if (UUID_RE.test(prid)) profileIds.add(prid);
+      }
+    } catch (_) {
+      /* optional */
+    }
+  }
+
+  return [...profileIds];
 }
 
 async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
@@ -56380,21 +56464,22 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
 }
 
 async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clinicId) {
-  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || "")) || !UUID_RE.test(String(clinicId || ""))) {
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || ""))) {
     return [];
   }
   const pid = String(resolvedPatientId).trim();
-  const cid = String(clinicId).trim();
+  const cid = String(clinicId || "").trim();
 
-  const { data: profiles } = await supabase
-    .from("ai_coordinator_lead_profiles")
-    .select("id")
-    .eq("patient_id", pid)
-    .eq("clinic_id", cid)
-    .order("updated_at", { ascending: false })
-    .limit(12);
-  const profileIds = [...new Set((profiles || []).map((p) => String(p?.id || "").trim()).filter(Boolean))];
-  if (!profileIds.length) return [];
+  const profileIds = await resolveCoordinatorProfileIdsForDoctorPatient(pid, cid);
+  if (!profileIds.length) {
+    if (String(process.env.DOCTOR_CHAT_DEBUG || "").trim() === "1") {
+      console.warn("[DOCTOR patient messages] coordinator profiles not found", {
+        patientId: pid.slice(0, 8),
+        clinicId: cid ? cid.slice(0, 8) : null,
+      });
+    }
+    return [];
+  }
 
   const out = [];
   const seen = new Set();
