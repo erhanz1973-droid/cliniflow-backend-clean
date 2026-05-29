@@ -477,6 +477,13 @@ const {
   assignDoctorOnPatientClinicJoin,
   resolveEligibleDoctorKey,
 } = require("./lib/autoAssignRespondingDoctor");
+const {
+  recordThreadAssignmentChange,
+  ASSIGNMENT_REASON,
+  loadThreadAssignmentSnapshot,
+  loadThreadAssignmentSnapshotByPatientClinic,
+  fetchThreadAssignmentChanges,
+} = require("./lib/patientChatThreadAssignmentAudit");
 const { mirrorDoctorReplyToCoordinatorChannel } = require("./lib/doctorPatientChatMirror");
 const {
   setupTreatmentRequestOrchestration,
@@ -16086,6 +16093,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
     }
 
     const assignedAtIso = new Date().toISOString();
+    const beforeAssign = await loadThreadAssignmentSnapshotByPatientClinic(patientId, clinicId);
     const upd = {
       status: "assigned",
       assigned_doctor_id: doctorUuid,
@@ -16181,6 +16189,15 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         "id, patient_id, assigned_doctor_id, status, assigned_at"
       );
       if (!insErr && insRow?.id) {
+        void recordThreadAssignmentChange({
+          threadId: String(insRow.id),
+          patientId,
+          clinicId,
+          oldAssignedDoctorId: beforeAssign?.assignedDoctorId || null,
+          newAssignedDoctorId: doctorUuid,
+          reason: ASSIGNMENT_REASON.ADMIN_ASSIGN_DOCTOR,
+          metadata: { mode: "inserted" },
+        });
         await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
         bumpUnreadCountsCache(clinicId);
         return res.json({
@@ -16242,6 +16259,15 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
             .select("id, patient_id, assigned_doctor_id, status, assigned_at")
             .maybeSingle();
           if (!fixErr && fixed?.id) {
+            void recordThreadAssignmentChange({
+              threadId: String(fixed.id),
+              patientId,
+              clinicId,
+              oldAssignedDoctorId: beforeAssign?.assignedDoctorId || null,
+              newAssignedDoctorId: doctorUuid,
+              reason: ASSIGNMENT_REASON.ADMIN_ASSIGN_DOCTOR,
+              metadata: { mode: "race_retry" },
+            });
             await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
             bumpUnreadCountsCache(clinicId);
             return res.json({
@@ -16262,6 +16288,15 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       });
     }
 
+    void recordThreadAssignmentChange({
+      threadId: String(updated.id),
+      patientId,
+      clinicId,
+      oldAssignedDoctorId: beforeAssign?.assignedDoctorId || null,
+      newAssignedDoctorId: doctorUuid,
+      reason: ASSIGNMENT_REASON.ADMIN_ASSIGN_DOCTOR,
+      metadata: { mode: "updated" },
+    });
     await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
     try {
       await reactivatePatientChatThreadOnClinicJoin(patientId, clinicId);
@@ -16384,6 +16419,14 @@ async function adminTryAssignUnassignedLeadThread(clinicId, patientId, doctorUui
   if (!updated?.id) {
     return { ok: false, error: "no_unassigned_thread" };
   }
+  void recordThreadAssignmentChange({
+    threadId: String(updated.id),
+    patientId: pid,
+    clinicId: cid,
+    oldAssignedDoctorId: null,
+    newAssignedDoctorId: doc,
+    reason: ASSIGNMENT_REASON.ADMIN_AUTO_ASSIGN_LEADS,
+  });
   await patchPatientAssignmentPointersSticky(pid, doc);
   return { ok: true, threadId: updated.id };
 }
@@ -16465,6 +16508,7 @@ async function pickDoctorForLeadRoutingIntake(clinicId, settingsRow, eligibleSor
 
 /** Atomic claim + patient sticky pointers; returns ok | skipped | failed */
 async function finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, chosen, via, clinicIdForLog = null) {
+  const before = await loadThreadAssignmentSnapshot(tid);
   const assignedAtIso = new Date().toISOString();
   const updPayload = {
     status: "assigned",
@@ -16496,6 +16540,20 @@ async function finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, cho
   if (!claimed) return "failed";
 
   await patchPatientAssignmentPointersSticky(resolvedPatientId, chosen);
+
+  const auditReason =
+    via && String(via).startsWith("lead_routing")
+      ? `${ASSIGNMENT_REASON.INBOUND_LEAD_ROUTING}:${via}`
+      : `${ASSIGNMENT_REASON.INBOUND_AUTO_ASSIGN}:${via || "unknown"}`;
+  void recordThreadAssignmentChange({
+    threadId: tid,
+    patientId: resolvedPatientId,
+    clinicId: clinicIdForLog || before?.clinicId || null,
+    oldAssignedDoctorId: before?.assignedDoctorId || null,
+    newAssignedDoctorId: chosen,
+    reason: auditReason,
+    metadata: { via: via || null },
+  });
 
   console.log("inbound_auto_assigned_doctor", {
     thread_id: tid,
@@ -16730,6 +16788,58 @@ app.post("/api/admin/auto-assign-leads", requireAdminAuth, async (req, res) => {
     });
   } catch (e) {
     console.error("[ADMIN auto-assign-leads]", e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+/**
+ * GET /api/admin/thread-assignment-audit?days=7&clinicId=&patientId=&threadId=&doctorId=
+ * Read-only: who gained/lost thread assignment and why (doctor visibility investigations).
+ */
+app.get("/api/admin/thread-assignment-audit", requireAdminAuth, async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(String(req.query.days || "7"), 10) || 7, 1), 90);
+    const clinicId = String(req.query.clinicId || req.clinicId || "").trim() || null;
+    const patientId = String(req.query.patientId || "").trim() || null;
+    const threadId = String(req.query.threadId || "").trim() || null;
+    const doctorId = String(req.query.doctorId || "").trim() || null;
+    const result = await fetchThreadAssignmentChanges({
+      days,
+      clinicId,
+      patientId,
+      threadId,
+      doctorId,
+      limit: Math.min(parseInt(String(req.query.limit || "500"), 10) || 500, 5000),
+    });
+    if (!result.ok && result.error === "table_missing") {
+      return res.status(503).json({
+        ok: false,
+        error: "migration_required",
+        message: "Run migration 20260529120000_patient_chat_thread_assignment_audit.sql",
+        events: [],
+      });
+    }
+    if (!result.ok) {
+      return res.status(500).json({ ok: false, error: String(result.error || "fetch_failed"), events: [] });
+    }
+    return res.json({
+      ok: true,
+      days: result.days,
+      since: result.since,
+      count: result.count,
+      events: (result.events || []).map((ev) => ({
+        thread_id: ev.thread_id,
+        patient_id: ev.patient_id,
+        clinic_id: ev.clinic_id,
+        old_assigned_doctor_id: ev.old_assigned_doctor_id,
+        new_assigned_doctor_id: ev.new_assigned_doctor_id,
+        reason: ev.reason,
+        timestamp: ev.created_at,
+        metadata: ev.metadata || {},
+      })),
+    });
+  } catch (e) {
+    console.error("[ADMIN thread-assignment-audit]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
