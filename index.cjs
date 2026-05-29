@@ -61482,6 +61482,8 @@ registerAiCoordinatorAdminRoutes(app, {
   requireAdminAuth,
   insertClinicMessageForLeadReply: insertClinicMessageForInApp,
 });
+const { registerAiLearningAdminRoutes } = require("./lib/aiLearningAdminRoutes");
+registerAiLearningAdminRoutes(app, { requireAdminAuth });
 const { registerClinicAiCommunicationRoutes } = require("./lib/clinicAiCommunicationRoutes");
 registerClinicAiCommunicationRoutes(app, { requireAdminAuth });
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
@@ -61574,6 +61576,11 @@ app.get("/admin/ai-leads", (req, res) => {
   const p = path.join(publicDir, "admin-ai-leads.html");
   if (fs.existsSync(p)) return res.sendFile(p);
   return res.status(404).send("admin-ai-leads.html not found");
+});
+app.get("/admin-learning-candidates.html", (req, res) => {
+  const p = path.join(publicDir, "admin-learning-candidates.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("admin-learning-candidates.html not found");
 });
 
 /** Coordination Center UI strings for admin-coordination-i18n.js (same source as API X-UI-Language). */
