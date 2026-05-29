@@ -49305,17 +49305,29 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       : (data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
 
     let offerArchived = [];
+    let coordinatorArchived = [];
+    const doctorClinicForOffers = String(req.query?.clinic_id || req.query?.clinicId || req.clinicId || "").trim();
     try {
-      const doctorClinicForOffers = String(req.query?.clinic_id || req.query?.clinicId || req.clinicId || "").trim();
       offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
         offerLimit: wantFull ? 400 : 180,
         clinicId: doctorClinicForOffers,
+        createCoordinationOfferIfMissing: true,
       });
     } catch (mergeErr) {
       console.warn("[DOCTOR patient messages] offer archive merge:", mergeErr?.message || mergeErr);
     }
+    try {
+      if (UUID_RE.test(doctorClinicForOffers)) {
+        coordinatorArchived = await fetchDoctorLeadCoordinatorLegacyMessages(pid, doctorClinicForOffers);
+      }
+    } catch (coordMergeErr) {
+      console.warn("[DOCTOR patient messages] coordinator merge:", coordMergeErr?.message || coordMergeErr);
+    }
 
-    let messages = mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived);
+    let messages = mergeUnifiedDoctorPatientMessages(
+      mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived),
+      coordinatorArchived,
+    );
     const tailN = wantFull
       ? null
       : Number.isFinite(limN) && limN > 0
@@ -49340,6 +49352,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       canonicalPatientId: pid,
       unifiedThread: true,
       offerArchiveCount: offerArchived.length,
+      coordinatorArchiveCount: coordinatorArchived.length,
     });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
@@ -56146,6 +56159,120 @@ function mapOfferMessageRowToUnifiedLegacy(row) {
   return out;
 }
 
+/** WhatsApp/Messenger lead history in coordinator tables — not always mirrored to patient_messages. */
+async function fetchDoctorLeadCoordinatorLegacyMessages(resolvedPatientId, clinicId) {
+  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || "")) || !UUID_RE.test(String(clinicId || ""))) {
+    return [];
+  }
+  const pid = String(resolvedPatientId).trim();
+  const cid = String(clinicId).trim();
+
+  const { data: profile } = await supabase
+    .from("ai_coordinator_lead_profiles")
+    .select("id")
+    .eq("patient_id", pid)
+    .eq("clinic_id", cid)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!profile?.id) return [];
+
+  const profileId = String(profile.id).trim();
+  const out = [];
+  const seen = new Set();
+
+  const pushLeg = (leg) => {
+    if (!leg) return;
+    const id = String(leg.id || "").trim();
+    if (!id || seen.has(id)) return;
+    const text = String(leg.text || "").trim();
+    if (!text && !leg.attachment) return;
+    seen.add(id);
+    out.push(leg);
+  };
+
+  const { data: chRows, error: chErr } = await supabase
+    .from("ai_coordinator_channel_messages")
+    .select("id, message_role, body, created_at")
+    .eq("profile_id", profileId)
+    .order("created_at", { ascending: true })
+    .limit(300);
+  if (chErr) {
+    console.warn("[DOCTOR patient messages] channel_messages:", chErr.message);
+  }
+  for (const row of chRows || []) {
+    const role = String(row.message_role || "").toLowerCase();
+    const from = role === "patient" ? "PATIENT" : "CLINIC";
+    const text = String(row.body || "").trim();
+    if (!text) continue;
+    const leg = {
+      id: `coord_ch_${row.id}`,
+      text,
+      from,
+      type: "text",
+      createdAt: normalizeMessageCreatedAtMs(row.created_at),
+      sourceCoordinatorChannel: true,
+    };
+    if (from === "CLINIC") {
+      leg.inboundKind = "clinic";
+      leg.senderName = role === "assistant" || role === "ai" ? "AI" : "Care Team";
+    }
+    pushLeg(leg);
+  }
+
+  const eventSelectAttempts = [
+    "id, patient_message, ai_reply, created_at, event_type",
+    "id, patient_message, ai_reply, created_at",
+  ];
+  let evRows = null;
+  for (const sel of eventSelectAttempts) {
+    const { data, error } = await supabase
+      .from("ai_coordinator_lead_events")
+      .select(sel)
+      .eq("profile_id", profileId)
+      .order("created_at", { ascending: true })
+      .limit(200);
+    if (!error) {
+      evRows = data;
+      break;
+    }
+    const code = String(error.code || "");
+    if (!["42703", "PGRST204", "PGRST205"].includes(code)) {
+      console.warn("[DOCTOR patient messages] lead_events:", error.message);
+      break;
+    }
+  }
+  for (const row of evRows || []) {
+    const at = normalizeMessageCreatedAtMs(row.created_at);
+    const pm = String(row.patient_message || "").trim();
+    const ar = String(row.ai_reply || "").trim();
+    if (pm) {
+      pushLeg({
+        id: `coord_ev_${row.id}_p`,
+        text: pm,
+        from: "PATIENT",
+        type: "text",
+        createdAt: at,
+        sourceCoordinatorEvent: true,
+      });
+    }
+    if (ar) {
+      pushLeg({
+        id: `coord_ev_${row.id}_a`,
+        text: ar,
+        from: "CLINIC",
+        type: "text",
+        createdAt: at,
+        inboundKind: "clinic",
+        senderName: "AI",
+        sourceCoordinatorEvent: true,
+      });
+    }
+  }
+
+  return out;
+}
+
 async function fetchDoctorPatientArchivedOfferMessages(resolvedPatientId, req, opts = {}) {
   if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || ""))) return [];
   const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
@@ -56160,7 +56287,7 @@ async function fetchDoctorPatientArchivedOfferMessages(resolvedPatientId, req, o
   if (UUID_RE.test(clinicId)) {
     try {
       const coordOfferId = await resolveCoordinationOfferIdForPatientClinic(resolvedPatientId, clinicId, {
-        createIfMissing: false,
+        createIfMissing: opts.createCoordinationOfferIfMissing === true,
       });
       if (UUID_RE.test(String(coordOfferId || ""))) offerIdSet.add(String(coordOfferId).trim());
     } catch (coordErr) {
