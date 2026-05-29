@@ -16,6 +16,8 @@
     "verify:sim-guards": "node scripts/verify-simulation-guards.cjs",
     "verify:pre-rollout": "node scripts/verify-pre-rollout.cjs",
     "verify:booking-scenarios": "node scripts/verify-booking-scenarios.cjs",
+    "verify:appointment-reliability": "node scripts/appointment-reliability-suite.cjs",
+    "diagnose:booking-calendar": "node scripts/diagnose-booking-calendar.cjs",
     "netlify:deploy": "netlify deploy --dir=public --prod"
   },
   "engines": {
