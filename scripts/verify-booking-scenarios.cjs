@@ -21,9 +21,14 @@ const {
   computeExpiresAt,
   resolveBookingRouterLock,
   isBookingConfirmationYesMessage,
+  patientHasNegativeSchedulingIntent,
+  patientBlocksBookingConfirmation,
+  isPendingBookingChangeConfirmation,
+  isPendingRescheduleConfirmation,
   assistantMessageOffersScheduling,
   coordinatorRecentlyOfferedScheduling,
 } = require("../lib/aiBookingState");
+const { parsePreferredDateFromMessage } = require("../lib/bookingDateParse");
 
 let passed = 0;
 let failed = 0;
@@ -162,6 +167,9 @@ test("Audit event constants exported", () => {
   assert.ok(BOOKING_AUDIT_EVENTS.BOOKING_STARTED);
   assert.ok(BOOKING_AUDIT_EVENTS.BOOKING_CREATED);
   assert.ok(BOOKING_AUDIT_EVENTS.BOOKING_EXPIRED);
+  assert.ok(BOOKING_AUDIT_EVENTS.BOOKING_RESCHEDULE_STARTED);
+  assert.ok(BOOKING_AUDIT_EVENTS.BOOKING_RESCHEDULE_CONFIRMED);
+  assert.ok(BOOKING_AUDIT_EVENTS.BOOKING_RESCHEDULE_COMPLETED);
 });
 
 test("expiresAt computed for in-progress booking", () => {
@@ -226,6 +234,291 @@ test("P0: appointmentOfferPending alone engages router lock", () => {
     aiBooking: { stage: "awaiting_patient_confirm", bookingActive: true },
   };
   assert.strictEqual(resolveBookingRouterLock(flags).locked, true);
+});
+
+const CONFIRM_FLAGS = mergeAiBookingPatch({}, {
+  stage: "awaiting_slot_confirm",
+  bookingActive: true,
+  awaitingAction: BOOKING_PENDING_ACTIONS.CONFIRM_BOOKING,
+  selectedSlot: {
+    startAt: "2026-05-30T11:30:00.000Z",
+    dateYmd: "2026-05-30",
+    label: "30 May 14:30",
+  },
+});
+const CONFIRM_STATE = readDurableBookingState({ aiBooking: CONFIRM_FLAGS });
+
+const NEGATIVE_SCHEDULING_PHRASES = [
+  "I do NOT want Monday.",
+  "Pazartesi harici başka bir gün talep ediyorum.",
+  "Pazartesi istemiyorum",
+  "başka gün",
+  "baska gun",
+  "başka saat",
+  "uygun değil",
+  "istemiyorum",
+  "harici",
+  "different day",
+  "another day",
+  "not Monday",
+  "I want another day other than Monday",
+  "Monday doesn't work for me",
+  "farklı saat lütfen",
+  "alternatif tarih",
+];
+
+for (const phrase of NEGATIVE_SCHEDULING_PHRASES) {
+  test(`negative scheduling: blocks confirm — ${phrase.slice(0, 48)}`, () => {
+    assert.ok(
+      patientHasNegativeSchedulingIntent(phrase),
+      `expected negative intent for: ${phrase}`,
+    );
+    assert.ok(
+      patientBlocksBookingConfirmation(phrase),
+      `expected confirmation block for: ${phrase}`,
+    );
+    assert.strictEqual(
+      isBookingConfirmationYesMessage(phrase, { pendingConfirmation: true }),
+      false,
+      `confirmation yes must be false for: ${phrase}`,
+    );
+    assert.strictEqual(
+      resolvesPendingConfirmation(phrase, CONFIRM_STATE),
+      false,
+      `resolvesPendingConfirmation must be false for: ${phrase}`,
+    );
+  });
+}
+
+test("negative scheduling: pure affirmatives still confirm", () => {
+  const affirmatives = ["evet", "yes", "tamam", "onaylıyorum", "confirm", "okay"];
+  for (const word of affirmatives) {
+    assert.strictEqual(patientHasNegativeSchedulingIntent(word), false, word);
+    assert.ok(
+      isBookingConfirmationYesMessage(word, { pendingConfirmation: true }),
+      `expected confirm for: ${word}`,
+    );
+    assert.ok(resolvesPendingConfirmation(word, CONFIRM_STATE), `pending confirm for: ${word}`);
+  }
+});
+
+test("reschedule: Evet confirms pending slot change (not stale post-booking)", () => {
+  const flags = {
+    canonicalBooking: {
+      bookingId: "appt-old",
+      date: "2026-06-03",
+      time: "10:15",
+      status: "scheduled",
+      startAt: "2026-06-03T07:15:00.000Z",
+      label: "3 Jun 10:15",
+    },
+    activeAppointment: {
+      id: "appt-old",
+      startAt: "2026-06-03T07:15:00.000Z",
+      status: "scheduled",
+    },
+    aiBooking: mergeAiBookingPatch({}, {
+      stage: "awaiting_slot_confirm",
+      bookingActive: true,
+      awaitingAction: BOOKING_PENDING_ACTIONS.CONFIRM_BOOKING,
+      selectedSlot: {
+        startAt: "2026-05-30T12:45:00.000Z",
+        dateYmd: "2026-05-30",
+        label: "30 Mayıs Cumartesi at 15:45",
+      },
+      appointmentOfferPending: true,
+    }),
+  };
+  assert.ok(isPendingBookingChangeConfirmation("Evet", flags));
+  assert.strictEqual(
+    isPostBookingStaleActionMessage("Evet", flags),
+    false,
+    "Evet must not be stale while awaiting_slot_confirm",
+  );
+  assert.ok(resolvesPendingConfirmation("Evet", readDurableBookingState(flags)));
+});
+
+test("reschedule: hayır rejects pending reschedule confirm", () => {
+  const flags = {
+    activeAppointment: {
+      id: "appt-old",
+      startAt: "2026-06-03T07:15:00.000Z",
+      status: "scheduled",
+    },
+    aiBooking: mergeAiBookingPatch({}, {
+      stage: "awaiting_slot_confirm",
+      rescheduleMode: true,
+      bookingActive: true,
+      awaitingAction: BOOKING_PENDING_ACTIONS.CONFIRM_BOOKING,
+      selectedSlot: {
+        startAt: "2026-05-30T12:45:00.000Z",
+        dateYmd: "2026-05-30",
+        label: "30 May 15:45",
+      },
+      rescheduleFromSlot: {
+        startAt: "2026-06-03T07:15:00.000Z",
+        label: "3 Jun 10:15",
+      },
+    }),
+  };
+  assert.strictEqual(isPendingRescheduleConfirmation("Evet", flags), true);
+  assert.strictEqual(isPendingRescheduleConfirmation("Hayır", flags), false);
+  assert.strictEqual(
+    isPostBookingStaleActionMessage("Evet", flags),
+    false,
+    "Evet during reschedule must not hit stale guard",
+  );
+});
+
+test("date parse: Pazartesi harici does not select Monday", () => {
+  const ref = new Date("2026-05-29T12:00:00.000Z");
+  const mondayDirect = parsePreferredDateFromMessage("pazartesi", "Europe/Istanbul", ref);
+  assert.ok(mondayDirect, "plain pazartesi should parse");
+  const excluded = parsePreferredDateFromMessage(
+    "Pazartesi harici başka bir gün talep ediyorum",
+    "Europe/Istanbul",
+    ref,
+  );
+  assert.strictEqual(excluded, null, "excluded weekday must not become preferred date");
+});
+
+const {
+  hasReschedulableActiveAppointment,
+  patientRescheduleIntent,
+  buildRescheduleConfirmDirectReply,
+  buildRescheduleRejectedReply,
+  resolveRescheduleTargetSlot,
+} = require("../lib/aiBookingReschedule");
+const { buildSlotFromPreferredDateTime } = require("../lib/aiAppointmentBooking");
+
+const ACTIVE_APPT_FLAGS = {
+  activeAppointment: {
+    id: "appt-old-1",
+    startAt: "2026-06-03T07:15:00.000Z",
+    status: "scheduled",
+    treatmentLabel: "Filling",
+  },
+  canonicalBooking: {
+    bookingId: "appt-old-1",
+    startAt: "2026-06-03T07:15:00.000Z",
+    date: "2026-06-03",
+    time: "10:15",
+    status: "scheduled",
+    label: "3 Jun 10:15",
+  },
+  aiBooking: { stage: "booked", bookingActive: false },
+};
+
+test("reschedule: detects active appointment", () => {
+  assert.ok(hasReschedulableActiveAppointment(ACTIVE_APPT_FLAGS));
+});
+
+test("reschedule: time change intent", () => {
+  assert.ok(
+    patientRescheduleIntent("15:45 olsun", ACTIVE_APPT_FLAGS, {
+      scheduling: { timezone: "Europe/Istanbul" },
+    }),
+  );
+  assert.ok(
+    patientRescheduleIntent("make it 15:45", ACTIVE_APPT_FLAGS, {
+      scheduling: { timezone: "Europe/Istanbul" },
+    }),
+  );
+});
+
+test("reschedule: date change intent", () => {
+  assert.ok(
+    patientRescheduleIntent("çarşamba olsun", ACTIVE_APPT_FLAGS, {
+      scheduling: { timezone: "Europe/Istanbul" },
+    }),
+  );
+  assert.ok(
+    patientRescheduleIntent("different day", ACTIVE_APPT_FLAGS, {
+      scheduling: { timezone: "Europe/Istanbul" },
+    }),
+  );
+});
+
+test("reschedule: explicit move/reschedule intent", () => {
+  assert.ok(patientRescheduleIntent("move appointment", ACTIVE_APPT_FLAGS));
+  assert.ok(patientRescheduleIntent("reschedule appointment", ACTIVE_APPT_FLAGS));
+  assert.ok(patientRescheduleIntent("başka saat", ACTIVE_APPT_FLAGS));
+});
+
+test("reschedule: resolves target time on same day", () => {
+  const existing = {
+    startAt: "2026-06-03T07:15:00.000Z",
+    dateYmd: "2026-06-03",
+    time: "10:15",
+  };
+  const scheduling = { timezone: "Europe/Istanbul" };
+  const slot = resolveRescheduleTargetSlot(
+    "15:45 olsun",
+    existing,
+    scheduling,
+    [],
+    (dateYmd, timeMin) =>
+      buildSlotFromPreferredDateTime(
+        dateYmd,
+        timeMin,
+        scheduling,
+        { defaultDurationMinutes: 30, bufferMinutes: 10 },
+        "Filling",
+        "tr",
+      ),
+  );
+  assert.ok(slot?.startAt, "expected target slot");
+  assert.ok(String(slot.time || "").startsWith("15:45"), `expected 15:45 got ${slot.time}`);
+  assert.strictEqual(slot.dateYmd, "2026-06-03");
+});
+
+test("reschedule: resolves date change keeping same clock time", () => {
+  const existing = {
+    startAt: "2026-06-03T07:15:00.000Z",
+    dateYmd: "2026-06-03",
+    time: "10:15",
+  };
+  const scheduling = { timezone: "Europe/Istanbul" };
+  const slot = resolveRescheduleTargetSlot(
+    "30 mayıs olsun",
+    existing,
+    scheduling,
+    [],
+    (dateYmd, timeMin) =>
+      buildSlotFromPreferredDateTime(
+        dateYmd,
+        timeMin,
+        scheduling,
+        { defaultDurationMinutes: 30, bufferMinutes: 10 },
+        "Filling",
+        "tr",
+      ),
+  );
+  assert.ok(slot?.dateYmd, "expected date on target slot");
+  assert.strictEqual(slot.dateYmd, "2026-05-30");
+  assert.ok(String(slot.time || "").startsWith("10:15"), `keeps clock time, got ${slot.time}`);
+});
+
+test("reschedule: confirm prompt mentions from and to", () => {
+  const reply = buildRescheduleConfirmDirectReply(
+    "tr",
+    "3 Haziran 10:15",
+    "3 Haziran 15:45",
+    "Dolgu",
+  );
+  assert.ok(reply.includes("3 Haziran 10:15"));
+  assert.ok(reply.includes("3 Haziran 15:45"));
+  assert.ok(/Evet/i.test(reply));
+});
+
+test("reschedule: rejection reply keeps existing time", () => {
+  const reply = buildRescheduleRejectedReply("tr", "3 Haziran 10:15");
+  assert.ok(reply.includes("3 Haziran 10:15"));
+  assert.ok(/kal/i.test(reply));
+});
+
+test("reschedule: pure evet is not new reschedule intent", () => {
+  assert.strictEqual(patientRescheduleIntent("Evet", ACTIVE_APPT_FLAGS), false);
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

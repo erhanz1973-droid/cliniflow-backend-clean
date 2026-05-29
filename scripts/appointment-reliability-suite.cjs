@@ -25,6 +25,8 @@ const {
   resolvesPendingConfirmation,
   resolveBookingRouterLock,
   isBookingConfirmationYesMessage,
+  patientHasNegativeSchedulingIntent,
+  patientBlocksBookingConfirmation,
   validateBookingGuardian,
   buildCanonicalBookingRecord,
 } = require("../lib/aiBookingState");
@@ -157,6 +159,50 @@ for (const input of CONFIRM_INPUTS) {
     );
   });
 }
+
+const NEGATIVE_CONFIRM_PHRASES = [
+  "I do NOT want Monday.",
+  "Pazartesi harici başka bir gün talep ediyorum.",
+  "Pazartesi istemiyorum",
+  "başka gün",
+  "başka saat",
+  "uygun değil",
+  "istemiyorum",
+  "harici",
+  "different day",
+  "another day",
+  "not Monday",
+];
+const NEG_CONFIRM_FLAGS = mergeAiBookingPatch({}, {
+  stage: "awaiting_slot_confirm",
+  bookingActive: true,
+  awaitingAction: BOOKING_PENDING_ACTIONS.CONFIRM_BOOKING,
+  selectedSlot: MOCK_SLOTS[1],
+});
+for (const phrase of NEGATIVE_CONFIRM_PHRASES) {
+  runCase("negative_scheduling", `neg-${phrase.slice(0, 24)}`, phrase, () => {
+    assert.ok(patientHasNegativeSchedulingIntent(phrase), `negative intent: ${phrase}`);
+    assert.strictEqual(
+      isBookingConfirmationYesMessage(phrase, { pendingConfirmation: true }),
+      false,
+      `must not confirm: ${phrase}`,
+    );
+    assert.strictEqual(
+      resolvesPendingConfirmation(phrase, readDurableBookingState({ aiBooking: NEG_CONFIRM_FLAGS })),
+      false,
+      `must not resolve pending: ${phrase}`,
+    );
+  });
+}
+
+runCase("negative_scheduling", "exclude-monday-date-parse", "Pazartesi harici", () => {
+  const d = parsePreferredDateFromMessage(
+    "Pazartesi harici başka bir gün talep ediyorum",
+    TZ,
+    REF_DATE,
+  );
+  assert.strictEqual(d, null);
+});
 
 // --- Date Inputs ---
 const DATE_CASES = [
