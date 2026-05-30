@@ -1494,16 +1494,22 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
       .select("clinic_id, primary_doctor_id")
       .eq("id", patientResolvedId)
       .maybeSingle();
-    if (!UUID_RE.test(clinicId)) {
-      clinicId = prow?.clinic_id ? String(prow.clinic_id).trim() : "";
-    }
     primaryDoctorUuid =
       prow?.primary_doctor_id != null ? String(prow.primary_doctor_id).trim() : "";
   } catch (_) {
     /* non-fatal */
   }
 
-  if (!UUID_RE.test(clinicId)) return null;
+  const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+  const canonical = await resolveCanonicalChatThread({
+    patientId: patientResolvedId,
+    clinicIdHint: clinicId || null,
+    source: "doctor_ui_lead_assignment",
+    allowPatientClinicFallback: false,
+  });
+  if (!UUID_RE.test(clinicId) && canonical.clinicId) clinicId = canonical.clinicId;
+
+  if (!UUID_RE.test(clinicId) && !canonical.thread) return null;
 
   async function hydrateDoctorDisplay(didRaw) {
     const did = String(didRaw || "").trim();
@@ -1514,9 +1520,11 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
     return { id: did, doctorName: name, assignedDoctor: { id: did, name } };
   }
 
-  let thr = null;
+  let thr = canonical.thread || null;
   try {
-    thr = await loadPrimaryPatientChatThreadRow(patientResolvedId, clinicId);
+    if (!thr?.id && UUID_RE.test(clinicId)) {
+      thr = await loadPrimaryPatientChatThreadRow(patientResolvedId, clinicId);
+    }
   } catch (e) {
     if (!isPatientChatThreadsTableUnavailable(e)) console.warn("[MESSAGES] fetchLeadThreadAssignmentForPatient:", e?.message || e);
   }
@@ -5176,57 +5184,15 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
 }
 
 async function resolveChatThreadRowForDoctorPush(resolvedPatientId, clinicUuid, assignedDoctorId) {
-  const pid = String(resolvedPatientId || "").trim();
-  if (!UUID_RE.test(pid) || !isSupabaseEnabled()) return null;
-
-  const keys = [];
-  const did = String(assignedDoctorId || "").trim();
-  if (did) {
-    try {
-      const resolvedKeys = await doctorKeysForUuidFkInQuery([did]);
-      for (const k of resolvedKeys || []) {
-        const s = String(k || "").trim();
-        if (s && !keys.includes(s)) keys.push(s);
-      }
-      if (did && !keys.includes(did)) keys.push(did);
-    } catch (_) {
-      if (did) keys.push(did);
-    }
-  }
-
-  if (keys.length) {
-    try {
-      const { data: assignedRows } = await supabase
-        .from("patient_chat_threads")
-        .select(
-          "id, is_lead, assigned_doctor_id, status, clinic_id, lifecycle_status, archived_at, updated_at, assigned_at",
-        )
-        .eq("patient_id", pid)
-        .in("assigned_doctor_id", keys)
-        .order("updated_at", { ascending: false })
-        .limit(8);
-      if (Array.isArray(assignedRows) && assignedRows.length) {
-        const cid = String(clinicUuid || "").trim();
-        let best = assignedRows[0];
-        for (const row of assignedRows) {
-          if (UUID_RE.test(cid) && String(row?.clinic_id || "").trim() === cid) {
-            best = row;
-            break;
-          }
-          best = pickBetterPatientChatThreadRow(best, row);
-        }
-        return best;
-      }
-    } catch (_) {
-      /* fallback below */
-    }
-  }
-
-  const cid = String(clinicUuid || "").trim();
-  if (UUID_RE.test(cid)) {
-    return loadPrimaryPatientChatThreadRow(pid, cid);
-  }
-  return null;
+  const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+  const canonical = await resolveCanonicalChatThread({
+    patientId: resolvedPatientId,
+    clinicIdHint: clinicUuid,
+    assignedDoctorId,
+    source: "push_notification",
+    allowPatientClinicFallback: false,
+  });
+  return canonical.thread || null;
 }
 
 async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, previewRaw, composerOpts) {
@@ -5243,7 +5209,17 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         ? String(composerOpts.messageComposerId).trim()
         : "";
   try {
-    let threadRow = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicUuid);
+    const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+    const canonical = await resolveCanonicalChatThread({
+      patientId: resolvedPatientId,
+      clinicIdHint: clinicUuid,
+      source: "push_notification",
+      allowPatientClinicFallback: false,
+    });
+    let threadRow = canonical.thread || null;
+    if (!threadRow) {
+      threadRow = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicUuid);
+    }
     const assignedRaw = String(threadRow?.assigned_doctor_id || "").trim();
     let did =
       (await resolveOwnerUuidForExpoPush("doctor", assignedRaw)) ||
@@ -5608,13 +5584,25 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
       try {
         const pid = await resolveMessagesPatientDbId(String(opts.patientId));
         if (pid) {
-          let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", pid);
           const ctxCid = String(opts?.contextClinicId || "").trim();
-          if (UUID_RE.test(ctxCid)) tq = tq.eq("clinic_id", ctxCid);
-          const { data: thr } = await tq.order("updated_at", { ascending: false }).limit(1).maybeSingle();
-          if (thr?.id && UUID_RE.test(String(thr.id).trim())) {
-            tid = String(thr.id).trim();
-            console.log("[chat-socket] thread_id resolved from patient_chat_threads fallback", tid);
+          const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+          const canonical = await resolveCanonicalChatThread({
+            patientId: pid,
+            clinicIdHint: UUID_RE.test(ctxCid) ? ctxCid : null,
+            source: "socket_emit_fallback",
+            allowPatientClinicFallback: false,
+          });
+          if (canonical.threadId && UUID_RE.test(canonical.threadId)) {
+            tid = canonical.threadId;
+            console.log("[chat-socket] thread_id resolved from canonical resolver", tid);
+          } else {
+            let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", pid);
+            if (UUID_RE.test(ctxCid)) tq = tq.eq("clinic_id", ctxCid);
+            const { data: thr } = await tq.order("updated_at", { ascending: false }).limit(1).maybeSingle();
+            if (thr?.id && UUID_RE.test(String(thr.id).trim())) {
+              tid = String(thr.id).trim();
+              console.log("[chat-socket] thread_id resolved from patient_chat_threads fallback", tid);
+            }
           }
         }
       } catch (_) {
@@ -45583,7 +45571,18 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
 
   let thread = null;
   try {
-    if (clinicId && UUID_RE.test(clinicId)) {
+    const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+    const matchKeys = await getDoctorMatchKeysForReq(req);
+    const canonical = await resolveCanonicalChatThread({
+      patientId: resolvedPatientId,
+      clinicIdHint: clinicId || null,
+      doctorMatchKeys: matchKeys,
+      assignedDoctorId: req.doctorId || req?.doctor?.id || null,
+      source: "doctor_messaging_access",
+      allowPatientClinicFallback: false,
+    });
+    if (canonical.thread) thread = canonical.thread;
+    else if (clinicId && UUID_RE.test(clinicId)) {
       thread = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicId);
     }
     if (!thread) {
@@ -49868,6 +49867,16 @@ async function resolveDoctorOutboundThreadId(patientId, clinicId, accessThreadId
   if (accessTid) return accessTid;
   if (!isSupabaseEnabled() || !UUID_RE.test(String(patientId || ""))) return null;
   try {
+    const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+    const canonical = await resolveCanonicalChatThread({
+      patientId,
+      clinicIdHint: clinicId,
+      source: "outbound_message",
+      allowPatientClinicFallback: false,
+    });
+    if (canonical.threadId && UUID_RE.test(canonical.threadId)) {
+      return canonical.threadId;
+    }
     let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", patientId);
     const cid = String(clinicId || "").trim();
     if (UUID_RE.test(cid)) tq = tq.eq("clinic_id", cid);
@@ -62451,28 +62460,71 @@ try {
           return;
         }
 
-        await socket.join(roomId);
+        let effectiveThreadId = threadIdJoined;
+        let effectiveThreadRow = threadRow;
+        try {
+          const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+          const doctorUuidForCanon = role === "DOCTOR" ? String(decoded.doctorId || decoded.id || "").trim() : "";
+          const doctorMatchKeys =
+            role === "DOCTOR" && Array.isArray(socket.data?._doctorMatchKeys)
+              ? socket.data._doctorMatchKeys
+              : [];
+          const canonical = await resolveCanonicalChatThread({
+            patientId: threadPid,
+            clinicIdHint: String(threadRow?.clinic_id || decoded.clinicId || "").trim() || null,
+            assignedDoctorId: doctorUuidForCanon || null,
+            doctorMatchKeys,
+            source: "socket_join",
+            allowPatientClinicFallback: false,
+          });
+          if (
+            canonical.threadId &&
+            UUID_RE.test(canonical.threadId) &&
+            canonical.threadId !== threadIdJoined
+          ) {
+            console.warn("[DOCTOR_CHAT_JOIN] thread_redirect", {
+              requested: threadIdJoined.slice(0, 8),
+              canonical: canonical.threadId.slice(0, 8),
+              patient_id: threadPid.slice(0, 8),
+              reason: canonical.reason,
+            });
+            effectiveThreadId = canonical.threadId;
+            effectiveThreadRow = canonical.thread || threadRow;
+          }
+        } catch (_) {
+          /* keep requested thread */
+        }
+
+        const effectiveRoomId = threadChatRoomId(effectiveThreadId);
+        if (!effectiveRoomId) {
+          socket.emit("chat_join_error", { error: "thread_id_required" });
+          if (typeof ack === "function") ack({ ok: false, error: "thread_id_required" });
+          return;
+        }
+
+        await socket.join(effectiveRoomId);
         if (role === "DOCTOR") {
           const doctorUuid = String(decoded.doctorId || decoded.id || "").trim();
           socket.data.role = "DOCTOR";
           socket.data.doctorId = doctorUuid;
           socket.data.patientId = threadPid;
-          socket.data.threadId = threadIdJoined;
-          socket.data.clinicId = String(threadRow?.clinic_id || decoded.clinicId || "").trim() || null;
+          socket.data.threadId = effectiveThreadId;
+          socket.data.clinicId =
+            String(effectiveThreadRow?.clinic_id || decoded.clinicId || "").trim() || null;
         } else if (role === "PATIENT") {
           socket.data.role = "PATIENT";
           socket.data.patientId = threadPid;
-          socket.data.threadId = threadIdJoined;
+          socket.data.threadId = effectiveThreadId;
         }
         const joinedAt = Date.now();
         const joinLatencyMs = joinedAt - joinReceivedAt;
         let roomSizeAfterJoin = null;
         try {
-          const fetched = await chatSocketIo.in(roomId).fetchSockets();
+          const fetched = await chatSocketIo.in(effectiveRoomId).fetchSockets();
           roomSizeAfterJoin = fetched.length;
           console.log(
             "[chat-socket] ROOM_SIZE",
-            roomId,
+            effectiveRoomId,
             fetched.length,
             "(2 = patient + doctor in same Socket.IO room)",
           );
@@ -62486,27 +62538,30 @@ try {
             doctor_id:
               role === "DOCTOR" ? String(decoded.doctorId || decoded.id || "").slice(0, 8) : null,
             patient_id: threadPid ? threadPid.slice(0, 8) : null,
-            thread_id: threadIdJoined.slice(0, 8),
-            assigned_doctor_id: String(threadRow?.assigned_doctor_id || "").slice(0, 8) || null,
-            clinic_id: String(threadRow?.clinic_id || "").slice(0, 8) || null,
-            room_id: roomId,
+            thread_id: effectiveThreadId.slice(0, 8),
+            requested_thread_id:
+              effectiveThreadId !== threadIdJoined ? threadIdJoined.slice(0, 8) : null,
+            assigned_doctor_id: String(effectiveThreadRow?.assigned_doctor_id || "").slice(0, 8) || null,
+            clinic_id: String(effectiveThreadRow?.clinic_id || "").slice(0, 8) || null,
+            room_id: effectiveRoomId,
             room_size: roomSizeAfterJoin,
             join_latency_ms: joinLatencyMs,
           }),
         );
         console.log(
           "[chat-socket] JOINED ROOM",
-          roomId,
+          effectiveRoomId,
           "threadIdJoined=",
-          threadIdJoined,
+          effectiveThreadId,
           "latency_ms_since_join_received",
           joinLatencyMs,
         );
         if (typeof ack === "function") {
           ack({
             ok: true,
-            room: roomId,
-            threadId: threadIdJoined,
+            room: effectiveRoomId,
+            threadId: effectiveThreadId,
+            requestedThreadId: effectiveThreadId !== threadIdJoined ? threadIdJoined : undefined,
             serverAckTime: joinedAt,
             joinReceivedTime: joinReceivedAt,
           });

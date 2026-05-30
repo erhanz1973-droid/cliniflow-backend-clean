@@ -607,5 +607,69 @@ test("isolation: buildRescheduleIsolationPatch clears stale proposal fields", ()
   assert.strictEqual(patch.pendingAction, null);
 });
 
+const {
+  shouldEngageAppointmentBooking,
+  patientMessageIsAlternativeSlotRequest,
+  detectConsecutiveBookingPromptLoop,
+  buildAlternativeSlotNotInListReply,
+} = require("../lib/aiAppointmentBooking");
+
+test("select_slot: 3 Haziran 8:30 is alternative slot request", () => {
+  assert.ok(
+    patientMessageIsAlternativeSlotRequest("3 Haziran 8:30", { timezone: "Europe/Istanbul" }),
+  );
+  assert.ok(patientMessageIsAlternativeSlotRequest("8:30", { timezone: "Europe/Istanbul" }));
+  assert.strictEqual(patientMessageIsAlternativeSlotRequest("1", { timezone: "Europe/Istanbul" }), false);
+  assert.strictEqual(patientMessageIsAlternativeSlotRequest("Evet", { timezone: "Europe/Istanbul" }), false);
+});
+
+test("select_slot: shouldEngage with active appointment + datetime request", () => {
+  const flags = {
+    activeAppointment: {
+      startAt: "2026-05-30T07:15:00.000Z",
+      status: "scheduled",
+    },
+    aiBooking: {
+      stage: "slots_offered",
+      bookingActive: true,
+      awaitingAction: BOOKING_PENDING_ACTIONS.SELECT_SLOT,
+      offeredSlots: [
+        { id: "s1", startAt: "2026-05-30T07:15:00.000Z", dateYmd: "2026-05-30", time: "10:15" },
+      ],
+    },
+  };
+  assert.ok(
+    shouldEngageAppointmentBooking("3 Haziran 8:30", {}, flags, {}, []),
+    "datetime request must engage booking while select_slot pending",
+  );
+  assert.ok(
+    shouldEngageAppointmentBooking("8:30", {}, flags, {}, []),
+    "time-only request must engage booking while select_slot pending",
+  );
+});
+
+test("select_slot: loop detection on repeated nudge", () => {
+  const nudgeTr =
+    "Randevu planlamasına devam edelim — lütfen paylaştığımız saatlerden birini seçin veya «Evet» ile onaylayın.";
+  const recentTurns = [{ role: "assistant", text: nudgeTr }];
+  assert.ok(
+    detectConsecutiveBookingPromptLoop(recentTurns, nudgeTr, "3 Haziran 8:30", {
+      timezone: "Europe/Istanbul",
+    }),
+  );
+  assert.strictEqual(
+    detectConsecutiveBookingPromptLoop(recentTurns, nudgeTr, "1", {
+      timezone: "Europe/Istanbul",
+    }),
+    false,
+  );
+});
+
+test("select_slot: not-in-list reply mentions date", () => {
+  const reply = buildAlternativeSlotNotInListReply("tr", "3 Haziran 08:30", "3 Haziran");
+  assert.ok(reply.includes("mevcut listede değil"));
+  assert.ok(reply.includes("3 Haziran"));
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
