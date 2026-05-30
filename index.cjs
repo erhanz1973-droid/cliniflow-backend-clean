@@ -1070,11 +1070,76 @@ function mapDbMessageToLegacyMessage(row) {
   return out;
 }
 
+/** Resolve PATIENT vs CLINIC for heterogeneous patient_messages schemas (from_role, sender_type, from_patient, …). */
+function resolveLegacyMessageSenderFromRow(row) {
+  if (!row || typeof row !== "object") return { from: "CLINIC", role: "" };
+  const senderRaw =
+    row.from_role ??
+    row.sender_type ??
+    row.sender ??
+    row.from ??
+    (row.from_patient === true ? "patient" : row.from_patient === false ? "clinic" : "");
+  const role = String(senderRaw || "").toLowerCase();
+  const from =
+    role === "patient" || role === "user" || role === "lead" ? "PATIENT" : "CLINIC";
+  return { from, role };
+}
+
+/** Drop coordinator mirror legs already present in patient_messages / messages (frees tail budget for inbound patient rows). */
+function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
+  const clinicFp = new Set();
+  for (const m of clinicMessages || []) {
+    const t = String(m?.text || "").trim();
+    if (!t) continue;
+    const from = String(m?.from || "").toUpperCase();
+    const ts = Number(m?.createdAt) || 0;
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    clinicFp.add(`${from}|${t.slice(0, 200)}|${bucket}`);
+  }
+  if (!clinicFp.size) return coordinatorArchived || [];
+  return (coordinatorArchived || []).filter((m) => {
+    const t = String(m?.text || "").trim();
+    if (!t) return true;
+    const isCoord =
+      m?.sourceCoordinatorEvent === true ||
+      m?.sourceCoordinatorChannel === true ||
+      String(m?.id || "").startsWith("coord_");
+    if (!isCoord) return true;
+    const from = String(m?.from || "").toUpperCase();
+    const ts = Number(m?.createdAt) || 0;
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    return !clinicFp.has(`${from}|${t.slice(0, 200)}|${bucket}`);
+  });
+}
+
+/** patient_messages inbound rows must survive tail truncation vs coordinator archive flood. */
+function ensureClinicPatientMessagesInThread(clinicMessages, mergedMessages, tailN) {
+  if (!tailN || tailN <= 0) return mergedMessages || [];
+  const patients = (clinicMessages || []).filter(
+    (m) => String(m?.from || "").toUpperCase() === "PATIENT" && String(m?.text || "").trim(),
+  );
+  const byId = new Map();
+  for (const m of mergedMessages || []) {
+    const id = String(m?.id || "").trim();
+    if (id) byId.set(id, m);
+  }
+  for (const p of patients) {
+    const id = String(p?.id || "").trim();
+    if (id) byId.set(id, p);
+  }
+  return [...byId.values()]
+    .sort((a, b) => {
+      const ta = Number(a?.createdAt) || 0;
+      const tb = Number(b?.createdAt) || 0;
+      return ta - tb;
+    })
+    .slice(-tailN);
+}
+
 /** patient_messages row → same legacy shape as admin-chat / mobile */
 function mapPatientMessagesRowToLegacy(row) {
   if (!row) return null;
-  const role = String(row.from_role || "").toLowerCase();
-  const from = role === "patient" ? "PATIENT" : "CLINIC";
+  const { from, role } = resolveLegacyMessageSenderFromRow(row);
   let attachment = row.attachment || undefined;
   if (attachment && typeof attachment === "object") {
     attachment = {
@@ -49847,6 +49912,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       console.warn("[DOCTOR patient messages] coordinator merge:", coordMergeErr?.message || coordMergeErr);
     }
 
+    coordinatorArchived = dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived);
     let messages = mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived, coordinatorArchived);
     const tailN = wantFull
       ? null
@@ -49854,7 +49920,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
         ? Math.min(500, Math.max(80, limN))
         : 180;
     if (tailN && messages.length > tailN) {
-      messages = messages.slice(-tailN);
+      messages = ensureClinicPatientMessagesInThread(clinicMessages, messages, tailN);
     }
 
     let leadAssignment = null;
