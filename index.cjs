@@ -2152,6 +2152,7 @@ async function handlePatientMessagesReadMark(req, res) {
 
 async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgType, insertOpts) {
   const opts = insertOpts && typeof insertOpts === "object" ? insertOpts : {};
+  const insertCaller = String(opts.caller || "insertClinicMessageViaPatientMessages").trim();
   const preResolved = String(opts.preResolvedPatientId || "").trim();
   const resolvedPatientId =
     preResolved && UUID_RE.test(preResolved)
@@ -2212,15 +2213,28 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
   if (opts.threadId && UUID_RE.test(String(opts.threadId).trim())) {
     baseRow.thread_id = String(opts.threadId).trim();
   }
+  const { guardPatientFacingMessagePayload, auditMessageInsert } = require("./lib/patientMessageThreadGuard");
+  const guarded = await guardPatientFacingMessagePayload(baseRow, {
+    caller: insertCaller,
+    insertFn: "insertClinicMessageViaPatientMessages",
+    source: String(opts.source || "clinic_outbound").trim(),
+    threadIdHint: opts.threadId || null,
+    clinicIdHint: clinicFk || null,
+    systemOnly: opts.systemOnly === true,
+  });
+  if (!guarded.ok) {
+    return { data: null, error: guarded.error || { message: "thread_id_required" } };
+  }
+  const guardedRow = guarded.payload;
   const preferredRole = String(opts.fromRole || "").trim().toLowerCase();
   const fromRoles = preferredRole
     ? [preferredRole, "doctor", "admin", "clinic", "CLINIC", "clinic_staff"]
     : ["doctor", "admin", "clinic", "CLINIC", "clinic_staff"];
   let lastError = null;
   const payloadsToTry =
-    clinicFk && Object.prototype.hasOwnProperty.call(baseRow, "clinic_id")
-      ? [baseRow, { ...baseRow, clinic_id: undefined }]
-      : [baseRow];
+    guardedRow.clinic_id && Object.prototype.hasOwnProperty.call(guardedRow, "clinic_id")
+      ? [guardedRow, { ...guardedRow, clinic_id: undefined }]
+      : [guardedRow];
   outerPayload: for (const payload of payloadsToTry) {
     const rowIns = Object.fromEntries(
       Object.entries({ ...payload }).filter(([, v]) => v !== undefined)
@@ -2233,7 +2247,33 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
       ...(senderName ? { sender_name: senderName } : {}),
     };
     const pr = await insertIntoTableWithColumnPruning("patient_messages", insertPayload);
-    if (!pr.error && pr.data) return { data: pr.data, error: null };
+    if (!pr.error && pr.data) {
+      const persistedThread =
+        pr.data?.thread_id != null && String(pr.data.thread_id).trim()
+          ? String(pr.data.thread_id).trim()
+          : guarded.persistedThreadId || guarded.resolvedThreadId || null;
+      auditMessageInsert({
+        patientId: resolvedPatientId,
+        clinicId: guarded.clinicId || guardedRow.clinic_id || null,
+        threadId: persistedThread,
+        resolvedThreadId: guarded.resolvedThreadId || null,
+        persistedThreadId: persistedThread,
+        messageId: pr.data?.message_id || pr.data?.id || messageId,
+        via: "patient_messages",
+        insertFn: "insertClinicMessageViaPatientMessages",
+        caller: insertCaller,
+      });
+      return {
+        data: { ...pr.data, thread_id: persistedThread || pr.data?.thread_id },
+        error: null,
+        insertMeta: {
+          insertFn: "insertClinicMessageViaPatientMessages",
+          caller: insertCaller,
+          resolvedThreadId: guarded.resolvedThreadId || null,
+          persistedThreadId: persistedThread,
+        },
+      };
+    }
     const error = pr.error;
     lastError = error;
     const msg = String(error?.message || "").toLowerCase();
@@ -2260,8 +2300,10 @@ async function insertPatientMessageViaPatientMessages(
   text,
   msgType,
   threadIdOpt,
-  clinicIdOpt
+  clinicIdOpt,
+  extraOpts = {},
 ) {
+  const insertCaller = String(extraOpts.caller || "insertPatientMessageViaPatientMessages").trim();
   const resolvedPatientId = await resolveMessagesPatientDbId(patientIdParam);
   if (!resolvedPatientId) {
     return {
@@ -2282,16 +2324,26 @@ async function insertPatientMessageViaPatientMessages(
     type: String(msgType || "text").trim() || "text",
     attachment: null,
     ...(clinicFk ? { clinic_id: clinicFk } : {}),
+    ...(threadIdOpt && UUID_RE.test(String(threadIdOpt).trim())
+      ? { thread_id: String(threadIdOpt).trim() }
+      : {}),
   };
-  const baseRows = [];
-  if (threadIdOpt && UUID_RE.test(String(threadIdOpt).trim())) {
-    baseRows.push({ ...baseRow, thread_id: String(threadIdOpt).trim() });
+  const { guardPatientFacingMessagePayload, auditMessageInsert } = require("./lib/patientMessageThreadGuard");
+  const guarded = await guardPatientFacingMessagePayload(baseRow, {
+    caller: insertCaller,
+    insertFn: "insertPatientMessageViaPatientMessages",
+    source: String(extraOpts.source || "patient_inbound").trim(),
+    threadIdHint: threadIdOpt || null,
+    clinicIdHint: clinicFk || null,
+    systemOnly: extraOpts.systemOnly === true,
+  });
+  if (!guarded.ok) {
+    return { data: null, error: guarded.error || { message: "thread_id_required" } };
   }
-  baseRows.push(baseRow);
+  const br = guarded.payload;
   const fromRoles = ["patient", "PATIENT"];
   let lastError = null;
   for (const from_role of fromRoles) {
-    for (const br of baseRows) {
     // Prefer row without sender_id: many DBs have no patient_messages.sender_id (PostgREST errors on unknown column).
     const variants = [
       { ...br, from_role },
@@ -2304,7 +2356,33 @@ async function insertPatientMessageViaPatientMessages(
         .insert(row)
         .select("*")
         .single();
-      if (!error) return { data, error: null };
+      if (!error) {
+        const persistedThread =
+          data?.thread_id != null && String(data.thread_id).trim()
+            ? String(data.thread_id).trim()
+            : guarded.persistedThreadId || guarded.resolvedThreadId || null;
+        auditMessageInsert({
+          patientId: resolvedPatientId,
+          clinicId: guarded.clinicId || br.clinic_id || null,
+          threadId: persistedThread,
+          resolvedThreadId: guarded.resolvedThreadId || null,
+          persistedThreadId: persistedThread,
+          messageId: data?.message_id || data?.id || messageId,
+          via: "patient_messages",
+          insertFn: "insertPatientMessageViaPatientMessages",
+          caller: insertCaller,
+        });
+        return {
+          data: { ...data, thread_id: persistedThread || data?.thread_id },
+          error: null,
+          insertMeta: {
+            insertFn: "insertPatientMessageViaPatientMessages",
+            caller: insertCaller,
+            resolvedThreadId: guarded.resolvedThreadId || null,
+            persistedThreadId: persistedThread,
+          },
+        };
+      }
       lastError = error;
       const msg = String(error?.message || "").toLowerCase();
       const code = String(error?.code || "");
@@ -2324,7 +2402,6 @@ async function insertPatientMessageViaPatientMessages(
         continue;
       }
       break;
-    }
     }
   }
   if (lastError) {
@@ -3154,18 +3231,18 @@ async function _insertMessageToSupabaseCore({
       msgText,
       msgType,
       inboundThreadId,
-      inboundClinicId
+      inboundClinicId,
+      { caller: "_insertMessageToSupabaseCore", source: "patient_inbound" },
     );
     if (!pmTry.error && pmTry.data) {
-      console.log("MESSAGE_INSERT", {
-        patient_id: resolvedPatientId,
-        clinic_id: inboundClinicId || null,
-        thread_id: inboundThreadId || null,
-        via: "patient_messages",
-      });
-      return { data: pmTry.data, error: null, insertedTable: "patient_messages" };
+      return { data: pmTry.data, error: null, insertedTable: "patient_messages", insertMeta: pmTry.insertMeta };
     }
   }
+
+  const ctxClinicId =
+    contextClinicId && UUID_RE.test(String(contextClinicId).trim())
+      ? String(contextClinicId).trim()
+      : null;
 
   let clinicId;
   let clinicCode;
@@ -3174,11 +3251,15 @@ async function _insertMessageToSupabaseCore({
     const { data: cl } = await supabase.from("clinics").select("clinic_code").eq("id", clinicId).maybeSingle();
     clinicCode = cl?.clinic_code ? String(cl.clinic_code).trim().toUpperCase() : null;
   } else {
+    // Clinic/AI outbound: operational contextClinicId wins over stale patients.clinic_id.
+    if (ctxClinicId) {
+      clinicId = ctxClinicId;
+    }
     const { clinicId: rowClinicId, clinicCode: rowClinicCode } = await resolveClinicContextForPatientRow(
       resolvedPatientId
     );
     clinicCode = rowClinicCode || (await resolveClinicCodeForPatient(resolvedPatientId)) || null;
-    clinicId = rowClinicId || null;
+    if (!clinicId) clinicId = rowClinicId || null;
     if (!clinicId && clinicCode) {
       clinicId = await resolveClinicUuidFromClinicCode(clinicCode);
     }
@@ -3192,10 +3273,7 @@ async function _insertMessageToSupabaseCore({
       }
     }
 
-    // Last resort: use the clinic from the doctor/admin's own JWT context
-    if (!clinicId && contextClinicId && UUID_RE.test(String(contextClinicId).trim())) {
-      clinicId = String(contextClinicId).trim();
-    }
+    if (!clinicId && ctxClinicId) clinicId = ctxClinicId;
     if (!clinicCode && contextClinicCode) {
       clinicCode = String(contextClinicCode).trim().toUpperCase() || clinicCode;
     }
@@ -3222,13 +3300,82 @@ async function _insertMessageToSupabaseCore({
     outboundThreadFromClinic = ot.threadId || null;
   }
 
+  const { resolveThreadForMessageInsert, auditMessageInsert, logMessageThreadMissing } = require("./lib/patientMessageThreadGuard");
+  const threadResolved = await resolveThreadForMessageInsert({
+    patientId: resolvedPatientId,
+    clinicId: clinicId || inboundClinicId || ctxClinicId || null,
+    threadIdHint: inboundThreadId || outboundThreadFromClinic || null,
+    source: fromPatient ? "patient_inbound" : "clinic_outbound",
+    caller: "_insertMessageToSupabaseCore",
+  });
+  if (threadResolved.clinicId && UUID_RE.test(String(threadResolved.clinicId).trim()) && !clinicId) {
+    clinicId = String(threadResolved.clinicId).trim();
+  }
+
   const effectiveThreadId =
-    inboundThreadId && UUID_RE.test(String(inboundThreadId).trim())
-      ? String(inboundThreadId).trim()
-      : outboundThreadFromClinic && UUID_RE.test(String(outboundThreadFromClinic).trim())
-        ? String(outboundThreadFromClinic).trim()
-        : null;
-  const threadOpt = effectiveThreadId ? { thread_id: effectiveThreadId } : {};
+    threadResolved.threadId && UUID_RE.test(String(threadResolved.threadId).trim())
+      ? String(threadResolved.threadId).trim()
+      : inboundThreadId && UUID_RE.test(String(inboundThreadId).trim())
+        ? String(inboundThreadId).trim()
+        : outboundThreadFromClinic && UUID_RE.test(String(outboundThreadFromClinic).trim())
+          ? String(outboundThreadFromClinic).trim()
+          : null;
+
+  const logMessagesInsert = (via, row, persistedThread) => {
+    auditMessageInsert({
+      patientId: resolvedPatientId,
+      clinicId: clinicId || inboundClinicId || null,
+      threadId: persistedThread || effectiveThreadId || null,
+      resolvedThreadId: threadResolved.threadId || effectiveThreadId || null,
+      persistedThreadId: persistedThread || effectiveThreadId || null,
+      messageId: row?.id || row?.message_id || null,
+      via,
+      insertFn: "_insertMessageToSupabaseCore",
+      caller: fromPatient ? "patient_inbound" : "clinic_outbound",
+    });
+  };
+
+  // Clinic/AI text outbound: patient_messages is canonical (messages table may lack thread_id column).
+  if (!fromPatient && !hasInboundAttachments(attachments) && msgText) {
+    const pmClinicTry = await insertClinicMessageViaPatientMessages(patientId, msgText, msgType, {
+      preResolvedPatientId: resolvedPatientId,
+      clinicId: clinicId || ctxClinicId || null,
+      fromRole: "clinic",
+      threadId: effectiveThreadId,
+      caller: "_insertMessageToSupabaseCore",
+      source: "clinic_outbound",
+    });
+    if (!pmClinicTry.error && pmClinicTry.data) {
+      fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId || inboundClinicId, senderIdOpt, fromPatient);
+      return {
+        data: pmClinicTry.data,
+        error: null,
+        insertedTable: "patient_messages",
+        insertMeta: pmClinicTry.insertMeta,
+      };
+    }
+  }
+
+  if (!effectiveThreadId) {
+    logMessageThreadMissing({
+      caller: fromPatient ? "patient_inbound" : "clinic_outbound",
+      insert_fn: "_insertMessageToSupabaseCore",
+      patient_id: resolvedPatientId,
+      clinic_id: clinicId || inboundClinicId || null,
+      thread_id: null,
+      reason: "thread_id_unresolved_before_messages_table",
+    });
+    return {
+      data: null,
+      error: {
+        message: "thread_id_required",
+        code: "422",
+        details: "Cannot persist patient-facing message without canonical thread_id",
+      },
+    };
+  }
+
+  const threadOpt = { thread_id: effectiveThreadId };
 
   const clinicFields = {
     ...(clinicId ? { clinic_id: clinicId } : {}),
@@ -3267,13 +3414,7 @@ async function _insertMessageToSupabaseCore({
     .single();
 
   if (!primaryResult?.error) {
-    console.log("MESSAGE_INSERT", {
-      patient_id: resolvedPatientId,
-      clinic_id: clinicId || inboundClinicId || null,
-      thread_id: inboundThreadId || null,
-      message_id: primaryResult.data?.id || null,
-      via: "messages",
-    });
+    logMessagesInsert("messages", primaryResult.data, effectiveThreadId);
     fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId || inboundClinicId, senderIdOpt, fromPatient);
     return { ...primaryResult, insertedTable: "messages" };
   }
@@ -3285,13 +3426,43 @@ async function _insertMessageToSupabaseCore({
   if (retryPrimary) {
     const pruned = await insertWithColumnPruning({ ...primaryPayload });
     if (!pruned?.error) {
-      console.log("MESSAGE_INSERT", {
-        patient_id: resolvedPatientId,
-        clinic_id: clinicId || inboundClinicId || null,
-        thread_id: inboundThreadId || null,
-        message_id: pruned.data?.id || null,
-        via: "messages_pruned",
-      });
+      const persistedThread =
+        pruned.data?.thread_id != null && String(pruned.data.thread_id).trim()
+          ? String(pruned.data.thread_id).trim()
+          : effectiveThreadId;
+      if (!persistedThread) {
+        logMessageThreadMissing({
+          caller: "clinic_outbound",
+          insert_fn: "_insertMessageToSupabaseCore",
+          patient_id: resolvedPatientId,
+          clinic_id: clinicId || inboundClinicId || null,
+          thread_id: null,
+          reason: "messages_pruned_dropped_thread_id",
+          via: "messages_pruned",
+        });
+        const pmFallback = await insertClinicMessageViaPatientMessages(patientId, msgText, msgType, {
+          preResolvedPatientId: resolvedPatientId,
+          clinicId: clinicId || ctxClinicId || null,
+          fromRole: "clinic",
+          threadId: effectiveThreadId,
+          caller: "_insertMessageToSupabaseCore",
+          source: "messages_pruned_fallback",
+        });
+        if (!pmFallback.error && pmFallback.data) {
+          fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId || inboundClinicId, senderIdOpt, fromPatient);
+          return {
+            data: pmFallback.data,
+            error: null,
+            insertedTable: "patient_messages",
+            insertMeta: pmFallback.insertMeta,
+          };
+        }
+        return {
+          data: null,
+          error: { message: "thread_id_not_persisted", code: "422" },
+        };
+      }
+      logMessagesInsert("messages_pruned", pruned.data, persistedThread);
       fireRespondingDoctorAutoAssign(resolvedPatientId, clinicId || inboundClinicId, senderIdOpt, fromPatient);
       return { ...pruned, insertedTable: "messages" };
     }
@@ -3317,13 +3488,7 @@ async function _insertMessageToSupabaseCore({
   };
   let fb = await insertWithColumnPruning(fallbackNoText);
   if (!fb?.error) {
-    console.log("MESSAGE_INSERT", {
-      patient_id: resolvedPatientId,
-      clinic_id: clinicId || inboundClinicId || null,
-      thread_id: inboundThreadId || null,
-      message_id: fb.data?.id || null,
-      via: "messages_fallback",
-    });
+    logMessagesInsert("messages_fallback", fb.data, effectiveThreadId);
     return { ...fb, insertedTable: "messages" };
   }
 
@@ -3336,13 +3501,7 @@ async function _insertMessageToSupabaseCore({
     ...threadOpt,
   });
   if (!fb?.error) {
-    console.log("MESSAGE_INSERT", {
-      patient_id: resolvedPatientId,
-      clinic_id: clinicId || inboundClinicId || null,
-      thread_id: inboundThreadId || null,
-      message_id: fb.data?.id || null,
-      via: "messages_fallback_minimal",
-    });
+    logMessagesInsert("messages_fallback_minimal", fb.data, effectiveThreadId);
     return { ...fb, insertedTable: "messages" };
   }
 
@@ -3360,13 +3519,7 @@ async function _insertMessageToSupabaseCore({
     ...threadOpt,
   });
   if (!fb?.error) {
-    console.log("MESSAGE_INSERT", {
-      patient_id: resolvedPatientId,
-      clinic_id: clinicId || inboundClinicId || null,
-      thread_id: inboundThreadId || null,
-      message_id: fb.data?.id || null,
-      via: "messages_fallback_upper_sender",
-    });
+    logMessagesInsert("messages_fallback_upper_sender", fb.data, effectiveThreadId);
     return { ...fb, insertedTable: "messages" };
   }
 
@@ -3385,13 +3538,7 @@ async function _insertMessageToSupabaseCore({
       ...threadOpt,
     });
     if (!fb?.error) {
-      console.log("MESSAGE_INSERT", {
-        patient_id: resolvedPatientId,
-        clinic_id: clinicId || inboundClinicId || null,
-        thread_id: inboundThreadId || null,
-        message_id: fb.data?.id || null,
-        via: "messages_fallback_legacy",
-      });
+      logMessagesInsert("messages_fallback_legacy", fb.data, effectiveThreadId);
       return { ...fb, insertedTable: "messages" };
     }
     const legMsg = String(fb?.error?.message || "");
@@ -3409,13 +3556,7 @@ async function _insertMessageToSupabaseCore({
         ...threadOpt,
       });
       if (!fb?.error) {
-        console.log("MESSAGE_INSERT", {
-          patient_id: resolvedPatientId,
-          clinic_id: clinicId || inboundClinicId || null,
-          thread_id: inboundThreadId || null,
-          message_id: fb.data?.id || null,
-          via: "messages_fallback_legacy_ms",
-        });
+        logMessagesInsert("messages_fallback_legacy_ms", fb.data, effectiveThreadId);
         return { ...fb, insertedTable: "messages" };
       }
     }
