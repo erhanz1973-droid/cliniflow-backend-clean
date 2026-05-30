@@ -1500,12 +1500,11 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
     /* non-fatal */
   }
 
-  const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
-  const canonical = await resolveCanonicalChatThread({
-    patientId: patientResolvedId,
-    clinicIdHint: clinicId || null,
+  const { getCanonicalThread } = require("./lib/canonicalChatThread");
+  const canonical = await getCanonicalThread(patientResolvedId, clinicId || null, {
     source: "doctor_ui_lead_assignment",
-    allowPatientClinicFallback: false,
+    repairClinic: true,
+    ensureProfile: true,
   });
   if (!UUID_RE.test(clinicId) && canonical.clinicId) clinicId = canonical.clinicId;
 
@@ -5184,13 +5183,12 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
 }
 
 async function resolveChatThreadRowForDoctorPush(resolvedPatientId, clinicUuid, assignedDoctorId) {
-  const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
-  const canonical = await resolveCanonicalChatThread({
-    patientId: resolvedPatientId,
-    clinicIdHint: clinicUuid,
+  const { getCanonicalThread } = require("./lib/canonicalChatThread");
+  const canonical = await getCanonicalThread(resolvedPatientId, clinicUuid, {
     assignedDoctorId,
     source: "push_notification",
-    allowPatientClinicFallback: false,
+    repairClinic: false,
+    ensureProfile: false,
   });
   return canonical.thread || null;
 }
@@ -5209,12 +5207,11 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         ? String(composerOpts.messageComposerId).trim()
         : "";
   try {
-    const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
-    const canonical = await resolveCanonicalChatThread({
-      patientId: resolvedPatientId,
-      clinicIdHint: clinicUuid,
+    const { getCanonicalThread } = require("./lib/canonicalChatThread");
+    const canonical = await getCanonicalThread(resolvedPatientId, clinicUuid, {
       source: "push_notification",
-      allowPatientClinicFallback: false,
+      repairClinic: false,
+      ensureProfile: false,
     });
     let threadRow = canonical.thread || null;
     if (!threadRow) {
@@ -5585,12 +5582,11 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
         const pid = await resolveMessagesPatientDbId(String(opts.patientId));
         if (pid) {
           const ctxCid = String(opts?.contextClinicId || "").trim();
-          const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
-          const canonical = await resolveCanonicalChatThread({
-            patientId: pid,
-            clinicIdHint: UUID_RE.test(ctxCid) ? ctxCid : null,
+          const { getCanonicalThread } = require("./lib/canonicalChatThread");
+          const canonical = await getCanonicalThread(pid, UUID_RE.test(ctxCid) ? ctxCid : null, {
             source: "socket_emit_fallback",
-            allowPatientClinicFallback: false,
+            repairClinic: false,
+            ensureProfile: false,
           });
           if (canonical.threadId && UUID_RE.test(canonical.threadId)) {
             tid = canonical.threadId;
@@ -45571,15 +45567,15 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
 
   let thread = null;
   try {
-    const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+    const { getCanonicalThread } = require("./lib/canonicalChatThread");
     const matchKeys = await getDoctorMatchKeysForReq(req);
-    const canonical = await resolveCanonicalChatThread({
-      patientId: resolvedPatientId,
-      clinicIdHint: clinicId || null,
+    const canonical = await getCanonicalThread(resolvedPatientId, clinicId || null, {
       doctorMatchKeys: matchKeys,
       assignedDoctorId: req.doctorId || req?.doctor?.id || null,
       source: "doctor_messaging_access",
-      allowPatientClinicFallback: false,
+      repairClinic: true,
+      ensureProfile: true,
+      archiveCrossClinicStale: true,
     });
     if (canonical.thread) thread = canonical.thread;
     else if (clinicId && UUID_RE.test(clinicId)) {
@@ -49551,6 +49547,23 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       const messages = Array.isArray(existing.messages) ? existing.messages : [];
       return res.json({ ok: true, messages });
     }
+
+    let timelinePrep = null;
+    try {
+      const { prepareDoctorConversationAccess } = require("./lib/doctorConversationTimeline");
+      const clinicHint = String(
+        req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
+      ).trim();
+      timelinePrep = await prepareDoctorConversationAccess(pid, clinicHint, {
+        source: "doctor_get_messages",
+      });
+      if (timelinePrep?.threadId && UUID_RE.test(String(timelinePrep.threadId))) {
+        access.threadId = String(timelinePrep.threadId).trim();
+      }
+    } catch (prepErr) {
+      console.warn("[DOCTOR patient messages] canonical prep:", prepErr?.message || prepErr);
+    }
+
     const wantFull = String(req.query?.full || "").trim() === "1";
     const limRaw = req.query?.limit ?? req.query?.tail;
     const limN = limRaw != null && String(limRaw).trim() !== "" ? parseInt(String(limRaw), 10) : NaN;
@@ -49573,9 +49586,12 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     let offerArchived = [];
     let coordinatorArchived = [];
-    const doctorClinicForOffers = await resolveDoctorPatientMessagesClinicId(pid, req, {
-      threadId: access.threadId || null,
-    });
+    const doctorClinicForOffers =
+      timelinePrep?.clinicId && UUID_RE.test(String(timelinePrep.clinicId))
+        ? String(timelinePrep.clinicId).trim()
+        : await resolveDoctorPatientMessagesClinicId(pid, req, {
+            threadId: access.threadId || timelinePrep?.threadId || null,
+          });
     try {
       offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
         offerLimit: wantFull ? 400 : 180,
@@ -49603,33 +49619,29 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
     }
 
     if (
-      access.threadId &&
-      UUID_RE.test(String(doctorClinicForOffers || "")) &&
-      coordinatorArchived.length === 0 &&
-      offerArchived.length === 0 &&
-      clinicMessages.length < 3
+      timelinePrep?.backfill?.inserted > 0 ||
+      (UUID_RE.test(String(doctorClinicForOffers || "")) &&
+        coordinatorArchived.length === 0 &&
+        (timelinePrep?.coordinatorMessageCount || 0) > 0 &&
+        clinicMessages.length < (timelinePrep?.coordinatorMessageCount || 0))
     ) {
       try {
-        const { backfillLeadCoordinatorHistoryToPatientMessages } = require("./lib/backfillLeadChatMirror");
-        const bf = await backfillLeadCoordinatorHistoryToPatientMessages(pid, doctorClinicForOffers);
-        if (bf.inserted > 0) {
-          const refetch = await fetchMessagesFromSupabase(pid, msgOpts);
-          if (!refetch.error) {
-            clinicMessages = refetch.preMapped
-              ? Array.isArray(refetch.data)
-                ? refetch.data
-                : []
-              : (refetch.data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
-          }
-          coordinatorArchived = await fetchDoctorLeadCoordinatorLegacyMessages(pid, doctorClinicForOffers);
-          offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
-            offerLimit: wantFull ? 400 : 180,
-            clinicId: doctorClinicForOffers,
-            createCoordinationOfferIfMissing: true,
-          });
+        const refetch = await fetchMessagesFromSupabase(pid, msgOpts);
+        if (!refetch.error) {
+          clinicMessages = refetch.preMapped
+            ? Array.isArray(refetch.data)
+              ? refetch.data
+              : []
+            : (refetch.data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
         }
+        coordinatorArchived = await fetchDoctorLeadCoordinatorLegacyMessages(pid, doctorClinicForOffers);
+        offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
+          offerLimit: wantFull ? 400 : 180,
+          clinicId: doctorClinicForOffers,
+          createCoordinationOfferIfMissing: true,
+        });
       } catch (bfErr) {
-        console.warn("[DOCTOR patient messages] lead backfill:", bfErr?.message || bfErr);
+        console.warn("[DOCTOR patient messages] post-backfill refetch:", bfErr?.message || bfErr);
       }
     }
 
@@ -49867,12 +49879,11 @@ async function resolveDoctorOutboundThreadId(patientId, clinicId, accessThreadId
   if (accessTid) return accessTid;
   if (!isSupabaseEnabled() || !UUID_RE.test(String(patientId || ""))) return null;
   try {
-    const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
-    const canonical = await resolveCanonicalChatThread({
-      patientId,
-      clinicIdHint: clinicId,
+    const { getCanonicalThread } = require("./lib/canonicalChatThread");
+    const canonical = await getCanonicalThread(patientId, clinicId, {
       source: "outbound_message",
-      allowPatientClinicFallback: false,
+      repairClinic: false,
+      ensureProfile: false,
     });
     if (canonical.threadId && UUID_RE.test(canonical.threadId)) {
       return canonical.threadId;
@@ -56748,6 +56759,24 @@ async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req, opts
   }
 
   try {
+    const reqCid = String(
+      req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
+    ).trim();
+    const { getCanonicalThread } = require("./lib/canonicalChatThread");
+    const canonical = await getCanonicalThread(pid, UUID_RE.test(reqCid) ? reqCid : null, {
+      source: "doctor_messages_clinic_resolve",
+      repairClinic: false,
+      ensureProfile: false,
+      archiveCrossClinicStale: false,
+    });
+    if (canonical.clinicId && UUID_RE.test(canonical.clinicId)) {
+      return String(canonical.clinicId).trim();
+    }
+  } catch (_) {
+    /* optional */
+  }
+
+  try {
     const threadIdHint = String(opts.threadId || opts.accessThreadId || "").trim();
     if (UUID_RE.test(threadIdHint)) {
       const { data: thrById } = await supabase
@@ -62463,20 +62492,23 @@ try {
         let effectiveThreadId = threadIdJoined;
         let effectiveThreadRow = threadRow;
         try {
-          const { resolveCanonicalChatThread } = require("./lib/canonicalChatThread");
+          const { getCanonicalThread } = require("./lib/canonicalChatThread");
           const doctorUuidForCanon = role === "DOCTOR" ? String(decoded.doctorId || decoded.id || "").trim() : "";
           const doctorMatchKeys =
             role === "DOCTOR" && Array.isArray(socket.data?._doctorMatchKeys)
               ? socket.data._doctorMatchKeys
               : [];
-          const canonical = await resolveCanonicalChatThread({
-            patientId: threadPid,
-            clinicIdHint: String(threadRow?.clinic_id || decoded.clinicId || "").trim() || null,
-            assignedDoctorId: doctorUuidForCanon || null,
-            doctorMatchKeys,
-            source: "socket_join",
-            allowPatientClinicFallback: false,
-          });
+          const canonical = await getCanonicalThread(
+            threadPid,
+            String(threadRow?.clinic_id || decoded.clinicId || "").trim() || null,
+            {
+              assignedDoctorId: doctorUuidForCanon || null,
+              doctorMatchKeys,
+              source: "socket_join",
+              repairClinic: false,
+              ensureProfile: false,
+            },
+          );
           if (
             canonical.threadId &&
             UUID_RE.test(canonical.threadId) &&
