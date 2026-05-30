@@ -49473,7 +49473,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       const supabasePublic = supabaseErrorPublic(error);
       return res.status(500).json({ ok: false, error: "messages_fetch_failed", supabase: supabasePublic });
     }
-    const clinicMessages = preMapped
+    let clinicMessages = preMapped
       ? Array.isArray(data)
         ? data
         : []
@@ -49481,7 +49481,9 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     let offerArchived = [];
     let coordinatorArchived = [];
-    const doctorClinicForOffers = await resolveDoctorPatientMessagesClinicId(pid, req);
+    const doctorClinicForOffers = await resolveDoctorPatientMessagesClinicId(pid, req, {
+      threadId: access.threadId || null,
+    });
     try {
       offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
         offerLimit: wantFull ? 400 : 180,
@@ -49508,6 +49510,37 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       console.warn("[DOCTOR patient messages] coordinator merge:", coordMergeErr?.message || coordMergeErr);
     }
 
+    if (
+      access.threadId &&
+      UUID_RE.test(String(doctorClinicForOffers || "")) &&
+      coordinatorArchived.length === 0 &&
+      offerArchived.length === 0 &&
+      clinicMessages.length < 3
+    ) {
+      try {
+        const { backfillLeadCoordinatorHistoryToPatientMessages } = require("./lib/backfillLeadChatMirror");
+        const bf = await backfillLeadCoordinatorHistoryToPatientMessages(pid, doctorClinicForOffers);
+        if (bf.inserted > 0) {
+          const refetch = await fetchMessagesFromSupabase(pid, msgOpts);
+          if (!refetch.error) {
+            clinicMessages = refetch.preMapped
+              ? Array.isArray(refetch.data)
+                ? refetch.data
+                : []
+              : (refetch.data || []).map(mapDbMessageToLegacyMessage).filter(Boolean);
+          }
+          coordinatorArchived = await fetchDoctorLeadCoordinatorLegacyMessages(pid, doctorClinicForOffers);
+          offerArchived = await fetchDoctorPatientArchivedOfferMessages(pid, req, {
+            offerLimit: wantFull ? 400 : 180,
+            clinicId: doctorClinicForOffers,
+            createCoordinationOfferIfMissing: true,
+          });
+        }
+      } catch (bfErr) {
+        console.warn("[DOCTOR patient messages] lead backfill:", bfErr?.message || bfErr);
+      }
+    }
+
     let messages = mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived, coordinatorArchived);
     const tailN = wantFull
       ? null
@@ -49520,10 +49553,24 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     let leadAssignment = null;
     try {
-      const doctorClinicQP = String(req.query?.clinic_id || req.query?.clinicId || "").trim();
-      leadAssignment = await fetchLeadThreadAssignmentForPatient(pid, doctorClinicQP || req.clinicId || "");
+      leadAssignment = await fetchLeadThreadAssignmentForPatient(
+        pid,
+        doctorClinicForOffers || String(req.query?.clinic_id || req.query?.clinicId || req.clinicId || "").trim(),
+      );
     } catch (_) {
       leadAssignment = null;
+    }
+
+    if (String(process.env.DOCTOR_CHAT_DEBUG || "").trim() === "1") {
+      console.log("[DOCTOR patient messages] unified fetch", {
+        patientId: pid.slice(0, 8),
+        clinicForArchive: doctorClinicForOffers ? String(doctorClinicForOffers).slice(0, 8) : null,
+        accessThreadId: access.threadId ? String(access.threadId).slice(0, 8) : null,
+        patientMessages: clinicMessages.length,
+        offerArchiveCount: offerArchived.length,
+        coordinatorArchiveCount: coordinatorArchived.length,
+        mergedCount: messages.length,
+      });
     }
 
     return res.json({
@@ -56494,37 +56541,63 @@ function coordinatorChannelRoleToLegacyFrom(messageRole) {
   return "CLINIC";
 }
 
-async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req) {
-  let cid = String(
-    req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
-  ).trim();
-  if (UUID_RE.test(cid)) return cid;
-  if (!isSupabaseEnabled() || !UUID_RE.test(String(resolvedPatientId || ""))) return "";
+async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req, opts = {}) {
+  const pid = String(resolvedPatientId || "").trim();
+  if (!isSupabaseEnabled() || !UUID_RE.test(pid)) {
+    return String(
+      req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
+    ).trim();
+  }
+
   try {
-    const doctorId = String(req.doctorId || req?.doctor?.id || "").trim();
-    if (UUID_RE.test(doctorId)) {
-      const { data: assignedThread } = await supabase
+    const threadIdHint = String(opts.threadId || opts.accessThreadId || "").trim();
+    if (UUID_RE.test(threadIdHint)) {
+      const { data: thrById } = await supabase
         .from("patient_chat_threads")
         .select("clinic_id")
-        .eq("patient_id", resolvedPatientId)
-        .eq("assigned_doctor_id", doctorId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
+        .eq("id", threadIdHint)
         .maybeSingle();
-      const assignedClinic = String(assignedThread?.clinic_id || "").trim();
-      if (UUID_RE.test(assignedClinic)) return assignedClinic;
+      const fromThreadId = String(thrById?.clinic_id || "").trim();
+      if (UUID_RE.test(fromThreadId)) return fromThreadId;
     }
+
+    const matchKeys = await getDoctorMatchKeysForReq(req);
+    const keyList = [...new Set(matchKeys.map((k) => String(k || "").trim()).filter((k) => UUID_RE.test(k)))];
+    if (keyList.length) {
+      const { data: assignedThreads } = await supabase
+        .from("patient_chat_threads")
+        .select("clinic_id, updated_at")
+        .eq("patient_id", pid)
+        .in("assigned_doctor_id", keyList)
+        .order("updated_at", { ascending: false })
+        .limit(4);
+      for (const row of assignedThreads || []) {
+        const ac = String(row?.clinic_id || "").trim();
+        if (UUID_RE.test(ac)) return ac;
+      }
+    }
+  } catch (_) {
+    /* optional */
+  }
+
+  let cid = String(req.query?.clinic_id || req.query?.clinicId || "").trim();
+  if (UUID_RE.test(cid)) return cid;
+
+  cid = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
+  if (UUID_RE.test(cid)) return cid;
+
+  try {
     const { data: prow } = await supabase
       .from("patients")
       .select("clinic_id")
-      .eq("id", resolvedPatientId)
+      .eq("id", pid)
       .maybeSingle();
     cid = String(prow?.clinic_id || "").trim();
     if (UUID_RE.test(cid)) return cid;
     const { data: threads } = await supabase
       .from("patient_chat_threads")
       .select("clinic_id")
-      .eq("patient_id", resolvedPatientId)
+      .eq("patient_id", pid)
       .order("updated_at", { ascending: false })
       .limit(4);
     for (const row of threads || []) {
@@ -56534,7 +56607,7 @@ async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req) {
     const { data: leadProfiles } = await supabase
       .from("ai_coordinator_lead_profiles")
       .select("clinic_id")
-      .eq("patient_id", resolvedPatientId)
+      .eq("patient_id", pid)
       .order("updated_at", { ascending: false })
       .limit(6);
     for (const row of leadProfiles || []) {
@@ -56544,7 +56617,7 @@ async function resolveDoctorPatientMessagesClinicId(resolvedPatientId, req) {
     const { data: identities } = await supabase
       .from("channel_identities")
       .select("clinic_id")
-      .eq("patient_id", resolvedPatientId)
+      .eq("patient_id", pid)
       .order("updated_at", { ascending: false })
       .limit(4);
     for (const row of identities || []) {
@@ -56590,6 +56663,10 @@ async function resolveCoordinatorProfileIdsForDoctorPatient(resolvedPatientId, c
   for (const row of byPatientRows || []) {
     const pc = String(row?.clinic_id || "").trim();
     if (!UUID_RE.test(cid) || !pc || pc === cid) addProfileRow(row);
+  }
+
+  if (!profileIds.size) {
+    for (const row of byPatientRows || []) addProfileRow(row);
   }
 
   if (UUID_RE.test(cid)) {
