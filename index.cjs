@@ -1112,28 +1112,36 @@ function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
   });
 }
 
-/** patient_messages inbound rows must survive tail truncation vs coordinator archive flood. */
-function ensureClinicPatientMessagesInThread(clinicMessages, mergedMessages, tailN) {
+/** patient_messages + messages table rows always win over coordinator archive in tail truncation. */
+function ensureCanonicalClinicMessagesInThread(clinicMessages, mergedMessages, tailN) {
   if (!tailN || tailN <= 0) return mergedMessages || [];
-  const patients = (clinicMessages || []).filter(
-    (m) => String(m?.from || "").toUpperCase() === "PATIENT" && String(m?.text || "").trim(),
-  );
-  const byId = new Map();
-  for (const m of mergedMessages || []) {
+  const canonical = (clinicMessages || []).filter((m) => {
     const id = String(m?.id || "").trim();
-    if (id) byId.set(id, m);
+    if (!id) return false;
+    const text = String(m?.text || "").trim();
+    const from = String(m?.from || "").toUpperCase();
+    return text.length > 0 || from === "PATIENT";
+  });
+  if (!canonical.length) return (mergedMessages || []).slice(-tailN);
+
+  const canonicalIds = new Set(canonical.map((m) => String(m.id)));
+  const archiveOnly = (mergedMessages || []).filter((m) => !canonicalIds.has(String(m?.id || "")));
+  const sortedCanonical = [...canonical].sort(
+    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
+  );
+  const sortedArchive = [...archiveOnly].sort(
+    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
+  );
+
+  if (sortedCanonical.length >= tailN) {
+    return sortedCanonical.slice(-tailN);
   }
-  for (const p of patients) {
-    const id = String(p?.id || "").trim();
-    if (id) byId.set(id, p);
-  }
-  return [...byId.values()]
-    .sort((a, b) => {
-      const ta = Number(a?.createdAt) || 0;
-      const tb = Number(b?.createdAt) || 0;
-      return ta - tb;
-    })
-    .slice(-tailN);
+
+  const archiveBudget = tailN - sortedCanonical.length;
+  const archiveTail = sortedArchive.slice(-archiveBudget);
+  return [...archiveTail, ...sortedCanonical].sort(
+    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
+  );
 }
 
 /** patient_messages row → same legacy shape as admin-chat / mobile */
@@ -1157,21 +1165,23 @@ function mapPatientMessagesRowToLegacy(row) {
   }
   let bodyText = extractMessageTextFromDbRow(row);
   const actorKind = String(row.actor_kind || row.message_source || "").toLowerCase();
-  let inboundKind =
-    role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
-  if (
-    actorKind === "clinic_ai" ||
-    role === "assistant" ||
-    role === "ai" ||
-    role === "clinic"
-  ) {
-    inboundKind = "clinic";
-  } else if (role === "doctor" && actorKind === "clinic_ai") {
-    inboundKind = "clinic";
-  }
   const senderNameTrim = String(
     row.sender_name || row.senderName || row.doctor_name || row.sender_display_name || "",
   ).trim();
+  let inboundKind =
+    role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
+  if (actorKind === "clinic_ai" || role === "assistant" || role === "ai") {
+    inboundKind = "clinic";
+  } else if (role === "doctor") {
+    inboundKind = "doctor";
+  } else if (
+    role === "clinic" &&
+    senderNameTrim &&
+    !actorKind.includes("ai") &&
+    !["care team", "ai", "klinik"].includes(senderNameTrim.toLowerCase())
+  ) {
+    inboundKind = "doctor";
+  }
 
   const outPm = {
     id: String(row.message_id || row.id || ""),
@@ -49920,7 +49930,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
         ? Math.min(500, Math.max(80, limN))
         : 180;
     if (tailN && messages.length > tailN) {
-      messages = ensureClinicPatientMessagesInThread(clinicMessages, messages, tailN);
+      messages = ensureCanonicalClinicMessagesInThread(clinicMessages, messages, tailN);
     }
 
     let leadAssignment = null;
@@ -49972,6 +49982,13 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       unifiedThread: true,
       offerArchiveCount: offerArchived.length,
       coordinatorArchiveCount: coordinatorArchived.length,
+      clinicMessageCount: clinicMessages.length,
+      patientInboundCount: messages.filter(
+        (m) => String(m?.from || "").toUpperCase() === "PATIENT",
+      ).length,
+      doctorOutboundCount: messages.filter(
+        (m) => String(m?.inboundKind || "").toLowerCase() === "doctor",
+      ).length,
     });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
