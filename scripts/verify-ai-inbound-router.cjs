@@ -58,11 +58,19 @@ const fixed = repairWhatsappNumberAskOnChannel(badReply, "whatsapp", "+447726948
 assert.ok(!/payla[sş]abilir misiniz/i.test(fixed) || /devam edelim/i.test(fixed));
 assert.ok(!/whatsapp numaran[ıi]z[ıi].*payla[sş]/i.test(fixed));
 
-// Parallel generation mutex
-assert.strictEqual(beginAiReplyGeneration(pid, cid), true);
-assert.strictEqual(beginAiReplyGeneration(pid, cid), false);
+// Parallel generation mutex — substantive second message defers, burst fragments suppress
+const slot1 = beginAiReplyGeneration(pid, cid, "Cuma randevu istiyorum");
+assert.strictEqual(slot1.allowed, true);
+const slot2 = beginAiReplyGeneration(pid, cid, "Ama saat belirtmediniz");
+assert.strictEqual(slot2.allowed, false);
+assert.strictEqual(slot2.deferRetry, true);
+const slot3 = beginAiReplyGeneration(pid, cid, "İstiyorum", {
+  recentTurns: [{ role: "patient", text: schedulingLine }],
+});
+assert.strictEqual(slot3.allowed, false);
+assert.strictEqual(slot3.deferRetry, false);
 endAiReplyGeneration(pid, cid);
-assert.strictEqual(beginAiReplyGeneration(pid, cid), true);
+assert.strictEqual(beginAiReplyGeneration(pid, cid, "follow up").allowed, true);
 endAiReplyGeneration(pid, cid);
 
 assert.ok(CONTINUATION_FRAGMENT_RE.test("istiyorum"));
