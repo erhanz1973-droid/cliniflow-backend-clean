@@ -5572,6 +5572,32 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
       try {
         const before = await chatSocketIo.in(roomId).fetchSockets();
         console.log("[chat-socket] ROOM SIZE (before emit)", roomId, before.length);
+        let assignedDoctorId = null;
+        if (isSupabaseEnabled() && UUID_RE.test(tid)) {
+          const { data: thrRow } = await supabase
+            .from("patient_chat_threads")
+            .select("assigned_doctor_id")
+            .eq("id", tid)
+            .maybeSingle();
+          assignedDoctorId = thrRow?.assigned_doctor_id
+            ? String(thrRow.assigned_doctor_id).slice(0, 8)
+            : null;
+        }
+        const connectedDoctorIds = before
+          .map((s) => String(s.data?.doctorId || "").trim())
+          .filter(Boolean)
+          .map((d) => d.slice(0, 8));
+        console.log(
+          "[DOCTOR_CHAT_EMIT]",
+          JSON.stringify({
+            thread_id: tid.slice(0, 8),
+            room_id: roomId,
+            room_size: before.length,
+            assigned_doctor_id: assignedDoctorId,
+            connected_doctor_ids: connectedDoctorIds,
+            message_id: result.legacyMessageId,
+          }),
+        );
       } catch (_) {
         /* non-fatal */
       }
@@ -49561,6 +49587,24 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       leadAssignment = null;
     }
 
+    const accessThreadId =
+      access.threadId && UUID_RE.test(String(access.threadId).trim())
+        ? String(access.threadId).trim()
+        : null;
+    if (accessThreadId) {
+      if (leadAssignment && typeof leadAssignment === "object") {
+        if (!leadAssignment.threadId) leadAssignment.threadId = accessThreadId;
+        if (!leadAssignment.clinicId && doctorClinicForOffers) {
+          leadAssignment.clinicId = doctorClinicForOffers;
+        }
+      } else {
+        leadAssignment = {
+          threadId: accessThreadId,
+          clinicId: doctorClinicForOffers || null,
+        };
+      }
+    }
+
     if (String(process.env.DOCTOR_CHAT_DEBUG || "").trim() === "1") {
       console.log("[DOCTOR patient messages] unified fetch", {
         patientId: pid.slice(0, 8),
@@ -49577,6 +49621,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       ok: true,
       messages,
       leadAssignment,
+      accessThreadId: accessThreadId || leadAssignment?.threadId || null,
       canonicalPatientId: pid,
       unifiedThread: true,
       offerArchiveCount: offerArchived.length,
@@ -49584,6 +49629,83 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
     });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/admin/thread-room-status — Socket.IO room diagnostics for assigned doctor visibility
+app.get("/api/admin/thread-room-status", requireAdminAuth, async (req, res) => {
+  try {
+    const threadId = String(req.query?.threadId || req.query?.thread_id || "").trim();
+    if (!UUID_RE.test(threadId)) {
+      return res.status(400).json({ ok: false, error: "thread_id_required" });
+    }
+    const roomId = threadChatRoomId(threadId);
+    if (!roomId) {
+      return res.status(400).json({ ok: false, error: "invalid_thread_id" });
+    }
+
+    let threadRow = null;
+    if (isSupabaseEnabled()) {
+      const { data } = await supabase
+        .from("patient_chat_threads")
+        .select("id, patient_id, clinic_id, assigned_doctor_id, status, is_lead")
+        .eq("id", threadId)
+        .maybeSingle();
+      threadRow = data;
+    }
+
+    let connectedSocketCount = 0;
+    const connectedDoctorIds = [];
+    const connectedPatientIds = [];
+    const socketSummaries = [];
+
+    if (chatSocketIo) {
+      try {
+        const sockets = await chatSocketIo.in(roomId).fetchSockets();
+        connectedSocketCount = sockets.length;
+        for (const s of sockets) {
+          const role = String(s.data?.role || "").toUpperCase();
+          const docId = String(s.data?.doctorId || "").trim();
+          const patId = String(s.data?.patientId || "").trim();
+          if (role === "DOCTOR" && docId && !connectedDoctorIds.includes(docId)) {
+            connectedDoctorIds.push(docId);
+          }
+          if (role === "PATIENT" && patId && !connectedPatientIds.includes(patId)) {
+            connectedPatientIds.push(patId);
+          }
+          socketSummaries.push({
+            socket_id: s.id,
+            role: role || null,
+            doctor_id: docId ? docId.slice(0, 8) : null,
+            patient_id: patId ? patId.slice(0, 8) : null,
+            thread_id: String(s.data?.threadId || "").slice(0, 8) || null,
+          });
+        }
+      } catch (roomErr) {
+        console.warn("[thread-room-status] fetchSockets:", roomErr?.message || roomErr);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      thread_id: threadId,
+      room_id: roomId,
+      patient_id: threadRow?.patient_id ? String(threadRow.patient_id) : null,
+      clinic_id: threadRow?.clinic_id ? String(threadRow.clinic_id) : null,
+      assigned_doctor_id: threadRow?.assigned_doctor_id
+        ? String(threadRow.assigned_doctor_id)
+        : null,
+      thread_status: threadRow?.status || null,
+      thread_is_lead: threadRow?.is_lead === true,
+      connected_socket_count: connectedSocketCount,
+      connected_doctor_ids: connectedDoctorIds,
+      connected_patient_ids: connectedPatientIds,
+      socket_io_ready: !!chatSocketIo,
+      sockets: socketSummaries,
+    });
+  } catch (e) {
+    console.error("[thread-room-status]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
@@ -62245,14 +62367,66 @@ try {
         }
 
         if (!authorized) {
+          console.log(
+            "[DOCTOR_CHAT_JOIN]",
+            JSON.stringify({
+              join_success: false,
+              reason: "forbidden",
+              doctor_id: role === "DOCTOR" ? String(decoded.doctorId || decoded.id || "").slice(0, 8) : null,
+              patient_id: threadPid ? threadPid.slice(0, 8) : null,
+              thread_id: threadIdJoined.slice(0, 8),
+              assigned_doctor_id: String(threadRow?.assigned_doctor_id || "").slice(0, 8) || null,
+              clinic_id: String(threadRow?.clinic_id || "").slice(0, 8) || null,
+            }),
+          );
           socket.emit("chat_join_error", { error: "forbidden" });
           if (typeof ack === "function") ack({ ok: false, error: "forbidden" });
           return;
         }
 
         await socket.join(roomId);
+        if (role === "DOCTOR") {
+          const doctorUuid = String(decoded.doctorId || decoded.id || "").trim();
+          socket.data.role = "DOCTOR";
+          socket.data.doctorId = doctorUuid;
+          socket.data.patientId = threadPid;
+          socket.data.threadId = threadIdJoined;
+          socket.data.clinicId = String(threadRow?.clinic_id || decoded.clinicId || "").trim() || null;
+        } else if (role === "PATIENT") {
+          socket.data.role = "PATIENT";
+          socket.data.patientId = threadPid;
+          socket.data.threadId = threadIdJoined;
+        }
         const joinedAt = Date.now();
         const joinLatencyMs = joinedAt - joinReceivedAt;
+        let roomSizeAfterJoin = null;
+        try {
+          const fetched = await chatSocketIo.in(roomId).fetchSockets();
+          roomSizeAfterJoin = fetched.length;
+          console.log(
+            "[chat-socket] ROOM_SIZE",
+            roomId,
+            fetched.length,
+            "(2 = patient + doctor in same Socket.IO room)",
+          );
+        } catch (roomErr) {
+          console.warn("[chat-socket] fetchSockets:", roomErr?.message || roomErr);
+        }
+        console.log(
+          "[DOCTOR_CHAT_JOIN]",
+          JSON.stringify({
+            join_success: true,
+            doctor_id:
+              role === "DOCTOR" ? String(decoded.doctorId || decoded.id || "").slice(0, 8) : null,
+            patient_id: threadPid ? threadPid.slice(0, 8) : null,
+            thread_id: threadIdJoined.slice(0, 8),
+            assigned_doctor_id: String(threadRow?.assigned_doctor_id || "").slice(0, 8) || null,
+            clinic_id: String(threadRow?.clinic_id || "").slice(0, 8) || null,
+            room_id: roomId,
+            room_size: roomSizeAfterJoin,
+            join_latency_ms: joinLatencyMs,
+          }),
+        );
         console.log(
           "[chat-socket] JOINED ROOM",
           roomId,
@@ -62261,19 +62435,6 @@ try {
           "latency_ms_since_join_received",
           joinLatencyMs,
         );
-        void (async () => {
-          try {
-            const fetched = await chatSocketIo.in(roomId).fetchSockets();
-            console.log(
-              "[chat-socket] ROOM_SIZE",
-              roomId,
-              fetched.length,
-              "(2 = patient + doctor in same Socket.IO room)",
-            );
-          } catch (roomErr) {
-            console.warn("[chat-socket] fetchSockets:", roomErr?.message || roomErr);
-          }
-        })();
         if (typeof ack === "function") {
           ack({
             ok: true,
