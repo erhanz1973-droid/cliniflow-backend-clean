@@ -1151,33 +1151,27 @@ function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
 /** patient_messages + messages table rows always win over coordinator archive in tail truncation. */
 function ensureCanonicalClinicMessagesInThread(clinicMessages, mergedMessages, tailN) {
   if (!tailN || tailN <= 0) return mergedMessages || [];
-  const canonical = (clinicMessages || []).filter((m) => {
+  const sorted = [...(mergedMessages || [])].sort(
+    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
+  );
+  if (sorted.length <= tailN) return sorted;
+
+  const canonicalById = new Map();
+  for (const m of clinicMessages || []) {
     const id = String(m?.id || "").trim();
-    if (!id) return false;
-    const text = String(m?.text || "").trim();
-    const from = String(m?.from || "").toUpperCase();
-    return text.length > 0 || from === "PATIENT";
-  });
-  if (!canonical.length) return (mergedMessages || []).slice(-tailN);
-
-  const canonicalIds = new Set(canonical.map((m) => String(m.id)));
-  const archiveOnly = (mergedMessages || []).filter((m) => !canonicalIds.has(String(m?.id || "")));
-  const sortedCanonical = [...canonical].sort(
-    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
-  );
-  const sortedArchive = [...archiveOnly].sort(
-    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
-  );
-
-  if (sortedCanonical.length >= tailN) {
-    return sortedCanonical.slice(-tailN);
+    if (id) canonicalById.set(id, m);
   }
 
-  const archiveBudget = tailN - sortedCanonical.length;
-  const archiveTail = sortedArchive.slice(-archiveBudget);
-  return [...archiveTail, ...sortedCanonical].sort(
-    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
-  );
+  let tail = sorted.slice(-tailN);
+  const windowStart = tail.length ? Number(tail[0]?.createdAt) || 0 : 0;
+  for (const [id, m] of canonicalById) {
+    const ts = Number(m?.createdAt) || 0;
+    if (ts >= windowStart && !tail.some((t) => String(t?.id) === id)) {
+      tail.push(m);
+    }
+  }
+  tail.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
+  return tail.length > tailN ? tail.slice(-tailN) : tail;
 }
 
 /** patient_messages row → same legacy shape as admin-chat / mobile */
@@ -50014,6 +50008,11 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       });
     }
 
+    const newestMessageAt = messages.reduce(
+      (max, m) => Math.max(max, Number(m?.createdAt) || 0),
+      0,
+    );
+
     return res.json({
       ok: true,
       messages,
@@ -50030,6 +50029,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       doctorOutboundCount: messages.filter(
         (m) => String(m?.inboundKind || "").toLowerCase() === "doctor",
       ).length,
+      newestMessageAt: newestMessageAt > 0 ? newestMessageAt : null,
     });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
@@ -57359,8 +57359,8 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
       .from("ai_coordinator_channel_messages")
       .select(sel)
       .eq("profile_id", profileId)
-      .order("created_at", { ascending: true })
-      .limit(300);
+      .order("created_at", { ascending: false })
+      .limit(400);
     chErr = error;
     if (!error) {
       chRows = data;
@@ -57372,7 +57372,11 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
   if (chErr) {
     console.warn("[DOCTOR patient messages] channel_messages:", chErr.message);
   }
-  for (const row of chRows || []) {
+  const orderedCh = [...(chRows || [])].sort(
+    (a, b) =>
+      normalizeMessageCreatedAtMs(a.created_at) - normalizeMessageCreatedAtMs(b.created_at),
+  );
+  for (const row of orderedCh) {
     const role = String(row.message_role || "").toLowerCase();
     const from = coordinatorChannelRoleToLegacyFrom(role);
     const text = String(row.body || "").trim();
@@ -57416,8 +57420,8 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
       .from("ai_coordinator_lead_events")
       .select(sel)
       .eq("profile_id", profileId)
-      .order("created_at", { ascending: true })
-      .limit(200);
+      .order("created_at", { ascending: false })
+      .limit(250);
     if (!error) {
       evRows = data;
       break;
@@ -57428,7 +57432,11 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
       break;
     }
   }
-  for (const row of evRows || []) {
+  const orderedEv = [...(evRows || [])].sort(
+    (a, b) =>
+      normalizeMessageCreatedAtMs(a.created_at) - normalizeMessageCreatedAtMs(b.created_at),
+  );
+  for (const row of orderedEv) {
     const at = normalizeMessageCreatedAtMs(row.created_at);
     const pm = String(row.patient_message || "").trim();
     const ar = String(row.ai_reply || "").trim();
