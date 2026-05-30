@@ -1546,7 +1546,11 @@ async function fetchLeadThreadAssignmentForPatient(patientResolvedId, clinicIdFr
 
   if (!thr?.id && !threadDisp && !primDisp) return null;
 
-  const threadId = thr?.id && UUID_RE.test(String(thr.id).trim()) ? String(thr.id).trim() : null;
+  const threadId =
+    (thr?.id && UUID_RE.test(String(thr.id).trim()) ? String(thr.id).trim() : null) ||
+    (canonical.threadId && UUID_RE.test(String(canonical.threadId).trim())
+      ? String(canonical.threadId).trim()
+      : null);
 
   const out = {
     clinicId,
@@ -45479,7 +45483,20 @@ async function doctorMessagingAccessFastPath(resolvedPatientId, req) {
   try {
     const data = await loadPrimaryPatientChatThreadRow(pid, clinicId);
     if (data && (await doctorAssignedOnThreadMatchesReq(data, req))) {
-      return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
+      const tid = await resolveDoctorChatThreadId(
+        pid,
+        clinicId,
+        data?.id ? String(data.id) : null,
+        req,
+        "doctor_send_fast_path",
+      );
+      return {
+        ok: true,
+        status: 200,
+        patientId: pid,
+        threadId: tid,
+        clinicId,
+      };
     }
     const matchKeys = await getDoctorMatchKeysForReq(req);
     const op = await resolveMessagingDoctorForPatientClinic(pid, clinicId);
@@ -45489,7 +45506,20 @@ async function doctorMessagingAccessFastPath(resolvedPatientId, req) {
         doctorIdsMatchFast(op, doctorUuid) ||
         (await compareDoctorIds(op, doctorUuid)))
     ) {
-      return { ok: true, status: 200, patientId: pid, threadId: data?.id ? String(data.id) : null };
+      const tid = await resolveDoctorChatThreadId(
+        pid,
+        clinicId,
+        data?.id ? String(data.id) : null,
+        req,
+        "doctor_send_fast_path",
+      );
+      return {
+        ok: true,
+        status: 200,
+        patientId: pid,
+        threadId: tid,
+        clinicId,
+      };
     }
   } catch (_) {
     return null;
@@ -45599,6 +45629,29 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
         ? clinicId
         : null;
 
+  async function finalizeAccess(accessPayload, source) {
+    if (!accessPayload?.ok) return accessPayload;
+    const cid =
+      accessPayload.clinicId ||
+      accessClinicId ||
+      (UUID_RE.test(clinicId) ? clinicId : null);
+    const priorTid =
+      accessPayload.threadId || (thread?.id ? String(thread.id) : null) || null;
+    const tid = await resolveDoctorChatThreadId(
+      resolvedPatientId,
+      cid,
+      priorTid,
+      req,
+      source || "doctor_messaging_access",
+    );
+    return {
+      ...accessPayload,
+      patientId: resolvedPatientId,
+      clinicId: cid || accessPayload.clinicId || null,
+      threadId: tid,
+    };
+  }
+
   if (forSend && thread) {
     const life = String(thread.lifecycle_status || "").trim().toLowerCase();
     if (life === "archived" || thread.archived_at != null) {
@@ -45615,18 +45668,24 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
   if (forSend && thread && !thread.assigned_doctor_id && clinicId && UUID_RE.test(clinicId)) {
     const eligible = await getEligibleDoctorIdForInboundAssignment(req.doctorId, clinicId);
     if (eligible) {
-      return { ok: true, patientId: resolvedPatientId, clinicId: accessClinicId };
+      return await finalizeAccess(
+        { ok: true, patientId: resolvedPatientId, clinicId: accessClinicId },
+        forSend ? "doctor_send_access" : "doctor_messaging_access",
+      );
     }
   }
 
   if (thread?.assigned_doctor_id) {
     if (await doctorAssignedOnThreadMatchesReq(thread, req)) {
-      return {
-        ok: true,
-        patientId: resolvedPatientId,
-        threadId: thread?.id ? String(thread.id) : null,
-        clinicId: accessClinicId,
-      };
+      return await finalizeAccess(
+        {
+          ok: true,
+          patientId: resolvedPatientId,
+          threadId: thread?.id ? String(thread.id) : null,
+          clinicId: accessClinicId,
+        },
+        forSend ? "doctor_send_access" : "doctor_messaging_access",
+      );
     }
   } else if (thread?.is_lead) {
     // Lead thread exists but unassigned — treatment-team lane below
@@ -45643,24 +45702,30 @@ async function resolveDoctorPatientMessagingAccess(patientIdParam, req, opts) {
     if (!rowCid || rowCid === clinicId) {
       const eligible = await getEligibleDoctorIdForInboundAssignment(req.doctorId, clinicId);
       if (eligible) {
-        return {
-          ok: true,
-          patientId: resolvedPatientId,
-          threadId: thread?.id ? String(thread.id) : null,
-          clinicId: accessClinicId,
-        };
+        return await finalizeAccess(
+          {
+            ok: true,
+            patientId: resolvedPatientId,
+            threadId: thread?.id ? String(thread.id) : null,
+            clinicId: accessClinicId,
+          },
+          forSend ? "doctor_send_access" : "doctor_messaging_access",
+        );
       }
     }
   }
 
   const teamAllowed = await doctorHasTreatmentTeamAccessToPatientId(resolvedPatientId, req);
   if (teamAllowed) {
-    return {
-      ok: true,
-      patientId: resolvedPatientId,
-      clinicId: accessClinicId,
-      threadId: thread?.id ? String(thread.id) : null,
-    };
+    return await finalizeAccess(
+      {
+        ok: true,
+        patientId: resolvedPatientId,
+        clinicId: accessClinicId,
+        threadId: thread?.id ? String(thread.id) : null,
+      },
+      forSend ? "doctor_send_access" : "doctor_messaging_access",
+    );
   }
 
   if (forSend && thread?.assigned_doctor_id) {
@@ -49547,6 +49612,21 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       return res.status(access.status).json({ ok: false, error: access.error });
     }
     const pid = access.patientId;
+    const clinicForThread =
+      access.clinicId ||
+      String(
+        req.query?.clinic_id || req.query?.clinicId || req.clinicId || req?.doctor?.clinic_id || "",
+      ).trim();
+    const resolvedThreadId = await resolveDoctorChatThreadId(
+      pid,
+      clinicForThread,
+      access.threadId,
+      req,
+      "doctor_fetch_messages",
+    );
+    if (resolvedThreadId) {
+      access.threadId = resolvedThreadId;
+    }
     if (!isSupabaseEnabled()) {
       if (!canUseFileFallback()) return res.status(500).json(supabaseDisabledPayload("messages"));
       const CHAT_DIR = path.join(DATA_DIR, "chats");
@@ -49851,32 +49931,136 @@ function logDoctorOutboundThread(payload) {
   }
 }
 
-/** Resolve patient_chat_threads.id for outbound doctor reply + socket room. */
-async function resolveDoctorOutboundThreadId(patientId, clinicId, accessThreadId) {
-  const accessTid =
+/**
+ * @param {Record<string, unknown>} payload
+ */
+function logDoctorThreadResolution(payload) {
+  try {
+    console.log(
+      "[DOCTOR_THREAD_RESOLUTION]",
+      JSON.stringify({
+        at: new Date().toISOString(),
+        patient_id: payload.patient_id
+          ? String(payload.patient_id).slice(0, 8)
+          : payload.patientId
+            ? String(payload.patientId).slice(0, 8)
+            : null,
+        clinic_id: payload.clinic_id
+          ? String(payload.clinic_id).slice(0, 8)
+          : payload.clinicId
+            ? String(payload.clinicId).slice(0, 8)
+            : null,
+        resolved_thread_id: payload.resolved_thread_id
+          ? String(payload.resolved_thread_id).slice(0, 8)
+          : payload.resolvedThreadId
+            ? String(payload.resolvedThreadId).slice(0, 8)
+            : null,
+        prior_thread_id: payload.prior_thread_id
+          ? String(payload.prior_thread_id).slice(0, 8)
+          : payload.priorThreadId
+            ? String(payload.priorThreadId).slice(0, 8)
+            : null,
+        source: payload.source || null,
+        reason: payload.reason || null,
+      }),
+    );
+  } catch (e) {
+    console.warn("[DOCTOR_THREAD_RESOLUTION] log_failed:", e?.message || e);
+  }
+}
+
+/**
+ * Single resolver for doctor chat thread identity — used by GET, POST, socket join.
+ * @param {string} patientId
+ * @param {string|null|undefined} clinicId
+ * @param {string|null|undefined} accessThreadId
+ * @param {import('express').Request|null|undefined} req
+ * @param {string} source
+ */
+async function resolveDoctorChatThreadId(patientId, clinicId, accessThreadId, req, source) {
+  const pid = String(patientId || "").trim();
+  const cid = String(clinicId || "").trim();
+  const prior =
     accessThreadId && UUID_RE.test(String(accessThreadId).trim())
       ? String(accessThreadId).trim()
       : null;
-  if (accessTid) return accessTid;
-  if (!isSupabaseEnabled() || !UUID_RE.test(String(patientId || ""))) return null;
+  if (prior) {
+    logDoctorThreadResolution({
+      patient_id: pid,
+      clinic_id: cid || null,
+      resolved_thread_id: prior,
+      prior_thread_id: prior,
+      source,
+      reason: "access_thread_id",
+    });
+    return prior;
+  }
+  if (!isSupabaseEnabled() || !UUID_RE.test(pid)) {
+    logDoctorThreadResolution({
+      patient_id: pid,
+      clinic_id: cid || null,
+      resolved_thread_id: null,
+      prior_thread_id: null,
+      source,
+      reason: "invalid_ids",
+    });
+    return null;
+  }
+  let resolved = null;
+  let reason = "none";
   try {
     const { getCanonicalThread, CANONICAL_THREAD_READ_OPTS } = require("./lib/canonicalChatThread");
-    const canonical = await getCanonicalThread(patientId, clinicId, {
+    const matchKeys = req ? await getDoctorMatchKeysForReq(req) : [];
+    const canonical = await getCanonicalThread(pid, UUID_RE.test(cid) ? cid : null, {
       ...CANONICAL_THREAD_READ_OPTS,
-      source: "outbound_message",
+      doctorMatchKeys: matchKeys,
+      assignedDoctorId: req?.doctorId || req?.doctor?.id || null,
+      source: source || "doctor_chat_thread",
     });
     if (canonical.threadId && UUID_RE.test(canonical.threadId)) {
-      return canonical.threadId;
+      resolved = String(canonical.threadId).trim();
+      reason = canonical.reason || "getCanonicalThread";
     }
-    let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", patientId);
-    const cid = String(clinicId || "").trim();
-    if (UUID_RE.test(cid)) tq = tq.eq("clinic_id", cid);
-    const { data: thr } = await tq.order("updated_at", { ascending: false }).limit(1).maybeSingle();
-    if (thr?.id && UUID_RE.test(String(thr.id).trim())) return String(thr.id).trim();
-  } catch (_) {
-    /* optional */
+    if (!resolved && UUID_RE.test(cid)) {
+      const row = await loadPrimaryPatientChatThreadRow(pid, cid);
+      if (row?.id && UUID_RE.test(String(row.id))) {
+        resolved = String(row.id).trim();
+        reason = "loadPrimaryPatientChatThreadRow";
+      }
+    }
+    if (!resolved) {
+      let tq = supabase.from("patient_chat_threads").select("id").eq("patient_id", pid);
+      if (UUID_RE.test(cid)) tq = tq.eq("clinic_id", cid);
+      const { data: thr } = await tq.order("updated_at", { ascending: false }).limit(1).maybeSingle();
+      if (thr?.id && UUID_RE.test(String(thr.id).trim())) {
+        resolved = String(thr.id).trim();
+        reason = "patient_chat_threads_fallback";
+      }
+    }
+  } catch (e) {
+    reason = "error";
+    console.warn("[resolveDoctorChatThreadId]", e?.message || e);
   }
-  return null;
+  logDoctorThreadResolution({
+    patient_id: pid,
+    clinic_id: cid || null,
+    resolved_thread_id: resolved,
+    prior_thread_id: null,
+    source,
+    reason,
+  });
+  return resolved;
+}
+
+/** @deprecated use resolveDoctorChatThreadId */
+async function resolveDoctorOutboundThreadId(patientId, clinicId, accessThreadId, req) {
+  return resolveDoctorChatThreadId(
+    patientId,
+    clinicId,
+    accessThreadId,
+    req,
+    "outbound_message",
+  );
 }
 
 app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
@@ -49908,10 +50092,12 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     const msgType = String(req.body?.type || "text").trim() || "text";
     const doctorUuid = String(req.doctor?.id || "").trim();
     const clinicIdForInsert = String(req.clinicId || req?.doctor?.clinic_id || "").trim();
-    const threadIdForInsert = await resolveDoctorOutboundThreadId(
+    const threadIdForInsert = await resolveDoctorChatThreadId(
       patientId,
       clinicIdForInsert,
       access.threadId,
+      req,
+      "doctor_send_message",
     );
     logDoctorOutboundThread({
       patient_id: patientId,
@@ -50073,10 +50259,12 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
     }).catch((e) =>
       console.warn("[POST /api/messages/:id/reply] coordinator mirror (fallback):", e?.message || e),
     );
-    const fallbackThreadId = await resolveDoctorOutboundThreadId(
+    const fallbackThreadId = await resolveDoctorChatThreadId(
       patientId,
       clinicIdForInsert,
       access.threadId,
+      req,
+      "doctor_send_message_fallback",
     );
     logDoctorOutboundThread({
       patient_id: patientId,
