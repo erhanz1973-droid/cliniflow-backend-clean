@@ -902,6 +902,42 @@ function filterRenderableLegacyMessages(list) {
   return (Array.isArray(list) ? list : []).filter(isRenderableLegacyMessage);
 }
 
+/** Collapse patient_messages + messages mirror rows that share the same legacy id (prefer PATIENT / doctor inbound). */
+function dedupeLegacyMessagesById(list) {
+  const byId = new Map();
+  for (const m of Array.isArray(list) ? list : []) {
+    const id = String(m?.id || "").trim();
+    if (!id) continue;
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, m);
+      continue;
+    }
+    const fromM = String(m?.from || "").toUpperCase();
+    const fromE = String(existing?.from || "").toUpperCase();
+    if (fromM === "PATIENT" && fromE !== "PATIENT") {
+      byId.set(id, m);
+      continue;
+    }
+    if (fromE === "PATIENT") continue;
+    const kindM = String(m?.inboundKind || "").toLowerCase();
+    const kindE = String(existing?.inboundKind || "").toLowerCase();
+    if (kindM === "doctor" && kindE !== "doctor") {
+      byId.set(id, m);
+      continue;
+    }
+    if (kindE === "doctor") continue;
+    const tM = Number(m?.createdAt) || 0;
+    const tE = Number(existing?.createdAt) || 0;
+    const lenM = String(m?.text || "").length;
+    const lenE = String(existing?.text || "").length;
+    if (lenM > lenE || (lenM === lenE && tM >= tE)) byId.set(id, m);
+  }
+  return [...byId.values()].sort(
+    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
+  );
+}
+
 /** Map `patient_messages` + backfill mirror rows that lost body text on insert (offer_message_id → offer_messages). */
 async function mapAndHydratePatientMessagesRows(pmRows) {
   if (!Array.isArray(pmRows)) return [];
@@ -1490,8 +1526,10 @@ async function fetchMessagesFromSupabase(patientId, opts = {}) {
 
     const legacyPm = await mapAndHydratePatientMessagesRows(pmRows);
     const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
-    const mergedDesc = filterRenderableLegacyMessages(
-      [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(b) - mergedSortKey(a)),
+    const mergedDesc = dedupeLegacyMessagesById(
+      filterRenderableLegacyMessages(
+        [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(b) - mergedSortKey(a)),
+      ),
     );
     const sliced = mergedDesc.slice(0, tailCap);
     const merged = sliced.sort((a, b) => mergedSortKey(a) - mergedSortKey(b));
@@ -1526,8 +1564,10 @@ async function fetchMessagesFromSupabase(patientId, opts = {}) {
 
   const legacyPm = await mapAndHydratePatientMessagesRows(pmRows);
   const legacyMg = mgRows.map(mapDbMessageToLegacyMessage).filter(Boolean);
-  const merged = filterRenderableLegacyMessages(
-    [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(a) - mergedSortKey(b)),
+  const merged = dedupeLegacyMessagesById(
+    filterRenderableLegacyMessages(
+      [...legacyPm, ...legacyMg].sort((a, b) => mergedSortKey(a) - mergedSortKey(b)),
+    ),
   );
 
   if (merged.length > 0) {
@@ -49932,6 +49972,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
     if (tailN && messages.length > tailN) {
       messages = ensureCanonicalClinicMessagesInThread(clinicMessages, messages, tailN);
     }
+    messages = dedupeLegacyMessagesById(messages);
 
     let leadAssignment = null;
     try {
@@ -57548,6 +57589,25 @@ function mergeUnifiedDoctorPatientMessages(...sources) {
     for (const m of list || []) {
       const id = String(m?.id || "").trim();
       if (!id) continue;
+      const existing = byId.get(id);
+      if (!existing) {
+        byId.set(id, m);
+        continue;
+      }
+      const fromM = String(m?.from || "").toUpperCase();
+      const fromE = String(existing?.from || "").toUpperCase();
+      if (fromM === "PATIENT" && fromE !== "PATIENT") {
+        byId.set(id, m);
+        continue;
+      }
+      if (fromE === "PATIENT") continue;
+      const kindM = String(m?.inboundKind || "").toLowerCase();
+      const kindE = String(existing?.inboundKind || "").toLowerCase();
+      if (kindM === "doctor" && kindE !== "doctor") {
+        byId.set(id, m);
+        continue;
+      }
+      if (kindE === "doctor") continue;
       byId.set(id, m);
     }
   }
