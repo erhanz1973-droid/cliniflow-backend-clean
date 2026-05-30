@@ -5175,6 +5175,60 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
   });
 }
 
+async function resolveChatThreadRowForDoctorPush(resolvedPatientId, clinicUuid, assignedDoctorId) {
+  const pid = String(resolvedPatientId || "").trim();
+  if (!UUID_RE.test(pid) || !isSupabaseEnabled()) return null;
+
+  const keys = [];
+  const did = String(assignedDoctorId || "").trim();
+  if (did) {
+    try {
+      const resolvedKeys = await doctorKeysForUuidFkInQuery([did]);
+      for (const k of resolvedKeys || []) {
+        const s = String(k || "").trim();
+        if (s && !keys.includes(s)) keys.push(s);
+      }
+      if (did && !keys.includes(did)) keys.push(did);
+    } catch (_) {
+      if (did) keys.push(did);
+    }
+  }
+
+  if (keys.length) {
+    try {
+      const { data: assignedRows } = await supabase
+        .from("patient_chat_threads")
+        .select(
+          "id, is_lead, assigned_doctor_id, status, clinic_id, lifecycle_status, archived_at, updated_at, assigned_at",
+        )
+        .eq("patient_id", pid)
+        .in("assigned_doctor_id", keys)
+        .order("updated_at", { ascending: false })
+        .limit(8);
+      if (Array.isArray(assignedRows) && assignedRows.length) {
+        const cid = String(clinicUuid || "").trim();
+        let best = assignedRows[0];
+        for (const row of assignedRows) {
+          if (UUID_RE.test(cid) && String(row?.clinic_id || "").trim() === cid) {
+            best = row;
+            break;
+          }
+          best = pickBetterPatientChatThreadRow(best, row);
+        }
+        return best;
+      }
+    } catch (_) {
+      /* fallback below */
+    }
+  }
+
+  const cid = String(clinicUuid || "").trim();
+  if (UUID_RE.test(cid)) {
+    return loadPrimaryPatientChatThreadRow(pid, cid);
+  }
+  return null;
+}
+
 async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, previewRaw, composerOpts) {
   if (!isSupabaseEnabled() || !resolvedPatientId || !clinicUuid || !UUID_RE.test(clinicUuid)) return;
   const pv = truncateChatPreview(previewRaw || "");
@@ -5189,7 +5243,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         ? String(composerOpts.messageComposerId).trim()
         : "";
   try {
-    const threadRow = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicUuid);
+    let threadRow = await loadPrimaryPatientChatThreadRow(resolvedPatientId, clinicUuid);
     const assignedRaw = String(threadRow?.assigned_doctor_id || "").trim();
     let did =
       (await resolveOwnerUuidForExpoPush("doctor", assignedRaw)) ||
@@ -5218,7 +5272,9 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       return;
     }
 
-    const threadId = String(threadRow?.id || "").trim();
+    const threadForPush =
+      (await resolveChatThreadRowForDoctorPush(resolvedPatientId, clinicUuid, did)) || threadRow;
+    const threadId = String(threadForPush?.id || "").trim();
 
     if (isChatPushPipelineLogEnabled()) {
       pushLog.info("chat_push.notify_doctor_assigned", {
@@ -5227,6 +5283,7 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
         doctorId: did,
         threadId: UUID_RE.test(threadId) ? threadId : null,
         senderRole: role,
+        threadClinicId: threadRow?.clinic_id ? String(threadRow.clinic_id).slice(0, 8) : null,
       });
     }
 
@@ -5352,6 +5409,16 @@ async function resolveClinicIdForChatPush(opts, insertedRow) {
   try {
     const resolved = await resolveMessagesPatientDbId(String(pidSrc));
     if (!resolved) return null;
+    try {
+      const operational = await resolveOperationalClinicId(resolved, {
+        contextClinicId: UUID_RE.test(ctx) ? ctx : null,
+        logLabel: "chat_push_clinic",
+      });
+      const opCid = String(operational?.clinicId || "").trim();
+      if (UUID_RE.test(opCid)) return opCid;
+    } catch (_) {
+      /* continue */
+    }
     const inbound = await resolveClinicIdForInbound(resolved, {
       contextClinicId: UUID_RE.test(ctx) ? ctx : null,
       contextClinicCode:
