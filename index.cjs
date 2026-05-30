@@ -1124,11 +1124,13 @@ function resolveLegacyMessageSenderFromRow(row) {
 /** Drop coordinator mirror legs already present in patient_messages / messages (frees tail budget for inbound patient rows). */
 function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
   const clinicFp = new Set();
+  let clinicMaxTs = 0;
   for (const m of clinicMessages || []) {
     const t = String(m?.text || "").trim();
+    const ts = Number(m?.createdAt) || 0;
+    if (ts > clinicMaxTs) clinicMaxTs = ts;
     if (!t) continue;
     const from = String(m?.from || "").toUpperCase();
-    const ts = Number(m?.createdAt) || 0;
     const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
     clinicFp.add(`${from}|${t.slice(0, 200)}|${bucket}`);
   }
@@ -1136,16 +1138,44 @@ function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
   return (coordinatorArchived || []).filter((m) => {
     const t = String(m?.text || "").trim();
     if (!t) return true;
+    const ts = Number(m?.createdAt) || 0;
+    // WhatsApp/AI rows after the newest patient_messages leg are often coordinator-only.
+    if (clinicMaxTs > 0 && ts > clinicMaxTs) return true;
     const isCoord =
       m?.sourceCoordinatorEvent === true ||
       m?.sourceCoordinatorChannel === true ||
       String(m?.id || "").startsWith("coord_");
     if (!isCoord) return true;
     const from = String(m?.from || "").toUpperCase();
-    const ts = Number(m?.createdAt) || 0;
     const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
     return !clinicFp.has(`${from}|${t.slice(0, 200)}|${bucket}`);
   });
+}
+
+/** Pin coordinator-only legs newer than the clinic table tail (not yet mirrored to patient_messages). */
+function mergeCoordinatorNewerThanClinic(clinicMessages, coordinatorArchived, mergedMessages) {
+  const clinicMaxTs = (clinicMessages || []).reduce(
+    (max, m) => Math.max(max, Number(m?.createdAt) || 0),
+    0,
+  );
+  if (!clinicMaxTs || !Array.isArray(coordinatorArchived) || !coordinatorArchived.length) {
+    return mergedMessages || [];
+  }
+  const mergedIds = new Set(
+    (mergedMessages || []).map((m) => String(m?.id || "").trim()).filter(Boolean),
+  );
+  const extra = [];
+  for (const m of coordinatorArchived) {
+    const id = String(m?.id || "").trim();
+    const ts = Number(m?.createdAt) || 0;
+    if (!id || ts <= clinicMaxTs || mergedIds.has(id)) continue;
+    mergedIds.add(id);
+    extra.push(m);
+  }
+  if (!extra.length) return mergedMessages || [];
+  return [...(mergedMessages || []), ...extra].sort(
+    (a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0),
+  );
 }
 
 /** patient_messages + messages table rows always win over coordinator archive in tail truncation. */
@@ -49958,6 +49988,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
 
     coordinatorArchived = dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived);
     let messages = mergeUnifiedDoctorPatientMessages(clinicMessages, offerArchived, coordinatorArchived);
+    messages = mergeCoordinatorNewerThanClinic(clinicMessages, coordinatorArchived, messages);
     const tailN = wantFull
       ? null
       : Number.isFinite(limN) && limN > 0
@@ -50030,6 +50061,8 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
         (m) => String(m?.inboundKind || "").toLowerCase() === "doctor",
       ).length,
       newestMessageAt: newestMessageAt > 0 ? newestMessageAt : null,
+      clinicNewestAt:
+        clinicMessages.reduce((max, m) => Math.max(max, Number(m?.createdAt) || 0), 0) || null,
     });
   } catch (e) {
     console.error("[DOCTOR patient messages]", e?.message || e);
