@@ -3785,6 +3785,53 @@ const EXPO_EXPERIENCE_ID_PATIENT = String(
   process.env.EXPO_EXPERIENCE_ID_PATIENT || "@erhanzorlu/clinifly-new",
 ).trim();
 
+/**
+ * Unified Clinifly (@erhanzorlu/clinifly-new) registers both patient + doctor tokens under the same
+ * experience id — only block standalone doctor-clean tokens on patient pushes.
+ */
+function isCrossAppExpoExperienceForPush(experienceId, ownerKind) {
+  const e = String(experienceId || "").trim();
+  if (!e) return false;
+  if (ownerKind === "patient" && e === EXPO_EXPERIENCE_ID_DOCTOR) return true;
+  return false;
+}
+
+/** Per-token Android channel + sound (background/killed delivery depends on channel + sound match). */
+function resolveExpoPushPresentationForRow(row, ownerKind) {
+  const exp = String(row?.expoExperienceId || "").trim();
+  const platform = String(row?.platform || "").trim().toLowerCase();
+  const isIos = platform === "ios";
+  const isAndroid = platform === "android";
+  const useSound = row?.messageSound !== false;
+
+  if (exp === EXPO_EXPERIENCE_ID_DOCTOR) {
+    return {
+      channelId: "default",
+      sound: useSound ? "default" : null,
+      allowRichImage: isAndroid,
+    };
+  }
+
+  const channelId =
+    String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "chat_alerts").trim() || "chat_alerts";
+  const iosSound = String(process.env.EXPO_PUSH_SOUND_IOS || "default").trim() || "default";
+  const androidSound =
+    String(process.env.EXPO_PUSH_SOUND || "notification.wav").trim() || "notification.wav";
+  const sound = !useSound
+    ? null
+    : isIos
+      ? iosSound
+      : isAndroid
+        ? androidSound
+        : iosSound;
+
+  return {
+    channelId,
+    sound,
+    allowRichImage: isAndroid,
+  };
+}
+
 function normalizeExpoExperienceIdFromRegisterBody(body, kind) {
   const raw =
     body?.expoExperienceId ??
@@ -3796,15 +3843,13 @@ function normalizeExpoExperienceIdFromRegisterBody(body, kind) {
   return kind === "doctor" ? EXPO_EXPERIENCE_ID_DOCTOR : EXPO_EXPERIENCE_ID_PATIENT;
 }
 
-/** Drop cross-app tokens for this owner_kind; split remainder so each Expo batch is single-experience. */
+/** Drop wrong-app tokens; split remainder so each Expo batch is single-experience. */
 function partitionExpoTokenRowsForPushBatch(rows, kind, deliveryCtx) {
   const ctx = deliveryCtx && typeof deliveryCtx === "object" ? deliveryCtx : {};
-  const other = kind === "doctor" ? EXPO_EXPERIENCE_ID_PATIENT : EXPO_EXPERIENCE_ID_DOCTOR;
-  const safe = rows.filter((r) => {
-    const e = String(r.expoExperienceId || "").trim();
-    if (e && e === other) return false;
-    return true;
-  });
+  const ownerKind = kind === "doctor" ? "doctor" : "patient";
+  const safe = rows.filter(
+    (r) => !isCrossAppExpoExperienceForPush(r?.expoExperienceId, ownerKind),
+  );
   const dropped = rows.length - safe.length;
   if (dropped > 0) {
     const log =
@@ -3819,7 +3864,6 @@ function partitionExpoTokenRowsForPushBatch(rows, kind, deliveryCtx) {
         doctorId: kind === "doctor" ? ctx.recipientId || null : null,
         patientId: kind === "patient" ? ctx.recipientId || null : null,
         threadId: ctx.threadId ?? null,
-        experiencePartition: other,
         droppedCrossExperience: dropped,
         message: `kept_after_filter=${safe.length}`,
       });
@@ -4551,22 +4595,23 @@ async function loadExpoTokenRows(kind, uuidRaw) {
     try {
       const { data, error } = await supabase
         .from("push_tokens")
-        .select("expo_push_token, message_sound, expo_experience_id")
+        .select("expo_push_token, message_sound, expo_experience_id, platform")
         .eq("owner_kind", kind === "doctor" ? "doctor" : "patient")
         .eq("owner_id", u);
       if (!error && Array.isArray(data) && data.length) {
-        const otherExp = kind === "doctor" ? EXPO_EXPERIENCE_ID_PATIENT : EXPO_EXPERIENCE_ID_DOCTOR;
+        const ownerKind = kind === "doctor" ? "doctor" : "patient";
         return data
           .map((r) => ({
             token: String(r.expo_push_token || "").trim(),
             messageSound: r.message_sound !== false,
+            platform: r.platform != null ? String(r.platform).trim() : "",
             expoExperienceId:
               r.expo_experience_id != null && String(r.expo_experience_id).trim()
                 ? String(r.expo_experience_id).trim()
                 : "",
           }))
           .filter((r) => r.token.startsWith("ExponentPushToken["))
-          .filter((r) => !r.expoExperienceId || r.expoExperienceId !== otherExp);
+          .filter((r) => !isCrossAppExpoExperienceForPush(r.expoExperienceId, ownerKind));
       }
     } catch (e) {
       console.warn("[push_tokens] load:", e?.message || e);
@@ -4780,11 +4825,6 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
       }),
     );
   }
-  /** Align with cliniflow-app lib/chatPushSound.ts + app.json expo-notifications sounds. */
-  const channelId =
-    String(process.env.EXPO_ANDROID_PUSH_CHANNEL_ID || "chat_alerts").trim() || "chat_alerts";
-  const soundWhenOn =
-    String(process.env.EXPO_PUSH_SOUND || "notification.wav").trim() || "notification.wav";
   const pushLogoUrl = resolveChatPushNotificationImageUrl();
   const rowGroups = partitionExpoTokenRowsForPushBatch(rows, kind, {
     traceId: expoTrace?.traceId,
@@ -4828,7 +4868,7 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     const partitionExperienceKey = String(groupRows[0]?.expoExperienceId || "").trim() || "_legacy_null_";
     const messages = [];
     for (const row of groupRows) {
-      const useSound = row.messageSound !== false;
+      const presentation = resolveExpoPushPresentationForRow(row, kind);
       const dataPayload = expoPushStringData({
         ...payloadBase,
         unreadBadge: badgeNum,
@@ -4838,12 +4878,12 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
         title: t,
         body: b,
         priority: "high",
-        channelId,
+        channelId: presentation.channelId,
         data: dataPayload,
       };
-      if (useSound) msg.sound = soundWhenOn;
+      if (presentation.sound) msg.sound = presentation.sound;
       msg.badge = badgeNum;
-      if (String(pushLogoUrl).startsWith("https://")) {
+      if (presentation.allowRichImage && String(pushLogoUrl).startsWith("https://")) {
         msg.image = pushLogoUrl;
         msg.richContent = { image: pushLogoUrl };
       }
@@ -4859,7 +4899,8 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
             unreadCountInput: badge == null ? null : Number(badge),
             computedUnreadBadge: badgeNum,
             dataUnreadBadgeString: dataPayload.unreadBadge,
-            messageSoundRow: useSound,
+            messageSoundRow: row.messageSound !== false,
+            platform: String(row.platform || "").trim() || null,
             title: t,
             expoExperiencePartition:
               String(row.expoExperienceId || "").trim() || "_legacy_null_",
