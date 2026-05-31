@@ -47862,11 +47862,55 @@ app.get("/admin/doctor-list", requireAdminAuth, async (req, res) => {
       return { ...d, public_profile, name: displayName || d.name || null };
     });
 
-    console.log("[DOCTOR LIST] Loaded doctors:", doctors.length);
-    res.json({ ok: true, doctors });
+    let profileCompletenessById = new Map();
+    if (clinicId && UUID_RE.test(String(clinicId))) {
+      try {
+        const { fetchDoctorProfileCompletenessForClinic } = require("./lib/doctorProfilesForAi");
+        const summary = await fetchDoctorProfileCompletenessForClinic(String(clinicId));
+        profileCompletenessById = new Map(
+          (summary.doctors || []).map((row) => [String(row.id), row]),
+        );
+      } catch (pcErr) {
+        console.warn("[DOCTOR LIST] profile completeness:", pcErr?.message || pcErr);
+      }
+    }
+
+    const doctorsWithCompleteness = doctors.map((d) => {
+      const pc = profileCompletenessById.get(String(d.id));
+      return {
+        ...d,
+        profileCompleteness: pc
+          ? {
+              specialtyMissing: pc.specialtyMissing,
+              languagesMissing: pc.languagesMissing,
+              proceduresMissing: pc.proceduresMissing,
+              missingFields: pc.missingFields,
+              complete: pc.complete,
+            }
+          : null,
+      };
+    });
+
+    console.log("[DOCTOR LIST] Loaded doctors:", doctorsWithCompleteness.length);
+    res.json({ ok: true, doctors: doctorsWithCompleteness });
   } catch (error) {
     console.error("[DOCTOR LIST] Error:", error);
     res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/admin/doctor-profile-completeness", requireAdminAuth, async (req, res) => {
+  try {
+    const clinicId = req.clinicId || null;
+    if (!clinicId || !UUID_RE.test(String(clinicId))) {
+      return res.status(400).json({ ok: false, error: "clinic_id_required" });
+    }
+    const { fetchDoctorProfileCompletenessForClinic } = require("./lib/doctorProfilesForAi");
+    const summary = await fetchDoctorProfileCompletenessForClinic(String(clinicId));
+    return res.json({ ok: true, ...summary });
+  } catch (error) {
+    console.error("[GET /api/admin/doctor-profile-completeness]", error?.message || error);
+    return res.status(500).json({ ok: false, error: error?.message || "server_error" });
   }
 });
 
