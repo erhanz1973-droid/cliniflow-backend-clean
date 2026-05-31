@@ -50382,6 +50382,7 @@ app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (
       return res.status(result.status || 500).json({
         ok: false,
         error: result.error || "translate_failed",
+        ...(result.detail ? { detail: result.detail } : {}),
       });
     }
 
