@@ -688,6 +688,28 @@ test("select_slot: not-in-list reply mentions date", () => {
   assert.ok(reply.includes("3 Haziran"));
 });
 
+test("post-booking: Tamam after app info is not stale booking action", () => {
+  const flags = {
+    canonicalBooking: {
+      bookingId: "appt-1",
+      date: "2026-06-03",
+      time: "11:45",
+      status: "scheduled",
+      startAt: "2026-06-03T08:45:00.000Z",
+      label: "3 Haziran 11:45",
+    },
+    activeAppointment: {
+      id: "appt-1",
+      startAt: "2026-06-03T08:45:00.000Z",
+      status: "scheduled",
+    },
+    aiBooking: { stage: "booked", bookingActive: false },
+  };
+  assert.strictEqual(isPostBookingStaleActionMessage("Tamam", flags, []), false);
+  assert.strictEqual(isBookingConfirmationYesMessage("Tamam"), false);
+  assert.ok(isBookingConfirmationYesMessage("Tamam", { pendingConfirmation: true }));
+});
+
 test("select_slot: resend intent re-lists offered slots", () => {
   assert.ok(patientRequestsSlotListResend("Hangi seçenekler tekrar atarmisiniz"));
   const slots = [
