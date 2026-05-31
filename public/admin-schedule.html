@@ -50,81 +50,48 @@
     .appt-card {
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 4px 6px;
+      padding: 6px 8px;
       margin-bottom: 2px;
       background: var(--card);
-      font-size: 12px;
+      font-size: 11px;
       min-height: 34px;
       transition: box-shadow .15s;
       display: flex;
-      flex-direction: row;
-      align-items: center;
-      gap: 6px;
-      line-height: 1.15;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 3px;
+      line-height: 1.25;
     }
     .appt-card:hover { box-shadow: var(--shadow-md); }
     .appt-card:last-child { margin-bottom:0; }
-    .appt-time {
-      width: 44px;
-      flex: 0 0 44px;
+    .appt-time-line {
       font-weight: 700;
       color: #0f172a;
-      font-size: 10px;
-      white-space: nowrap;
-      text-align: center;
+      font-size: 13px;
+      letter-spacing: -0.01em;
     }
-    .appt-main {
-      min-width: 0;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
+    .appt-status-line { display: flex; }
+    .appt-detail-line {
+      color: #475569;
+      font-size: 11px;
+      word-break: break-word;
+      white-space: normal;
     }
-    .appt-row-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      min-width: 0;
-    }
-    .appt-patient {
-      font-weight: 700;
-      color: #0f172a;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-width: 0;
-      font-size: 12px;
-    }
-    .appt-meta {
-      color: #64748b;
-      min-width: 0;
-    }
-    .appt-meta-text {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      display: block;
+    .appt-doctor-line {
+      color: #334155;
+      font-weight: 600;
       font-size: 11px;
     }
-    .appt-meta-text + .appt-meta-text { margin-top: 1px; }
     .status-badge {
       display: inline-block;
-      padding: 1px 6px;
+      padding: 2px 7px;
       border-radius: 999px;
       font-size: 10px;
       font-weight: 700;
-      flex-shrink: 0;
-      margin: 0;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
     }
-    .appt-chevron {
-      color: #94a3b8;
-      font-size: 12px;
-      line-height: 1;
-      width: 10px;
-      flex: 0 0 10px;
-      text-align: right;
-    }
+    .status-scheduled { background:#dbeafe; color:#1e40af; }
     .status-proposed  { background:#fef3c7; color:#92400e; }
     .status-confirmed { background:#dcfce7; color:#166534; }
     .status-other     { background:#e2e8f0; color:#334155; }
@@ -217,7 +184,7 @@
     // Date.getDay(): 0 = Sunday … 6 = Saturday. Do not subtract 1 from getDay().
     // Week columns: Sun → Sat (Sunday in range: weekStart + 0 .. +6).
     const SLOT_MINUTES = 10;
-    const MIN_VISUAL_CARD_SPAN_SLOTS = 3;
+    const MIN_VISUAL_CARD_SPAN_SLOTS = 4;
     const START_HOUR = 8;
     const END_HOUR = 20;
     const SLOT_START_MINUTES = START_HOUR * 60;
@@ -422,10 +389,31 @@
       return `${sText} - ${eText}`;
     }
 
+    function fmtStartTime(startAt, lang, scheduledLocalTime) {
+      const hm = String(scheduledLocalTime || '').trim();
+      if (/^\d{1,2}:\d{2}$/.test(hm)) {
+        const parts = hm.split(':');
+        return `${parts[0].padStart(2, '0')}:${parts[1]}`;
+      }
+      const L = lang !== undefined ? lang : currentLanguage();
+      const loc = localeMap[L] || 'en-US';
+      const s = safeDate(startAt);
+      if (!s) return '-';
+      return s.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function formatCalendarDoctorLabel(doctor) {
+      const raw = String(doctor || '').trim();
+      if (!raw) return 'Doktor atanmadı';
+      if (/^dr\.?\s/i.test(raw)) return raw;
+      return `Dr. ${raw}`;
+    }
+
     function statusClass(status) {
       const s = String(status || '').toUpperCase();
       if (s === 'PROPOSED') return 'status-proposed';
       if (s === 'CONFIRMED') return 'status-confirmed';
+      if (s === 'SCHEDULED') return 'status-scheduled';
       return 'status-other';
     }
 
@@ -857,30 +845,23 @@
           const cards = (map[key] || []).map((entry) => {
             const item = entry.item;
             if (!entry.isStart) return '';
-            const compactTime = fmtTime(item.startAt, item.endAt, lang, item.scheduledLocalTime);
+            const startTime = fmtStartTime(item.startAt, lang, item.scheduledLocalTime);
             const procLabel = formatCalendarTreatmentLabel(item.treatment);
             const procAndTooth = `${procLabel}` + (item.tooth ? ` • 🦷 ${item.tooth}` : '');
             const chairTxt = normalizeChairText(item.chair) || '';
-            const doctorTxt = String(item.doctor || '').trim() || 'Atanmadı';
+            const doctorLabel = formatCalendarDoctorLabel(item.doctor);
             const patientTxt = formatCalendarPatientLabel(item.patient);
             const visualSpanSlots = Math.max(MIN_VISUAL_CARD_SPAN_SLOTS, Number(entry?.spanSlots) || 1);
             const visualMinHeight = (visualSpanSlots * 34) - 2;
-            const chairPart = chairTxt ? `Koltuk ${chairTxt}` : 'Koltuk atanmadı';
-            const cardTitle = `Hasta: ${patientTxt} | Doktor: ${doctorTxt} | Saat: ${compactTime} | İşlem: ${procAndTooth} | ${chairPart}`;
+            const detailLine = `${procAndTooth}${chairTxt ? ` • Koltuk ${chairTxt}` : ''}`;
+            const statusLabel = String(item.status || 'UNKNOWN').toUpperCase();
+            const cardTitle = `Hasta: ${patientTxt} | ${doctorLabel} | ${startTime} | ${detailLine}`;
             return `
             <div class="appt-card" style="min-height:${visualMinHeight}px;" title="${cardTitle}">
-              <div class="appt-time">${compactTime}</div>
-              <div class="appt-main">
-                <div class="appt-row-top">
-                  <div class="appt-patient">${patientTxt}</div>
-                  <span class="status-badge ${statusClass(item.status)}">${item.status || 'UNKNOWN'}</span>
-                </div>
-                <div class="appt-meta">
-                  <span class="appt-meta-text">${procAndTooth}${chairTxt ? ` • Koltuk ${chairTxt}` : ' • Koltuk —'}</span>
-                  <span class="appt-meta-text">${doctorTxt === 'Atanmadı' ? 'Doktor atanmadı' : `Dr. ${doctorTxt}`}</span>
-                </div>
-              </div>
-              <div class="appt-chevron">›</div>
+              <div class="appt-time-line">${startTime}</div>
+              <div class="appt-status-line"><span class="status-badge ${statusClass(item.status)}">${statusLabel}</span></div>
+              <div class="appt-detail-line">${detailLine}</div>
+              <div class="appt-doctor-line">${doctorLabel}</div>
             </div>
           `;
           }).join('');
