@@ -1327,6 +1327,9 @@ function mapPatientMessagesRowToLegacy(row) {
     if (senderNameTrim) outPm.senderName = senderNameTrim;
     else if (inboundKind === "clinic") outPm.senderName = "Care Team";
   }
+  if (row.translation && typeof row.translation === "object") {
+    outPm.translation = row.translation;
+  }
   return outPm;
 }
 
@@ -36206,15 +36209,26 @@ app.put("/api/doctor/languages", requireDoctorAuth, async (req, res) => {
   }
 });
 
-// Mobil profil dil butonları — UI dili (sunucuda kalıcı kolon yoksa yine de 200)
+// Mobil profil dil butonları — UI dili + chat çeviri hedef dili
 app.patch("/api/doctor/language", requireDoctorAuth, async (req, res) => {
   try {
     const { language } = req.body || {};
     if (language === undefined || language === null || String(language).trim() === "") {
       return res.status(400).json({ ok: false, error: "language_required" });
     }
-    const lang = String(language).trim().slice(0, 12);
-    return res.json({ ok: true, language: lang });
+    const {
+      normalizeDoctorChatLang,
+      persistDoctorPreferredLanguage,
+    } = require("./lib/doctorChatTranslation");
+    const lang = normalizeDoctorChatLang(String(language).trim());
+    const doctorId = String(req.doctorId || req.doctor?.id || "").trim();
+    if (doctorId) {
+      const saved = await persistDoctorPreferredLanguage(doctorId, lang);
+      if (!saved.ok) {
+        console.warn("[PATCH /api/doctor/language] persist:", saved.error);
+      }
+    }
+    return res.json({ ok: true, language: lang, preferredLanguage: lang });
   } catch (err) {
     console.error("[PATCH /api/doctor/language]", err);
     return res.status(500).json({ ok: false, error: "internal_error" });
@@ -48042,6 +48056,9 @@ app.get("/api/doctor/me", requireDoctorAuth, async (req, res) => {
         graduation_year: base?.graduation_year != null ? Number(base.graduation_year) : null,
         role: base?.role || "Dentist",
         public_profile: Boolean(base?.public_profile),
+        preferredLanguage: String(
+          base?.preferred_language || base?.preferredLanguage || "",
+        ).trim() || null,
         specialities,
         languages,
         procedures,
@@ -50264,6 +50281,80 @@ app.post("/api/doctor/patient/:patientId/messages/read", requireDoctorAuth, asyn
     });
   } catch (e) {
     console.error("[DOCTOR patient messages read]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/doctor/messages/:messageId/translate — cache translation on patient_messages.translation
+app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (req, res) => {
+  try {
+    const messageId = String(req.params.messageId || "").trim();
+    if (!messageId) {
+      return res.status(400).json({ ok: false, error: "message_id_required" });
+    }
+    const {
+      translateDoctorChatMessage,
+      resolveDoctorPreferredLanguageFromRequest,
+      normalizeDoctorChatLang,
+    } = require("./lib/doctorChatTranslation");
+
+    let doctorPreferred = "";
+    try {
+      const did = String(req.doctorId || req.doctor?.id || "").trim();
+      if (did && isSupabaseEnabled()) {
+        const { data: drow } = await supabase
+          .from("doctors")
+          .select("preferred_language")
+          .eq("id", did)
+          .maybeSingle();
+        doctorPreferred = String(drow?.preferred_language || "").trim();
+      }
+    } catch (_) {
+      /* optional */
+    }
+
+    const targetLang = normalizeDoctorChatLang(
+      req.body?.targetLanguage ||
+        req.body?.target_language ||
+        req.body?.language ||
+        resolveDoctorPreferredLanguageFromRequest(req, doctorPreferred),
+    );
+
+    const result = await translateDoctorChatMessage({
+      messageId,
+      targetLang,
+      openaiKey: OPENAI_KEY,
+      assertAccess: async (row) => {
+        const patientId = String(row?.patient_id || "").trim();
+        if (!patientId) {
+          return { ok: false, status: 404, error: "patient_not_found" };
+        }
+        const access = await resolveDoctorPatientMessagingAccess(patientId, req);
+        if (!access.ok) {
+          return { ok: false, status: access.status || 403, error: access.error || "forbidden" };
+        }
+        return { ok: true };
+      },
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json({
+        ok: false,
+        error: result.error || "translate_failed",
+      });
+    }
+
+    return res.json({
+      ok: true,
+      messageId: result.messageId,
+      cached: result.cached === true,
+      translation: result.translation,
+      translatedText: result.translation?.translatedText,
+      sourceLanguage: result.translation?.sourceLanguage,
+      targetLanguage: result.translation?.targetLanguage,
+    });
+  } catch (e) {
+    console.error("[DOCTOR message translate]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
