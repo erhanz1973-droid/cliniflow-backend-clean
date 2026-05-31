@@ -48137,6 +48137,7 @@ app.get("/api/doctor/me", requireDoctorAuth, async (req, res) => {
         license_number: base?.license_number != null ? String(base.license_number) : "",
         status: String(base?.status || doctor?.status || ""),
         years_of_experience: base?.experience_years != null ? Number(base.experience_years) : null,
+        experience_years: base?.experience_years != null ? Number(base.experience_years) : null,
         university: base?.university != null ? String(base.university) : "",
         graduation_year: base?.graduation_year != null ? Number(base.graduation_year) : null,
         role: base?.role || "Dentist",
@@ -48280,30 +48281,42 @@ async function resolveSpecialityIdsByNames(names) {
 
 async function syncDoctorLanguagesByNames(docUuid, rawLanguages) {
   const names = parseProfileCommaList(rawLanguages);
-  const { error: delErr } = await supabase.from("doctor_languages").delete().eq("doctor_id", docUuid);
-  if (delErr) throw delErr;
-  if (names.length === 0) return;
+  if (names.length === 0) {
+    const { error: delErr } = await supabase.from("doctor_languages").delete().eq("doctor_id", docUuid);
+    if (delErr && !String(delErr.message || "").includes("does not exist")) throw delErr;
+    return;
+  }
   await ensureLanguagesSeededAdmin().catch(() => {});
   const languageIds = await resolveLanguageIdsByNames(names);
-  if (languageIds.length > 0) {
-    const rows = languageIds.map((language_id) => ({ doctor_id: docUuid, language_id }));
-    const { error: insErr } = await supabase.from("doctor_languages").insert(rows);
-    if (insErr) throw insErr;
+  if (languageIds.length === 0) {
+    console.warn("[syncDoctorLanguages] could not resolve language ids for:", names.join(", "));
+    return;
   }
+  const { error: delErr } = await supabase.from("doctor_languages").delete().eq("doctor_id", docUuid);
+  if (delErr && !String(delErr.message || "").includes("does not exist")) throw delErr;
+  const rows = languageIds.map((language_id) => ({ doctor_id: docUuid, language_id }));
+  const { error: insErr } = await supabase.from("doctor_languages").insert(rows);
+  if (insErr) throw insErr;
 }
 
 async function syncDoctorSpecialitiesByNames(docUuid, rawSpecialties) {
   const names = parseProfileCommaList(rawSpecialties);
-  const { error: delErr } = await supabase.from("doctor_specialities").delete().eq("doctor_id", docUuid);
-  if (delErr) throw delErr;
-  if (names.length === 0) return;
+  if (names.length === 0) {
+    const { error: delErr } = await supabase.from("doctor_specialities").delete().eq("doctor_id", docUuid);
+    if (delErr && !String(delErr.message || "").includes("does not exist")) throw delErr;
+    return;
+  }
   await ensureSpecialitiesSeededAdmin().catch(() => {});
   const specialityIds = await resolveSpecialityIdsByNames(names);
-  if (specialityIds.length > 0) {
-    const rows = specialityIds.map((speciality_id) => ({ doctor_id: docUuid, speciality_id }));
-    const { error: insErr } = await supabase.from("doctor_specialities").insert(rows);
-    if (insErr) throw insErr;
+  if (specialityIds.length === 0) {
+    console.warn("[syncDoctorSpecialities] could not resolve speciality ids for:", names.join(", "));
+    return;
   }
+  const { error: delErr } = await supabase.from("doctor_specialities").delete().eq("doctor_id", docUuid);
+  if (delErr && !String(delErr.message || "").includes("does not exist")) throw delErr;
+  const rows = specialityIds.map((speciality_id) => ({ doctor_id: docUuid, speciality_id }));
+  const { error: insErr } = await supabase.from("doctor_specialities").insert(rows);
+  if (insErr) throw insErr;
 }
 
 async function handleDoctorMeUpdateCliniflow(req, res) {
@@ -48324,6 +48337,18 @@ async function handleDoctorMeUpdateCliniflow(req, res) {
     if (b.graduation_year !== undefined) updatePayload.graduation_year = b.graduation_year;
     if (b.role !== undefined) updatePayload.role = b.role;
     if (b.public_profile !== undefined) updatePayload.public_profile = b.public_profile;
+    if (b.languages !== undefined) {
+      const langNames = parseProfileCommaList(b.languages);
+      updatePayload.languages = langNames.length ? langNames.join(", ") : null;
+    }
+    if (b.specialties !== undefined) {
+      const spNames = parseProfileCommaList(b.specialties);
+      updatePayload.specialties = spNames.length ? spNames.join(", ") : null;
+    }
+    if (b.specialities !== undefined) {
+      const spNames = parseProfileCommaList(b.specialities);
+      updatePayload.specialties = spNames.length ? spNames.join(", ") : null;
+    }
 
     const keys = Object.keys(updatePayload).filter((k) => k !== "updated_at");
     if (keys.length === 0) {
@@ -48350,11 +48375,7 @@ async function handleDoctorMeUpdateCliniflow(req, res) {
         if (b.specialities !== undefined) await syncDoctorSpecialitiesByNames(docUuid, b.specialities);
       } catch (syncErr) {
         console.warn("[PUT/PATCH /api/doctor/me] languages/specialities sync:", syncErr?.message || syncErr);
-        return res.status(500).json({
-          ok: false,
-          error: "profile_lists_sync_failed",
-          message: syncErr?.message || "sync_failed",
-        });
+        // doctors.languages / doctors.specialties columns were saved above — keep ok:true for mobile display.
       }
     }
 
