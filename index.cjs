@@ -1139,6 +1139,12 @@ function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
     const t = String(m?.text || "").trim();
     if (!t) return true;
     const ts = Number(m?.createdAt) || 0;
+    const from = String(m?.from || "").toUpperCase();
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    const fpBase = `${from}|${t.slice(0, 200)}|`;
+    for (const b of [bucket - 1, bucket, bucket + 1]) {
+      if (clinicFp.has(`${fpBase}${b}`)) return false;
+    }
     // WhatsApp/AI rows after the newest patient_messages leg are often coordinator-only.
     if (clinicMaxTs > 0 && ts > clinicMaxTs) return true;
     const isCoord =
@@ -1146,10 +1152,71 @@ function dedupeCoordinatorMirrorLegs(clinicMessages, coordinatorArchived) {
       m?.sourceCoordinatorChannel === true ||
       String(m?.id || "").startsWith("coord_");
     if (!isCoord) return true;
-    const from = String(m?.from || "").toUpperCase();
-    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
-    return !clinicFp.has(`${from}|${t.slice(0, 200)}|${bucket}`);
+    return !clinicFp.has(`${fpBase}${bucket}`);
   });
+}
+
+function normalizeOutboundDedupeText(text) {
+  return String(text || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/** Prefer patient_messages / doctor sends over coordinator archive mirrors with different ids. */
+function outboundDoctorChatSourceRank(m) {
+  const id = String(m?.id || "").trim();
+  const kind = String(m?.inboundKind || "").toLowerCase();
+  if (kind === "doctor") return 5;
+  if (m?.sourceCoordinatorEvent === true || m?.sourceCoordinatorChannel === true) return 1;
+  if (id.startsWith("coord_")) return 1;
+  if (UUID_RE.test(id)) return 4;
+  return 2;
+}
+
+/**
+ * Collapse duplicate CLINIC/AI bubbles mirrored across patient_messages, offer archive, and coordinator legs.
+ * @param {Array<Record<string, unknown>>} list
+ */
+function dedupeCrossSourceOutboundMessages(list) {
+  const items = Array.isArray(list) ? list : [];
+  const groups = new Map();
+
+  for (const m of items) {
+    const from = String(m?.from || "").toUpperCase();
+    if (from !== "CLINIC") continue;
+    const t = normalizeOutboundDedupeText(m.text);
+    if (!t || t.length < 4) continue;
+    const ts = Number(m?.createdAt) || 0;
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    const key = `${bucket}|${t.slice(0, 280)}`;
+    const prev = groups.get(key);
+    if (!prev) {
+      groups.set(key, m);
+      continue;
+    }
+    if (outboundDoctorChatSourceRank(m) > outboundDoctorChatSourceRank(prev)) {
+      groups.set(key, m);
+    }
+  }
+
+  const dropIds = new Set();
+  for (const m of items) {
+    const from = String(m?.from || "").toUpperCase();
+    if (from !== "CLINIC") continue;
+    const t = normalizeOutboundDedupeText(m.text);
+    if (!t || t.length < 4) continue;
+    const ts = Number(m?.createdAt) || 0;
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    const key = `${bucket}|${t.slice(0, 280)}`;
+    const winner = groups.get(key);
+    if (winner && String(winner.id) !== String(m.id)) {
+      dropIds.add(String(m.id));
+    }
+  }
+
+  if (!dropIds.size) return items;
+  return items.filter((m) => !dropIds.has(String(m?.id || "")));
 }
 
 /** Pin coordinator-only legs newer than the clinic table tail (not yet mirrored to patient_messages). */
@@ -49997,6 +50064,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
     if (tailN && messages.length > tailN) {
       messages = ensureCanonicalClinicMessagesInThread(clinicMessages, messages, tailN);
     }
+    messages = dedupeCrossSourceOutboundMessages(messages);
     messages = dedupeLegacyMessagesById(messages);
 
     let leadAssignment = null;
