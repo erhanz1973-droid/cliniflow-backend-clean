@@ -49033,6 +49033,11 @@ async function seedOfferThreadSystemMessage(offerId, doctorId, doctorName, offer
  * Lead-phase offer threads for doctor Leads Inbox — same universe as unread-counts.offerUnread.
  * Foreign leads often have offer_messages but no patient_chat_threads row yet.
  */
+const {
+  batchLoadCoordinationResponderByPatientIds,
+  coordinationResponderForPatient,
+} = require("./lib/coordinationResponderSummary");
+
 async function buildDoctorOfferInboxThreads(req, opts = {}) {
   const onlyActive = opts.onlyActive !== false;
   const rawDoctor = String(req.doctorId || req?.doctor?.id || "").trim();
@@ -49119,6 +49124,11 @@ async function buildDoctorOfferInboxThreads(req, opts = {}) {
     }
   }
 
+  const responderByPatient =
+    clinicId && UUID_RE.test(clinicId) && pids.length
+      ? await batchLoadCoordinationResponderByPatientIds(supabase, clinicId, pids)
+      : new Map();
+
   const rows = [];
   for (const offer of offers) {
     const oid = String(offer.id || "").trim();
@@ -49181,6 +49191,7 @@ async function buildDoctorOfferInboxThreads(req, opts = {}) {
         unassigned: false,
         threadIsLead: lead_thread_is_lead,
       },
+      coordinationResponder: coordinationResponderForPatient(responderByPatient, pid),
     });
   }
 
@@ -49348,6 +49359,12 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
     }
   }
 
+  const cidForResponder =
+    clinicId && UUID_RE.test(String(clinicId).trim()) ? String(clinicId).trim() : "";
+  const responderByPatient = cidForResponder
+    ? await batchLoadCoordinationResponderByPatientIds(supabase, cidForResponder, uuidList)
+    : new Map();
+
   const onlyActive = String(req.query.onlyActive || "").trim() === "1";
   const patientThreads = [];
   for (const pid of uuidList) {
@@ -49400,6 +49417,7 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       lastMessage: preview,
       lastActivityAt: preview?.createdAt ?? null,
       leadPrimaryResponder,
+      coordinationResponder: coordinationResponderForPatient(responderByPatient, pid),
     });
   }
 
@@ -59249,6 +59267,11 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
       clinicCodeForActivity
     );
 
+    const responderByPatient =
+      clinicId && UUID_RE.test(clinicId) && pids.length
+        ? await batchLoadCoordinationResponderByPatientIds(supabase, clinicId, pids)
+        : new Map();
+
     const requests = list.map((r) => {
       const allOffs = offersByReq[r.id] || [];
       const offs = allOffs.filter((o) => !isCoordinationPlaceholderOffer(o));
@@ -59362,6 +59385,7 @@ app.get("/api/doctor/treatment-requests", requireDoctorAuth, async (req, res) =>
         last_message_at,
         last_message_preview,
         last_message_role,
+        coordination_responder: coordinationResponderForPatient(responderByPatient, pid),
       };
     });
 
