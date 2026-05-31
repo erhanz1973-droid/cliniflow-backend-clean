@@ -9,6 +9,8 @@ const {
   mergeAiBookingPatch,
   readDurableBookingState,
   buildCanonicalBookingRecord,
+  buildCanonicalBookingFromAppointment,
+  buildCanonicalStatusReply,
   buildClosedBookingPatch,
   buildRescheduleIsolationPatch,
   hasStaleBookingProposalVsActiveAppointment,
@@ -148,6 +150,16 @@ test("Scenario C: post-booking numeric input is stale action", () => {
 test("Scenario D: status inquiry detected", () => {
   assert.ok(isBookingStatusInquiry("What time is my appointment?"));
   assert.ok(isBookingStatusInquiry("Randevum ne zaman?"));
+});
+
+test("status reply shows clinic local time (11:45 TR) not UTC (8:45)", () => {
+  const appt = buildCanonicalBookingFromAppointment({
+    startAt: "2026-06-03T08:45:00.000Z",
+    status: "scheduled",
+  });
+  const reply = buildCanonicalStatusReply("tr", appt);
+  assert.ok(reply.includes("11:45"), reply);
+  assert.ok(!/\b8:45\b/.test(reply), reply);
 });
 
 test("Scenario E: intake sync preserves booking state", () => {
@@ -612,6 +624,8 @@ const {
   patientMessageIsAlternativeSlotRequest,
   detectConsecutiveBookingPromptLoop,
   buildAlternativeSlotNotInListReply,
+  buildSelectSlotListResendTurn,
+  patientRequestsSlotListResend,
 } = require("../lib/aiAppointmentBooking");
 
 test("select_slot: 3 Haziran 8:30 is alternative slot request", () => {
@@ -669,6 +683,32 @@ test("select_slot: not-in-list reply mentions date", () => {
   const reply = buildAlternativeSlotNotInListReply("tr", "3 Haziran 08:30", "3 Haziran");
   assert.ok(reply.includes("mevcut listede değil"));
   assert.ok(reply.includes("3 Haziran"));
+});
+
+test("select_slot: resend intent re-lists offered slots", () => {
+  assert.ok(patientRequestsSlotListResend("Hangi seçenekler tekrar atarmisiniz"));
+  const slots = [
+    { id: "s1", label: "2 Haziran 10:00", startAt: "2026-06-02T07:00:00.000Z", time: "10:00" },
+    { id: "s2", label: "2 Haziran 11:30", startAt: "2026-06-02T08:30:00.000Z", time: "11:30" },
+  ];
+  const turn = buildSelectSlotListResendTurn({
+    message: "Bana müsait tarih ve saatleri tekrar atarmisiniz",
+    state: { stage: "slots_offered", offeredSlots: slots },
+    scheduling: { timezone: "Europe/Istanbul", workStartMin: 480, workEndMin: 1080 },
+    locale: "tr",
+    contact: { hasContact: true, hasName: true },
+    contactPromptOpts: { whatsappChannel: true, knownPhone: null },
+    booking: { mode: "auto", contactRequired: false },
+    treatmentLabel: "Consultation",
+    catalogSlots: slots,
+    offeredSlots: slots,
+    preferredDateYmd: null,
+    profileId: null,
+  });
+  assert.ok(turn?.directReply);
+  assert.ok(turn.directReply.includes("1. 2 Haziran 10:00"));
+  assert.ok(turn.directReply.includes("tekrar"));
+  assert.strictEqual(turn.directReply.includes("1–5 arası numara"), false);
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
