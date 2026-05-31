@@ -41,7 +41,7 @@
     .head-day strong { font-size:12px; color:#334155; }
     .head-day span { font-size:11px; color:#64748b; font-weight:600; }
     .time-cell { font-size:12px; color:#475569; background:#fcfdff; font-weight:600; }
-    .slot-cell { padding:2px; }
+    .slot-cell { padding:2px; overflow:visible; position:relative; }
     .view-tog { font-weight: 600; }
     .view-tog.is-active { background: var(--blue, #2563eb); color: #fff; border-color: var(--blue, #2563eb); }
     .cal-month-block { margin-bottom: 24px; }
@@ -61,6 +61,9 @@
       align-items: stretch;
       gap: 3px;
       line-height: 1.25;
+      position: relative;
+      z-index: 2;
+      box-sizing: border-box;
     }
     .appt-card:hover { box-shadow: var(--shadow-md); }
     .appt-card:last-child { margin-bottom:0; }
@@ -69,6 +72,13 @@
       color: #0f172a;
       font-size: 13px;
       letter-spacing: -0.01em;
+    }
+    .appt-patient-line {
+      font-weight: 700;
+      color: #0f172a;
+      font-size: 12px;
+      word-break: break-word;
+      white-space: normal;
     }
     .appt-status-line { display: flex; }
     .appt-detail-line {
@@ -184,7 +194,7 @@
     // Date.getDay(): 0 = Sunday … 6 = Saturday. Do not subtract 1 from getDay().
     // Week columns: Sun → Sat (Sunday in range: weekStart + 0 .. +6).
     const SLOT_MINUTES = 10;
-    const MIN_VISUAL_CARD_SPAN_SLOTS = 4;
+    const SLOT_ROW_PX = 36;
     const START_HOUR = 8;
     const END_HOUR = 20;
     const SLOT_START_MINUTES = START_HOUR * 60;
@@ -462,15 +472,42 @@
       return raw.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     }
 
+    function getTreatmentLookupKeys(raw) {
+      const keys = [];
+      const normalized = normalizeTreatmentKey(raw);
+      if (normalized) keys.push(normalized);
+      const upper = String(raw || '').trim().toUpperCase();
+      if (upper && !keys.includes(upper)) keys.push(upper);
+
+      const aliasGroups = [
+        ['CONSULT', 'CONSULTATION', 'MUAYENE'],
+        ['FOLLOWUP', 'FOLLOW_UP', 'KONTROL'],
+        ['FILLING', 'DOLGU'],
+        ['EXTRACTION', 'CEKIM', 'DIS_CEKIMI'],
+        ['ROOT_CANAL_TREATMENT', 'KANAL_TEDAVISI'],
+      ];
+      aliasGroups.forEach((group) => {
+        if (group.some((k) => k === upper || k === normalized)) {
+          group.forEach((k) => {
+            if (!keys.includes(k)) keys.push(k);
+          });
+        }
+      });
+      return keys;
+    }
+
     function getTimingFromMap(treatment) {
-      const normalized = normalizeTreatmentKey(treatment);
-      const direct = treatmentTimingMap[normalized] || treatmentTimingMap[String(treatment || '').trim().toUpperCase()];
-      if (direct) {
-        const d = parseMinuteValue(direct?.duration_minutes, 0);
-        const b = parseMinuteValue(direct?.break_minutes, 0);
-        if (d > 0 || b > 0) return direct;
+      const lookupKeys = getTreatmentLookupKeys(treatment);
+      for (const key of lookupKeys) {
+        const direct = treatmentTimingMap[key];
+        if (direct) {
+          const d = parseMinuteValue(direct?.duration_minutes, 0);
+          const b = parseMinuteValue(direct?.break_minutes, 0);
+          if (d > 0 || b > 0) return direct;
+        }
       }
 
+      const normalized = lookupKeys[0] || normalizeTreatmentKey(treatment);
       const prefixedKey = Object.keys(treatmentTimingMap).find((key) => {
         if (!(key === normalized || key.startsWith(`${normalized}_`) || normalized.startsWith(`${key}_`))) return false;
         const candidate = treatmentTimingMap[key];
@@ -489,10 +526,23 @@
         };
       }
 
-      return direct || { duration_minutes: 10, break_minutes: 0 };
+      return lookupKeys.length ? treatmentTimingMap[lookupKeys[0]] : null;
     }
 
     function getItemOccupiedMinutes(item) {
+      const treatmentFields = [
+        item?.treatment,
+        item?.type,
+        item?.eventType,
+        item?.procedure_code,
+      ];
+      for (const field of treatmentFields) {
+        if (!String(field || '').trim()) continue;
+        const mapped = getTimingFromMap(field);
+        const mappedTotal = parseMinuteValue(mapped?.duration_minutes, 0) + parseMinuteValue(mapped?.break_minutes, 0);
+        if (mappedTotal > 0) return Math.max(SLOT_MINUTES, mappedTotal);
+      }
+
       const fromItemDuration = parseMinuteValue(
         item?.duration_minutes ?? item?.durationMinutes ?? item?.duration ?? item?.estimated_duration_minutes ?? item?.estimatedDurationMinutes,
         0
@@ -505,13 +555,6 @@
         return Math.max(SLOT_MINUTES, fromItemDuration + fromItemBreak);
       }
 
-      const treatmentKey = normalizeTreatmentKey(item?.treatment || item?.type || item?.eventType || item?.procedure_code || '');
-      if (treatmentKey) {
-        const mapped = getTimingFromMap(treatmentKey);
-        const mappedTotal = parseMinuteValue(mapped?.duration_minutes, 0) + parseMinuteValue(mapped?.break_minutes, 0);
-        if (mappedTotal > 0) return Math.max(SLOT_MINUTES, mappedTotal);
-      }
-
       const start = safeDate(item.startAt);
       const end = safeDate(item.endAt);
       if (start && end && Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start) {
@@ -519,7 +562,24 @@
         return Math.max(SLOT_MINUTES, diffMin);
       }
 
-      return 10;
+      return SLOT_MINUTES * 3;
+    }
+
+    function getDoctorOccupancyKey(item) {
+      return item?._doctorNorm || normalizeDoctorName(item?.doctor) || '';
+    }
+
+    function isDoctorRangeBlocked(dayIdx, slotIdx, spanSlots, doctorKey, placedList) {
+      if (!doctorKey) return false;
+      for (let offset = 0; offset < spanSlots; offset += 1) {
+        const targetSlot = slotIdx + offset;
+        for (const placed of placedList) {
+          if (placed.dayIdx !== dayIdx || placed.doctorKey !== doctorKey) continue;
+          const rangeEnd = placed.slotIdx + placed.spanSlots - 1;
+          if (targetSlot >= placed.slotIdx && targetSlot <= rangeEnd) return true;
+        }
+      }
+      return false;
     }
 
     function renderDoctors(items) {
@@ -803,6 +863,7 @@
       });
       const columnsStyle = '130px repeat(7, minmax(150px, 1fr))';
       const map = {};
+      const pendingPlacements = [];
       const timeHead = t('calendar.timeColumn');
 
       weekFiltered.forEach((item) => {
@@ -817,13 +878,42 @@
 
         const occupiedMinutes = getItemOccupiedMinutes(item);
         const spanSlots = Math.max(1, Math.ceil(occupiedMinutes / SLOT_MINUTES));
+        pendingPlacements.push({ item, dayIdx, slotIdx, spanSlots, occupiedMinutes });
+      });
 
-        for (let offset = 0; offset < spanSlots; offset += 1) {
-          const rowIdx = slotIdx + offset;
+      pendingPlacements.sort((a, b) => {
+        const ta = safeDate(a.item.startAt)?.getTime() || 0;
+        const tb = safeDate(b.item.startAt)?.getTime() || 0;
+        return ta - tb;
+      });
+
+      const placed = [];
+      pendingPlacements.forEach((entry) => {
+        const doctorKey = getDoctorOccupancyKey(entry.item);
+        if (isDoctorRangeBlocked(entry.dayIdx, entry.slotIdx, entry.spanSlots, doctorKey, placed)) {
+          return;
+        }
+        placed.push({
+          item: entry.item,
+          dayIdx: entry.dayIdx,
+          slotIdx: entry.slotIdx,
+          spanSlots: entry.spanSlots,
+          doctorKey,
+        });
+      });
+
+      placed.forEach((entry) => {
+        for (let offset = 0; offset < entry.spanSlots; offset += 1) {
+          const rowIdx = entry.slotIdx + offset;
           if (rowIdx >= slots.length) break;
-          const key = `${rowIdx}|${dayIdx}`;
+          const key = `${rowIdx}|${entry.dayIdx}`;
           if (!map[key]) map[key] = [];
-          map[key].push({ item, isStart: offset === 0, spanSlots });
+          map[key].push({
+            item: entry.item,
+            isStart: offset === 0,
+            spanSlots: entry.spanSlots,
+            occupiedMinutes: getItemOccupiedMinutes(entry.item),
+          });
         }
       });
 
@@ -851,14 +941,15 @@
             const chairTxt = normalizeChairText(item.chair) || '';
             const doctorLabel = formatCalendarDoctorLabel(item.doctor);
             const patientTxt = formatCalendarPatientLabel(item.patient);
-            const visualSpanSlots = Math.max(MIN_VISUAL_CARD_SPAN_SLOTS, Number(entry?.spanSlots) || 1);
-            const visualMinHeight = (visualSpanSlots * 34) - 2;
+            const spanSlots = Math.max(1, Number(entry?.spanSlots) || 1);
+            const visualMinHeight = Math.max(SLOT_ROW_PX, (spanSlots * SLOT_ROW_PX) - 4);
             const detailLine = `${procAndTooth}${chairTxt ? ` • Koltuk ${chairTxt}` : ''}`;
             const statusLabel = String(item.status || 'UNKNOWN').toUpperCase();
             const cardTitle = `Hasta: ${patientTxt} | ${doctorLabel} | ${startTime} | ${detailLine}`;
             return `
             <div class="appt-card" style="min-height:${visualMinHeight}px;" title="${cardTitle}">
               <div class="appt-time-line">${startTime}</div>
+              <div class="appt-patient-line">${patientTxt}</div>
               <div class="appt-status-line"><span class="status-badge ${statusClass(item.status)}">${statusLabel}</span></div>
               <div class="appt-detail-line">${detailLine}</div>
               <div class="appt-doctor-line">${doctorLabel}</div>
