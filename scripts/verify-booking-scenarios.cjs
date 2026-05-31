@@ -626,6 +626,9 @@ const {
   buildAlternativeSlotNotInListReply,
   buildSelectSlotListResendTurn,
   patientRequestsSlotListResend,
+  patientRequestsNewSchedulingWindow,
+  buildSchedulingContextIntro,
+  assessSchedulingRequestTiming,
 } = require("../lib/aiAppointmentBooking");
 
 test("select_slot: 3 Haziran 8:30 is alternative slot request", () => {
@@ -709,6 +712,28 @@ test("select_slot: resend intent re-lists offered slots", () => {
   assert.ok(turn.directReply.includes("1. 2 Haziran 10:00"));
   assert.ok(turn.directReply.includes("tekrar"));
   assert.strictEqual(turn.directReply.includes("1–5 arası numara"), false);
+});
+
+test("select_slot: month-week randevu request is new scheduling window", () => {
+  assert.ok(
+    patientRequestsNewSchedulingWindow("Bana Mayıs ayı 3. Hafta için randevu verirmisiniz"),
+  );
+  assert.ok(patientRequestsNewSchedulingWindow("Hangi seçenekler tekrar atarmisiniz"));
+});
+
+test("select_slot: past May week detected on May 31", () => {
+  const ref = new Date("2026-05-31T12:00:00.000Z");
+  const timing = assessSchedulingRequestTiming(
+    "Bana Mayıs ayı 3. Hafta için randevu verirmisiniz",
+    "Europe/Istanbul",
+    ref,
+  );
+  assert.strictEqual(timing.inPast, true);
+  assert.strictEqual(timing.reason, "month_week_in_past");
+  const intro = buildSchedulingContextIntro("tr", timing, { timezone: "Europe/Istanbul" });
+  assert.ok(intro.includes("Mayıs"));
+  assert.ok(intro.includes("geçmiş"));
+  assert.ok(intro.includes("müsait saatleri"));
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
