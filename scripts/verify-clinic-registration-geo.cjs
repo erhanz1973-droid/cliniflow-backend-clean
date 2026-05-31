@@ -9,6 +9,7 @@ const {
 } = require("../lib/clinicRegistrationGeo.cjs");
 
 assert.strictEqual(inferCountryFromPhone("+995 555 123456"), "GE");
+assert.strictEqual(inferCountryFromPhone("574155552"), "GE");
 
 const enriched = enrichClinicRegistrationGeo({
   name: "მედსმაილი",
