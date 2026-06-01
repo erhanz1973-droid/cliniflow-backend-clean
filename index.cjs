@@ -50863,12 +50863,8 @@ app.post("/api/doctor/patient/:patientId/messages/read", requireDoctorAuth, asyn
 // POST /api/doctor/messages/:messageId/translate — cache translation on patient_messages.translation
 app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (req, res) => {
   const messageId = String(req.params.messageId || "").trim();
-  const {
-    resolveOpenAiApiKey,
-    isOpenAiApiKeyConfigured,
-    openAiEnvSource,
-  } = require("./lib/openAiEnv.cjs");
-  const openaiKey = resolveOpenAiApiKey();
+  const apiKey = String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim();
+  const { isOpenAiApiKeyConfigured, openAiEnvSource } = require("./lib/openAiEnv.cjs");
 
   try {
     if (!messageId) {
@@ -50917,7 +50913,7 @@ app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (
     const result = await translateDoctorChatMessage({
       messageId,
       targetLang,
-      openaiKey: openaiKey || undefined,
+      openaiKey: apiKey || undefined,
       assertAccess: async (row) => {
         const patientId = String(row?.patient_id || "").trim();
         if (!patientId) {
