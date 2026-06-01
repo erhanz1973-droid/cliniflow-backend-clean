@@ -50910,12 +50910,25 @@ app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (
       }),
     );
 
+    const translatePatientId = String(
+      req.body?.patientId || req.body?.patient_id || req.query?.patientId || req.query?.patient_id || "",
+    ).trim();
+    const translateClinicId = String(
+      req.body?.clinicId || req.body?.clinic_id || req.clinicId || req?.doctor?.clinic_id || "",
+    ).trim();
+
     const result = await translateDoctorChatMessage({
       messageId,
       targetLang,
+      patientId: translatePatientId || undefined,
+      clinicId: translateClinicId || undefined,
       openaiKey: apiKey || undefined,
       assertAccess: async (row) => {
-        const patientId = String(row?.patient_id || "").trim();
+        let patientId = String(row?.patient_id || "").trim();
+        if (!patientId && translatePatientId) {
+          const resolvedPid = await resolveMessagesPatientDbId(translatePatientId);
+          patientId = resolvedPid || translatePatientId;
+        }
         if (!patientId) {
           return { ok: false, status: 404, error: "patient_not_found" };
         }
@@ -58189,8 +58202,13 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
     const from = coordinatorChannelRoleToLegacyFrom(role);
     const text = String(row.body || "").trim();
     if (!text) continue;
+    const meta =
+      row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata
+        : {};
+    const omniPublicId = String(meta.mirror_message_id || meta.omni_public_id || "").trim();
     const leg = {
-      id: `coord_ch_${row.id}`,
+      id: omniPublicId || `coord_ch_${row.id}`,
       text,
       from,
       type: "text",
@@ -58198,10 +58216,6 @@ async function fetchCoordinatorLegacyMessagesForProfile(profileId, pushLeg) {
       sourceCoordinatorChannel: true,
     };
     if (from === "CLINIC") {
-      const meta =
-        row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
-          ? row.metadata
-          : {};
       const metaSource = String(meta.source || "").trim();
       const doctorLabel = String(meta.doctor_name || meta.doctorName || "").trim();
       if (role === "staff" || role === "doctor" || metaSource === "doctor_patient_chat") {
