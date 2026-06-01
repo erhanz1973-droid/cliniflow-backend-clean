@@ -5551,6 +5551,9 @@ async function deliverClinicInboundPatientNotifications(meta) {
     route: "patient_chat",
     enrolled: true,
     leadThreadIsLead: false,
+    url: clinicUuid
+      ? `/(tabs)/chat?clinicId=${encodeURIComponent(String(clinicUuid))}&clinic_id=${encodeURIComponent(String(clinicUuid))}`
+      : "/(tabs)/chat",
   });
 
   try {
