@@ -7,6 +7,9 @@ const {
   assessDoctorProfileCompleteness,
   buildDoctorProfilesPromptBlock,
   procedureNamesFromIds,
+  formatDoctorPatientName,
+  buildDoctorAssignmentReply,
+  sanitizeDoctorNamesInReply,
 } = require("../lib/doctorProfilesForAi");
 
 const serap = mapDoctorProfileRow(
@@ -56,5 +59,40 @@ assert.strictEqual(withSpecialty.completeness.proceduresMissing, false);
 
 const prompt2 = buildDoctorProfilesPromptBlock([withSpecialty], "Test Clinic");
 assert.ok(prompt2.includes("İmplantoloji") || prompt2.includes("specialties"));
+
+const burhan = mapDoctorProfileRow(
+  {
+    id: "doc-b",
+    full_name: "Burhan",
+    title: "İmplantoloji",
+    experience_years: 10,
+    specialties: null,
+    languages: "Almanca",
+  },
+  "CEM Klinik",
+  { specialities: [{ name: "İmplantoloji" }], languages: [], procedures: [] },
+);
+assert.strictEqual(formatDoctorPatientName(burhan), "Dr. Burhan");
+const burhanPrompt = buildDoctorProfilesPromptBlock([burhan], "CEM Klinik");
+assert.ok(burhanPrompt.includes("Dr. Burhan"));
+const doctorsLine = burhanPrompt.split("Doctors:")[1]?.split("\n\n")[0] || "";
+assert.ok(!/İmplantoloji\s+Burhan/.test(doctorsLine));
+
+const teamReply = buildDoctorAssignmentReply([serap, burhan], {
+  lang: "tr",
+  clinicName: "CEM Klinik",
+  message: "Doktorum kim olacak",
+});
+assert.ok(teamReply.includes("Dr. Serap Zorlu"));
+assert.ok(teamReply.includes("Dr. Burhan"));
+assert.ok(!/implant.*fiyat/i.test(teamReply));
+assert.ok(teamReply.includes("atanır"));
+
+const fixed = sanitizeDoctorNamesInReply(
+  "İmplantoloji Burhan öne çıkıyor.",
+  [burhan],
+);
+assert.ok(fixed.includes("Dr. Burhan"));
+assert.ok(!/İmplantoloji Burhan/.test(fixed));
 
 console.log("doctorProfilesForAi: ok");
