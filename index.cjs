@@ -50931,6 +50931,17 @@ app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (
       if (result.status === 503 && result.error === "Translation service unavailable") {
         return res.status(503).json({ error: "Translation service unavailable" });
       }
+      if (result.status === 404) {
+        console.warn(
+          "[DOCTOR_TRANSLATE]",
+          JSON.stringify({
+            messageId,
+            language: targetLang,
+            outcome: "not_found",
+            error: result.error || "message_not_found",
+          }),
+        );
+      }
       return res.status(result.status || 500).json({
         ok: false,
         error: result.error || "translate_failed",
