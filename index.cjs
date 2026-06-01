@@ -22,6 +22,8 @@ console.log("TF BACKEND:", tf.getBackend());
 
 // ─── Bootstrap: imports & app init ─────────────────────────────────────────
 require("dotenv").config();
+const { logOpenAiStartupValidation } = require("./lib/openAiEnv.cjs");
+logOpenAiStartupValidation();
 console.log("🔥 ROOT INDEX.CJS RUNNING");
 
 // TensorFlow.js / face-landmarks-detection may read `navigator` / `window` at load time.
@@ -8996,9 +8998,10 @@ app.get("/api/health", async (req, res) => {
       schemaMigrationsHead: buildInfo.schemaMigrationsHead || undefined,
       region: railwayRegion,
       railwayRegion,
-      aiOrchestration: Boolean(
-        String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim(),
-      ),
+      aiOrchestration: (() => {
+        const { isOpenAiApiKeyConfigured } = require("./lib/openAiEnv.cjs");
+        return isOpenAiApiKeyConfigured();
+      })(),
       commit:
         String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT || "").trim() ||
         undefined,
@@ -9300,9 +9303,10 @@ app.get("/api/version", (req, res) => {
     commit:
       String(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT || "").trim() ||
       undefined,
-    aiOrchestration: Boolean(
-      String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim(),
-    ),
+    aiOrchestration: (() => {
+      const { isOpenAiApiKeyConfigured } = require("./lib/openAiEnv.cjs");
+      return isOpenAiApiKeyConfigured();
+    })(),
     built: buildInfo.apiBuild || new Date().toISOString().slice(0, 10),
   });
 });
@@ -35385,7 +35389,8 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     console.log("AI LANG INPUT:", lang);
     console.log("TRANSLATED?", lang !== "en");
 
-    const OPENAI_KEY = process.env.OPENAI_API_KEY;
+    const { resolveOpenAiApiKey } = require("./lib/openAiEnv.cjs");
+    const OPENAI_KEY = resolveOpenAiApiKey();
     if (!OPENAI_KEY) {
       logAI('warn', 'ai_not_configured', { patientId });
       return res.status(501).json({ ok: false, error: 'ai_not_configured', message: 'OPENAI_API_KEY not set' });
@@ -50857,11 +50862,19 @@ app.post("/api/doctor/patient/:patientId/messages/read", requireDoctorAuth, asyn
 
 // POST /api/doctor/messages/:messageId/translate — cache translation on patient_messages.translation
 app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (req, res) => {
+  const messageId = String(req.params.messageId || "").trim();
+  const {
+    resolveOpenAiApiKey,
+    isOpenAiApiKeyConfigured,
+    openAiEnvSource,
+  } = require("./lib/openAiEnv.cjs");
+  const openaiKey = resolveOpenAiApiKey();
+
   try {
-    const messageId = String(req.params.messageId || "").trim();
     if (!messageId) {
       return res.status(400).json({ ok: false, error: "message_id_required" });
     }
+
     const {
       translateDoctorChatMessage,
       resolveDoctorPreferredLanguageFromRequest,
@@ -50890,10 +50903,21 @@ app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (
         resolveDoctorPreferredLanguageFromRequest(req, doctorPreferred),
     );
 
+    console.log(
+      "[DOCTOR_TRANSLATE]",
+      JSON.stringify({
+        messageId,
+        language: targetLang,
+        provider: "openai",
+        keyLoaded: isOpenAiApiKeyConfigured(),
+        keySource: openAiEnvSource(),
+      }),
+    );
+
     const result = await translateDoctorChatMessage({
       messageId,
       targetLang,
-      openaiKey: OPENAI_KEY,
+      openaiKey: openaiKey || undefined,
       assertAccess: async (row) => {
         const patientId = String(row?.patient_id || "").trim();
         if (!patientId) {
@@ -50908,6 +50932,9 @@ app.post("/api/doctor/messages/:messageId/translate", requireDoctorAuth, async (
     });
 
     if (!result.ok) {
+      if (result.status === 503 && result.error === "Translation service unavailable") {
+        return res.status(503).json({ error: "Translation service unavailable" });
+      }
       return res.status(result.status || 500).json({
         ok: false,
         error: result.error || "translate_failed",
