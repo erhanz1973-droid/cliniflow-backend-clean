@@ -430,6 +430,15 @@ if (
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const IS_PROD = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const { pushLog, traceMiddleware, pushDeliveryV1, newPushTraceId } = require("./lib/pushLog.cjs");
+const {
+  logDoctorSocketJoin,
+  logDoctorSocketLeave,
+  logThreadConsistencyCheck,
+  logPushCandidate,
+  logPushSent,
+  logPushSkipped,
+  logUnreadBump,
+} = require("./lib/doctorChatDeliveryDiag.cjs");
 const pushMetrics = require("./lib/pushMetrics.cjs");
 const {
   PATIENT_INBOUND_DOCTOR_PUSH_TYPE,
@@ -2192,6 +2201,13 @@ async function bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTabl
     if (UUID_RE.test(aid)) {
       await incrementDoctorUnreadForAssignedDoctor(aid);
       bumpUnreadCountsCache(clinicUuid);
+      const tid = String(insertedRow?.thread_id || opts?.threadId || "").trim();
+      logUnreadBump({
+        patient_id: resolved,
+        doctor_id: aid,
+        thread_id: UUID_RE.test(tid) ? tid : null,
+        source: "patient_inbound_insert",
+      });
     }
   } catch (e) {
     console.warn("[MESSAGES unread bump]", e?.message || e);
@@ -4851,6 +4867,12 @@ function resolveChatPushNotificationImageUrl() {
 async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, expoTrace) {
   const u = (await resolveOwnerUuidForExpoPush(kind, uuidRaw)) || String(uuidRaw || "").trim();
   if (!u || (kind === "doctor" && !DOCTOR_FK_UUID_RE.test(u))) {
+    if (kind === "doctor") {
+      logPushSkipped({
+        doctor_id: uuidRaw,
+        reason: "unresolved_doctor_uuid",
+      });
+    }
     if (kind === "doctor" && isChatPushPipelineLogEnabled()) {
       pushLog.info("chat_push.send_skipped_unresolved_doctor_uuid", {
         doctorKeyRaw: String(uuidRaw || "").slice(0, 24),
@@ -4859,6 +4881,13 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
     return;
   }
   if (await fetchUserNotificationsMuted(kind, u)) {
+    if (kind === "doctor") {
+      logPushSkipped({
+        doctor_id: u,
+        thread_id: expoTrace?.threadId ?? null,
+        reason: "notifications_muted",
+      });
+    }
     if (kind === "doctor" && expoTrace && isDoctorPushExpoTraceEnabled()) {
       pushDeliveryV1("info", {
         traceId: expoTrace.traceId,
@@ -4873,6 +4902,11 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   const rows = await loadExpoTokenRows(kind, u);
   if (!rows.length) {
     if (kind === "doctor") {
+      logPushSkipped({
+        doctor_id: u,
+        thread_id: expoTrace?.threadId ?? null,
+        reason: "no_expo_tokens",
+      });
       if (isChatPushPipelineLogEnabled()) {
         const payloadEarly = typeof data === "object" && data ? data : {};
         const tidEarly = String(payloadEarly?.threadId || "").trim();
@@ -4948,6 +4982,11 @@ async function sendExpoToEntity(kind, uuidRaw, { title, body, data, badge }, exp
   }
   if (!totalGrouped) {
     if (kind === "doctor") {
+      logPushSkipped({
+        doctor_id: u,
+        thread_id: threadIdNorm,
+        reason: "no_tokens_after_partition",
+      });
       const traceOn = !!(expoTrace && isDoctorPushExpoTraceEnabled());
       const forceLog = String(process.env.DOCTOR_PUSH_NO_TOKEN_LOG || "").trim() === "1";
       if (traceOn || forceLog) {
@@ -5690,7 +5729,17 @@ async function resolveChatThreadRowForDoctorPush(resolvedPatientId, clinicUuid, 
 }
 
 async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, previewRaw, composerOpts) {
-  if (!isSupabaseEnabled() || !resolvedPatientId || !clinicUuid || !UUID_RE.test(clinicUuid)) return;
+  if (!isSupabaseEnabled() || !resolvedPatientId || !clinicUuid || !UUID_RE.test(clinicUuid)) {
+    logPushSkipped({
+      patient_id: resolvedPatientId,
+      reason: !isSupabaseEnabled()
+        ? "supabase_disabled"
+        : !resolvedPatientId
+          ? "no_patient_id"
+          : "invalid_clinic_uuid",
+    });
+    return;
+  }
   const pv = truncateChatPreview(previewRaw || "");
   const role =
     composerOpts && String(composerOpts.messageComposerRole || "").toLowerCase() === "clinic"
@@ -5721,6 +5770,12 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       )) ||
       "";
     if (!did || !DOCTOR_FK_UUID_RE.test(did)) {
+      logPushSkipped({
+        patient_id: resolvedPatientId,
+        doctor_id: did || null,
+        thread_id: threadRow?.id || null,
+        reason: "no_assigned_doctor",
+      });
       if (isDoctorPushExpoTraceEnabled()) {
         const bodySd = String(composerOpts?.senderDoctorId || "").trim();
         pushDeliveryV1("info", {
@@ -5743,6 +5798,16 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
     const threadForPush =
       (await resolveChatThreadRowForDoctorPush(resolvedPatientId, clinicUuid, did)) || threadRow;
     const threadId = String(threadForPush?.id || "").trim();
+
+    logPushCandidate({
+      patient_id: resolvedPatientId,
+      doctor_id: did,
+      thread_id: UUID_RE.test(threadId) ? threadId : null,
+      clinic_id: clinicUuid,
+      message_id: composerOpts?.messageStableId || null,
+      sender_role: role,
+      routing_path: composerOpts?.routingPath || null,
+    });
 
     if (isChatPushPipelineLogEnabled()) {
       pushLog.info("chat_push.notify_doctor_assigned", {
@@ -5804,6 +5869,13 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       preview: pv,
     });
     if (!dedupeStableId) {
+      logPushSkipped({
+        patient_id: resolvedPatientId,
+        doctor_id: did,
+        thread_id: UUID_RE.test(threadId) ? threadId : null,
+        message_id: messageStableId || null,
+        reason: "no_dedupe_key",
+      });
       pushLog?.warn?.("chat_push.doctor_inbound_skip_no_dedupe_key", {
         patientId: String(resolvedPatientId || "").slice(0, 8),
         clinicId: String(clinicUuid || "").slice(0, 8),
@@ -5824,7 +5896,16 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       recipientId: did,
       notificationType: PATIENT_INBOUND_DOCTOR_PUSH_TYPE,
     });
-    if (!claimed) return;
+    if (!claimed) {
+      logPushSkipped({
+        patient_id: resolvedPatientId,
+        doctor_id: did,
+        thread_id: UUID_RE.test(threadId) ? threadId : null,
+        message_id: messageStableId || dedupeStableId,
+        reason: "dedupe_claim_failed",
+      });
+      return;
+    }
 
     const deepLink = buildDoctorMessagePushDeepLink({
       offerId: null,
@@ -5859,10 +5940,20 @@ async function notifyAssignedDoctorExpoInbound(resolvedPatientId, clinicUuid, pr
       },
       expoTrace,
     );
-    if (expoTrace) await sendP;
-    else void sendP;
+    await sendP;
+    logPushSent({
+      patient_id: resolvedPatientId,
+      doctor_id: did,
+      thread_id: UUID_RE.test(threadId) ? threadId : null,
+      message_id: messageStableId || dedupeStableId,
+      badge,
+    });
   } catch (e) {
     console.warn("[expo-push] doctor notify skipped:", e?.message || e);
+    logPushSkipped({
+      patient_id: resolvedPatientId,
+      reason: e?.message || "notify_exception",
+    });
   }
 }
 
@@ -5939,6 +6030,14 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
       const routingLogEnv = String(process.env.CHAT_PUSH_ROUTING_LOG || "").trim() === "1";
 
       if (fromPatient) {
+        logPushCandidate({
+          patient_id: resolved,
+          doctor_id: assignedDoctorId,
+          clinic_id: clinicUuid,
+          message_id: stableId,
+          sender_role: "patient",
+          routing_path: "enqueue_patient_inbound",
+        });
         const shouldSendPush = !!(clinicUuid && assignedDoctorId);
         if (routingLogEnv || !shouldSendPush) {
           console.log(
@@ -5965,6 +6064,21 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
             routingPath: "enqueue_patient_inbound",
             messageStableId: stableId,
           });
+        else
+          logPushSkipped({
+            patient_id: resolved,
+            doctor_id: assignedDoctorId,
+            message_id: stableId,
+            reason: "no_clinic_uuid",
+          });
+        if (!assignedDoctorId && clinicUuid) {
+          logPushSkipped({
+            patient_id: resolved,
+            clinic_id: clinicUuid,
+            message_id: stableId,
+            reason: "no_assigned_doctor",
+          });
+        }
         return;
       }
 
@@ -6143,6 +6257,15 @@ async function emitRealtimeChatMessageToThread(opts, insertedRow, insertedTableH
             message_id: result.legacyMessageId,
           }),
         );
+        logThreadConsistencyCheck({
+          patient_id: opts?.patientId || insertedRow?.patient_id || null,
+          doctor_id: assignedDoctorId,
+          thread_id: tid,
+          room_id: roomId,
+          source: "socket_emit",
+          message_id: result.legacyMessageId,
+          mismatch: before.length === 0 ? "room_empty_at_emit" : null,
+        });
       } catch (_) {
         /* non-fatal */
       }
@@ -6177,6 +6300,30 @@ async function runChatMessageSideEffectsAfterInsert(opts, insertedRow, insertedT
       });
     }
     return;
+  }
+  try {
+    const pidSrc = insertedRow?.patient_id || opts?.patientId;
+    const resolvedPid = pidSrc ? await resolveMessagesPatientDbId(String(pidSrc)) : null;
+    const tidRaw = String(insertedRow?.thread_id ?? insertedRow?.threadId ?? opts?.threadId ?? "").trim();
+    const clinicUuid = await resolveClinicIdForChatPush(opts, insertedRow || {});
+    let assignedDoctorId = null;
+    if (resolvedPid && UUID_RE.test(clinicUuid)) {
+      try {
+        assignedDoctorId = await resolveMessagingDoctorForPatientClinic(resolvedPid, clinicUuid);
+      } catch (_) {
+        assignedDoctorId = null;
+      }
+    }
+    logThreadConsistencyCheck({
+      patient_id: resolvedPid,
+      doctor_id: assignedDoctorId,
+      thread_id: UUID_RE.test(tidRaw) ? tidRaw : null,
+      room_id: UUID_RE.test(tidRaw) ? `chat:${tidRaw}` : null,
+      source: "message_side_effects",
+      message_id: extractStableMessageIdForChatPush(insertedRow, insertedTableHint),
+    });
+  } catch (e) {
+    console.warn("[THREAD_CONSISTENCY_CHECK] side_effects_log_failed", e?.message || e);
   }
   try {
     await bumpChatUnreadCountersAfterInsert(opts, insertedRow, insertedTableHint);
@@ -50845,6 +50992,15 @@ function logDoctorThreadResolution(payload) {
         reason: payload.reason || null,
       }),
     );
+    const resolvedTid =
+      payload.resolved_thread_id || payload.resolvedThreadId || payload.prior_thread_id || payload.priorThreadId;
+    logThreadConsistencyCheck({
+      patient_id: payload.patient_id || payload.patientId,
+      doctor_id: payload.doctor_id || payload.doctorId,
+      thread_id: resolvedTid,
+      room_id: resolvedTid ? `chat:${resolvedTid}` : null,
+      source: payload.source || "doctor_thread_resolution",
+    });
   } catch (e) {
     console.warn("[DOCTOR_THREAD_RESOLUTION] log_failed:", e?.message || e);
   }
@@ -50869,6 +51025,7 @@ async function resolveDoctorChatThreadId(patientId, clinicId, accessThreadId, re
     logDoctorThreadResolution({
       patient_id: pid,
       clinic_id: cid || null,
+      doctor_id: req?.doctorId || req?.doctor?.id || null,
       resolved_thread_id: prior,
       prior_thread_id: prior,
       source,
@@ -50925,6 +51082,7 @@ async function resolveDoctorChatThreadId(patientId, clinicId, accessThreadId, re
   logDoctorThreadResolution({
     patient_id: pid,
     clinic_id: cid || null,
+    doctor_id: req?.doctorId || req?.doctor?.id || null,
     resolved_thread_id: resolved,
     prior_thread_id: null,
     source,
@@ -63457,6 +63615,19 @@ try {
 
   chatSocketIo.on("connection", (socket) => {
     console.log("[chat-socket] CONNECTION OPEN TIME", Date.now(), "socket=", socket.id);
+    socket.on("disconnect", (reason) => {
+      if (String(socket.data?.role || "").toUpperCase() === "DOCTOR") {
+        const tid = String(socket.data?.threadId || "").trim();
+        logDoctorSocketLeave({
+          doctor_id: socket.data?.doctorId,
+          patient_id: socket.data?.patientId,
+          thread_id: tid || null,
+          room_id: tid ? threadChatRoomId(tid) : null,
+          reason: String(reason || "disconnect"),
+          socket_id: socket.id,
+        });
+      }
+    });
     socket.on("join_chat", async (payload, ack) => {
       const joinReceivedAt = Date.now();
       console.log("[chat-socket] JOIN RECEIVED TIME", joinReceivedAt, payload);
@@ -63674,6 +63845,28 @@ try {
             join_latency_ms: joinLatencyMs,
           }),
         );
+        if (role === "DOCTOR") {
+          logDoctorSocketJoin({
+            doctor_id: decoded.doctorId || decoded.id,
+            patient_id: threadPid,
+            thread_id: effectiveThreadId,
+            requested_thread_id:
+              effectiveThreadId !== threadIdJoined ? threadIdJoined : undefined,
+            room_id: effectiveRoomId,
+            room_size: roomSizeAfterJoin,
+            join_success: true,
+          });
+          logThreadConsistencyCheck({
+            patient_id: threadPid,
+            doctor_id: decoded.doctorId || decoded.id,
+            thread_id: effectiveThreadId,
+            room_id: effectiveRoomId,
+            source: "socket_join",
+            fetch_thread_id: threadIdJoined !== effectiveThreadId ? threadIdJoined : null,
+            mismatch:
+              effectiveThreadId !== threadIdJoined ? "canonical_thread_redirect" : null,
+          });
+        }
         console.log(
           "[chat-socket] JOINED ROOM",
           effectiveRoomId,
