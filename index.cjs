@@ -561,6 +561,11 @@ const REGISTER_USER_MSG = {
 };
 
 const { sendRegisterUserError } = require("./lib/registerUserErrors");
+const {
+  upsertPatientClinicLink,
+  patientJoinedViaInvitation,
+  registerClinicInvitationRoutes,
+} = require("./lib/clinicInvitation");
 
 function buildRegisterOtpSuccessJson({
   patientId,
@@ -10093,6 +10098,16 @@ async function runPatientRegister(req, res, route, otpMode) {
     }
 
     if (patientPersistRow) supabasePatientRow = patientPersistRow;
+    if (supabaseClinicId && supabasePatientRow?.id) {
+      const viaInvite = patientJoinedViaInvitation(body);
+      upsertPatientClinicLink({
+        patientId: supabasePatientRow.id,
+        clinicId: supabaseClinicId,
+        joinedViaInvitation: viaInvite,
+      }).catch((linkErr) => {
+        console.warn("[CLINIC_INVITE] link after register:", linkErr?.message || linkErr);
+      });
+    }
     logRegisterTrace(route, "STEP_AFTER_DB_PERSIST", {
       patientRowId: patientPersistRow?.id || supabasePatientRow?.id || null,
     });
@@ -62932,6 +62947,8 @@ app.get("/api/discovery/clinics", async (req, res) => {
     });
   }
 });
+
+registerClinicInvitationRoutes(app, { requireAdminAuth });
 
 const { registerTreatmentProposalAdminRoutes } = require("./lib/treatmentProposalAdminRoutes");
 registerTreatmentProposalAdminRoutes(app, { requireAdminAuth });
