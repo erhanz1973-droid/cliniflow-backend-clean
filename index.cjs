@@ -453,7 +453,10 @@ const {
   markProposalQuoteSent,
   setupProposalSlaSweep,
 } = require("./lib/treatmentProposalWorkflow");
-const { resolveOperationalClinicId } = require("./lib/clinicOperationalContext");
+const {
+  resolveOperationalClinicId,
+  resolveClinicIdFromPatientClinicLinks,
+} = require("./lib/clinicOperationalContext");
 const {
   LEAD_STATUS,
   ensureLeadWorkspaceForClinic,
@@ -1534,13 +1537,38 @@ async function resolveClinicContextForPatientRow(internalPatientId) {
   for (const sel of selects) {
     let r = await supabase.from("patients").select(sel).eq("id", id).maybeSingle();
     if (!r.error && r.data) {
-      return {
-        clinicId: r.data.clinic_id != null ? String(r.data.clinic_id).trim() : null,
-        clinicCode: r.data.clinic_code != null ? String(r.data.clinic_code).trim() : null,
-      };
+      let clinicId = r.data.clinic_id != null ? String(r.data.clinic_id).trim() : null;
+      let clinicCode = r.data.clinic_code != null ? String(r.data.clinic_code).trim() : null;
+      if (!clinicId) {
+        const fromLink = await resolveClinicIdFromPatientClinicLinks(id);
+        if (fromLink) {
+          clinicId = fromLink;
+          const { data: crow } = await supabase
+            .from("clinics")
+            .select("clinic_code")
+            .eq("id", fromLink)
+            .maybeSingle();
+          if (crow?.clinic_code) {
+            clinicCode = String(crow.clinic_code).trim().toUpperCase();
+          }
+        }
+      }
+      return { clinicId, clinicCode };
     }
     const code = String(r.error?.code || "");
     if (!["PGRST116", "42P01", "42703", "PGRST204", "PGRST205"].includes(code)) break;
+  }
+  const fromLinkOnly = await resolveClinicIdFromPatientClinicLinks(id);
+  if (fromLinkOnly) {
+    const { data: crow } = await supabase
+      .from("clinics")
+      .select("clinic_code")
+      .eq("id", fromLinkOnly)
+      .maybeSingle();
+    return {
+      clinicId: fromLinkOnly,
+      clinicCode: crow?.clinic_code ? String(crow.clinic_code).trim().toUpperCase() : null,
+    };
   }
   return { clinicId: null, clinicCode: null };
 }
@@ -10111,13 +10139,22 @@ async function runPatientRegister(req, res, route, otpMode) {
     if (patientPersistRow) supabasePatientRow = patientPersistRow;
     if (supabaseClinicId && supabasePatientRow?.id) {
       const viaInvite = patientJoinedViaInvitation(body);
+      const linkPatientId = supabasePatientRow.id;
       upsertPatientClinicLink({
-        patientId: supabasePatientRow.id,
+        patientId: linkPatientId,
         clinicId: supabaseClinicId,
         joinedViaInvitation: viaInvite,
-      }).catch((linkErr) => {
-        console.warn("[CLINIC_INVITE] link after register:", linkErr?.message || linkErr);
-      });
+      })
+        .then((linkRes) => {
+          if (!linkRes?.ok) return linkRes;
+          return ensureLeadWorkspaceForClinic(linkPatientId, supabaseClinicId, {
+            source: viaInvite ? "clinic_invite_register" : "clinic_register",
+            leadStatus: LEAD_STATUS.INQUIRY,
+          }).then(() => linkRes);
+        })
+        .catch((linkErr) => {
+          console.warn("[CLINIC_INVITE] link after register:", linkErr?.message || linkErr);
+        });
     }
     logRegisterTrace(route, "STEP_AFTER_DB_PERSIST", {
       patientRowId: patientPersistRow?.id || supabasePatientRow?.id || null,
