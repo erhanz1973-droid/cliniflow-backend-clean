@@ -499,7 +499,7 @@ const JWT_SECRET = (() => {
   console.warn("[SECURITY] JWT_SECRET missing or too short — set in .env for non-dev use");
   return "dev-only-jwt-secret-min-8-chars";
 })();
-const JWT_EXPIRES_IN = String(process.env.JWT_EXPIRES_IN || "30d").trim() || "30d";
+const JWT_EXPIRES_IN = String(process.env.JWT_EXPIRES_IN || "365d").trim() || "365d";
 const PERF_LOGS_ENABLED = !IS_PROD || String(process.env.PERF_LOGS || "").trim() === "1";
 /** Set OTP_DEBUG=1 to log OTP digits in register/send paths (never enable in prod unless short tests). */
 const OTP_DEBUG_LOG = String(process.env.OTP_DEBUG || "").trim() === "1" || !IS_PROD;
@@ -8019,7 +8019,10 @@ async function sendPushNotification(patientId, title, message, options = {}) {
 const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_MAX_ATTEMPTS = 3;
 const OTP_LENGTH = 6;
-const TOKEN_EXPIRY_DAYS = 14; // 7-14 days as requested
+const TOKEN_EXPIRY_DAYS = Math.max(
+  30,
+  parseInt(String(process.env.TOKEN_EXPIRY_DAYS || "365"), 10) || 365,
+);
 
 // OTP Feature Flags
 const OTP_ENABLED_FOR_ADMINS = process.env.OTP_ENABLED_FOR_ADMINS === "true";
@@ -13043,6 +13046,66 @@ app.post("/api/patient/auth/oauth", patientOauthLimiter, async (req, res) => {
       error: "internal_error",
       message: error?.message || "internal_error",
     });
+  }
+});
+
+// ================== SESSION REFRESH (mobile — stay signed in) ==================
+/** Re-issue JWT for patient/doctor when the previous token expired (ignoreExpiration verify). */
+app.post("/api/auth/refresh-session", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ ok: false, error: "missing_token" });
+    }
+    const oldToken = authHeader.slice(7).trim();
+    if (!oldToken) {
+      return res.status(401).json({ ok: false, error: "missing_token" });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(oldToken, JWT_SECRET, { ignoreExpiration: true });
+    } catch (e) {
+      return res.status(401).json({ ok: false, error: "invalid_token", message: e?.message });
+    }
+
+    const expSec = decoded && typeof decoded.exp === "number" ? decoded.exp : null;
+    const maxGraceSec = 90 * 24 * 60 * 60;
+    if (expSec != null && expSec < Math.floor(Date.now() / 1000) - maxGraceSec) {
+      return res.status(401).json({ ok: false, error: "token_too_old" });
+    }
+
+    const role = String(decoded.role || "").toUpperCase();
+    const type = String(decoded.type || "").toLowerCase();
+    const payload = { ...decoded };
+    delete payload.iat;
+    delete payload.exp;
+    delete payload.nbf;
+
+    if (role === "PATIENT" || type === "patient") {
+      payload.type = "patient";
+      payload.role = "PATIENT";
+    } else if (role === "DOCTOR" || type === "doctor") {
+      payload.type = "doctor";
+      payload.role = "DOCTOR";
+    } else {
+      return res.status(403).json({ ok: false, error: "unsupported_role" });
+    }
+
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    return res.json({
+      ok: true,
+      token,
+      type: payload.type,
+      role: payload.role,
+      patientId: payload.patientId || null,
+      doctorId: payload.doctorId || null,
+      clinicId: payload.clinicId || null,
+      clinicCode: payload.clinicCode || null,
+      status: payload.status || null,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || "internal_error" });
   }
 });
 
