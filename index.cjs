@@ -1227,6 +1227,57 @@ function dedupeCrossSourceOutboundMessages(list) {
   return items.filter((m) => !dropIds.has(String(m?.id || "")));
 }
 
+/** Prefer patient_messages / messages UUID rows over offer_msg_* archive mirrors. */
+function inboundDoctorChatSourceRank(m) {
+  const id = String(m?.id || "").trim();
+  if (UUID_RE.test(id)) return 5;
+  if (m?.sourceOfferMessage === true || id.startsWith("offer_msg_")) return 3;
+  if (m?.sourceCoordinatorEvent === true || m?.sourceCoordinatorChannel === true) return 1;
+  if (id.startsWith("coord_")) return 1;
+  return 2;
+}
+
+/**
+ * Collapse duplicate PATIENT bubbles mirrored across patient_messages, messages, and offer archive.
+ * @param {Array<Record<string, unknown>>} list
+ */
+function dedupeCrossSourceInboundMessages(list) {
+  const items = Array.isArray(list) ? list : [];
+  const groups = new Map();
+
+  for (const m of items) {
+    const from = String(m?.from || "").toUpperCase();
+    if (from !== "PATIENT") continue;
+    const t = normalizeOutboundDedupeText(m.text);
+    if (!t || t.length < 2) continue;
+    const ts = Number(m?.createdAt) || 0;
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    const key = `${bucket}|${t.slice(0, 280)}`;
+    const prev = groups.get(key);
+    if (!prev || inboundDoctorChatSourceRank(m) > inboundDoctorChatSourceRank(prev)) {
+      groups.set(key, m);
+    }
+  }
+
+  const dropIds = new Set();
+  for (const m of items) {
+    const from = String(m?.from || "").toUpperCase();
+    if (from !== "PATIENT") continue;
+    const t = normalizeOutboundDedupeText(m.text);
+    if (!t || t.length < 2) continue;
+    const ts = Number(m?.createdAt) || 0;
+    const bucket = Number.isFinite(ts) ? Math.floor(ts / 120_000) : 0;
+    const key = `${bucket}|${t.slice(0, 280)}`;
+    const winner = groups.get(key);
+    if (winner && String(winner.id) !== String(m.id)) {
+      dropIds.add(String(m.id));
+    }
+  }
+
+  if (!dropIds.size) return items;
+  return items.filter((m) => !dropIds.has(String(m?.id || "")));
+}
+
 /** Pin coordinator-only legs newer than the clinic table tail (not yet mirrored to patient_messages). */
 function mergeCoordinatorNewerThanClinic(clinicMessages, coordinatorArchived, mergedMessages) {
   const clinicMaxTs = (clinicMessages || []).reduce(
@@ -50437,6 +50488,7 @@ app.get("/api/doctor/patient/:patientId/messages", requireDoctorAuth, async (req
       messages = ensureCanonicalClinicMessagesInThread(clinicMessages, messages, tailN);
     }
     messages = dedupeCrossSourceOutboundMessages(messages);
+    messages = dedupeCrossSourceInboundMessages(messages);
     messages = dedupeLegacyMessagesById(messages);
 
     let leadAssignment = null;
