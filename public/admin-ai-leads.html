@@ -858,7 +858,55 @@
       return parts.join("");
     }
 
+    function renderLeadSummarySections(L) {
+      const sections = L.leadSummarySections;
+      if (Array.isArray(sections) && sections.length) {
+        return (
+          '<div class="summary-box lead-summary-box">' +
+          sections
+            .map(function (section) {
+              const bullets = (section && section.bullets) || [];
+              if (!section || !section.title || !bullets.length) return "";
+              return (
+                '<div class="lead-summary-section" style="margin-top:10px">' +
+                '<div style="font-weight:700;font-size:0.8rem;margin-bottom:4px">' +
+                esc(section.title) +
+                "</div>" +
+                '<ul style="margin:0 0 0 18px">' +
+                bullets
+                  .map(function (bullet) {
+                    return "<li>" + esc(bullet) + "</li>";
+                  })
+                  .join("") +
+                "</ul></div>"
+              );
+            })
+            .join("") +
+          "</div>"
+        );
+      }
+      if (L.leadSummaryLines && L.leadSummaryLines.length) {
+        return (
+          '<div class="summary-box lead-summary-box"><ul style="margin:8px 0 0 18px">' +
+          L.leadSummaryLines
+            .map(function (line) {
+              return "<li>" + esc(line) + "</li>";
+            })
+            .join("") +
+          "</ul></div>"
+        );
+      }
+      return "";
+    }
+
     function formatTreatmentInterest(L) {
+      if (L.treatmentInterestSummary) return L.treatmentInterestSummary;
+      if (L.leadSummaryLines && L.leadSummaryLines.length) {
+        const joined = L.leadSummaryLines.join(" ").toLowerCase();
+        if (/implant/.test(joined)) return ct("interest.implants");
+        if (/veneer|cosmetic|whitening|lamina|gülüş/.test(joined)) return ct("interest.cosmetic");
+        return L.leadSummaryLines[0];
+      }
       const raw = String(L.treatmentInterest || "").trim();
       const tags = (L.operationalIntakeFlags && L.operationalIntakeFlags.patientReportedTags) || [];
       if (/implant/i.test(raw) || tags.includes("implant_interest")) return ct("interest.implants");
@@ -1255,7 +1303,14 @@
       if (f.missingSmilePhotos) missing.push(ct("detail.missingPhotos"));
       if (f.missingTravelTimeline) missing.push(ct("detail.missingTravel"));
       if (f.missingTreatmentPreference) missing.push(ct("detail.missingTreatment"));
-      if (!missing.length && !f.doctorReviewNeeded && !(f.patientReportedTags || []).length) return "";
+      if (
+        !missing.length &&
+        !f.doctorReviewNeeded &&
+        !(f.patientReportedTags || []).length &&
+        !(f.patientReportedTagSummaries || []).length
+      ) {
+        return "";
+      }
       let html =
         '<div class="intake-flags-box"><strong>' +
         esc(ct("detail.intakeGaps")) +
@@ -1270,14 +1325,14 @@
           esc(ct("detail.doctorReviewNeeded")) +
           "</span></p>";
       }
-      const tags = f.patientReportedTags || [];
-      if (tags.length) {
+      const tagLines = f.patientReportedTagSummaries || [];
+      if (tagLines.length) {
         html +=
           '<p style="margin:8px 0 0;font-size:0.78rem"><strong>' +
           esc(ct("detail.patientReportedTags")) +
-          "</strong> " +
-          tags.map(function (t) { return '<span class="tag-pill">' + esc(t) + "</span>"; }).join("") +
-          "</p>";
+          '</strong></p><ul style="margin:4px 0 0 16px;font-size:0.78rem">' +
+          tagLines.map(function (line) { return "<li>" + esc(line) + "</li>"; }).join("") +
+          "</ul>";
       }
       return html + "</div>";
     }
@@ -1775,20 +1830,12 @@
           L.aiMode === "AI_DRAFT" ||
           L.aiMode === "HUMAN_ONLY";
 
-        const budgetDisplay =
-          String(L.budgetSignal || "").toLowerCase() === "not_discussed"
-            ? ct("detail.budgetNotDiscussed")
-            : L.budgetSignal;
+        const leadInsights = renderLeadSummarySections(L);
 
         const grid =
           '<div class="grid2">' +
-          fieldHtml(ct("detail.treatment"), L.treatmentInterest) +
           fieldHtml(ct("detail.country"), L.country) +
           fieldHtml(ct("detail.language"), L.preferredLanguage) +
-          fieldHtml(ct("detail.travel"), L.travelTimeline) +
-          fieldHtml(ct("detail.urgency"), L.urgency) +
-          fieldHtml(ct("detail.bookingReadiness"), L.bookingIntent) +
-          fieldHtml(ct("detail.budget"), budgetDisplay) +
           fieldHtml(ct("detail.channel"), L.channelBadge || L.primaryChannel) +
           fieldHtml(ct("detail.messages"), L.messageCount) +
           "</div>";
@@ -1889,6 +1936,7 @@
           escRow +
           delegationHtml +
           grid +
+          leadInsights +
           summary +
           (json.visitPlanDraft
             ? '<div class="section-hd">' + esc(ct("detail.visitPlanSection")) + "</div>" + renderVisitPlan(json.visitPlanDraft)
