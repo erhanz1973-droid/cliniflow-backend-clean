@@ -181,7 +181,9 @@
 
 <script src="/admin-layout.js?v=202605162"></script>
 <script>
-  const API = '';
+  const API = (typeof cliniflowAdminApiOrigin === 'function'
+    ? cliniflowAdminApiOrigin()
+    : 'https://cliniflow-backend-clean-production.up.railway.app');
   const params = new URLSearchParams(location.search);
   let currentPatientId = params.get('patientId') || localStorage.getItem('selected_patient_id') || '';
   let allFiles = [];
@@ -285,8 +287,10 @@
         <div>👤 Çözülen UUID: <code style="color:#c4b5fd">${d.resolvedUUID || '—'}</code></div>
         <div>📁 patient_files satırları: <strong style="color:#60a5fa">${(d.patient_files_rows || []).length}</strong></div>
         ${d.patient_files_error ? `<div style="color:#f87171">❌ patient_files hata: ${escHtml(d.patient_files_error)}</div>` : ''}
-        <div>💬 Mesaj ekleri: <strong style="color:#60a5fa">${d.messages_with_attachments || 0}</strong></div>
+        <div>💬 Mesaj ekleri (messages): <strong style="color:#60a5fa">${d.messages_with_attachments || 0}</strong></div>
         ${d.messages_error ? `<div style="color:#f87171">❌ messages hata: ${escHtml(d.messages_error)}</div>` : ''}
+        <div>💬 patient_messages ekleri: <strong style="color:#60a5fa">${d.patient_messages_with_attachments || 0}</strong></div>
+        ${d.patient_messages_error ? `<div style="color:#f87171">❌ patient_messages hata: ${escHtml(d.patient_messages_error)}</div>` : ''}
         <div>📂 Disk intraoral: <strong style="color:${d.intraoral_disk_exists?'#4ade80':'#f87171'}">${d.intraoral_disk_exists ? '✓' : '✗'}</strong> (${(d.intraoral_files||[]).length} dosya)</div>
         <div>📂 Disk patient: <strong style="color:${d.patient_disk_exists?'#4ade80':'#f87171'}">${d.patient_disk_exists ? '✓' : '✗'}</strong> (${(d.patient_disk_files||[]).length} dosya)</div>
         <div style="margin-top:12px;color:#f8fafc;font-weight:700;">📋 patient_files URL'leri:</div>

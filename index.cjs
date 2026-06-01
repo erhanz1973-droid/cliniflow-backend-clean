@@ -26953,8 +26953,134 @@ async function assertPatientInClinicForStaff(patientRawId, staffClinicId) {
   const { data: pr, error } = await supabase.from("patients").select("id, clinic_id").eq("id", patientUuid).maybeSingle();
   if (error || !pr?.id) return { ok: false, code: "patient_not_found", patientUuid };
   const pc = pr.clinic_id != null ? String(pr.clinic_id).trim() : "";
-  if (!pc || pc !== cid) return { ok: false, code: "patient_clinic_mismatch", patientUuid };
-  return { ok: true, patientUuid };
+  if (pc && pc === cid) return { ok: true, patientUuid };
+  const linkClinic = await resolveClinicIdFromPatientClinicLinks(patientUuid, cid);
+  if (linkClinic && linkClinic === cid) return { ok: true, patientUuid };
+  if (!pc) return { ok: false, code: "patient_clinic_mismatch", patientUuid };
+  return { ok: false, code: "patient_clinic_mismatch", patientUuid };
+}
+
+/** Parse attachment JSON from messages / patient_messages into normalized file objects. */
+function parseAttachmentPayload(raw) {
+  if (raw == null) return [];
+  let att = raw;
+  if (typeof att === "string") {
+    const s = att.trim();
+    if (!s) return [];
+    try {
+      att = JSON.parse(s);
+    } catch (_) {
+      if (/^https?:\/\//i.test(s) || s.startsWith("/")) return [{ url: s, name: "file" }];
+      return [];
+    }
+  }
+  if (Array.isArray(att)) return att.flatMap((x) => parseAttachmentPayload(x));
+  if (typeof att !== "object") return [];
+
+  const items = [];
+  const directUrl =
+    att.url ??
+    att.attachment_url ??
+    att.imageUrl ??
+    att.image_url ??
+    att.originalImageUrl ??
+    att.original_image_url;
+  if (directUrl && String(directUrl).trim()) items.push(att);
+
+  const ai = att.aiResult || att.ai_result;
+  if (ai && typeof ai === "object") {
+    for (const key of ["originalImageUrl", "original_image_url", "simulatedImageUrl", "imageUrl"]) {
+      const u = ai[key];
+      if (u && String(u).trim()) {
+        items.push({
+          url: String(u).trim(),
+          name: "dental-photo.jpg",
+          fileType: "image",
+          mimeType: "image/jpeg",
+          subtype: key.includes("simulated") ? "simulation" : "dental",
+        });
+        break;
+      }
+    }
+  }
+  for (const key of ["photo_urls", "photoUrls", "urls"]) {
+    const arr = att[key];
+    if (!Array.isArray(arr)) continue;
+    for (const u of arr) {
+      const urlStr = typeof u === "string" ? u : u?.url;
+      if (!urlStr || !String(urlStr).trim()) continue;
+      items.push(
+        typeof u === "object" && u?.url
+          ? u
+          : { url: String(urlStr).trim(), name: "photo.jpg", fileType: "image", mimeType: "image/jpeg" },
+      );
+    }
+  }
+  return items;
+}
+
+function chatAttachmentItemsToFiles(row, items, tableName) {
+  const { from } = resolveLegacyMessageSenderFromRow(row);
+  const createdAt = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+  const rowId = String(row.message_id || row.id || "row");
+  return items
+    .map((att, idx) => {
+      const url = String(att.url ?? att.attachment_url ?? att.imageUrl ?? "").trim();
+      if (!url) return null;
+      const mime = String(att.mimeType || att.mime || "").toLowerCase();
+      const ftRaw = String(att.fileType || att.file_type || "").toLowerCase();
+      const ft =
+        ftRaw === "xray"
+          ? "xray"
+          : ftRaw === "pdf" || mime.includes("pdf")
+            ? "pdf"
+            : ftRaw === "image" || mime.startsWith("image/")
+              ? "image"
+              : "file";
+      return {
+        id: `${tableName}_${rowId}_${idx}`,
+        name: att.name || att.file_name || "file",
+        url,
+        mimeType: mime,
+        fileType: ft,
+        subtype: att.subtype || att.file_subtype || null,
+        size: Number(att.size || att.file_size || 0) || 0,
+        createdAt,
+        from,
+        source: "chat",
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchChatAttachmentRows(table, patientUUID, patientIdCandidates) {
+  const baseQ = (q) =>
+    patientIdCandidates.length <= 1
+      ? q.eq("patient_id", patientUUID)
+      : q.in("patient_id", patientIdCandidates);
+  const selectVariants = [
+    "id, message_id, patient_id, from_role, sender, sender_type, from_patient, attachments, attachment, created_at",
+    "id, message_id, patient_id, from_role, from_patient, attachment, created_at",
+    "id, patient_id, sender, attachment, created_at",
+    "id, patient_id, attachments, attachment, created_at",
+  ];
+  for (const sel of selectVariants) {
+    for (const col of ["attachments", "attachment"]) {
+      const r = await baseQ(supabase.from(table).select(sel))
+        .not(col, "is", null)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (!r.error && Array.isArray(r.data) && r.data.length) return r.data;
+    }
+    const rAll = await baseQ(supabase.from(table).select(sel))
+      .order("created_at", { ascending: false })
+      .limit(300);
+    if (!rAll.error && Array.isArray(rAll.data)) {
+      const withAtt = rAll.data.filter((row) => row.attachments != null || row.attachment != null);
+      if (withAtt.length) return withAtt;
+    }
+  }
+  return [];
 }
 
 // ─── Helper: collect files from all sources for a patient ─────────────────────
@@ -26967,55 +27093,24 @@ async function collectPatientFiles(patientId) {
   const folderVariants = await resolvePatientFolderIdVariants(patientId);
   const messagePatientIdCandidates = [...new Set([patientUUID, ...folderVariants])].filter(Boolean).slice(0, 12);
 
-  // ── Source 1: messages table (chat uploads) ───────────────────────────────
+  // ── Source 1: patient_messages + messages (chat uploads) ─────────────────
   if (isSupabaseEnabled()) {
     try {
-      // Try primary schema (sender column)
-      let msgRows = [];
-      const baseQ = (q) =>
-        messagePatientIdCandidates.length <= 1
-          ? q.eq("patient_id", patientUUID)
-          : q.in("patient_id", messagePatientIdCandidates);
-      const r1 = await baseQ(
-        supabase.from('messages')
-        .select('id, patient_id, sender, attachments, attachment, created_at')
-      )
-        .not('attachments', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(200);
-      if (!r1.error) {
-        msgRows = r1.data || [];
-      } else {
-        // Fallback schema (from_patient column)
-        const r2 = await baseQ(
-          supabase.from('messages')
-          .select('id, patient_id, from_patient, attachment, created_at')
-        )
-          .not('attachment', 'is', null)
-          .order('created_at', { ascending: false })
-          .limit(200);
-        if (!r2.error) msgRows = r2.data || [];
+      for (const table of ["patient_messages", "messages"]) {
+        const msgRows = await fetchChatAttachmentRows(table, patientUUID, messagePatientIdCandidates);
+        for (const row of msgRows) {
+          const attItems = [
+            ...parseAttachmentPayload(row.attachments),
+            ...parseAttachmentPayload(row.attachment),
+          ];
+          for (const fileRec of chatAttachmentItemsToFiles(row, attItems, table)) {
+            addFile(fileRec);
+          }
+        }
       }
-
-      for (const row of msgRows) {
-        const att = row.attachments || row.attachment;
-        if (!att || !att.url) continue;
-        const isClinic = row.sender === 'clinic' || row.sender === 'admin' || row.from_patient === false;
-        const ft = att.fileType || (att.mimeType && att.mimeType.startsWith('image/') ? 'image' : 'pdf');
-        addFile({
-          id: String(row.id),
-          name: att.name || 'file',
-          url: att.url,
-          mimeType: att.mimeType || '',
-          fileType: ft,
-          subtype: att.subtype || null,
-          size: att.size || 0,
-          createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
-          from: isClinic ? 'CLINIC' : 'PATIENT',
-          source: 'chat',
-        });
-      }
-    } catch (_) {}
+    } catch (chatFileErr) {
+      console.warn("[FILES] chat attachments:", chatFileErr?.message || chatFileErr);
+    }
 
     // ── Source 2: patient_files table ─────────────────────────────────────────
     try {
@@ -27534,6 +27629,16 @@ app.get('/api/admin/patient/:patientId/files', requireAdminAuth, async (req, res
         debugInfo.messages_with_attachments = (msgRaw || []).length;
         debugInfo.messages_error = msgErr ? msgErr.message : null;
         debugInfo.sample_attachments = (msgRaw || []).slice(0, 3).map(r => r.attachment);
+
+        const { data: pmRaw, error: pmErr } = await supabase
+          .from('patient_messages')
+          .select('id, attachment, attachments, created_at')
+          .eq('patient_id', patientUUID)
+          .limit(50);
+        const pmWithAtt = (pmRaw || []).filter((r) => r.attachment != null || r.attachments != null);
+        debugInfo.patient_messages_with_attachments = pmWithAtt.length;
+        debugInfo.patient_messages_error = pmErr ? pmErr.message : null;
+        debugInfo.sample_patient_message_attachments = pmWithAtt.slice(0, 3).map((r) => r.attachment || r.attachments);
       }
 
       const intraoralDir = path.join(__dirname, 'public', 'uploads', 'intraoral', patientId);
