@@ -7,6 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Hastalar - Clinifly Admin</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605281"/>
+  <script src="/admin-clinic-invitation.js?v=1"></script>
   <script>
     // Token and role check - redirect to login if not authenticated or not admin
     (function() {
@@ -538,6 +539,7 @@
       <div id="usageBadge" style="display:none; padding:6px 12px; border:1px solid #cbd5e1; border-radius:999px; background:#eff6ff; color:#1e40af; font-size:12px; font-weight:800; margin-top:12px;"></div>
     </header>
 
+    <div id="patientInviteQuickBar" style="display:none;"></div>
 
     <div id="tokenInfo" class="token-info" style="display:none;" data-i18n="patients.errors.noToken"></div>
 
@@ -1835,7 +1837,14 @@
     }
 
   </script>
-  <script src="/admin-layout.js?v=202605281"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      if (!window.ClinicInvitationAdmin) return;
+      ClinicInvitationAdmin.mountQuickBar("patientInviteQuickBar");
+      ClinicInvitationAdmin.load();
+    });
+  </script>
+  <script src="/admin-layout.js?v=202605282"></script>
 </body>
 </html>
 

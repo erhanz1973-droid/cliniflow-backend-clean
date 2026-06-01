@@ -60,7 +60,15 @@
   /* ── Navigation items (key maps to dashboard.nav.{key}) ────── */
   const NAV = [
     { href: '/admin.html', icon: iconGrid(),     key: 'dashboard' },
-    { href: '/admin-patients.html',  icon: iconUsers(),    key: 'patients',  badge: 'sbPatients' },
+    {
+      href: '/admin-patients.html',
+      icon: iconUsers(),
+      key: 'patients',
+      badge: 'sbPatients',
+      children: [
+        { href: '/admin-invite-patients.html', icon: iconQr(), key: 'invitePatients' },
+      ],
+    },
     { href: '/admin-treatment.html', icon: iconTooth(),    key: 'treatment' },
     { href: '/admin-schedule.html',  icon: iconCal(),      key: 'schedule' },
   ];
@@ -81,6 +89,7 @@
     // Fallbacks
     const fallbacks = {
       'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
+      'dashboard.nav.invitePatients': 'Invite Patients',
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Lead inbox',
       'dashboard.nav.aiLeads': 'Coordination Center',
@@ -117,24 +126,61 @@
   function iconReferrals() {
     return svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>');
   }
+  function iconQr() {
+    return svg(
+      '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="3" height="3"/><rect x="18" y="14" width="3" height="3"/><rect x="14" y="18" width="3" height="3"/><rect x="18" y="18" width="3" height="3"/>',
+    );
+  }
   function iconLogout()   { return svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'); }
   function iconMenu()     { return svg('<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>'); }
 
+  function hrefMatchesPage(currentHref, href) {
+    if (!href) return false;
+    const file = href.split('/').pop() || href;
+    return currentHref.indexOf(file) !== -1;
+  }
+
+  function navItemActive(currentHref, item) {
+    if (hrefMatchesPage(currentHref, item.href)) return true;
+    if (item.children && item.children.some(function (c) { return hrefMatchesPage(currentHref, c.href); })) {
+      return true;
+    }
+    return false;
+  }
+
   /* ── Build nav item HTML ──────────────────────────────────── */
-  function navItem(item, active) {
+  function navItem(item, active, opts) {
+    opts = opts || {};
     const cls = active ? 'al-nav-item active' : 'al-nav-item';
-    const badge = item.badge ? `<span class="al-nav-badge" id="${item.badge}"></span>` : '';
-    return `<a href="${item.href}" class="${cls}" data-nav-key="${item.key}">
+    const sub = opts.sub ? ' al-nav-sub' : '';
+    const badge = item.badge && !opts.sub ? `<span class="al-nav-badge" id="${item.badge}"></span>` : '';
+    return `<a href="${item.href}" class="${cls}${sub}" data-nav-key="${item.key}">
       <span class="al-nav-icon">${item.icon}</span>
       <span class="al-nav-label">${tn('dashboard.nav.' + item.key)}</span>
       ${badge}
     </a>`;
   }
 
+  function buildNavGroup(currentHref, items) {
+    return items
+      .map(function (i) {
+        var html = navItem(i, navItemActive(currentHref, i));
+        if (i.children && i.children.length) {
+          html += i.children
+            .map(function (c) {
+              return navItem(c, hrefMatchesPage(currentHref, c.href), { sub: true });
+            })
+            .join('');
+        }
+        return html;
+      })
+      .join('');
+  }
+
   /* ── Build full sidebar HTML ─────────────────────────────── */
   function buildSidebar(currentHref) {
-    const nav1 = NAV.map(i => navItem(i, currentHref.endsWith(i.key) || currentHref.includes(i.href.replace('/', '')))).join('');
-    const nav2 = NAV2.map(i => navItem(i, currentHref.endsWith(i.key) || currentHref.includes(i.href.replace('/', '')))).join('');
+    const nav1 = buildNavGroup(currentHref, NAV);
+    const nav2 = buildNavGroup(currentHref, NAV2);
     return `
       <a href="/admin.html" class="al-logo" style="text-decoration:none;">
         <div class="al-logo-icon">🦷</div>
@@ -319,7 +365,7 @@
 
     overlay.addEventListener('click', closeNav);
 
-    sidebar.querySelectorAll('.al-nav-item, .al-logo').forEach(function (el) {
+    sidebar.querySelectorAll('.al-nav-item, .al-nav-sub, .al-logo').forEach(function (el) {
       el.addEventListener('click', function () {
         if (isMobile()) closeNav();
       });

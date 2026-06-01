@@ -7253,6 +7253,14 @@ app.get("/admin-patients.html", (req, res) => {
   return res.status(404).send("admin-patients.html not found in cliniflow-admin/public");
 });
 
+app.get("/admin-invite-patients.html", (req, res) => {
+  const invitePath = path.join(publicDir, "admin-invite-patients.html");
+  if (fs.existsSync(invitePath)) {
+    return res.sendFile(invitePath);
+  }
+  return res.status(404).send("admin-invite-patients.html not found in cliniflow-admin/public");
+});
+
 app.get("/admin-patient-detail.html", (req, res) => {
   const detailPath = path.join(publicDir, "admin-patient-detail.html");
   if (fs.existsSync(detailPath)) {

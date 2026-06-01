@@ -209,6 +209,7 @@
         nav: {
           dashboard: "Dashboard",
           patients: "Hastalar",
+          invitePatients: "Hasta Daveti",
           travel: "Seyahat",
           treatment: "Tedaviler",
           schedule: "Takvim",
@@ -1271,6 +1272,27 @@
         customTypePrompt: "Tedavi adı (ör. sinüs kaldırma):"
       },
 
+      patientInvite: {
+        dashboardTitle: "Hasta Daveti",
+        quickTitle: "Hasta davet et",
+        quickHint: "Hastalarınız klinik kodu girmeden QR veya link ile otomatik kayıt olur.",
+        pageTitle: "Hasta Daveti",
+        pageSubtitle: "Davet linki veya QR kodunu paylaşın. Yeni hastalar kayıt sonrası kliniğinize otomatik bağlanır.",
+        copyLink: "Davet Linkini Kopyala",
+        showQr: "QR Kodu Göster",
+        downloadQr: "QR İndir",
+        printPoster: "Poster Yazdır",
+        invitationUrl: "Davet URL",
+        modalTitle: "Hasta daveti",
+        clinicLabel: "Klinik",
+        copied: "Kopyalandı!",
+        allowPopups: "Poster için açılır pencereye izin verin.",
+        posterTagline: "Clinifly'de kliniğimize katılmak için tarayın",
+        openFullPage: "Davet sayfasını aç",
+        codeHint: "Klinik kodu: {code}",
+        codeHintSuffix: "QR tarayan hastalar kayıt sonrası kliniğinize bağlanır."
+      },
+
       // Patients (admin-patients.html)
       patients: {
         title: "Clinifly Admin – Patients",
@@ -1684,6 +1706,7 @@
         nav: {
           dashboard: "Dashboard",
           patients: "Patients",
+          invitePatients: "Invite Patients",
           travel: "Travel",
           treatment: "Treatments",
           schedule: "Schedule",
@@ -2682,6 +2705,27 @@
         customTypePrompt: "Treatment name (e.g. sinus lift):"
       },
 
+      patientInvite: {
+        dashboardTitle: "Patient Invitation",
+        quickTitle: "Invite patients",
+        quickHint: "Share your link or QR so patients join automatically — no manual clinic code.",
+        pageTitle: "Invite Patients",
+        pageSubtitle: "Share your invitation link or QR code. New patients are linked to your clinic automatically after signup.",
+        copyLink: "Copy Invitation Link",
+        showQr: "Show QR Code",
+        downloadQr: "Download QR",
+        printPoster: "Print Poster",
+        invitationUrl: "Invitation URL",
+        modalTitle: "Patient invitation",
+        clinicLabel: "Clinic",
+        copied: "Copied!",
+        allowPopups: "Allow pop-ups to print the poster.",
+        posterTagline: "Scan to join our clinic on Clinifly",
+        openFullPage: "Open invite page",
+        codeHint: "Clinic code: {code}",
+        codeHintSuffix: "Patients who scan the QR are linked to your clinic after signup."
+      },
+
       // Patients (admin-patients.html)
       patients: {
         title: "Clinifly Admin – Patients",
@@ -3057,7 +3101,7 @@
           logout: "Выход",
           clinic: "Клиника"
         },
-        nav: { dashboard: "Панель", patients: "Пациенты", travel: "Поездки", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", aiLeads: "Центр координации", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
+        nav: { dashboard: "Панель", patients: "Пациенты", invitePatients: "Пригласить пациентов", travel: "Поездки", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Лиды", aiLeads: "Центр координации", files: "Файлы", referrals: "Рефералы", health: "Здоровье", settings: "Настройки" },
         charts: {
           metricTitleMonthlyPatients: "Количество зарегистрированных пациентов по месяцам",
           metricTitleMonthlyProcedures: "Количество процедур по месяцам",
@@ -4163,7 +4207,7 @@
           logout: "გასვლა",
           clinic: "კლინიკა"
         },
-        nav: { dashboard: "პანელი", patients: "პაციენტები", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "განრიგი", doctors: "ექიმები", chat: "ჩათი", leads: "ლიდები", aiLeads: "კოორდინაციის ცენტრი", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები", login: "შესვლა", register: "კლინიკის რეგისტრაცია" },
+        nav: { dashboard: "პანელი", patients: "პაციენტები", invitePatients: "პაციენტების მოწვევა", travel: "მოგზაურობა", treatment: "მკურნალება", schedule: "განრიგი", doctors: "ექიმები", chat: "ჩათი", leads: "ლიდები", aiLeads: "კოორდინაციის ცენტრი", files: "ფაილები", referrals: "მოწვევები", health: "ჯანმრთელობა", settings: "პარამეტრები", login: "შესვლა", register: "კლინიკის რეგისტრაცია" },
         charts: {
           metricTitleMonthlyPatients: "ყოველთვიული რეგისტრაციის რაოდენობა",
           metricTitleMonthlyProcedures: "ყოველთვიული პროცედურების რაოდენობა",

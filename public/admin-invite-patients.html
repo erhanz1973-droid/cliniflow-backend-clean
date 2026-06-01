@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605185"></script>
+  <script src="/admin-i18n.js?v=37"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Invite Patients - Clinifly Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605281"/>
+  <script src="/admin-clinic-invitation.js?v=1"></script>
+  <script>
+    (function () {
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      const userStr = localStorage.getItem("user") || localStorage.getItem("adminUser");
+      if (!token || !userStr) {
+        window.location.href = "/admin-login.html";
+        return;
+      }
+      try {
+        const user = JSON.parse(userStr);
+        if (!user || user.role !== "ADMIN") {
+          window.location.href = "/admin-login.html";
+        }
+      } catch (_e) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; margin: 0; background: #f1f5f9; color: #0f172a; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 20px 48px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px; box-shadow: 0 4px 24px rgba(15,23,42,0.06); }
+    #invitePatientsPage { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div id="invitePatientsPage"></div>
+    </div>
+  </div>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      if (!window.ClinicInvitationAdmin) return;
+      ClinicInvitationAdmin.mountInvitePage();
+      ClinicInvitationAdmin.load();
+    });
+  </script>
+  <script src="/admin-layout.js?v=202605282"></script>
+</body>
+</html>
