@@ -820,6 +820,22 @@ function extractMessageTextFromAttachments(row) {
   return "";
 }
 
+/** Strip coordinator JSON blobs from stored message text (legacy bad rows). */
+function polishPatientMessageText(text) {
+  const s = String(text || "").trim();
+  if (!s) return s;
+  try {
+    const {
+      looksLikeCoordinatorJsonBlob,
+      coercePatientFacingReply,
+    } = require("./lib/coordinatorReplySanitize.cjs");
+    if (!looksLikeCoordinatorJsonBlob(s)) return s;
+    return coercePatientFacingReply(s, { logLabel: "extractMessageTextFromDbRow" });
+  } catch {
+    return s;
+  }
+}
+
 /** Message body across `messages` / `patient_messages` schema variants (avoids empty admin bubbles). */
 function extractMessageTextFromDbRow(row) {
   if (!row || typeof row !== "object") return "";
@@ -843,7 +859,7 @@ function extractMessageTextFromDbRow(row) {
     const v = row[k];
     if (v == null) continue;
     const s = typeof v === "string" ? v.trim() : String(v).trim();
-    if (s !== "") return s;
+    if (s !== "") return polishPatientMessageText(s);
   }
   if (row.payload != null) {
     try {
@@ -852,7 +868,7 @@ function extractMessageTextFromDbRow(row) {
         const nested = ["text", "message", "body", "content"];
         for (let j = 0; j < nested.length; j++) {
           const v = p[nested[j]];
-          if (v != null && String(v).trim() !== "") return String(v).trim();
+          if (v != null && String(v).trim() !== "") return polishPatientMessageText(String(v).trim());
         }
       }
     } catch (_) {
@@ -866,7 +882,7 @@ function extractMessageTextFromDbRow(row) {
         const nested = ["text", "message", "body", "content"];
         for (let j = 0; j < nested.length; j++) {
           const v = d[nested[j]];
-          if (v != null && String(v).trim() !== "") return String(v).trim();
+          if (v != null && String(v).trim() !== "") return polishPatientMessageText(String(v).trim());
         }
       }
     } catch (_) {
@@ -874,7 +890,7 @@ function extractMessageTextFromDbRow(row) {
     }
   }
   const fromAtt = extractMessageTextFromAttachments(row);
-  if (fromAtt) return fromAtt;
+  if (fromAtt) return polishPatientMessageText(fromAtt);
   if (String(row.type || "").toLowerCase() === "ai_result") {
     return "AI analiz sonucu";
   }
