@@ -63197,6 +63197,19 @@ app.get("/admin-learning-candidates.html", (req, res) => {
   if (fs.existsSync(p)) return res.sendFile(p);
   return res.status(404).send("admin-learning-candidates.html not found");
 });
+/** Admin sidebar feature flags — AI_LEARNING_ENABLED=true restores Learning Candidates nav. */
+app.get("/admin-feature-flags.js", (req, res) => {
+  const aiLearningEnabled =
+    String(process.env.AI_LEARNING_ENABLED || "").trim().toLowerCase() === "true";
+  res.type("application/javascript");
+  res.set("Cache-Control", "no-store");
+  res.send(
+    "window.CLINIFLOW_ADMIN_FEATURES=window.CLINIFLOW_ADMIN_FEATURES||{};" +
+      "window.CLINIFLOW_ADMIN_FEATURES.aiLearningEnabled=" +
+      (aiLearningEnabled ? "true" : "false") +
+      ";",
+  );
+});
 
 /** Coordination Center UI strings for admin-coordination-i18n.js (same source as API X-UI-Language). */
 app.get("/locales/:lang/coordination.js", (req, res) => {

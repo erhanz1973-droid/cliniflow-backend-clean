@@ -32,7 +32,7 @@ const {
   assistantMessageOffersScheduling,
   coordinatorRecentlyOfferedScheduling,
 } = require("../lib/aiBookingState");
-const { parsePreferredDateFromMessage } = require("../lib/bookingDateParse");
+const { parsePreferredDateFromMessage, inferPreferredDateFromConversation } = require("../lib/bookingDateParse");
 
 let passed = 0;
 let failed = 0;
@@ -756,6 +756,27 @@ test("select_slot: past May week detected on May 31", () => {
   assert.ok(intro.includes("Mayıs"));
   assert.ok(intro.includes("geçmiş"));
   assert.ok(intro.includes("müsait saatleri"));
+});
+
+test("Friday request survives phone-only follow-up (Asia/Tbilisi)", () => {
+  const refDate = new Date("2026-06-01T12:00:00+04:00");
+  const tz = "Asia/Tbilisi";
+  const fridayMsg = "I need an appointment for Friday";
+  const fridayYmd = parsePreferredDateFromMessage(fridayMsg, tz, refDate);
+  assert.strictEqual(fridayYmd, "2026-06-05", "Friday from Monday ref is 2026-06-05");
+
+  const turns = [
+    { role: "patient", text: fridayMsg },
+    {
+      role: "assistant",
+      text: "Great! To arrange your appointment, could you share a phone or WhatsApp number where we can reach you?",
+    },
+    { role: "patient", text: "995514661161" },
+  ];
+  const fromPhoneTurn = parsePreferredDateFromMessage("995514661161", tz, refDate);
+  assert.strictEqual(fromPhoneTurn, null, "phone-only message has no embedded date");
+  const fromConvo = inferPreferredDateFromConversation(turns, tz, refDate);
+  assert.strictEqual(fromConvo, fridayYmd, "Friday intent preserved across contact gate");
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

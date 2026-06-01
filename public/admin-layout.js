@@ -72,16 +72,35 @@
     { href: '/admin-treatment.html', icon: iconTooth(),    key: 'treatment' },
     { href: '/admin-schedule.html',  icon: iconCal(),      key: 'schedule' },
   ];
-  const NAV2 = [
+  const NAV2_BASE = [
     { href: '/admin-doctor-applications-v2.html', icon: iconDoctor(), key: 'doctors', badge: 'sbDoctors' },
     { href: '/admin-leads.html',    icon: iconLeads(),    key: 'leads' },
     { href: '/admin-ai-leads.html', icon: iconAi(),       key: 'aiLeads' },
-    { href: '/admin-learning-candidates.html', icon: iconAi(), key: 'learningCandidates' },
     { href: '/admin-chat.html',     icon: iconChat(),     key: 'chat',    badge: 'sbChat' },
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
     { href: '/admin-referrals.html', icon: iconReferrals(), key: 'referrals', badge: 'sbReferrals' },
     { href: '/admin-settings.html', icon: iconSettings(), key: 'settings' },
   ];
+  const NAV2_AI_LEARNING = {
+    href: '/admin-learning-candidates.html',
+    icon: iconAi(),
+    key: 'learningCandidates',
+  };
+
+  function isAiLearningNavEnabled() {
+    if (window.__CLINIFLOW_AI_LEARNING_ENABLED__ === true) return true;
+    var flags = window.CLINIFLOW_ADMIN_FEATURES;
+    return !!(flags && flags.aiLearningEnabled === true);
+  }
+
+  function getNav2Items() {
+    if (!isAiLearningNavEnabled()) return NAV2_BASE.slice();
+    var items = NAV2_BASE.slice();
+    var aiLeadsIdx = items.findIndex(function (i) { return i.key === 'aiLeads'; });
+    var insertAt = aiLeadsIdx >= 0 ? aiLeadsIdx + 1 : 3;
+    items.splice(insertAt, 0, NAV2_AI_LEARNING);
+    return items;
+  }
 
   /* ── i18n helper ─────────────────────────────────────────────── */
   function tn(key) {
@@ -93,7 +112,7 @@
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Lead inbox',
       'dashboard.nav.aiLeads': 'Coordination Center',
-      'dashboard.nav.learningCandidates': 'Learning Candidates',
+      'dashboard.nav.learningCandidates': 'AI Learning',
       'dashboard.nav.chat': 'Messages',
       'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.settings': 'Settings',
       'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
@@ -180,7 +199,7 @@
   /* ── Build full sidebar HTML ─────────────────────────────── */
   function buildSidebar(currentHref) {
     const nav1 = buildNavGroup(currentHref, NAV);
-    const nav2 = buildNavGroup(currentHref, NAV2);
+    const nav2 = buildNavGroup(currentHref, getNav2Items());
     return `
       <a href="/admin.html" class="al-logo" style="text-decoration:none;">
         <div class="al-logo-icon">🦷</div>
@@ -538,12 +557,27 @@
     }, 45000);
   }
 
-  /* ── Run ─────────────────────────────────────────────────── */
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', inject);
-  } else {
-    inject();
+  function loadAdminFeatureFlags(done) {
+    if (window.CLINIFLOW_ADMIN_FEATURES) {
+      done();
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = '/admin-feature-flags.js?v=1';
+    s.onload = done;
+    s.onerror = done;
+    (document.head || document.documentElement).appendChild(s);
   }
+
+  function bootAdminLayout() {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', inject);
+    } else {
+      inject();
+    }
+  }
+
+  loadAdminFeatureFlags(bootAdminLayout);
 
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) {
