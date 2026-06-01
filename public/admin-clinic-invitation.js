@@ -10,7 +10,10 @@
     clinicName: "",
     clinicCode: "",
     webUrl: "",
+    /** Public PNG URL (no auth — safe for &lt;img&gt;) */
     qrSrc: "",
+    /** Blob URL after fetch — used for modal / preview / download */
+    qrObjectUrl: "",
   };
 
   function t(key, fallback) {
@@ -78,7 +81,9 @@
       "  </div>" +
       '  <div class="ci-modal-body">' +
       '    <p class="ci-clinic-label" id="ciClinicLabel"></p>' +
-      '    <div class="ci-qr-wrap"><img id="ciModalQr" class="ci-qr-large" alt="Invitation QR" width="280" height="280"/></div>' +
+      '    <div class="ci-qr-wrap"><img id="ciModalQr" class="ci-qr-large" alt="Invitation QR" width="280" height="280"/><p id="ciModalQrError" style="display:none;color:#b91c1c;font-size:13px;margin:8px 0 0;">' +
+      t("patientInvite.qrLoadError", "QR could not be loaded. Try again or use Copy Link.") +
+      "</p></div>" +
       '    <label class="ci-url-label">' +
       t("patientInvite.invitationUrl", "Invitation URL") +
       "</label>" +
@@ -144,6 +149,100 @@
     }
   }
 
+  function buildPublicQrUrl(clinicCode) {
+    var code = String(clinicCode || "").trim();
+    if (!code) return "";
+    return (
+      getApiBase() +
+      "/api/public/clinic-invite/" +
+      encodeURIComponent(code) +
+      "/qr.png"
+    );
+  }
+
+  function revokeQrObjectUrl() {
+    if (state.qrObjectUrl) {
+      try {
+        URL.revokeObjectURL(state.qrObjectUrl);
+      } catch (_e) {
+        /* ignore */
+      }
+      state.qrObjectUrl = "";
+    }
+  }
+
+  function wireQrImg(img, placeholder) {
+    if (!img) return;
+    img.onerror = function () {
+      console.warn("[patientInvite] QR image failed to load", state.qrSrc);
+      img.style.display = "none";
+      if (placeholder) placeholder.style.display = "flex";
+    };
+    img.onload = function () {
+      img.style.display = "block";
+      if (placeholder) placeholder.style.display = "none";
+    };
+  }
+
+  function setQrOnElement(img, placeholder) {
+    if (!img) return;
+    var src = state.qrObjectUrl || state.qrSrc;
+    if (!src) {
+      img.style.display = "none";
+      if (placeholder) placeholder.style.display = "flex";
+      return;
+    }
+    wireQrImg(img, placeholder);
+    img.src = src;
+  }
+
+  /** &lt;img&gt; cannot send Bearer token — load PNG via fetch (public, then admin fallback). */
+  function hydrateQrImages() {
+    var code = state.clinicCode;
+    if (!code) return Promise.resolve();
+    state.qrSrc = buildPublicQrUrl(code);
+
+    function blobToObjectUrl(blob) {
+      revokeQrObjectUrl();
+      state.qrObjectUrl = URL.createObjectURL(blob);
+      return state.qrObjectUrl;
+    }
+
+    var publicUrl = state.qrSrc + "?ts=" + Date.now();
+    return fetch(publicUrl, { credentials: "omit" })
+      .then(function (res) {
+        if (res.ok) return res.blob();
+        var token = getToken();
+        if (!token) throw new Error("qr_unauthorized");
+        return fetch(getApiBase() + "/api/admin/clinic-invitation/qr.png?ts=" + Date.now(), {
+          headers: { Authorization: "Bearer " + token },
+        }).then(function (r2) {
+          if (!r2.ok) throw new Error("qr_http_" + r2.status);
+          return r2.blob();
+        });
+      })
+      .then(function (blob) {
+        if (!blob || blob.size < 50) throw new Error("qr_empty");
+        blobToObjectUrl(blob);
+        setQrOnElement(document.getElementById("inviteQrImg"), document.getElementById("inviteQrPlaceholder"));
+        setQrOnElement(document.getElementById("invitePageQr"), document.getElementById("invitePageQrPh"));
+        setQrOnElement(document.getElementById("ciModalQr"), null);
+        console.log("[patientInvite] QR loaded", { clinicCode: code, bytes: blob.size });
+        var errEl = document.getElementById("ciModalQrError");
+        if (errEl) errEl.style.display = "none";
+      })
+      .catch(function (err) {
+        console.error("[patientInvite] QR hydrate failed:", err?.message || err);
+        revokeQrObjectUrl();
+        ["inviteQrImg", "invitePageQr", "ciModalQr"].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.style.display = "none";
+        });
+        var errEl = document.getElementById("ciModalQrError");
+        if (errEl) errEl.style.display = "block";
+      });
+  }
+
   function refreshModalContent() {
     var label = document.getElementById("ciClinicLabel");
     var urlInput = document.getElementById("ciModalUrl");
@@ -156,10 +255,7 @@
         "</strong>";
     }
     if (urlInput) urlInput.value = state.webUrl || "";
-    if (qr) {
-      qr.src = state.qrSrc || "";
-      qr.style.display = state.qrSrc ? "block" : "none";
-    }
+    setQrOnElement(qr, null);
   }
 
   function escapeHtml(s) {
@@ -172,6 +268,11 @@
   function openModal() {
     ensureModal();
     refreshModalContent();
+    if (state.clinicCode && !state.qrObjectUrl) {
+      hydrateQrImages().then(function () {
+        refreshModalContent();
+      });
+    }
     var el = document.getElementById("clinicInviteModal");
     if (el) el.style.display = "flex";
   }
@@ -203,15 +304,17 @@
   }
 
   function downloadQr() {
-    if (!state.qrSrc) return;
+    var href = state.qrObjectUrl || state.qrSrc;
+    if (!href) return;
     var a = document.createElement("a");
-    a.href = state.qrSrc;
+    a.href = href;
     a.download = "clinifly-invite-" + (state.clinicCode || "clinic") + ".png";
     a.click();
   }
 
   function printPoster() {
-    if (!state.qrSrc) return;
+    var qrForPrint = state.qrObjectUrl || state.qrSrc;
+    if (!qrForPrint) return;
     var clinicName = escapeHtml(state.clinicName || state.clinicCode || "Clinic");
     var w = global.open("", "_blank");
     if (!w) return alert(t("patientInvite.allowPopups", "Allow pop-ups to print the poster."));
@@ -225,7 +328,7 @@
         t("patientInvite.posterTagline", "Scan to join our clinic on Clinifly") +
         "</p>" +
         '<img src="' +
-        state.qrSrc +
+        qrForPrint +
         '" alt="QR"/>' +
         "<p style='font-size:14px;margin-top:24px;'>" +
         escapeHtml(state.webUrl) +
@@ -352,10 +455,7 @@
     state.clinicName = data.clinicName || inv.clinicName || "";
     state.clinicCode = data.clinicCode || inv.clinicCode || "";
     state.webUrl = inv.webUrl || "";
-    state.qrSrc =
-      getApiBase() +
-      "/api/admin/clinic-invitation/qr.png?ts=" +
-      Date.now();
+    state.qrSrc = buildPublicQrUrl(state.clinicCode);
     state.loaded = true;
 
     var urlInput = document.getElementById("inviteUrlInput");
@@ -373,24 +473,6 @@
           "Patients who scan the QR are linked to your clinic after signup.",
         );
     }
-    var qrImg = document.getElementById("inviteQrImg");
-    var qrPh = document.getElementById("inviteQrPlaceholder");
-    var pageQr = document.getElementById("invitePageQr");
-    var pageQrPh = document.getElementById("invitePageQrPh");
-    if (qrImg) {
-      qrImg.src = state.qrSrc;
-      qrImg.style.display = "block";
-      qrImg.onload = function () {
-        if (qrPh) qrPh.style.display = "none";
-      };
-    }
-    if (pageQr) {
-      pageQr.src = state.qrSrc;
-      pageQr.style.display = "block";
-      pageQr.onload = function () {
-        if (pageQrPh) pageQrPh.style.display = "none";
-      };
-    }
     var pageUrl = document.getElementById("invitePageUrl");
     if (pageUrl) pageUrl.value = state.webUrl;
     var pageClinic = document.getElementById("invitePageClinic");
@@ -399,6 +481,7 @@
     }
 
     refreshModalContent();
+    hydrateQrImages();
 
     ["patientInviteQuickBar", "patientInvitationCard", "invitePatientsPage"].forEach(
       function (id) {

@@ -1290,7 +1290,8 @@
         posterTagline: "Clinifly'de kliniğimize katılmak için tarayın",
         openFullPage: "Davet sayfasını aç",
         codeHint: "Klinik kodu: {code}",
-        codeHintSuffix: "QR tarayan hastalar kayıt sonrası kliniğinize bağlanır."
+        codeHintSuffix: "QR tarayan hastalar kayıt sonrası kliniğinize bağlanır.",
+        qrLoadError: "QR yüklenemedi. Tekrar deneyin veya davet linkini kopyalayın."
       },
 
       // Patients (admin-patients.html)
@@ -2723,7 +2724,8 @@
         posterTagline: "Scan to join our clinic on Clinifly",
         openFullPage: "Open invite page",
         codeHint: "Clinic code: {code}",
-        codeHintSuffix: "Patients who scan the QR are linked to your clinic after signup."
+        codeHintSuffix: "Patients who scan the QR are linked to your clinic after signup.",
+        qrLoadError: "QR could not be loaded. Try again or use Copy Link."
       },
 
       // Patients (admin-patients.html)
