@@ -43069,35 +43069,47 @@ app.post("/api/admin/login", async (req, res) => {
 
 // POST /api/admin/forgot-password/verify
 // Verify clinic code and email for password reset
-app.post("/api/admin/forgot-password/verify", (req, res) => {
+app.post("/api/admin/forgot-password/verify", async (req, res) => {
   try {
     const { clinicCode, email } = req.body || {};
-    
+
     if (!clinicCode || !String(clinicCode).trim()) {
       return res.status(400).json({ ok: false, error: "clinic_code_required" });
     }
-    
+
     if (!email || !String(email).trim()) {
       return res.status(400).json({ ok: false, error: "email_required" });
     }
-    
+
     const code = String(clinicCode).trim().toUpperCase();
     const emailLower = String(email).trim().toLowerCase();
+
+    if (isSupabaseEnabled()) {
+      const admin = await getAdminByEmailAndClinicCode(emailLower, code);
+      if (admin) {
+        return res.json({ ok: true });
+      }
+      const clinicRow = await getClinicByCode(code);
+      if (!clinicRow) {
+        return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
+      }
+      const dbEmail = String(clinicRow.email || "").trim().toLowerCase();
+      if (dbEmail !== emailLower) {
+        return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
+      }
+      return res.json({ ok: true });
+    }
+
     const clinic = readJson(CLINIC_FILE, {});
-    
-    // Check if clinic code matches
     if (!clinic.clinicCode || clinic.clinicCode.toUpperCase() !== code) {
       return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
     }
-    
-    // Check if email matches
     if (!clinic.email || clinic.email.toLowerCase() !== emailLower) {
       return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
     }
-    
+
     res.json({ ok: true });
   } catch (error) {
-
     res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
 });
@@ -43107,46 +43119,77 @@ app.post("/api/admin/forgot-password/verify", (req, res) => {
 app.post("/api/admin/forgot-password/reset", async (req, res) => {
   try {
     const { clinicCode, email, newPassword } = req.body || {};
-    
+
     if (!clinicCode || !String(clinicCode).trim()) {
       return res.status(400).json({ ok: false, error: "clinic_code_required" });
     }
-    
+
     if (!email || !String(email).trim()) {
       return res.status(400).json({ ok: false, error: "email_required" });
     }
-    
+
     if (!newPassword || !String(newPassword).trim()) {
       return res.status(400).json({ ok: false, error: "new_password_required" });
     }
-    
+
     if (String(newPassword).trim().length < 6) {
       return res.status(400).json({ ok: false, error: "password_too_short" });
     }
-    
+
     const code = String(clinicCode).trim().toUpperCase();
     const emailLower = String(email).trim().toLowerCase();
+    const hashedPassword = await bcrypt.hash(String(newPassword).trim(), 10);
+
+    if (isSupabaseEnabled()) {
+      let verified = false;
+      const admin = await getAdminByEmailAndClinicCode(emailLower, code);
+      if (admin) {
+        verified = true;
+        const { error: adminErr } = await supabase
+          .from("admins")
+          .update({ password_hash: hashedPassword })
+          .eq("id", admin.id);
+        if (adminErr) {
+          console.error("[ADMIN FORGOT] admins update error:", adminErr.message);
+          return res.status(500).json({ ok: false, error: "reset_failed" });
+        }
+      }
+
+      const clinicRow = await getClinicByCode(code);
+      if (clinicRow) {
+        const dbEmail = String(clinicRow.email || "").trim().toLowerCase();
+        if (dbEmail === emailLower) {
+          verified = true;
+          try {
+            await updateClinic(clinicRow.id, { password_hash: hashedPassword });
+          } catch (clinicErr) {
+            console.error("[ADMIN FORGOT] clinics update error:", clinicErr?.message || clinicErr);
+            return res.status(500).json({ ok: false, error: "reset_failed" });
+          }
+        }
+      }
+
+      if (!verified) {
+        return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
+      }
+
+      return res.json({ ok: true });
+    }
+
     const clinic = readJson(CLINIC_FILE, {});
-    
-    // Verify clinic code and email again
     if (!clinic.clinicCode || clinic.clinicCode.toUpperCase() !== code) {
       return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
     }
-    
     if (!clinic.email || clinic.email.toLowerCase() !== emailLower) {
       return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
     }
-    
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(String(newPassword).trim(), 10);
+
     clinic.password = hashedPassword;
     clinic.updatedAt = now();
-    
     writeJson(CLINIC_FILE, clinic);
-    
+
     res.json({ ok: true });
   } catch (error) {
-
     res.status(500).json({ ok: false, error: error?.message || "internal_error" });
   }
 });
