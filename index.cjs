@@ -9421,6 +9421,15 @@ app.get("/super-admin.html", (req, res) => {
   }
 });
 
+app.get("/super-admin-invitation-codes.html", (req, res) => {
+  const filePath = path.join(__dirname, "public", "super-admin-invitation-codes.html");
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send("Super Admin invitation codes page not found");
+  }
+});
+
 /**
  * Kayıtta klinik isteğe bağlı: hastalar klinik kodu olmadan da kayıt olabilir; boş bırakılabilir.
  * İsteğe bağlı çözümleme: clinicCode | clinic_code | clinic_id (UUID), sonra DEFAULT_CLINIC_CODE / DEFAULT_CLINIC_ID.
@@ -42558,7 +42567,7 @@ async function requireAdminAuth(req, res, next) {
 // Clinic registration (email/password) - Supabase supported
 app.post("/api/admin/register", async (req, res) => {
   try {
-    const { email, password, name, phone, address, clinicCode } = req.body || {};
+    const { email, password, name, phone, address, clinicCode, invitationCode } = req.body || {};
     
     if (!email || !String(email).trim()) {
       return res.status(400).json({ ok: false, error: "email_required" });
@@ -42725,13 +42734,28 @@ app.post("/api/admin/register", async (req, res) => {
         
 
         
+        let inviteApplied = null;
+        if (invitationCode) {
+          const redeemed = await redeemInvitationCodeForClinic(newClinic.id, invitationCode);
+          if (redeemed?.ok) {
+            inviteApplied = redeemed;
+          } else {
+            console.warn("[admin register] invitation redeem skipped", {
+              clinicId: String(newClinic.id).slice(0, 8),
+              reason: redeemed?.reason || "unknown",
+            });
+          }
+        }
+
         return res.json({
           ok: true,
           clinicId: newClinic.id,
           clinicCode: newClinic.clinic_code,
           token,
           status: "ACTIVE",
-          subscriptionStatus: "TRIAL",
+          subscriptionStatus: inviteApplied?.subscriptionStatus || "TRIAL",
+          invitationCodeApplied: inviteApplied?.ok === true,
+          invitationTrialEndsAt: inviteApplied?.trialEndsAt || null,
         });
       } catch (supabaseError) {
         console.error("[ADMIN REGISTER] ❌ Supabase insert FAILED:", supabaseError.message);
@@ -63444,6 +63468,11 @@ const { registerTreatmentProposalAdminRoutes } = require("./lib/treatmentProposa
 registerTreatmentProposalAdminRoutes(app, { requireAdminAuth });
 
 const { registerAiCoordinatorDoctorRoutes } = require("./lib/aiCoordinatorDoctorRoutes");
+const {
+  registerInvitationCodeRoutes,
+  startInvitationTrialDowngradeWorker,
+  redeemInvitationCodeForClinic,
+} = require("./lib/invitationCodes");
 
 const { setupAiSlaContinuity, afterPatientInboundMessage } = require("./lib/aiSlaContinuity");
 const { setupAiPatientInboundReply } = require("./lib/aiPatientInboundReply");
@@ -63506,6 +63535,8 @@ registerAiCoordinatorDoctorRoutes(app, {
   requireDoctorAuth,
   insertClinicMessage: inboundClinicMessageInsert,
 });
+registerInvitationCodeRoutes(app, { requireAdminAuth, superAdminGuard });
+startInvitationTrialDowngradeWorker();
 setupProposalSlaSweep();
 
 const { registerClinicTravelAdminRoutes } = require("./lib/clinicTravelAdminRoutes");

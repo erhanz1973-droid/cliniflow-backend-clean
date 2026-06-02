@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="/api-base.js?v=202605185"></script>
+  <title>Marketing · Invitation Codes</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; background:#111827; color:#e5e7eb; margin:0; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 22px; }
+    .card { background:#1f2937; border:1px solid #374151; border-radius:14px; padding:18px; margin-bottom:14px; }
+    input, select { background:#111827; border:1px solid #374151; color:#e5e7eb; border-radius:8px; padding:10px; }
+    button { background:#2563eb; border:none; color:#fff; border-radius:8px; padding:10px 14px; cursor:pointer; font-weight:600; }
+    button.secondary { background:#4b5563; }
+    button.danger { background:#b91c1c; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid #374151; padding:10px; text-align:left; font-size:14px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    .muted { color:#9ca3af; font-size:13px; }
+    .ok { color:#86efac; }
+    .err { color:#fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Marketing → Invitation Codes</h2>
+        <a href="/super-admin.html" class="muted">← Dashboard</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Create code</h3>
+      <div class="row">
+        <input id="code" placeholder="MEDSMILE60" />
+        <input id="description" placeholder="Campaign description" style="min-width:260px;flex:1" />
+        <select id="plan"><option>PREMIUM</option><option>PRO</option><option>BASIC</option><option>FREE</option></select>
+        <input id="trialDays" type="number" value="60" min="0" />
+        <input id="maxUses" type="number" placeholder="max uses" min="0" />
+        <input id="expiresAt" type="datetime-local" />
+        <button id="createBtn">Create code</button>
+      </div>
+      <div id="createMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Codes</h3>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <script>
+    const API = (typeof cliniflowAdminApiOrigin === "function" ? cliniflowAdminApiOrigin() : "").replace(/\/+$/, "");
+    const token = localStorage.getItem("super_admin_token") || "";
+    if (!token) window.location.href = "/super-admin-login.html";
+    const headers = { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
+
+    async function req(path, method = "GET", body) {
+      const res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || ("http_" + res.status));
+      return data;
+    }
+
+    function fmtDate(v) {
+      if (!v) return "—";
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+    }
+
+    async function loadCodes() {
+      const data = await req("/api/super-admin/invitation-codes");
+      const list = document.getElementById("list");
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (!items.length) {
+        list.innerHTML = '<div class="muted">No invitation codes yet.</div>';
+        return;
+      }
+      let html = "<table><thead><tr><th>Code</th><th>Plan</th><th>Trial</th><th>Usage</th><th>Expires</th><th>Active</th><th>Actions</th></tr></thead><tbody>";
+      items.forEach((x) => {
+        html += "<tr>";
+        html += `<td><strong>${x.code}</strong><div class="muted">${x.description || ""}</div></td>`;
+        html += `<td>${x.plan || "PREMIUM"}</td>`;
+        html += `<td>${Number(x.trial_days || 60)} days</td>`;
+        html += `<td>${Number(x.current_uses || 0)} / ${x.max_uses == null ? "∞" : Number(x.max_uses)}</td>`;
+        html += `<td>${fmtDate(x.expires_at)}</td>`;
+        html += `<td>${x.is_active === false ? "No" : "Yes"}</td>`;
+        html += `<td class="row">
+          <button class="secondary" onclick="toggleCode('${x.id}', ${x.is_active === false})">${x.is_active === false ? "Enable" : "Disable"}</button>
+          <button class="secondary" onclick="showRedemptions('${x.id}')">Clinics</button>
+          <button class="danger" onclick="deleteCode('${x.id}')">Delete</button>
+        </td>`;
+        html += "</tr>";
+      });
+      html += "</tbody></table><div id='codeClinics' class='muted' style='margin-top:10px'></div>";
+      list.innerHTML = html;
+    }
+
+    async function createCode() {
+      const msg = document.getElementById("createMsg");
+      msg.className = "muted";
+      msg.textContent = "";
+      try {
+        await req("/api/super-admin/invitation-codes", "POST", {
+          code: document.getElementById("code").value,
+          description: document.getElementById("description").value,
+          plan: document.getElementById("plan").value,
+          trialDays: Number(document.getElementById("trialDays").value || 60),
+          maxUses: document.getElementById("maxUses").value || null,
+          expiresAt: document.getElementById("expiresAt").value || null,
+        });
+        msg.className = "ok";
+        msg.textContent = "Code created.";
+        loadCodes();
+      } catch (e) {
+        msg.className = "err";
+        msg.textContent = e.message || "Create failed";
+      }
+    }
+
+    async function toggleCode(id, nextActive) {
+      try {
+        await req(`/api/super-admin/invitation-codes/${encodeURIComponent(id)}`, "PATCH", { is_active: nextActive });
+        loadCodes();
+      } catch (e) {
+        alert(e.message || "Toggle failed");
+      }
+    }
+
+    async function deleteCode(id) {
+      if (!confirm("Delete invitation code?")) return;
+      try {
+        await req(`/api/super-admin/invitation-codes/${encodeURIComponent(id)}`, "DELETE");
+        loadCodes();
+      } catch (e) {
+        alert(e.message || "Delete failed");
+      }
+    }
+
+    async function showRedemptions(id) {
+      try {
+        const data = await req(`/api/super-admin/invitation-codes/${encodeURIComponent(id)}/clinics`);
+        const items = Array.isArray(data.items) ? data.items : [];
+        const host = document.getElementById("codeClinics");
+        if (!items.length) {
+          host.innerHTML = "No clinics redeemed this code yet.";
+          return;
+        }
+        host.innerHTML = items.map((x) => {
+          const c = x.clinics || {};
+          return `${c.name || "Clinic"} (${c.clinic_code || c.id || "—"}) · redeemed ${fmtDate(x.redeemed_at)} · trial ends ${fmtDate(x.trial_ends_at)}`;
+        }).join("<br/>");
+      } catch (e) {
+        alert(e.message || "Load failed");
+      }
+    }
+
+    document.getElementById("createBtn").addEventListener("click", createCode);
+    loadCodes().catch((e) => {
+      document.getElementById("list").innerHTML = `<div class="err">${e.message || "Failed to load invitation codes."}</div>`;
+    });
+  </script>
+</body>
+</html>
