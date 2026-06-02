@@ -63848,6 +63848,8 @@ registerAiCoordinatorDoctorRoutes(app, {
   insertClinicMessage: inboundClinicMessageInsert,
 });
 registerInvitationCodeRoutes(app, { requireAdminAuth, superAdminGuard });
+const { registerWhatsAppSuperAdminRoutes } = require("./lib/omnichannel/registerWhatsAppSuperAdminRoutes");
+registerWhatsAppSuperAdminRoutes(app, { superAdminGuard });
 startInvitationTrialDowngradeWorker();
 setupProposalSlaSweep();
 
@@ -63904,6 +63906,11 @@ app.get(["/admin-whatsapp.html", "/admin/settings/whatsapp"], (req, res) => {
   const p = path.join(publicDir, "admin-whatsapp.html");
   if (fs.existsSync(p)) return res.sendFile(p);
   return res.status(404).send("admin-whatsapp.html not found");
+});
+app.get("/super-admin-whatsapp.html", (req, res) => {
+  const p = path.join(publicDir, "super-admin-whatsapp.html");
+  if (fs.existsSync(p)) return res.sendFile(p);
+  return res.status(404).send("super-admin-whatsapp.html not found");
 });
 app.get("/admin/ops-profile", (req, res) => {
   const p = path.join(publicDir, "admin-ops-profile.html");

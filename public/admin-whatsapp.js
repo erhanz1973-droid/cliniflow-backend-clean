@@ -264,7 +264,8 @@
   }
 
   function statusBadge(c) {
-    const op = c.operationalStatus || (c.status === "disconnected" ? "disconnected" : c.is_enabled === false ? "paused" : "active");
+    const op = c.operationalStatus || (c.status === "pending" ? "pending" : c.status === "disconnected" ? "disconnected" : c.is_enabled === false ? "paused" : "active");
+    if (op === "pending") return '<span class="badge badge-pending">Pending setup</span>';
     if (op === "active") return '<span class="badge badge-active">Active</span>';
     if (op === "paused") return '<span class="badge badge-paused">Paused</span>';
     return '<span class="badge badge-off">Disconnected</span>';
@@ -328,7 +329,28 @@
 
   function renderConnectionCard(c) {
     const id = c.id;
-    const op = c.operationalStatus || "active";
+    const op = c.operationalStatus || c.status || "active";
+
+    if (op === "pending" || c.status === "pending") {
+      return (
+        '<article class="conn-card" data-connection-id="' +
+        escapeHtml(id) +
+        '">' +
+        '<div class="conn-hd">' +
+        "<div><h3 class=\"conn-title\">" +
+        escapeHtml(c.phoneNumber || c.phone_number || "WhatsApp") +
+        " " +
+        statusBadge(c) +
+        "</h3>" +
+        '<p class="wa-muted" style="margin:4px 0 0">Clinifly is completing Meta setup for this number. You will be able to go live once it is connected.</p>' +
+        "</div></div>" +
+        '<p class="helper" style="margin-top:10px">Requested ' +
+        formatTs(c.created_at || c.metadata?.requestedAt) +
+        "</p>" +
+        "</article>"
+      );
+    }
+
     const routingOn = c.routingEnabled !== false && op === "active";
     const h = c.health || {};
     const stats = c.stats || {};
@@ -451,7 +473,7 @@
     if (!res.ok || !json.ok) return;
 
     const steps = json.steps || {};
-    const order = ["connect", "verifyWebhook", "testMessage", "configureAi", "goLive"];
+    const order = ["connect", "pendingApproval", "verifyWebhook", "testMessage", "configureAi", "goLive"];
     let currentMarked = false;
     if (onboardSteps) {
       onboardSteps.querySelectorAll("li").forEach(function (li) {
@@ -496,6 +518,7 @@
   function formatAuditLabel(type) {
     const map = {
       connected: "Connected",
+      pending_requested: "WhatsApp number submitted",
       created: "Connected",
       updated: "Updated",
       enabled: "WhatsApp turned ON",
@@ -530,6 +553,89 @@
     if (el) renderAuditList(el, json.events || []);
   }
 
+  function updateConnectUiState(rows) {
+    const pending = (rows || []).filter(function (c) {
+      return c.status === "pending" || c.operationalStatus === "pending";
+    });
+    const active = (rows || []).filter(function (c) {
+      return c.status === "active";
+    });
+    const banner = document.getElementById("pendingBanner");
+    const bannerText = document.getElementById("pendingBannerText");
+    const connectCard = document.getElementById("connectCard");
+    const simpleForm = document.getElementById("inpClinicWhatsApp");
+    const btnRequest = document.getElementById("btnRequestWhatsApp");
+
+    if (pending.length && !active.length) {
+      if (banner) {
+        banner.style.display = "block";
+        if (bannerText) {
+          bannerText.textContent =
+            "We received " +
+            (pending[0].phoneNumber || pending[0].phone_number || "your number") +
+            ". Clinifly will complete the Meta setup — usually within 1 business day.";
+        }
+      }
+      if (simpleForm) simpleForm.value = pending[0].phoneNumber || pending[0].phone_number || "";
+      if (btnRequest) {
+        btnRequest.disabled = true;
+        btnRequest.textContent = "Pending Clinifly setup";
+      }
+    } else if (pending.length && active.length) {
+      if (banner) banner.style.display = "block";
+      if (btnRequest) btnRequest.disabled = false;
+    } else {
+      if (banner) banner.style.display = "none";
+      if (btnRequest) {
+        btnRequest.disabled = false;
+        btnRequest.textContent = "Save WhatsApp number";
+      }
+    }
+
+    if (active.length && connectCard && !pending.length) {
+      const simpleSection = connectCard.querySelector("label[for='inpClinicWhatsApp']");
+      if (simpleSection && simpleSection.parentElement) {
+        const row = simpleSection.parentElement.querySelector(".wa-btn-row");
+        if (row) row.style.display = active.length ? "none" : "";
+        simpleSection.style.display = active.length ? "none" : "";
+        if (simpleForm) simpleForm.style.display = active.length ? "none" : "";
+      }
+    }
+  }
+
+  async function requestWhatsAppConnection() {
+    const input = document.getElementById("inpClinicWhatsApp");
+    const phone = input ? input.value.trim() : "";
+    if (!phone) {
+      setMsg("Enter your WhatsApp number with country code, e.g. +995599220690.", true);
+      return;
+    }
+    const btn = document.getElementById("btnRequestWhatsApp");
+    const prev = btn ? btn.textContent : "";
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Saving…';
+    }
+    const res = await fetch("/api/integrations/whatsapp/onboarding/request", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ phoneNumber: phone }),
+    });
+    const json = await res.json().catch(function () {
+      return {};
+    });
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+    if (!res.ok || !json.ok) {
+      setMsg(json.message || json.error || "Could not save your number", true);
+      return;
+    }
+    setMsg(json.message || "WhatsApp connection pending.", false);
+    await refreshAll();
+  }
+
   async function loadStatus() {
     if (!token) {
       statusText.textContent = "Please log in to the admin dashboard first.";
@@ -544,16 +650,22 @@
       return;
     }
     const rows = json.connections || [];
+    const pendingRows = json.pending || [];
     const live = rows.filter(function (c) {
       return c.operationalStatus === "active" || (c.status === "active" && c.is_enabled !== false);
     });
-    statusText.textContent = json.enabled
-      ? live.length
+    if (pendingRows.length && !live.length) {
+      statusText.textContent =
+        "WhatsApp connection pending — Clinifly is completing Meta setup for your number.";
+    } else if (json.enabled) {
+      statusText.textContent = live.length
         ? live.length + " number(s) live. Paused numbers still receive webhooks but won't route to inbox or AI."
-        : rows.length
-          ? rows.length + " number(s) connected — turn WhatsApp ON when ready."
-          : "No WhatsApp number connected yet."
-      : "WhatsApp is not configured on the server. Contact Clinifly support.";
+        : rows.length || pendingRows.length
+          ? (rows.length + pendingRows.length) + " number(s) — turn WhatsApp ON when ready."
+          : "No WhatsApp number connected yet.";
+    } else {
+      statusText.textContent = "WhatsApp is not configured on the server. Contact Clinifly support.";
+    }
   }
 
   async function loadConnections() {
@@ -570,14 +682,16 @@
       return;
     }
     const rows = json.connections || [];
+    updateConnectUiState(rows);
     if (!rows.length) {
       connectionsList.innerHTML =
-        '<p class="wa-muted">No WhatsApp number linked yet. Use <strong>Connect WhatsApp</strong> above.</p>';
+        '<p class="wa-muted">No WhatsApp number saved yet. Enter your number above to get started.</p>';
       return;
     }
     connectionsList.innerHTML = rows.map(renderConnectionCard).join("");
     wireConnectionButtons();
     rows.forEach(function (c) {
+      if (c.status === "pending" || c.operationalStatus === "pending") return;
       const el = connectionsList.querySelector('.conn-audit[data-audit-for="' + c.id + '"]');
       if (c.id && el) void loadConnectionAudit(c.id, el);
     });
@@ -960,6 +1074,18 @@
   document.getElementById("saveClinicAiBtn").addEventListener("click", function () {
     void saveClinicAi();
   });
+  const btnRequestWhatsApp = document.getElementById("btnRequestWhatsApp");
+  if (btnRequestWhatsApp) {
+    btnRequestWhatsApp.addEventListener("click", function () {
+      void requestWhatsAppConnection();
+    });
+  }
+  const inpClinicWhatsApp = document.getElementById("inpClinicWhatsApp");
+  if (inpClinicWhatsApp) {
+    inpClinicWhatsApp.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") void requestWhatsAppConnection();
+    });
+  }
 
   if (btnMetaConnect) {
     btnMetaConnect.addEventListener("click", function () {

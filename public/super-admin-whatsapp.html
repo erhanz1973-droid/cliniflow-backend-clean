@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202605185"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pending WhatsApp — Super Admin</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202605201" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+    .wrap { max-width: 960px; margin: 24px auto; padding: 0 16px 48px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .muted { color: #64748b; font-size: 14px; }
+    .nav { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; font-size: 14px; }
+    .nav a { color: #2563eb; text-decoration: none; font-weight: 600; }
+    .pending-item { border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-top: 12px; }
+    .pending-item h3 { margin: 0 0 8px; font-size: 16px; }
+    label { display: block; font-weight: 700; font-size: 13px; margin: 12px 0 6px; }
+    input { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; }
+    .btn { display: inline-flex; padding: 10px 16px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; margin-right: 8px; margin-top: 8px; }
+    .btn-primary { background: #25d366; color: #fff; }
+    .btn-secondary { background: #475569; color: #fff; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .preview { margin-top: 12px; padding: 12px; border-radius: 8px; background: #f0fdf4; border: 1px solid #86efac; font-size: 13px; display: none; }
+    .preview.error { background: #fef2f2; border-color: #fecaca; }
+    .preview.visible { display: block; }
+    .err { color: #b91c1c; }
+    .ok { color: #047857; }
+  </style>
+  <script>
+    (function () {
+      if (!localStorage.getItem("super_admin_token")) {
+        window.location.href = "/super-admin-login.html";
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <a href="/super-admin.html">← Dashboard</a>
+      <a href="/super-admin-invitation-codes.html">Invitation codes</a>
+    </nav>
+    <h1>Pending WhatsApp connections</h1>
+    <p class="muted">Clinics that submitted a WhatsApp number. Complete Meta Cloud API setup here.</p>
+    <p id="msg" class="muted"></p>
+
+    <div class="card">
+      <div id="pendingList" class="muted">Loading…</div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const API = typeof cliniflowAdminApiOrigin === "function"
+        ? cliniflowAdminApiOrigin()
+        : window.location.origin;
+      const msgEl = document.getElementById("msg");
+      const pendingList = document.getElementById("pendingList");
+
+      function token() {
+        return localStorage.getItem("super_admin_token") || "";
+      }
+
+      function headers(extra) {
+        return Object.assign(
+          { Authorization: "Bearer " + token(), "Content-Type": "application/json" },
+          extra || {},
+        );
+      }
+
+      function setMsg(text, isErr) {
+        msgEl.textContent = text || "";
+        msgEl.className = isErr ? "err" : text ? "ok" : "muted";
+      }
+
+      function escapeHtml(s) {
+        return String(s || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function formatTs(iso) {
+        if (!iso) return "—";
+        try { return new Date(iso).toLocaleString(); } catch { return iso; }
+      }
+
+      async function loadPending() {
+        const res = await fetch(API + "/api/super-admin/whatsapp/pending", { headers: headers() });
+        const json = await res.json().catch(function () { return {}; });
+        if (!res.ok || !json.ok) {
+          pendingList.textContent = json.error || "Could not load pending requests";
+          return;
+        }
+        const rows = json.pending || [];
+        if (!rows.length) {
+          pendingList.innerHTML = '<p class="muted">No pending WhatsApp requests.</p>';
+          return;
+        }
+        pendingList.innerHTML = rows.map(renderItem).join("");
+        wireItems();
+      }
+
+      function renderItem(row) {
+        const id = row.id;
+        return (
+          '<div class="pending-item" data-id="' + escapeHtml(id) + '">' +
+          "<h3>" + escapeHtml(row.clinicName || "Clinic") +
+          (row.clinicCode ? " <span class=\"muted\">(" + escapeHtml(row.clinicCode) + ")</span>" : "") +
+          "</h3>" +
+          "<p class=\"muted\" style=\"margin:0 0 4px\">Requested: <strong>" +
+          escapeHtml(row.phone_number || row.phoneNumber || "—") + "</strong></p>" +
+          "<p class=\"muted\" style=\"margin:0\">Submitted " + formatTs(row.created_at) + "</p>" +
+          "<label>Meta Phone Number ID</label>" +
+          '<input class="inp-pid" data-id="' + escapeHtml(id) + '" inputmode="numeric" placeholder="e.g. 1215203901656745" />' +
+          "<label>WABA ID <span class=\"muted\">(optional)</span></label>" +
+          '<input class="inp-waba" data-id="' + escapeHtml(id) + '" inputmode="numeric" placeholder="WhatsApp Business Account ID" />' +
+          '<div class="preview" data-preview-for="' + escapeHtml(id) + '"></div>' +
+          '<button type="button" class="btn btn-secondary btn-verify" data-id="' + escapeHtml(id) + '">Verify with Meta</button>' +
+          '<button type="button" class="btn btn-primary btn-activate" data-id="' + escapeHtml(id) + '" disabled>Activate for clinic</button>' +
+          "</div>"
+        );
+      }
+
+      const previewCache = {};
+
+      function wireItems() {
+        pendingList.querySelectorAll(".btn-verify").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            void verifyPending(btn.getAttribute("data-id"));
+          });
+        });
+        pendingList.querySelectorAll(".btn-activate").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            void activatePending(btn.getAttribute("data-id"));
+          });
+        });
+      }
+
+      function getInputs(connectionId) {
+        const root = pendingList.querySelector('.pending-item[data-id="' + connectionId + '"]');
+        if (!root) return {};
+        return {
+          root: root,
+          phoneNumberId: (root.querySelector(".inp-pid") || {}).value || "",
+          wabaId: (root.querySelector(".inp-waba") || {}).value || "",
+          previewEl: root.querySelector('[data-preview-for="' + connectionId + '"]'),
+          activateBtn: root.querySelector(".btn-activate"),
+        };
+      }
+
+      async function verifyPending(connectionId) {
+        const inp = getInputs(connectionId);
+        const pid = String(inp.phoneNumberId || "").trim();
+        if (!pid) {
+          setMsg("Enter Meta Phone Number ID first.", true);
+          return;
+        }
+        setMsg("Verifying with Meta…");
+        const res = await fetch(
+          API + "/api/super-admin/whatsapp/pending/" + encodeURIComponent(connectionId) + "/preview",
+          {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ phoneNumberId: pid, wabaId: inp.wabaId || null }),
+          },
+        );
+        const json = await res.json().catch(function () { return {}; });
+        if (!inp.previewEl) return;
+        inp.previewEl.classList.add("visible");
+        if (!res.ok || !json.ok) {
+          inp.previewEl.classList.add("error");
+          inp.previewEl.innerHTML =
+            "<strong>Verification failed</strong><br>" +
+            escapeHtml(json.message || json.error || "Unknown error");
+          previewCache[connectionId] = null;
+          if (inp.activateBtn) inp.activateBtn.disabled = true;
+          setMsg("Meta verification failed.", true);
+          return;
+        }
+        const p = json.preview || {};
+        previewCache[connectionId] = p;
+        inp.previewEl.classList.remove("error");
+        inp.previewEl.innerHTML =
+          "<strong>Verified</strong><br>" +
+          "Display: " + escapeHtml(p.displayName || "—") + "<br>" +
+          "Line: " + escapeHtml(p.phoneNumber || "—");
+        if (inp.activateBtn) inp.activateBtn.disabled = false;
+        setMsg("Verified — click Activate for clinic.", false);
+      }
+
+      async function activatePending(connectionId) {
+        const inp = getInputs(connectionId);
+        const pid = String(inp.phoneNumberId || "").trim();
+        if (!pid) {
+          setMsg("Enter and verify Phone Number ID first.", true);
+          return;
+        }
+        if (!confirm("Activate WhatsApp for this clinic?")) return;
+        setMsg("Activating…");
+        const res = await fetch(
+          API + "/api/super-admin/whatsapp/pending/" + encodeURIComponent(connectionId) + "/activate",
+          {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              phoneNumberId: pid,
+              wabaId: inp.wabaId || null,
+              displayName: previewCache[connectionId]?.displayName || null,
+              phoneNumber: previewCache[connectionId]?.phoneNumber || null,
+            }),
+          },
+        );
+        const json = await res.json().catch(function () { return {}; });
+        if (!res.ok || !json.ok) {
+          setMsg(json.message || json.error || "Activation failed", true);
+          return;
+        }
+        setMsg(json.message || "Activated.", false);
+        await loadPending();
+      }
+
+      void loadPending();
+    })();
+  </script>
+</body>
+</html>

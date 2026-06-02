@@ -136,7 +136,21 @@
     .badge-off { background: #f1f5f9; color: #64748b; }
     .badge-ok { background: #dcfce7; color: #166534; }
     .badge-warn { background: #fef3c7; color: #92400e; }
+    .badge-pending { background: #dbeafe; color: #1e40af; }
     .badge-bad { background: #fee2e2; color: #991b1b; }
+    .pending-banner {
+      background: #eff6ff; border: 1px solid #93c5fd; border-radius: 12px;
+      padding: 16px 18px; margin-bottom: 16px;
+    }
+    .pending-banner h3 { margin: 0 0 6px; font-size: 1rem; color: #1e3a8a; }
+    .advanced-setup {
+      margin-top: 16px; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0 18px 18px;
+      background: #fafafa;
+    }
+    .advanced-setup > summary {
+      cursor: pointer; font-weight: 700; color: #475569; padding: 16px 0; list-style: none;
+    }
+    .advanced-setup > summary::-webkit-details-marker { display: none; }
     .conn-card { padding: 18px 0; border-bottom: 1px solid #f1f5f9; }
     .conn-card:last-child { border-bottom: none; padding-bottom: 0; }
     .conn-hd { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -171,7 +185,7 @@
   <div class="wa-wrap">
     <p class="wa-muted"><a href="/admin-settings.html">← Settings</a> · <a href="/admin-ai-leads.html">Coordination inbox</a></p>
     <h1 style="margin:8px 0 4px;font-size:1.5rem">WhatsApp</h1>
-    <p class="wa-muted">Connect your clinic WhatsApp number so patient messages flow into Clinifly AI Coordination.</p>
+    <p class="wa-muted">Add your clinic WhatsApp number — we handle the technical Meta setup for you.</p>
 
     <div class="wa-notice" role="note">
       <strong>Your number stays yours.</strong>
@@ -182,85 +196,87 @@
       <h2>Setup checklist</h2>
       <p class="wa-muted">Follow these steps to go live. Use the pause switch anytime without losing your connection.</p>
       <ol class="onboard-steps" id="onboardSteps">
-        <li data-step="connect"><span class="step-num">1</span><span class="step-body"><strong>Connect WhatsApp</strong><span class="wa-muted">Link your business number.</span></span></li>
-        <li data-step="verifyWebhook"><span class="step-num">2</span><span class="step-body"><strong>Verify messages arrive</strong><span class="wa-muted" id="webhookHint">Meta sends a test signal to Clinifly when patients write you.</span></span></li>
-        <li data-step="testMessage"><span class="step-num">3</span><span class="step-body"><strong>Send test message</strong><span class="wa-muted">Confirm you can reply to a test number.</span></span></li>
-        <li data-step="configureAi"><span class="step-num">4</span><span class="step-body"><strong>Configure AI</strong><span class="wa-muted">Choose automation level for this number.</span></span></li>
-        <li data-step="goLive"><span class="step-num">5</span><span class="step-body"><strong>Go live</strong><span class="wa-muted">Turn WhatsApp ON when ready.</span></span></li>
+        <li data-step="connect"><span class="step-num">1</span><span class="step-body"><strong>Add your WhatsApp number</strong><span class="wa-muted">Enter the line patients use to reach you.</span></span></li>
+        <li data-step="pendingApproval"><span class="step-num">2</span><span class="step-body"><strong>Clinifly completes setup</strong><span class="wa-muted">We connect your number to Meta — usually within 1 business day.</span></span></li>
+        <li data-step="verifyWebhook"><span class="step-num">3</span><span class="step-body"><strong>Verify messages arrive</strong><span class="wa-muted" id="webhookHint">Meta sends a test signal to Clinifly when patients write you.</span></span></li>
+        <li data-step="testMessage"><span class="step-num">4</span><span class="step-body"><strong>Send test message</strong><span class="wa-muted">Confirm you can reply to a test number.</span></span></li>
+        <li data-step="configureAi"><span class="step-num">5</span><span class="step-body"><strong>Configure AI</strong><span class="wa-muted">Choose automation level for this number.</span></span></li>
+        <li data-step="goLive"><span class="step-num">6</span><span class="step-body"><strong>Go live</strong><span class="wa-muted">Turn WhatsApp ON when ready.</span></span></li>
       </ol>
     </div>
 
+    <div id="pendingBanner" class="pending-banner" style="display:none" role="status">
+      <h3>WhatsApp connection pending</h3>
+      <p class="wa-muted" style="margin:0" id="pendingBannerText">
+        We received your number. Clinifly will complete the Meta setup and notify you when messaging is ready.
+      </p>
+    </div>
+
     <div class="wa-card" id="connectCard">
-      <h2>Connect WhatsApp</h2>
-      <p class="wa-muted">Choose how you want to link your clinic number.</p>
+      <h2>Your WhatsApp number</h2>
+      <p class="wa-muted">Enter the WhatsApp line your patients use. No Meta IDs or API keys needed.</p>
 
-      <div class="mode-tabs" role="tablist">
-        <button type="button" class="mode-tab active" data-mode="quick" role="tab" aria-selected="true">Quick Connect <span style="font-weight:500;color:#16a34a">(recommended)</span></button>
-        <button type="button" class="mode-tab" data-mode="advanced" role="tab">Advanced manual setup</button>
+      <label for="inpClinicWhatsApp">WhatsApp number</label>
+      <input id="inpClinicWhatsApp" type="tel" autocomplete="tel" placeholder="+995599220690" />
+      <p class="helper">Include country code. Example: <code>+995599220690</code></p>
+
+      <div class="wa-btn-row">
+        <button type="button" class="wa-btn wa-btn-primary-lg" id="btnRequestWhatsApp">Save WhatsApp number</button>
       </div>
 
-      <div id="panelQuick" class="mode-panel active" role="tabpanel">
-        <p class="wa-intro">
-          Sign in to Meta, pick your business and phone number — Clinifly imports everything automatically.
-        </p>
-        <div class="cta-row">
-          <button type="button" class="wa-btn wa-btn-meta wa-btn-primary-lg" id="btnMetaConnect">
-            Connect with Meta
-          </button>
-          <span class="soon-inline" id="metaConnectSoon" aria-hidden="true">Coming soon</span>
-          <button type="button" class="btn-link" id="waHelpBtn">Need help connecting?</button>
-        </div>
-        <p class="helper">
-          Need to connect today? Switch to <strong>Advanced manual setup</strong> — use your Phone number ID from
-          <a href="https://business.facebook.com/wa/manage/home/" target="_blank" rel="noopener">WhatsApp Manager</a>.
-        </p>
-      </div>
+      <details class="advanced-setup" id="advancedWhatsAppSetup">
+        <summary>Advanced WhatsApp setup (Meta Cloud API)</summary>
+        <p class="wa-muted">For technical users or clinics that already have Meta Cloud API credentials.</p>
 
-      <div id="panelAdvanced" class="mode-panel" role="tabpanel">
-        <p class="wa-muted">For clinics setting up Cloud API manually in Meta. You only need one code from Meta — we verify it and fill in the rest.</p>
-
-        <label for="inpBusinessNumberId">WhatsApp Business Number <span class="opt">(from Meta)</span></label>
-        <input id="inpBusinessNumberId" inputmode="numeric" autocomplete="off" placeholder="e.g. 1123564784177382" />
-        <p class="helper">
-          In <a href="https://business.facebook.com/wa/manage/home/" target="_blank" rel="noopener">Meta WhatsApp Manager</a>,
-          open <strong>API setup</strong> (or Phone numbers → your number → API). Copy the numeric
-          <strong>Phone number ID</strong> — digits only, not your +90 patient-facing number.
-        </p>
-        <div class="example-box">
-          <strong>Example</strong> (format only): <code>1123564784177382</code><br>
-          Your clinic’s public WhatsApp line might show as <code>+90 555 …</code> — that is different from this ID.
+        <div class="mode-tabs" role="tablist" style="margin-top:12px">
+          <button type="button" class="mode-tab active" data-mode="quick" role="tab" aria-selected="true">Connect with Meta <span style="font-weight:500;color:#16a34a">(coming soon)</span></button>
+          <button type="button" class="mode-tab" data-mode="advanced" role="tab">Manual Cloud API</button>
         </div>
 
-        <div class="wa-btn-row">
-          <button type="button" class="wa-btn-outline wa-btn" id="btnVerifyNumber">Verify with Meta</button>
-        </div>
-
-        <div id="previewCard" class="preview-card" aria-live="polite"></div>
-
-        <details class="tech-details">
-          <summary>Technical details (optional)</summary>
-          <div class="inner">
-            <label for="inpWabaId" style="margin-top:0">Business account ID <span class="opt">(WABA — optional)</span></label>
-            <input id="inpWabaId" inputmode="numeric" autocomplete="off" placeholder="Only if Meta support gave you this" />
-            <p class="helper">
-              In WhatsApp Manager → <strong>Account tools</strong> → <strong>Phone numbers</strong>, the
-              <em>WhatsApp Business Account ID</em> may appear in the URL or account settings. If unsure, leave blank —
-              we often detect it from your first patient message.
-            </p>
-            <p class="helper">Example format: <code>123456789012345</code></p>
-            <p class="helper" style="margin-top:8px">
-              <a href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started" target="_blank" rel="noopener">Meta Cloud API getting started guide</a>
-            </p>
-            <input type="hidden" id="inpPhoneNumberId" />
-            <input type="hidden" id="inpDisplayName" />
-            <input type="hidden" id="inpPhoneNumber" />
+        <div id="panelQuick" class="mode-panel active" role="tabpanel">
+          <p class="wa-intro">
+            Sign in with Facebook, select your WhatsApp Business account, and grant permissions — Clinifly imports everything automatically.
+          </p>
+          <div class="cta-row">
+            <button type="button" class="wa-btn wa-btn-meta wa-btn-primary-lg" id="btnMetaConnect">
+              Connect with Meta
+            </button>
+            <span class="soon-inline" id="metaConnectSoon" aria-hidden="true">Coming soon</span>
+            <button type="button" class="btn-link" id="waHelpBtn">Need help connecting?</button>
           </div>
-        </details>
-
-        <div class="wa-btn-row">
-          <button type="button" class="wa-btn" id="saveConnectBtn" disabled>Confirm and connect</button>
         </div>
-      </div>
+
+        <div id="panelAdvanced" class="mode-panel" role="tabpanel">
+          <p class="wa-muted">Paste your Meta Phone number ID — we verify it and fill in the rest.</p>
+
+          <label for="inpBusinessNumberId">Phone Number ID <span class="opt">(from Meta WhatsApp Manager)</span></label>
+          <input id="inpBusinessNumberId" inputmode="numeric" autocomplete="off" placeholder="e.g. 1123564784177382" />
+          <p class="helper">
+            WhatsApp Manager → <strong>API setup</strong> → copy the numeric <strong>Phone number ID</strong> (not your +90 public line).
+          </p>
+
+          <div class="wa-btn-row">
+            <button type="button" class="wa-btn-outline wa-btn" id="btnVerifyNumber">Verify with Meta</button>
+          </div>
+
+          <div id="previewCard" class="preview-card" aria-live="polite"></div>
+
+          <details class="tech-details">
+            <summary>WABA ID and technical fields (optional)</summary>
+            <div class="inner">
+              <label for="inpWabaId" style="margin-top:0">WABA ID <span class="opt">(optional)</span></label>
+              <input id="inpWabaId" inputmode="numeric" autocomplete="off" placeholder="WhatsApp Business Account ID" />
+              <input type="hidden" id="inpPhoneNumberId" />
+              <input type="hidden" id="inpDisplayName" />
+              <input type="hidden" id="inpPhoneNumber" />
+            </div>
+          </details>
+
+          <div class="wa-btn-row">
+            <button type="button" class="wa-btn" id="saveConnectBtn" disabled>Confirm and connect</button>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div class="wa-card">
@@ -337,6 +353,6 @@
   </div>
 
   <script src="/admin-layout.js?v=202605201"></script>
-  <script src="/admin-whatsapp.js?v=6"></script>
+  <script src="/admin-whatsapp.js?v=7"></script>
 </body>
 </html>
