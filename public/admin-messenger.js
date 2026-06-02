@@ -422,7 +422,10 @@
       const err = c.subscribeMeta?.subscribe_error;
       return `${c.pageName || c.pageId}: ${sub}${err ? " — " + err : ""}`;
     });
-    const failLines = (json.failed || []).map((f) => `${f.pageId}: ${f.error}`);
+    const failLines = (json.failed || []).map((f) => {
+      const line = `${f.pageId}: ${f.error || "connect_failed"}`;
+      return f.message ? `${line} — ${f.message}` : line;
+    });
     setMsg(
       ["Connected " + (json.connected || []).length + " page(s).", ...lines, ...failLines].join("\n"),
       (json.connected || []).some((c) => !c.webhookSubscribed),
