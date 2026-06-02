@@ -30,6 +30,11 @@
     .tools-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #f1f5f9; }
     .muted { color: #64748b; font-size: 14px; }
     .page-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+    .token-warn {
+      background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px;
+      padding: 14px 16px; margin: 0 0 16px; font-size: 14px; color: #991b1b; line-height: 1.5;
+    }
+    .token-warn strong { color: #7f1d1d; }
     .err { color: #b91c1c; white-space: pre-wrap; }
     .ok { color: #047857; white-space: pre-wrap; }
     #pageSelect label { display: block; padding: 8px 0; cursor: pointer; }
@@ -118,6 +123,8 @@
     </p>
     <p class="intro-note">You must sign in with a Facebook account that manages the Page.</p>
 
+    <div id="tokenWarnBanner" class="token-warn" style="display:none" role="alert"></div>
+
     <div class="card">
       <p id="statusText" class="status-line muted-state">Loading…</p>
 
@@ -205,6 +212,6 @@
   </div>
 
   <script src="/admin-layout.js?v=202605201"></script>
-  <script src="/admin-messenger.js?v=5"></script>
+  <script src="/admin-messenger.js?v=7"></script>
 </body>
 </html>

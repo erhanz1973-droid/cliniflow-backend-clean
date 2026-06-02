@@ -10,7 +10,14 @@
   const waHelpModal = document.getElementById("waHelpModal");
   const waHelpModalClose = document.getElementById("waHelpModalClose");
   const btnMetaConnect = document.getElementById("btnMetaConnect");
-  const metaConnectSoon = document.getElementById("metaConnectSoon");
+  const metaUnavailableHint = document.getElementById("metaUnavailableHint");
+  const waConnectedSuccessCard = document.getElementById("waConnectedSuccessCard");
+  const waSuccessBusinessName = document.getElementById("waSuccessBusinessName");
+  const waSuccessDisplayNumber = document.getElementById("waSuccessDisplayNumber");
+  const connectPrimary = document.getElementById("connectPrimary");
+  const fallbackPhoneSetup = document.getElementById("fallbackPhoneSetup");
+  const advancedMetaSetup = document.getElementById("advancedMetaSetup");
+  const onboardStepPending = document.getElementById("onboardStepPending");
   let lastPreview = null;
   /** @type {{ available?: boolean, appId?: string, configId?: string, graphApiVersion?: string }|null} */
   let embeddedSignupConfig = null;
@@ -32,22 +39,41 @@
     document.body.style.overflow = "";
   }
 
+  function isLiveWhatsAppConnection(c) {
+    if (!c) return false;
+    if (c.status === "pending" || c.operationalStatus === "pending") return false;
+    const pid = String(c.phone_number_id || c.phoneNumberId || "");
+    if (pid.startsWith("pending_")) return false;
+    return c.status === "active" || c.operationalStatus === "active";
+  }
+
+  function showConnectedSuccess(summary) {
+    if (!waConnectedSuccessCard) return;
+    const businessName = String(summary?.businessName || summary?.displayName || "").trim();
+    const displayNumber = String(summary?.displayNumber || summary?.phoneNumber || "").trim();
+    if (!businessName && !displayNumber) {
+      waConnectedSuccessCard.classList.remove("visible");
+      return;
+    }
+    if (waSuccessBusinessName) waSuccessBusinessName.textContent = businessName || "—";
+    if (waSuccessDisplayNumber) waSuccessDisplayNumber.textContent = displayNumber || "—";
+    waConnectedSuccessCard.classList.add("visible");
+  }
+
+  function hideConnectedSuccess() {
+    if (waConnectedSuccessCard) waConnectedSuccessCard.classList.remove("visible");
+  }
+
   function applyMetaConnectButtonState() {
     if (!btnMetaConnect) return;
     const ready = Boolean(embeddedSignupConfig?.available && embeddedSignupConfig?.configId);
-    btnMetaConnect.disabled = !token;
-    if (metaConnectSoon) {
-      if (ready) {
-        metaConnectSoon.style.display = "none";
-      } else {
-        metaConnectSoon.style.display = "inline-block";
-        metaConnectSoon.textContent = "Manual setup";
-        metaConnectSoon.title = "Use Advanced tab until Embedded Signup is configured on Railway";
-      }
+    btnMetaConnect.disabled = !token || !ready;
+    if (metaUnavailableHint) {
+      metaUnavailableHint.style.display = ready ? "none" : "block";
     }
     btnMetaConnect.title = ready
       ? "Sign in with Meta and select your WhatsApp Business number"
-      : "Opens Advanced manual setup — Embedded Signup not configured on server yet";
+      : "Meta Embedded Signup is not configured — use manual setup below";
   }
 
   async function loadEmbeddedSignupConfig() {
@@ -179,7 +205,15 @@
       setMsg(json.message || json.error || "Could not complete Meta signup", true);
       return;
     }
-    setMsg("WhatsApp connected via Meta. Continue the checklist above.", false);
+    if (json.summary) {
+      showConnectedSuccess(json.summary);
+    } else if (json.connection) {
+      showConnectedSuccess({
+        businessName: json.connection.display_name || json.connection.displayName,
+        displayNumber: json.connection.phone_number || json.connection.phoneNumber,
+      });
+    }
+    setMsg("WhatsApp connected via Meta. Turn routing ON when you are ready to go live.", false);
     await refreshAll();
   }
 
@@ -188,13 +222,14 @@
 
     if (!embeddedSignupConfig?.available || !embeddedSignupConfig.configId) {
       setMsg(
-        (embeddedSignupConfig?.hint ||
-          "Quick Connect is not configured on the server yet.") +
-          " Use Advanced manual setup below.",
+        embeddedSignupConfig?.hint ||
+          "Connect with Meta is not configured on the server yet. Submit your number below for Clinifly setup.",
         true,
       );
-      setConnectMode("advanced");
-      openWaHelpModal();
+      if (fallbackPhoneSetup) {
+        fallbackPhoneSetup.open = true;
+        fallbackPhoneSetup.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
       return;
     }
 
@@ -557,16 +592,31 @@
     const pending = (rows || []).filter(function (c) {
       return c.status === "pending" || c.operationalStatus === "pending";
     });
-    const active = (rows || []).filter(function (c) {
-      return c.status === "active";
-    });
+    const live = (rows || []).filter(isLiveWhatsAppConnection);
     const banner = document.getElementById("pendingBanner");
     const bannerText = document.getElementById("pendingBannerText");
     const connectCard = document.getElementById("connectCard");
     const simpleForm = document.getElementById("inpClinicWhatsApp");
     const btnRequest = document.getElementById("btnRequestWhatsApp");
 
-    if (pending.length && !active.length) {
+    if (onboardStepPending) {
+      onboardStepPending.style.display = pending.length ? "" : "none";
+    }
+
+    if (live.length) {
+      showConnectedSuccess({
+        businessName: live[0].display_name || live[0].displayName,
+        displayNumber: live[0].phone_number || live[0].phoneNumber,
+      });
+      if (connectPrimary) connectPrimary.style.display = "none";
+      if (connectCard) connectCard.style.display = "none";
+    } else {
+      hideConnectedSuccess();
+      if (connectPrimary) connectPrimary.style.display = "";
+      if (connectCard) connectCard.style.display = "";
+    }
+
+    if (pending.length && !live.length) {
       if (banner) {
         banner.style.display = "block";
         if (bannerText) {
@@ -581,24 +631,15 @@
         btnRequest.disabled = true;
         btnRequest.textContent = "Pending Clinifly setup";
       }
-    } else if (pending.length && active.length) {
+      if (fallbackPhoneSetup) fallbackPhoneSetup.open = true;
+    } else if (pending.length && live.length) {
       if (banner) banner.style.display = "block";
       if (btnRequest) btnRequest.disabled = false;
     } else {
       if (banner) banner.style.display = "none";
       if (btnRequest) {
         btnRequest.disabled = false;
-        btnRequest.textContent = "Save WhatsApp number";
-      }
-    }
-
-    if (active.length && connectCard && !pending.length) {
-      const simpleSection = connectCard.querySelector("label[for='inpClinicWhatsApp']");
-      if (simpleSection && simpleSection.parentElement) {
-        const row = simpleSection.parentElement.querySelector(".wa-btn-row");
-        if (row) row.style.display = active.length ? "none" : "";
-        simpleSection.style.display = active.length ? "none" : "";
-        if (simpleForm) simpleForm.style.display = active.length ? "none" : "";
+        btnRequest.textContent = "Submit number for Clinifly setup";
       }
     }
   }
@@ -685,7 +726,7 @@
     updateConnectUiState(rows);
     if (!rows.length) {
       connectionsList.innerHTML =
-        '<p class="wa-muted">No WhatsApp number saved yet. Enter your number above to get started.</p>';
+        '<p class="wa-muted">No WhatsApp number connected yet. Click <strong>Connect with Meta</strong> above, or use manual setup if Meta login is unavailable.</p>';
       return;
     }
     connectionsList.innerHTML = rows.map(renderConnectionCard).join("");
@@ -768,16 +809,6 @@
     await loadConnections();
     await loadOnboarding();
     await loadClinicAudit();
-  }
-
-  function setConnectMode(mode) {
-    document.querySelectorAll(".mode-tab").forEach(function (tab) {
-      const on = tab.getAttribute("data-mode") === mode;
-      tab.classList.toggle("active", on);
-      tab.setAttribute("aria-selected", on ? "true" : "false");
-    });
-    document.getElementById("panelQuick").classList.toggle("active", mode === "quick");
-    document.getElementById("panelAdvanced").classList.toggle("active", mode === "advanced");
   }
 
   function renderPreviewCard(result) {
@@ -928,12 +959,20 @@
       setMsg(json.error || "Could not save connection", true);
       return;
     }
-    setMsg("WhatsApp connected successfully. Continue the checklist above.");
+    if (json.connection) {
+      showConnectedSuccess({
+        businessName: json.connection.display_name || json.connection.displayName || lastPreview.displayName,
+        displayNumber: json.connection.phone_number || json.connection.phoneNumber || lastPreview.phoneNumber,
+      });
+    }
+    setMsg("WhatsApp connected successfully. Turn routing ON when you are ready to go live.");
     lastPreview = null;
-    document.getElementById("previewCard").classList.remove("visible");
-    document.getElementById("inpBusinessNumberId").value = "";
-    document.getElementById("saveConnectBtn").disabled = true;
-    setConnectMode("quick");
+    const previewCard = document.getElementById("previewCard");
+    if (previewCard) previewCard.classList.remove("visible");
+    const bizInp = document.getElementById("inpBusinessNumberId");
+    if (bizInp) bizInp.value = "";
+    const saveBtn = document.getElementById("saveConnectBtn");
+    if (saveBtn) saveBtn.disabled = true;
     await refreshAll();
   }
 
@@ -1081,28 +1120,40 @@
     await loadClinicAudit();
   }
 
-  document.querySelectorAll(".mode-tab").forEach(function (tab) {
-    tab.addEventListener("click", function () {
-      setConnectMode(tab.getAttribute("data-mode"));
+  const btnVerifyNumber = document.getElementById("btnVerifyNumber");
+  if (btnVerifyNumber) {
+    btnVerifyNumber.addEventListener("click", function () {
+      void verifyBusinessNumber();
     });
-  });
-  document.getElementById("btnVerifyNumber").addEventListener("click", function () {
-    void verifyBusinessNumber();
-  });
-  document.getElementById("inpBusinessNumberId").addEventListener("input", function () {
-    lastPreview = null;
-    document.getElementById("saveConnectBtn").disabled = true;
-    document.getElementById("previewCard").classList.remove("visible");
-    document.getElementById("inpPhoneNumberId").value =
-      document.getElementById("inpBusinessNumberId").value.trim().replace(/\s+/g, "");
-  });
-  document.getElementById("inpWabaId").addEventListener("change", function () {
-    if (lastPreview) lastPreview = null;
-    document.getElementById("saveConnectBtn").disabled = true;
-  });
-  document.getElementById("saveConnectBtn").addEventListener("click", function () {
-    void saveConnect();
-  });
+  }
+  const inpBusinessNumberId = document.getElementById("inpBusinessNumberId");
+  if (inpBusinessNumberId) {
+    inpBusinessNumberId.addEventListener("input", function () {
+      lastPreview = null;
+      const saveConnectBtn = document.getElementById("saveConnectBtn");
+      if (saveConnectBtn) saveConnectBtn.disabled = true;
+      const previewCard = document.getElementById("previewCard");
+      if (previewCard) previewCard.classList.remove("visible");
+      const inpPhoneNumberId = document.getElementById("inpPhoneNumberId");
+      if (inpPhoneNumberId) {
+        inpPhoneNumberId.value = inpBusinessNumberId.value.trim().replace(/\s+/g, "");
+      }
+    });
+  }
+  const inpWabaId = document.getElementById("inpWabaId");
+  if (inpWabaId) {
+    inpWabaId.addEventListener("change", function () {
+      if (lastPreview) lastPreview = null;
+      const saveConnectBtn = document.getElementById("saveConnectBtn");
+      if (saveConnectBtn) saveConnectBtn.disabled = true;
+    });
+  }
+  const saveConnectBtnEl = document.getElementById("saveConnectBtn");
+  if (saveConnectBtnEl) {
+    saveConnectBtnEl.addEventListener("click", function () {
+      void saveConnect();
+    });
+  }
   document.getElementById("saveClinicAiBtn").addEventListener("click", function () {
     void saveClinicAi();
   });

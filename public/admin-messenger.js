@@ -16,6 +16,7 @@
   const helpBtn = document.getElementById("helpBtn");
   const helpModal = document.getElementById("helpModal");
   const helpModalClose = document.getElementById("helpModalClose");
+  const tokenWarnBanner = document.getElementById("tokenWarnBanner");
 
   /** @type {Record<string, unknown>} */
   const uiState = {
@@ -132,6 +133,26 @@
     statusText.className = "status-line" + (variant === "connected" ? "" : " muted-state");
   }
 
+  function showTokenWarning(pages) {
+    const unhealthy = (pages || []).filter((p) => p.needsFacebookReconnect || p.tokenHealthy === false);
+    if (!tokenWarnBanner) return;
+    if (!unhealthy.length) {
+      tokenWarnBanner.style.display = "none";
+      tokenWarnBanner.innerHTML = "";
+      return;
+    }
+    const names = unhealthy
+      .map((p) => p.pageName || p.pageId)
+      .filter(Boolean)
+      .join(", ");
+    tokenWarnBanner.style.display = "block";
+    tokenWarnBanner.innerHTML =
+      "<strong>Messenger AI cannot send replies</strong> — the stored Facebook Page token is invalid or does not match this Page" +
+      (names ? " (" + escapeHtml(names) + ")" : "") +
+      ". Click <strong>Retry permissions</strong>, complete Facebook login, select the correct Page, then <strong>Save selected</strong>. " +
+      "Until then, patients may message you but Clinifly cannot deliver AI or staff replies via Messenger.";
+  }
+
   async function loadStatus() {
     metaUiLog("loadStatus.start", {});
 
@@ -174,20 +195,33 @@
     const pages = (json.pages || []).filter((p) => String(p.status || "active") === "active");
     uiState.connectedPageCount = pages.length;
     uiState.activeConnections = pages;
+    showTokenWarning(pages);
 
     if (!json.enabled) {
       setStatusLine(
         "Server Meta credentials are not configured (META_APP_ID / META_APP_SECRET on Railway).",
       );
     } else if (pages.length) {
-      setStatusLine(
-        "Connected to " +
-          pages.length +
-          " Facebook Page" +
-          (pages.length === 1 ? "" : "s") +
-          ". You can connect another Page or remove one below.",
-        "connected",
-      );
+      const unhealthy = pages.filter((p) => p.needsFacebookReconnect || p.tokenHealthy === false);
+      if (unhealthy.length) {
+        setStatusLine(
+          "Page connected but Facebook token needs refresh — use Retry permissions so AI can reply on Messenger.",
+        );
+        setMsg(
+          (unhealthy[0].tokenIssue || "Stored token cannot access this Facebook Page.") +
+            "\n\nClick Retry permissions → Connect Facebook → Save selected.",
+          true,
+        );
+      } else {
+        setStatusLine(
+          "Connected to " +
+            pages.length +
+            " Facebook Page" +
+            (pages.length === 1 ? "" : "s") +
+            ". Messenger token is healthy — AI replies can be delivered.",
+          "connected",
+        );
+      }
     } else {
       setStatusLine("No Facebook Page connected yet.");
     }
@@ -197,7 +231,7 @@
       connectedList.innerHTML = pages
         .map(
           (p) =>
-            `<div class="page-row"><span><strong>${escapeHtml(p.pageName || p.pageId)}</strong><br><span class="muted">${p.pageId}</span> · webhook: ${p.webhookSubscribed ? "yes" : "no"}</span></span>` +
+            `<div class="page-row"><span><strong>${escapeHtml(p.pageName || p.pageId)}</strong><br><span class="muted">${p.pageId}</span> · webhook: ${p.webhookSubscribed ? "yes" : "no"} · token: ${p.tokenHealthy === false ? '<span class="err">reconnect required</span>' : "ok"}</span></span>` +
             `<button type="button" data-page-id="${escapeAttr(p.pageId)}" class="disconnect-btn">Disconnect</button></div>`,
         )
         .join("");
@@ -357,9 +391,28 @@
     metaUiLog("page_connect.result", { ok: res.ok, connected: json.connected, failed: json.failed });
 
     if (!res.ok || !json.ok) {
-      setMsg(json.message || json.error || "Connect failed", true);
+      const failDetail = (json.failed || [])
+        .map((f) => (f.message || f.error || "") + (f.pageId ? " (" + f.pageId + ")" : ""))
+        .filter(Boolean)
+        .join("\n");
+      setMsg(
+        (json.message || json.error || "Connect failed") + (failDetail ? "\n" + failDetail : ""),
+        true,
+      );
       applyConnectButtonState();
       return;
+    }
+    const tokenRejected = (json.failed || []).filter(
+      (f) =>
+        f.error === "page_token_mismatch" ||
+        f.error === "invalid_token" ||
+        f.error === "user_token_not_page",
+    );
+    if (tokenRejected.length && !(json.connected || []).length) {
+      setMsg(
+        "Facebook returned a token that cannot access the selected Page. Use Retry permissions and sign in with the Page admin account.",
+        true,
+      );
     }
 
     hidePagePicker();
@@ -448,7 +501,8 @@
         } else if (!actionRequired) {
           diagText = "Diagnostics OK — page token and probes look healthy.";
         }
-        setMsg(diagText.trim() || "Diagnostics finished.", findings.length > 0 || Boolean(actionRequired));
+        const showAsError = report.needsFacebookReconnect === true;
+        setMsg(diagText.trim() || "Diagnostics finished.", showAsError);
         if (debugEl) debugEl.textContent = JSON.stringify(json.report, null, 2);
       } catch (e) {
         setMsg(e.message || "Diagnostics request failed", true);
