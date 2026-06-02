@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202605185"></script>
-  <script src="/admin-i18n.js?v=46"></script>
+  <script src="/admin-i18n.js?v=47"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title data-i18n="opsProfile.pageTitle">Clinic AI Training</title>
   <link rel="stylesheet" href="/admin-layout.css?v=202605182" />
@@ -84,6 +84,100 @@
     @media (max-width: 640px) { .i18n-grid { grid-template-columns: 1fr; } }
     .i18n-row label { font-size: 0.68rem; }
     .multilingual-note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 12px; font-size: 0.8rem; line-height: 1.45; margin-bottom: 12px; color: #1e3a5f; }
+    .multilingual-note p { color: #334155; }
+    .multilingual-note strong { color: #0f172a; }
+
+    /* Light training panels inside dark admin shell (.al-main) — fix invisible pale text */
+    body.al-ready .al-main .ops-layout {
+      --muted: #64748b;
+      color: #0f172a;
+    }
+    body.al-ready .al-main .ops-main h1,
+    body.al-ready .al-main .ops-main h2,
+    body.al-ready .al-main .ops-main h3,
+    body.al-ready .al-main .ops-main h4,
+    body.al-ready .al-main .ops-main summary {
+      color: #0f172a !important;
+    }
+    body.al-ready .al-main .ops-main a:not(.btn) {
+      color: #1d4ed8;
+    }
+    body.al-ready .al-main .ops-nav,
+    body.al-ready .al-main .section-panel {
+      background: #ffffff !important;
+      border-color: #e2e8f0 !important;
+      color: #0f172a;
+    }
+    body.al-ready .al-main .ops-nav a {
+      color: #334155 !important;
+    }
+    body.al-ready .al-main .ops-nav a.active {
+      color: #047857 !important;
+    }
+    body.al-ready .al-main .ops-main .lead,
+    body.al-ready .al-main .ops-main .hint,
+    body.al-ready .al-main .ops-main .counts,
+    body.al-ready .al-main .ops-main .field-label,
+    body.al-ready .al-main .ops-main label,
+    body.al-ready .al-main .ops-main .field-helper,
+    body.al-ready .al-main .ops-main .field-ai-usage,
+    body.al-ready .al-main .ops-main .section-intro-text,
+    body.al-ready .al-main .ops-main .section-ai-summary,
+    body.al-ready .al-main .ops-main .example-text,
+    body.al-ready .al-main .ops-main .catalog-card .meta,
+    body.al-ready .al-main .ops-main .pricing-hint,
+    body.al-ready .al-main .ops-main .variant-row-hd span,
+    body.al-ready .al-main .ops-main .lang-matrix th {
+      color: #475569 !important;
+    }
+    body.al-ready .al-main .ops-main .check-row label {
+      color: #0f172a !important;
+      font-weight: 600;
+    }
+    body.al-ready .al-main .ops-main .section-intro,
+    body.al-ready .al-main .ops-main .variants-panel,
+    body.al-ready .al-main .ops-main .variant-row,
+    body.al-ready .al-main .ops-main .example-text {
+      background: #f8fafc !important;
+      border-color: #e2e8f0 !important;
+      color: #334155 !important;
+    }
+    body.al-ready .al-main .ops-main .multilingual-note {
+      background: #eff6ff !important;
+      border-color: #bfdbfe !important;
+      color: #1e3a5f !important;
+    }
+    body.al-ready .al-main .ops-main .multilingual-note p {
+      color: #334155 !important;
+    }
+    body.al-ready .al-main .ops-main .multilingual-note strong {
+      color: #0f172a !important;
+    }
+    body.al-ready .al-main .ops-main .info-btn {
+      background: #fff !important;
+      color: #64748b !important;
+      border-color: #e2e8f0 !important;
+    }
+    body.al-ready .al-main .ops-main .example-expander summary {
+      color: #2563eb !important;
+    }
+    body.al-ready .al-main .ops-main input,
+    body.al-ready .al-main .ops-main select,
+    body.al-ready .al-main .ops-main textarea {
+      background: #ffffff !important;
+      color: #0f172a !important;
+      border-color: #cbd5e1 !important;
+    }
+    body.al-ready .al-main .ops-main .btn.secondary {
+      background: #f1f5f9 !important;
+      color: #0f172a !important;
+      border-color: #e2e8f0 !important;
+    }
+    body.al-ready .al-main .ops-main table.autonomy td,
+    body.al-ready .al-main .ops-main table.autonomy th,
+    body.al-ready .al-main .ops-main .lang-matrix td {
+      color: #0f172a !important;
+    }
   </style>
 </head>
 <body>
@@ -115,6 +209,6 @@
   </div>
   <script src="/admin-field-help.js?v=3"></script>
   <script src="/admin-layout.js?v=202605184"></script>
-  <script src="/admin-ops-profile.js?v=12"></script>
+  <script src="/admin-ops-profile.js?v=14"></script>
 </body>
 </html>

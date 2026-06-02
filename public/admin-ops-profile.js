@@ -485,6 +485,7 @@ function renderAllSections() {
         <label><input type="checkbox" name="depositRequired" ${pay.depositRequired ? "checked" : ""}/> ${esc(op("depositRequired"))}</label>
         <label><input type="checkbox" name="installmentAvailable" ${pay.installmentAvailable ? "checked" : ""}/> ${esc(op("installments"))}</label>
         <label><input type="checkbox" name="financingSupport" ${pay.financingSupport ? "checked" : ""}/> ${esc(op("financing"))}</label>
+        <label><input type="checkbox" name="creditCardAccepted" ${pay.creditCardAccepted !== false ? "checked" : ""}/> ${esc(op("creditCard"))}</label>
       </div>
       ${fld("refundPolicy", `<textarea name="refundPolicy"${ph("refundPolicy")}>${esc(pay.refundPolicy)}</textarea>`, true)}
       ${fld("cancellationPolicy", `<textarea name="cancellationPolicy"${ph("cancellationPolicy")}>${esc(pay.cancellationPolicy)}</textarea>`, true)}
@@ -605,6 +606,7 @@ function collectSectionPayload(sectionId) {
         depositRequired: chk("depositRequired"),
         installmentAvailable: chk("installmentAvailable"),
         financingSupport: chk("financingSupport"),
+        creditCardAccepted: chk("creditCardAccepted"),
         acceptedCurrencies: parseList(String(fd.get("acceptedCurrencies"))),
         refundPolicy: String(fd.get("refundPolicy") || "").trim() || null,
         cancellationPolicy: String(fd.get("cancellationPolicy") || "").trim() || null,
