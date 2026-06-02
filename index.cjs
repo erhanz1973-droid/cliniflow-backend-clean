@@ -37097,6 +37097,59 @@ function planToMaxPatients(plan) {
   return 3;
 }
 
+function normalizeAdminSubscriptionPlan(raw) {
+  const p = String(raw || "FREE").trim().toUpperCase();
+  if (p === "BASIC") return "PRO";
+  if (p === "PROFESSIONAL") return "PRO";
+  if (p === "PRO" || p === "PREMIUM" || p === "FREE") return p;
+  return "FREE";
+}
+
+function normalizeAdminSubscriptionStatus(raw) {
+  const s = String(raw || "ACTIVE").trim().toUpperCase();
+  if (["ACTIVE", "TRIAL", "EXPIRED", "SUSPENDED"].includes(s)) return s;
+  if (s === "APPROVED") return "ACTIVE";
+  if (s === "PENDING") return "TRIAL";
+  return "ACTIVE";
+}
+
+function resolveClinicSubscriptionSnapshot(clinicRow) {
+  const settings = parseClinicSettingsJson(clinicRow?.settings);
+  const subscriptionPlan = normalizeAdminSubscriptionPlan(
+    clinicRow?.subscription_plan ||
+      clinicRow?.subscriptionPlan ||
+      settings.subscriptionPlan ||
+      clinicRow?.plan ||
+      "FREE",
+  );
+  const subscriptionStatus = normalizeAdminSubscriptionStatus(
+    clinicRow?.subscription_status ||
+      clinicRow?.subscriptionStatus ||
+      settings.subscriptionStatus ||
+      clinicRow?.status ||
+      "ACTIVE",
+  );
+  const trialEndsAt =
+    clinicRow?.trial_ends_at ||
+    clinicRow?.trialEndsAt ||
+    settings.trialEndsAt ||
+    null;
+  const subscriptionStartsAt =
+    clinicRow?.subscription_starts_at ||
+    clinicRow?.subscriptionStartsAt ||
+    settings.subscriptionStartsAt ||
+    clinicRow?.created_at ||
+    clinicRow?.createdAt ||
+    null;
+  return {
+    subscriptionPlan,
+    subscriptionStatus,
+    trialEndsAt: trialEndsAt ? String(trialEndsAt) : null,
+    subscriptionStartsAt: subscriptionStartsAt ? String(subscriptionStartsAt) : null,
+    settings,
+  };
+}
+
 /** API-facing cap: finite number or null when unlimited (PRO / sentinel). Separate from active-treatment SaaS caps. */
 function resolvePatientRosterCap(clinicRow, planKey) {
   const planNorm = normalizeClinicPlan(planKey || clinicRow?.plan || clinicRow?.subscriptionPlan || "FREE");
@@ -43521,6 +43574,7 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
         const clinicRows = Array.isArray(supabaseClinics) ? supabaseClinics : [];
         for (const clinic of clinicRows) {
             const clinicCode = (clinic.clinic_code || "").toUpperCase();
+            const sub = resolveClinicSubscriptionSnapshot(clinic);
             
             // Debug: Log each clinic from Supabase
             console.log(`[SUPER_ADMIN] Processing Supabase clinic:`, {
@@ -43560,10 +43614,14 @@ app.get("/api/super-admin/clinics", superAdminGuard, async (req, res) => {
               clinicCode: clinic.clinic_code,
               phone: clinic.phone,
               address: clinic.address,
-              status: "ACTIVE", // All Supabase clinics are considered active
+              status: clinic.status || sub.subscriptionStatus || "ACTIVE",
               plan: clinic.plan,
               planExpiry: clinic.plan_expiry || null,
               planSource: clinic.plan_source || null,
+              subscriptionPlan: sub.subscriptionPlan,
+              subscriptionStatus: sub.subscriptionStatus,
+              trialEndsAt: sub.trialEndsAt,
+              subscriptionStartsAt: sub.subscriptionStartsAt,
               enabledModules: clinic.enabled_modules,
               createdAt: clinic.created_at,
               updatedAt: clinic.updated_at,
@@ -44211,6 +44269,190 @@ app.post("/api/super-admin/clinics/:clinicId/assign-plan", superAdminGuard, asyn
   } catch (err) {
     console.error("[assign-plan]", err);
     return res.status(500).json({ ok: false, error: "internal_error", message: err?.message || "Error" });
+  }
+});
+
+// GET /api/super-admin/clinics/:clinicId/subscription
+app.get("/api/super-admin/clinics/:clinicId/subscription", superAdminGuard, async (req, res) => {
+  try {
+    const clinicId = String(req.params?.clinicId || "").trim();
+    if (!UUID_RE.test(clinicId)) {
+      return res.status(400).json({ ok: false, error: "invalid_clinic_id" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_not_configured" });
+    }
+    const { data, error } = await supabase
+      .from("clinics")
+      .select("*")
+      .eq("id", clinicId)
+      .maybeSingle();
+    if (error) return res.status(500).json({ ok: false, error: "clinic_load_failed", message: error.message });
+    if (!data?.id) return res.status(404).json({ ok: false, error: "clinic_not_found" });
+    const sub = resolveClinicSubscriptionSnapshot(data);
+    return res.json({
+      ok: true,
+      clinicId,
+      subscriptionPlan: sub.subscriptionPlan,
+      subscriptionStatus: sub.subscriptionStatus,
+      trialEndsAt: sub.trialEndsAt,
+      subscriptionStartsAt: sub.subscriptionStartsAt,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "internal_error", message: e?.message || "error" });
+  }
+});
+
+// PATCH /api/super-admin/clinics/:clinicId/subscription
+app.patch("/api/super-admin/clinics/:clinicId/subscription", superAdminGuard, async (req, res) => {
+  try {
+    const clinicId = String(req.params?.clinicId || "").trim();
+    if (!UUID_RE.test(clinicId)) {
+      return res.status(400).json({ ok: false, error: "invalid_clinic_id" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(503).json({ ok: false, error: "supabase_not_configured" });
+    }
+
+    const { data: currentRow, error: currentErr } = await supabase
+      .from("clinics")
+      .select("*")
+      .eq("id", clinicId)
+      .maybeSingle();
+    if (currentErr) {
+      return res.status(500).json({ ok: false, error: "clinic_load_failed", message: currentErr.message });
+    }
+    if (!currentRow?.id) {
+      return res.status(404).json({ ok: false, error: "clinic_not_found" });
+    }
+
+    const before = resolveClinicSubscriptionSnapshot(currentRow);
+    const body = req.body || {};
+    const targetPlan = normalizeAdminSubscriptionPlan(
+      body.subscriptionPlan ?? before.subscriptionPlan,
+    );
+    const targetStatus = normalizeAdminSubscriptionStatus(
+      body.subscriptionStatus ?? before.subscriptionStatus,
+    );
+
+    let trialEndsAt = body.trialEndsAt ?? before.trialEndsAt ?? null;
+    if (trialEndsAt != null && String(trialEndsAt).trim() !== "") {
+      const parsed = Date.parse(String(trialEndsAt));
+      if (!Number.isFinite(parsed)) {
+        return res.status(400).json({ ok: false, error: "invalid_trial_ends_at" });
+      }
+      trialEndsAt = new Date(parsed).toISOString();
+    } else {
+      trialEndsAt = null;
+    }
+
+    let subscriptionStartsAt = body.subscriptionStartsAt ?? before.subscriptionStartsAt ?? null;
+    if (subscriptionStartsAt != null && String(subscriptionStartsAt).trim() !== "") {
+      const parsed = Date.parse(String(subscriptionStartsAt));
+      if (!Number.isFinite(parsed)) {
+        return res.status(400).json({ ok: false, error: "invalid_subscription_starts_at" });
+      }
+      subscriptionStartsAt = new Date(parsed).toISOString();
+    } else {
+      subscriptionStartsAt = new Date().toISOString();
+    }
+
+    const settings = parseClinicSettingsJson(currentRow.settings);
+    const oldLog = Array.isArray(settings.subscriptionActivityLog)
+      ? settings.subscriptionActivityLog.filter((x) => x && typeof x === "object").slice(0, 99)
+      : [];
+    const nowIso = new Date().toISOString();
+    const actor = String(req.superAdmin?.email || "super-admin").trim();
+    const activityEntries = [];
+
+    if (before.subscriptionPlan !== targetPlan) {
+      activityEntries.push(
+        `Super Admin changed clinic plan from ${before.subscriptionPlan} to ${targetPlan}`,
+      );
+    }
+    if (before.subscriptionStatus !== targetStatus) {
+      activityEntries.push(`Super Admin changed clinic status to ${targetStatus}`);
+    }
+    if (targetStatus === "TRIAL" && trialEndsAt) {
+      const days = Math.max(0, Math.ceil((Date.parse(trialEndsAt) - Date.now()) / (24 * 60 * 60 * 1000)));
+      activityEntries.push(
+        `Super Admin activated ${days}-day ${targetPlan} trial`,
+      );
+    } else if (before.trialEndsAt && !trialEndsAt) {
+      activityEntries.push("Super Admin removed trial period");
+    }
+
+    const newLog = [
+      ...activityEntries.map((message) => ({ at: nowIso, by: actor, message })),
+      ...oldLog,
+    ].slice(0, 100);
+
+    settings.subscriptionPlan = targetPlan;
+    settings.subscriptionStatus = targetStatus;
+    settings.trialEndsAt = trialEndsAt;
+    settings.subscriptionStartsAt = subscriptionStartsAt;
+    settings.subscriptionActivityLog = newLog;
+
+    const mappedPlanForCore = targetPlan === "PREMIUM" ? "PRO" : targetPlan;
+    const clinicStatus = targetStatus === "SUSPENDED" ? "SUSPENDED" : "ACTIVE";
+    const patch = {
+      plan: mappedPlanForCore,
+      status: clinicStatus,
+      max_patients: planToMaxPatients(mappedPlanForCore),
+      subscription_plan: targetPlan,
+      subscription_status: targetStatus,
+      trial_ends_at: trialEndsAt,
+      subscription_starts_at: subscriptionStartsAt,
+      settings,
+      updated_at: nowIso,
+    };
+
+    let currentPatch = { ...patch };
+    let lastError = null;
+    for (let i = 0; i < 10; i += 1) {
+      const { data: updated, error: updateErr } = await supabase
+        .from("clinics")
+        .update(currentPatch)
+        .eq("id", clinicId)
+        .select("*")
+        .maybeSingle();
+      if (!updateErr && updated?.id) {
+        return res.json({
+          ok: true,
+          clinicId,
+          subscriptionPlan: targetPlan,
+          subscriptionStatus: targetStatus,
+          trialEndsAt,
+          subscriptionStartsAt,
+          activityLog: newLog.slice(0, 20),
+        });
+      }
+      lastError = updateErr;
+      if (!isMissingColumnError(updateErr)) {
+        return res.status(500).json({
+          ok: false,
+          error: "subscription_update_failed",
+          message: updateErr?.message || "update_failed",
+        });
+      }
+      const missing = getMissingColumnName(updateErr);
+      if (!missing || !(missing in currentPatch)) {
+        return res.status(500).json({
+          ok: false,
+          error: "subscription_update_failed",
+          message: updateErr?.message || "update_failed",
+        });
+      }
+      delete currentPatch[missing];
+    }
+
+    return res.status(500).json({
+      ok: false,
+      error: "subscription_update_failed",
+      message: lastError?.message || "update_failed",
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "internal_error", message: e?.message || "error" });
   }
 });
 

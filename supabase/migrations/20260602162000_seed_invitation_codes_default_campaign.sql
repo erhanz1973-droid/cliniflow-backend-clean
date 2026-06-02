@@ -1,4 +1,5 @@
 -- Default invitation campaign codes (Premium 60-day trial)
+-- Must run AFTER invitation_codes table migration.
 INSERT INTO invitation_codes (code, description, plan, trial_days, max_uses, is_active)
 VALUES
   ('WELCOME60', 'Welcome campaign: 60-day Premium trial', 'PREMIUM', 60, NULL, true),
@@ -10,4 +11,5 @@ SET
   description = EXCLUDED.description,
   plan = EXCLUDED.plan,
   trial_days = EXCLUDED.trial_days,
-  is_active = EXCLUDED.is_active;
+  is_active = EXCLUDED.is_active,
+  updated_at = now();
