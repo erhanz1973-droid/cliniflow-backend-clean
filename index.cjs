@@ -63486,6 +63486,13 @@ registerMetaIntegrationRoutes(app, {
   requireAdminAuth,
   afterPatientInboundMessage,
 });
+const {
+  setupOmnichannelMirrorDoctorNotify,
+} = require("./lib/mirrorOmnichannelPatientMessage");
+setupOmnichannelMirrorDoctorNotify({
+  notifyAfterMirror: (opts, insertedRow) =>
+    runChatMessageSideEffectsAfterInsert(opts, insertedRow, "patient_messages"),
+});
 const { setupWhatsAppInbound: bindWhatsAppAiInbound } = require("./lib/omnichannel/whatsappInbound");
 bindWhatsAppAiInbound({ afterPatientInboundMessage });
 console.log("[whatsapp] AI inbound hook bound after orchestration setup");
