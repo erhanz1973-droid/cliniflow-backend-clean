@@ -141,6 +141,17 @@
       max-width: 92%;
     }
     .tl-patient { background: var(--blue-l); border: 1px solid #bfdbfe; margin-left: auto; }
+    .tl-link-warn {
+      margin-top: 6px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      color: #9a3412;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+    }
     .tl-ai { background: #f8fafc; border: 1px solid var(--border); }
     .placeholder-reply {
       margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm);
@@ -1101,13 +1112,28 @@
       return channelSourceBadge({ channelBadge: label, primaryChannel: ch });
     }
 
+    function messageContainsExternalLink(text) {
+      var s = String(text || "");
+      return /https?:\/\/\S+/i.test(s) || /\bwww\.\S+/i.test(s);
+    }
+
+    function externalLinkWarningHtml() {
+      var msg =
+        (typeof ct === "function" && ct("security.externalLinkWarning")) ||
+        "⚠️ Hasta harici bağlantı gönderdi. Virüs veya dolandırıcılık riski olabilir — bağlantıyı açmayın.";
+      return '<div class="tl-link-warn" role="alert">' + esc(msg) + "</div>";
+    }
+
     function renderOperationalTimeline(events) {
       return (events || []).map(function (ev) {
         const label = ev.label || ev.eventType || 'Event';
         const meta = ev.eventMetadata || {};
         const chBadge = timelineChannelBadge(ev);
         let body = '';
-        if (ev.patientMessage) body += '<div class="tl-bubble tl-patient">' + esc(ev.patientMessage) + '</div>';
+        if (ev.patientMessage) {
+          body += '<div class="tl-bubble tl-patient">' + esc(ev.patientMessage) + "</div>";
+          if (messageContainsExternalLink(ev.patientMessage)) body += externalLinkWarningHtml();
+        }
         if (ev.aiReply) body += '<div class="tl-bubble tl-ai">' + esc(ev.aiReply) + '</div>';
         if (!body && meta.title) body = '<div class="tl-system">' + esc(meta.title) + '</div>';
         if (!body && meta.mode) body = '<div class="tl-system">Mode: ' + esc(meta.mode) + '</div>';
