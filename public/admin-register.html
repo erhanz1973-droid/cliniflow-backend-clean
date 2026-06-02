@@ -245,6 +245,19 @@
         </div>
 
         <div class="form-group">
+          <label class="field-label-muted" for="invitationCode">
+            Invitation Code (Optional)
+          </label>
+          <input
+            type="text"
+            id="invitationCode"
+            name="invitationCode"
+            style="text-transform: uppercase;"
+          />
+          <div class="help-text">If you have a campaign code, enter it to activate your premium trial.</div>
+        </div>
+
+        <div class="form-group">
           <label class="field-label-muted" for="email">
             <span data-i18n="auth.email">Email</span> <span class="required" data-i18n="register.emailRequired">*</span>
           </label>
@@ -435,6 +448,7 @@
       const confirmPassword = document.getElementById('confirmPassword').value;
       const phone = document.getElementById('phone').value.trim();
       const address = document.getElementById('address').value.trim();
+      const invitationCode = document.getElementById('invitationCode').value.trim().toUpperCase();
 
       if (!clinicName || !clinicCode || !email || !password) {
         showAlert(i18n.t('register.errors.nameRequired'), 'error');
@@ -495,6 +509,7 @@
             clinicName,
             name: clinicName,
             clinicCode,
+            invitationCode: invitationCode || undefined,
             email,
             password,
             phone: phone || undefined,
@@ -523,7 +538,7 @@
         // Check if OTP verification is required
         if (data.requiresOTP) {
           // Show OTP verification form
-          showOTPVerificationForm(email, clinicCode, clinicName);
+          showOTPVerificationForm(email, clinicCode, clinicName, invitationCode);
           return;
         }
 
@@ -566,7 +581,7 @@
       }
     });
 
-    function showOTPVerificationForm(email, clinicCode, clinicName) {
+    function showOTPVerificationForm(email, clinicCode, clinicName, invitationCode) {
       // Hide original form
       document.getElementById('form-container').style.display = 'none';
       
@@ -615,8 +630,8 @@
       otpContainer.id = 'otp-container';
       
       // Add event listeners
-      document.getElementById('verify-otp-btn').addEventListener('click', () => verifyOTP(email, clinicCode, clinicName));
-      document.getElementById('resend-otp-btn').addEventListener('click', () => resendOTP(email, clinicCode, clinicName));
+      document.getElementById('verify-otp-btn').addEventListener('click', () => verifyOTP(email, clinicCode, clinicName, invitationCode));
+      document.getElementById('resend-otp-btn').addEventListener('click', () => resendOTP(email, clinicCode, clinicName, invitationCode));
       document.getElementById('back-to-register-btn').addEventListener('click', () => location.reload());
       
       // Auto-focus OTP input
@@ -628,7 +643,7 @@
       });
     }
 
-    async function verifyOTP(email, clinicCode, clinicName) {
+    async function verifyOTP(email, clinicCode, clinicName, invitationCode) {
       const otp = document.getElementById('otp-input').value.trim();
       const verifyBtn = document.getElementById('verify-otp-btn');
       
@@ -649,7 +664,8 @@
           body: JSON.stringify({
             email,
             otp,
-            clinicCode
+            clinicCode,
+            invitationCode: invitationCode || undefined,
           }),
         });
         
@@ -719,7 +735,7 @@
       }
     }
 
-    async function resendOTP(email, clinicCode, clinicName) {
+    async function resendOTP(email, clinicCode, clinicName, invitationCode) {
       const resendBtn = document.getElementById('resend-otp-btn');
       
       resendBtn.disabled = true;
@@ -735,6 +751,7 @@
             email,
             clinicCode,
             clinicName,
+            invitationCode: invitationCode || undefined,
           }),
         });
         
@@ -763,6 +780,9 @@
 
     // Auto-uppercase clinic code
     document.getElementById('clinicCode').addEventListener('input', (e) => {
+      e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    });
+    document.getElementById('invitationCode').addEventListener('input', (e) => {
       e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
     });
 

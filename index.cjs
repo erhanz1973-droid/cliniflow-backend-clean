@@ -646,6 +646,11 @@ function flattenRegistrationPayload(raw) {
     password_hash: raw.password_hash ?? inner.password_hash,
     password: raw.password ?? inner.password,
     clinic_code: raw.clinic_code ?? inner.clinic_code ?? raw.clinicCode ?? inner.clinicCode,
+    invitation_code:
+      raw.invitation_code ??
+      inner.invitation_code ??
+      raw.invitationCode ??
+      inner.invitationCode,
     plan: raw.plan ?? inner.plan,
     max_patients: raw.max_patients ?? inner.max_patients,
   };
@@ -42671,6 +42676,7 @@ app.post("/api/admin/register", async (req, res) => {
           address: String(address || "").trim(),
           email: emailLower,
           clinic_code: clinicCodeTrimmed,
+          invitation_code: String(invitationCode || "").trim() || null,
           password_hash: hashedPassword,
           plan: "FREE",
           max_patients: 3,
@@ -45824,6 +45830,25 @@ app.post("/api/admin/verify-registration-otp", async (req, res) => {
       return res.status(500).json({ ok: false, error: "clinic_creation_failed", message: "Failed to create clinic" });
     }
 
+    const invitationCodeRaw =
+      registrationData.invitation_code ?? registrationData.invitationCode ?? null;
+    const invitationCodeNorm = String(invitationCodeRaw || "").trim();
+    let invitationApplied = false;
+    if (invitationCodeNorm) {
+      try {
+        const redeemed = await redeemInvitationCodeForClinic(newClinic.id, invitationCodeNorm);
+        invitationApplied = redeemed?.ok === true;
+        if (!invitationApplied) {
+          console.warn("[VERIFY REG OTP] invitation redeem skipped", {
+            clinicId: String(newClinic.id).slice(0, 8),
+            reason: redeemed?.reason || "unknown",
+          });
+        }
+      } catch (e) {
+        console.warn("[VERIFY REG OTP] invitation redeem error", e?.message || e);
+      }
+    }
+
     if (isSupabaseEnabled()) {
       if (latestOTP.id) {
         await markOTPUsed(latestOTP.id);
@@ -45857,6 +45882,7 @@ app.post("/api/admin/verify-registration-otp", async (req, res) => {
       ok: true,
       message: "Clinic registered successfully",
       token,
+      invitationCodeApplied: invitationApplied,
       clinic: {
         id: newClinic.id,
         clinic_code: newClinic.clinic_code,
@@ -45879,7 +45905,7 @@ app.post("/api/admin/verify-registration-otp", async (req, res) => {
 // Resend OTP for clinic registration
 app.post("/api/admin/resend-otp", async (req, res) => {
   try {
-    const { email, clinicCode, clinicName, phone: bodyPhone } = req.body || {};
+    const { email, clinicCode, clinicName, phone: bodyPhone, invitationCode } = req.body || {};
     
     if (!email || !clinicCode || !clinicName) {
       return res.status(400).json({ ok: false, error: "missing_fields", message: "Email, clinic code, and clinic name are required" });
@@ -45924,6 +45950,7 @@ app.post("/api/admin/resend-otp", async (req, res) => {
       email: emailLower,
       clinic_code: clinicCodeTrimmed,
       clinicCode: clinicCodeTrimmed,
+      invitation_code: String(invitationCode || "").trim() || null,
     });
     
     res.json({
