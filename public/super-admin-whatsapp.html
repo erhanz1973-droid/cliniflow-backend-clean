@@ -117,6 +117,7 @@
           "<label>WABA ID <span class=\"muted\">(optional)</span></label>" +
           '<input class="inp-waba" data-id="' + escapeHtml(id) + '" inputmode="numeric" placeholder="WhatsApp Business Account ID" />' +
           '<div class="preview" data-preview-for="' + escapeHtml(id) + '"></div>' +
+          '<button type="button" class="btn btn-secondary btn-discover" data-id="' + escapeHtml(id) + '">Discover numbers from token</button>' +
           '<button type="button" class="btn btn-secondary btn-verify" data-id="' + escapeHtml(id) + '">Verify with Meta</button>' +
           '<button type="button" class="btn btn-primary btn-activate" data-id="' + escapeHtml(id) + '" disabled>Activate for clinic</button>' +
           "</div>"
@@ -125,7 +126,48 @@
 
       const previewCache = {};
 
+      function renderDiscoveryHtml(discovery) {
+        if (!discovery) return "";
+        let html = "";
+        if (discovery.diagnosis) {
+          html += "<p><strong>Diagnosis:</strong> " + escapeHtml(discovery.diagnosis) + "</p>";
+        }
+        if (discovery.matchedByPhone) {
+          html +=
+            "<p class=\"ok\"><strong>Suggested match:</strong> " +
+            escapeHtml(discovery.matchedByPhone.displayPhoneNumber || "") +
+            " → Phone Number ID <code>" +
+            escapeHtml(discovery.matchedByPhone.phoneNumberId) +
+            "</code></p>";
+        }
+        const nums = discovery.accessiblePhoneNumbers || [];
+        if (nums.length) {
+          html += "<p><strong>Numbers this token can access:</strong></p><ul>";
+          nums.forEach(function (n) {
+            html +=
+              "<li><button type=\"button\" class=\"btn-use-pid\" data-pid=\"" +
+              escapeHtml(n.phoneNumberId) +
+              "\" style=\"background:none;border:none;color:#2563eb;cursor:pointer;padding:0;font:inherit\">" +
+              escapeHtml(n.displayPhoneNumber || n.phoneNumberId) +
+              "</button> · ID <code>" +
+              escapeHtml(n.phoneNumberId) +
+              "</code>" +
+              (n.verifiedName ? " · " + escapeHtml(n.verifiedName) : "") +
+              "</li>";
+          });
+          html += "</ul>";
+        } else if (!discovery.diagnosis) {
+          html += "<p class=\"err\">No WhatsApp numbers found for this token.</p>";
+        }
+        return html;
+      }
+
       function wireItems() {
+        pendingList.querySelectorAll(".btn-discover").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            void discoverPending(btn.getAttribute("data-id"));
+          });
+        });
         pendingList.querySelectorAll(".btn-verify").forEach(function (btn) {
           btn.addEventListener("click", function () {
             void verifyPending(btn.getAttribute("data-id"));
@@ -136,6 +178,42 @@
             void activatePending(btn.getAttribute("data-id"));
           });
         });
+        pendingList.querySelectorAll(".btn-use-pid").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            const pid = btn.getAttribute("data-pid");
+            const root = btn.closest(".pending-item");
+            if (root && pid) {
+              const inp = root.querySelector(".inp-pid");
+              if (inp) inp.value = pid;
+            }
+          });
+        });
+      }
+
+      async function discoverPending(connectionId) {
+        setMsg("Discovering WhatsApp numbers from Railway token…");
+        const res = await fetch(
+          API + "/api/super-admin/whatsapp/pending/" + encodeURIComponent(connectionId) + "/discover",
+          { method: "POST", headers: headers(), body: JSON.stringify({}) },
+        );
+        const json = await res.json().catch(function () { return {}; });
+        const inp = getInputs(connectionId);
+        if (!inp.previewEl) return;
+        inp.previewEl.classList.add("visible");
+        if (!res.ok || !json.ok) {
+          inp.previewEl.classList.add("error");
+          inp.previewEl.innerHTML = escapeHtml(json.error || "Discovery failed");
+          setMsg("Discovery failed.", true);
+          return;
+        }
+        inp.previewEl.classList.remove("error");
+        inp.previewEl.innerHTML = renderDiscoveryHtml(json.discovery);
+        if (json.discovery?.matchedByPhone?.phoneNumberId && inp.root) {
+          const pidInp = inp.root.querySelector(".inp-pid");
+          if (pidInp) pidInp.value = json.discovery.matchedByPhone.phoneNumberId;
+          if (inp.activateBtn) inp.activateBtn.disabled = false;
+        }
+        setMsg(json.discovery?.diagnosis || "Discovery complete.", false);
       }
 
       function getInputs(connectionId) {
@@ -173,10 +251,11 @@
           inp.previewEl.classList.add("error");
           inp.previewEl.innerHTML =
             "<strong>Verification failed</strong><br>" +
-            escapeHtml(json.message || json.error || "Unknown error");
+            escapeHtml(json.message || json.error || "Unknown error") +
+            renderDiscoveryHtml(json.discovery);
           previewCache[connectionId] = null;
           if (inp.activateBtn) inp.activateBtn.disabled = true;
-          setMsg("Meta verification failed.", true);
+          setMsg(json.message || "Meta verification failed.", true);
           return;
         }
         const p = json.preview || {};

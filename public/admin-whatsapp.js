@@ -791,11 +791,43 @@
     }
     if (!result.ok) {
       el.classList.add("visible", "error");
+      let extra = "";
+      const disc = result.discovery;
+      if (disc) {
+        if (disc.diagnosis) {
+          extra += "<p style=\"margin:8px 0 0\">" + escapeHtml(disc.diagnosis) + "</p>";
+        }
+        if (disc.probeIdWasWaba) {
+          extra += "<p style=\"margin:8px 0 0\"><strong>Likely cause:</strong> You entered a WABA ID, not a Phone Number ID.</p>";
+        }
+        const nums = disc.accessiblePhoneNumbers || [];
+        if (nums.length) {
+          extra += "<p style=\"margin:8px 0 4px\"><strong>Numbers your server token can access:</strong></p><ul style=\"margin:0;padding-left:1.2rem\">";
+          nums.forEach(function (n) {
+            extra +=
+              "<li>" +
+              escapeHtml(n.displayPhoneNumber || n.phoneNumberId) +
+              " → ID <code>" +
+              escapeHtml(n.phoneNumberId) +
+              "</code></li>";
+          });
+          extra += "</ul>";
+        }
+        if (disc.matchedByPhone) {
+          extra +=
+            "<p style=\"margin:8px 0 0\" class=\"ok\">Suggested: <code>" +
+            escapeHtml(disc.matchedByPhone.phoneNumberId) +
+            "</code> for " +
+            escapeHtml(disc.matchedByPhone.displayPhoneNumber || "") +
+            "</p>";
+        }
+      }
       el.innerHTML =
         "<h4>Could not verify</h4><p class=\"err\" style=\"margin:0\">" +
         escapeHtml(result.message || result.error || "Verification failed") +
         (result.code ? " (Meta code " + escapeHtml(result.code) + ")" : "") +
-        "</p>";
+        "</p>" +
+        extra;
       lastPreview = null;
       if (saveBtn) saveBtn.disabled = true;
       return;
