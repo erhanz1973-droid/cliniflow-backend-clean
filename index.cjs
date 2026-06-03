@@ -8653,6 +8653,68 @@ async function sendOTPEmail(email, otpCode, lang = "en") {
   }
 }
 
+/**
+ * Password-reset OTP email (10-minute validity, distinct copy from login/registration OTP).
+ */
+async function sendPasswordResetOTPEmail(email, otpCode, lang = "tr") {
+  if (REVIEW_MODE && email.toLowerCase() === "test@clinifly.net") {
+    console.log("[sendPasswordResetOTPEmail] REVIEW_MODE_SKIP", { email: maskEmailForLog(email) });
+    return { messageId: "review-mode-bypass", accepted: [email] };
+  }
+
+  const apiKey = process.env.BREVO_API_KEY;
+  const fromEmail = SMTP_FROM;
+  const fromName = process.env.BREVO_FROM_NAME || "Clinifly";
+  const safeLang = String(lang || "tr").slice(0, 2).toLowerCase() === "en" ? "en" : "tr";
+  const subject =
+    safeLang === "tr"
+      ? "Clinifly – Şifre sıfırlama doğrulama kodu"
+      : "Clinifly – Password reset verification code";
+  const htmlContent =
+    safeLang === "tr"
+      ? `<div style="font-family:Arial,sans-serif"><h2>Şifre sıfırlama</h2><p>Clinifly klinik yönetim paneli şifrenizi sıfırlamak için kod:</p><h1 style="letter-spacing:4px">${otpCode}</h1><p>Bu kod 10 dakika geçerlidir. Kodu siz istemediyseniz bu e-postayı yok sayın.</p></div>`
+      : `<div style="font-family:Arial,sans-serif"><h2>Password reset</h2><p>Use this code to reset your Clinifly clinic admin password:</p><h1 style="letter-spacing:4px">${otpCode}</h1><p>Valid for 10 minutes. If you did not request this, ignore this email.</p></div>`;
+
+  if (!apiKey) {
+    if (!emailTransporter) throw new Error("email_not_configured");
+    await emailTransporter.sendMail({
+      from: `"${fromName}" <${fromEmail}>`,
+      to: email,
+      subject,
+      html: htmlContent,
+    });
+    return;
+  }
+
+  const BREVO_FETCH_MS = Math.min(
+    Math.max(Number.parseInt(String(process.env.BREVO_FETCH_TIMEOUT_MS || "25000"), 10) || 25000, 5000),
+    60000,
+  );
+  const brevoAbort = new AbortController();
+  const brevoTimer = setTimeout(() => brevoAbort.abort(), BREVO_FETCH_MS);
+  try {
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email }],
+        subject,
+        htmlContent,
+      }),
+      signal: brevoAbort.signal,
+    });
+    clearTimeout(brevoTimer);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`brevo_${response.status}:${text.slice(0, 200)}`);
+    }
+  } catch (err) {
+    clearTimeout(brevoTimer);
+    throw err;
+  }
+}
+
 /** Default ITU country calling code for SMS when the client sends a local number (e.g. 995 = Georgia, 90 = Turkey). */
 const OTP_SMS_DEFAULT_CALLING_CODE = String(process.env.OTP_SMS_DEFAULT_CALLING_CODE || "995")
   .replace(/\D/g, "")
@@ -43077,131 +43139,22 @@ app.post("/api/admin/login", async (req, res) => {
   }
 });
 
-// POST /api/admin/forgot-password/verify
-// Verify clinic code and email for password reset
-app.post("/api/admin/forgot-password/verify", async (req, res) => {
-  try {
-    const { clinicCode, email } = req.body || {};
-
-    if (!clinicCode || !String(clinicCode).trim()) {
-      return res.status(400).json({ ok: false, error: "clinic_code_required" });
-    }
-
-    if (!email || !String(email).trim()) {
-      return res.status(400).json({ ok: false, error: "email_required" });
-    }
-
-    const code = String(clinicCode).trim().toUpperCase();
-    const emailLower = String(email).trim().toLowerCase();
-
-    if (isSupabaseEnabled()) {
-      const admin = await getAdminByEmailAndClinicCode(emailLower, code);
-      if (admin) {
-        return res.json({ ok: true });
-      }
-      const clinicRow = await getClinicByCode(code);
-      if (!clinicRow) {
-        return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-      }
-      const dbEmail = String(clinicRow.email || "").trim().toLowerCase();
-      if (dbEmail !== emailLower) {
-        return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-      }
-      return res.json({ ok: true });
-    }
-
-    const clinic = readJson(CLINIC_FILE, {});
-    if (!clinic.clinicCode || clinic.clinicCode.toUpperCase() !== code) {
-      return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-    }
-    if (!clinic.email || clinic.email.toLowerCase() !== emailLower) {
-      return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-    }
-
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || "internal_error" });
-  }
-});
-
-// POST /api/admin/forgot-password/reset
-// Reset password after verification
-app.post("/api/admin/forgot-password/reset", async (req, res) => {
-  try {
-    const { clinicCode, email, newPassword } = req.body || {};
-
-    if (!clinicCode || !String(clinicCode).trim()) {
-      return res.status(400).json({ ok: false, error: "clinic_code_required" });
-    }
-
-    if (!email || !String(email).trim()) {
-      return res.status(400).json({ ok: false, error: "email_required" });
-    }
-
-    if (!newPassword || !String(newPassword).trim()) {
-      return res.status(400).json({ ok: false, error: "new_password_required" });
-    }
-
-    if (String(newPassword).trim().length < 6) {
-      return res.status(400).json({ ok: false, error: "password_too_short" });
-    }
-
-    const code = String(clinicCode).trim().toUpperCase();
-    const emailLower = String(email).trim().toLowerCase();
-    const hashedPassword = await bcrypt.hash(String(newPassword).trim(), 10);
-
-    if (isSupabaseEnabled()) {
-      let verified = false;
-      const admin = await getAdminByEmailAndClinicCode(emailLower, code);
-      if (admin) {
-        verified = true;
-        const { error: adminErr } = await supabase
-          .from("admins")
-          .update({ password_hash: hashedPassword })
-          .eq("id", admin.id);
-        if (adminErr) {
-          console.error("[ADMIN FORGOT] admins update error:", adminErr.message);
-          return res.status(500).json({ ok: false, error: "reset_failed" });
-        }
-      }
-
-      const clinicRow = await getClinicByCode(code);
-      if (clinicRow) {
-        const dbEmail = String(clinicRow.email || "").trim().toLowerCase();
-        if (dbEmail === emailLower) {
-          verified = true;
-          try {
-            await updateClinic(clinicRow.id, { password_hash: hashedPassword });
-          } catch (clinicErr) {
-            console.error("[ADMIN FORGOT] clinics update error:", clinicErr?.message || clinicErr);
-            return res.status(500).json({ ok: false, error: "reset_failed" });
-          }
-        }
-      }
-
-      if (!verified) {
-        return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-      }
-
-      return res.json({ ok: true });
-    }
-
-    const clinic = readJson(CLINIC_FILE, {});
-    if (!clinic.clinicCode || clinic.clinicCode.toUpperCase() !== code) {
-      return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-    }
-    if (!clinic.email || clinic.email.toLowerCase() !== emailLower) {
-      return res.status(401).json({ ok: false, error: "invalid_clinic_code_or_email" });
-    }
-
-    clinic.password = hashedPassword;
-    clinic.updatedAt = now();
-    writeJson(CLINIC_FILE, clinic);
-
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || "internal_error" });
-  }
+const { registerAdminPasswordResetRoutes } = require("./lib/adminPasswordResetRoutes.cjs");
+registerAdminPasswordResetRoutes(app, {
+  DATA_DIR,
+  bcrypt,
+  isSupabaseEnabled,
+  supabase,
+  getAdminByEmailAndClinicCode,
+  getClinicByCode,
+  updateClinic,
+  readJson,
+  writeJson,
+  CLINIC_FILE,
+  deliverPasswordResetOtp: ({ email, otpCode, lang }) =>
+    sendPasswordResetOTPEmail(email, otpCode, lang),
+  isTransactionalEmailConfigured,
+  REGISTER_USER_MSG,
 });
 
 // GET /api/admin/me

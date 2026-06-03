@@ -462,18 +462,30 @@
     }
     const fallbacks = {
       forgotPasswordLink: "Şifremi unuttum",
-      forgotTitle: "Şifre değiştir",
-      forgotSubtitle: "Klinik kodunuz ve kayıtlı e-posta ile yeni şifre belirleyin",
-      forgotVerify: "Doğrula ve devam et",
+      forgotTitle: "Şifremi unuttum",
+      forgotSubtitle: "Klinik kodunuz ve kayıtlı e-postanıza 6 haneli doğrulama kodu gönderilir.",
+      forgotSend: "Doğrulama kodu gönder",
+      forgotResend: "Kodu yeniden gönder",
+      forgotResendWait: "Yeniden gönder",
+      forgotOtpTitle: "E-posta doğrulama",
+      forgotOtpSubtitle: "E-postanıza gelen 6 haneli kodu girin.",
+      forgotOtpCode: "Doğrulama kodu",
+      forgotVerifyOtp: "Kodu doğrula",
+      forgotSetPasswordTitle: "Yeni şifre",
+      forgotSetPasswordSubtitle: "Doğrulama tamam — yeni şifrenizi belirleyin.",
       forgotNewPassword: "Yeni şifre",
       forgotConfirmPassword: "Yeni şifre (tekrar)",
       forgotReset: "Şifreyi kaydet",
       forgotBack: "Girişe dön",
       forgotSuccess: "Şifreniz güncellendi. Giriş yapabilirsiniz.",
+      forgotOtpSent: "Doğrulama kodu e-postanıza gönderildi.",
       forgotPasswordMismatch: "Şifreler eşleşmiyor.",
       forgotPasswordTooShort: "Şifre en az 6 karakter olmalıdır.",
       forgotInvalidIdentity: "Klinik kodu veya e-posta eşleşmedi.",
       forgotResetFailed: "Şifre güncellenemedi. Lütfen tekrar deneyin.",
+      forgotOtpInvalid: "Geçersiz veya süresi dolmuş kod.",
+      forgotOtpRequired: "Önce e-posta doğrulamasını tamamlayın.",
+      forgotRateLimit: "Lütfen 1 dakika bekleyip tekrar deneyin.",
     };
     return fallbacks[key] || key;
   }
@@ -482,130 +494,236 @@
     const savedEmail = document.getElementById("email")?.value.trim() || "";
     const savedCode = document.getElementById("clinicCode")?.value.trim().toUpperCase() || "";
     const formContainer = document.getElementById("form-container");
-    formContainer.innerHTML = `
-      <div class="header" style="margin-bottom:20px">
-        <h1 style="font-size:24px;margin:0 0 8px" data-i18n="login.forgotTitle">${tLogin("forgotTitle")}</h1>
-        <p class="subtitle" data-i18n="login.forgotSubtitle">${tLogin("forgotSubtitle")}</p>
-      </div>
-      <form id="forgot-form">
-        <div class="form-group">
-          <label class="field-label-muted" for="forgot-clinicCode">
-            <span data-i18n="login.clinicCode">Clinic Code</span> <span class="required">*</span>
-          </label>
-          <input type="text" id="forgot-clinicCode" required autocomplete="organization" />
+
+    function renderRequestStep() {
+      formContainer.innerHTML = `
+        <div class="header" style="margin-bottom:20px">
+          <h1 style="font-size:24px;margin:0 0 8px">${tLogin("forgotTitle")}</h1>
+          <p class="subtitle">${tLogin("forgotSubtitle")}</p>
         </div>
-        <div class="form-group">
-          <label class="field-label-muted" for="forgot-email">
-            <span data-i18n="auth.email">E-posta</span> <span class="required">*</span>
-          </label>
-          <input type="email" id="forgot-email" required autocomplete="email" />
-        </div>
-        <div class="form-group">
-          <label class="field-label-muted" for="forgot-newPassword">
-            <span data-i18n="login.forgotNewPassword">${tLogin("forgotNewPassword")}</span> <span class="required">*</span>
-          </label>
-          <input type="password" id="forgot-newPassword" required autocomplete="new-password" minlength="6" />
-        </div>
-        <div class="form-group">
-          <label class="field-label-muted" for="forgot-confirmPassword">
-            <span data-i18n="login.forgotConfirmPassword">${tLogin("forgotConfirmPassword")}</span> <span class="required">*</span>
-          </label>
-          <input type="password" id="forgot-confirmPassword" required autocomplete="new-password" minlength="6" />
-        </div>
-        <button type="submit" class="btn btn-primary" id="forgot-submit-btn" data-i18n="login.forgotReset">${tLogin("forgotReset")}</button>
-        <button type="button" class="btn btn-secondary" id="forgot-back-btn" data-i18n="login.forgotBack">${tLogin("forgotBack")}</button>
-      </form>
-    `;
-
-    if (typeof window.applyI18n === "function") window.applyI18n();
-
-    const forgotEmail = document.getElementById("forgot-email");
-    const forgotCode = document.getElementById("forgot-clinicCode");
-    if (savedEmail && forgotEmail) forgotEmail.value = savedEmail;
-    if (savedCode && forgotCode) forgotCode.value = savedCode;
-
-    document.getElementById("forgot-back-btn").onclick = () => location.reload();
-
-    forgotCode.addEventListener("input", (e) => {
-      const pos = e.target.selectionStart;
-      e.target.value = e.target.value.toUpperCase();
-      e.target.setSelectionRange(pos, pos);
-    });
-
-    let submitting = false;
-    document.getElementById("forgot-form").onsubmit = async (e) => {
-      e.preventDefault();
-      if (submitting) return;
-      submitting = true;
-      const btn = document.getElementById("forgot-submit-btn");
-      btn.disabled = true;
-
-      const clinicCode = document.getElementById("forgot-clinicCode").value.trim().toUpperCase();
-      const email = document.getElementById("forgot-email").value.trim().toLowerCase();
-      const newPassword = document.getElementById("forgot-newPassword").value;
-      const confirmPassword = document.getElementById("forgot-confirmPassword").value;
-
-      if (!clinicCode || !email) {
-        showAlert(tLogin("forgotInvalidIdentity"), "error");
-        btn.disabled = false;
-        submitting = false;
-        return;
-      }
-      if (newPassword.length < 6) {
-        showAlert(tLogin("forgotPasswordTooShort"), "error");
-        btn.disabled = false;
-        submitting = false;
-        return;
-      }
-      if (newPassword !== confirmPassword) {
-        showAlert(tLogin("forgotPasswordMismatch"), "error");
-        btn.disabled = false;
-        submitting = false;
-        return;
-      }
-
-      try {
-        const verifyRes = await fetch(`${API.replace(/\/+$/, "")}/api/admin/forgot-password/verify`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clinicCode, email }),
-        });
-        const verifyJson = await verifyRes.json().catch(() => ({}));
-        if (!verifyRes.ok || !verifyJson.ok) {
+        <form id="forgot-request-form">
+          <div class="form-group">
+            <label class="field-label-muted" for="forgot-clinicCode">
+              <span data-i18n="login.clinicCode">Clinic Code</span> <span class="required">*</span>
+            </label>
+            <input type="text" id="forgot-clinicCode" required autocomplete="organization" />
+          </div>
+          <div class="form-group">
+            <label class="field-label-muted" for="forgot-email">
+              <span data-i18n="auth.email">E-posta</span> <span class="required">*</span>
+            </label>
+            <input type="email" id="forgot-email" required autocomplete="email" />
+          </div>
+          <button type="submit" class="btn btn-primary" id="forgot-send-btn">${tLogin("forgotSend")}</button>
+          <button type="button" class="btn btn-secondary" id="forgot-back-btn">${tLogin("forgotBack")}</button>
+        </form>
+      `;
+      if (typeof window.applyI18n === "function") window.applyI18n();
+      if (savedEmail) document.getElementById("forgot-email").value = savedEmail;
+      if (savedCode) document.getElementById("forgot-clinicCode").value = savedCode;
+      document.getElementById("forgot-back-btn").onclick = () => location.reload();
+      const codeInput = document.getElementById("forgot-clinicCode");
+      codeInput.addEventListener("input", (e) => {
+        const pos = e.target.selectionStart;
+        e.target.value = e.target.value.toUpperCase();
+        e.target.setSelectionRange(pos, pos);
+      });
+      document.getElementById("forgot-request-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("forgot-send-btn");
+        btn.disabled = true;
+        const clinicCode = document.getElementById("forgot-clinicCode").value.trim().toUpperCase();
+        const email = document.getElementById("forgot-email").value.trim().toLowerCase();
+        if (!clinicCode || !email) {
           showAlert(tLogin("forgotInvalidIdentity"), "error");
           btn.disabled = false;
-          submitting = false;
           return;
         }
-
-        const resetRes = await fetch(`${API.replace(/\/+$/, "")}/api/admin/forgot-password/reset`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clinicCode, email, newPassword }),
-        });
-        const resetJson = await resetRes.json().catch(() => ({}));
-        if (!resetRes.ok || !resetJson.ok) {
-          const err =
-            resetJson.error === "password_too_short"
-              ? tLogin("forgotPasswordTooShort")
-              : tLogin("forgotResetFailed");
-          showAlert(err, "error");
+        try {
+          const res = await fetch(`${API.replace(/\/+$/, "")}/api/admin/forgot-password/request-otp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clinicCode, email }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (res.status === 429) {
+            showAlert(tLogin("forgotRateLimit"), "error");
+            btn.disabled = false;
+            return;
+          }
+          if (!res.ok && !json.ok) {
+            showAlert(json.message || tLogin("forgotResetFailed"), "error");
+            btn.disabled = false;
+            return;
+          }
+          showAlert(tLogin("forgotOtpSent"), "success");
+          renderOtpStep(clinicCode, email);
+        } catch (err) {
+          console.error("[FORGOT PASSWORD]", err);
+          showAlert(tLogin("forgotResetFailed"), "error");
           btn.disabled = false;
-          submitting = false;
+        }
+      };
+      codeInput.focus();
+    }
+
+    function renderOtpStep(clinicCode, email) {
+      formContainer.innerHTML = `
+        <div class="header" style="margin-bottom:20px">
+          <h1 style="font-size:24px;margin:0 0 8px">${tLogin("forgotOtpTitle")}</h1>
+          <p class="subtitle">${tLogin("forgotOtpSubtitle")}</p>
+        </div>
+        <form id="forgot-otp-form">
+          <div class="form-group">
+            <label class="field-label-muted">${tLogin("forgotOtpCode")} <span class="required">*</span></label>
+            <input type="text" id="forgot-otp-code" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" required
+              style="font-size:24px;text-align:center;letter-spacing:8px" autocomplete="one-time-code" />
+          </div>
+          <button type="submit" class="btn btn-primary" id="forgot-verify-btn">${tLogin("forgotVerifyOtp")}</button>
+          <button type="button" class="btn btn-secondary" id="forgot-resend-btn" disabled>${tLogin("forgotResend")} (60)</button>
+          <button type="button" class="btn btn-secondary" id="forgot-back-btn">${tLogin("forgotBack")}</button>
+        </form>
+      `;
+      document.getElementById("forgot-back-btn").onclick = () => location.reload();
+      let resendSec = 60;
+      const resendBtn = document.getElementById("forgot-resend-btn");
+      const tick = setInterval(() => {
+        resendSec -= 1;
+        if (resendSec <= 0) {
+          clearInterval(tick);
+          resendBtn.disabled = false;
+          resendBtn.textContent = tLogin("forgotResend");
+        } else {
+          resendBtn.textContent = `${tLogin("forgotResendWait")} (${resendSec})`;
+        }
+      }, 1000);
+      resendBtn.onclick = async () => {
+        resendBtn.disabled = true;
+        try {
+          const res = await fetch(`${API.replace(/\/+$/, "")}/api/admin/forgot-password/resend-otp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clinicCode, email }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (res.status === 429) {
+            showAlert(tLogin("forgotRateLimit"), "error");
+          } else if (res.ok || json.ok) {
+            showAlert(tLogin("forgotOtpSent"), "success");
+            resendSec = 60;
+            resendBtn.disabled = true;
+            const t2 = setInterval(() => {
+              resendSec -= 1;
+              if (resendSec <= 0) {
+                clearInterval(t2);
+                resendBtn.disabled = false;
+                resendBtn.textContent = tLogin("forgotResend");
+              } else {
+                resendBtn.textContent = `${tLogin("forgotResendWait")} (${resendSec})`;
+              }
+            }, 1000);
+          }
+        } catch (err) {
+          showAlert(tLogin("forgotResetFailed"), "error");
+          resendBtn.disabled = false;
+        }
+      };
+      document.getElementById("forgot-otp-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("forgot-verify-btn");
+        btn.disabled = true;
+        const otp = document.getElementById("forgot-otp-code").value.trim();
+        if (!/^\d{6}$/.test(otp)) {
+          showAlert(tLogin("forgotOtpInvalid"), "error");
+          btn.disabled = false;
           return;
         }
+        try {
+          const res = await fetch(`${API.replace(/\/+$/, "")}/api/admin/forgot-password/verify-otp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clinicCode, email, otp }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || !json.ok || !json.resetToken) {
+            showAlert(tLogin("forgotOtpInvalid"), "error");
+            btn.disabled = false;
+            return;
+          }
+          renderResetStep(clinicCode, email, json.resetToken);
+        } catch (err) {
+          showAlert(tLogin("forgotOtpInvalid"), "error");
+          btn.disabled = false;
+        }
+      };
+      document.getElementById("forgot-otp-code").focus();
+    }
 
-        showAlert(tLogin("forgotSuccess"), "success");
-        setTimeout(() => location.reload(), 1500);
-      } catch (err) {
-        console.error("[FORGOT PASSWORD]", err);
-        showAlert(tLogin("forgotResetFailed"), "error");
-        btn.disabled = false;
-        submitting = false;
-      }
-    };
+    function renderResetStep(clinicCode, email, resetToken) {
+      formContainer.innerHTML = `
+        <div class="header" style="margin-bottom:20px">
+          <h1 style="font-size:24px;margin:0 0 8px">${tLogin("forgotSetPasswordTitle")}</h1>
+          <p class="subtitle">${tLogin("forgotSetPasswordSubtitle")}</p>
+        </div>
+        <form id="forgot-reset-form">
+          <div class="form-group">
+            <label class="field-label-muted" for="forgot-newPassword">${tLogin("forgotNewPassword")} <span class="required">*</span></label>
+            <input type="password" id="forgot-newPassword" required autocomplete="new-password" minlength="6" />
+          </div>
+          <div class="form-group">
+            <label class="field-label-muted" for="forgot-confirmPassword">${tLogin("forgotConfirmPassword")} <span class="required">*</span></label>
+            <input type="password" id="forgot-confirmPassword" required autocomplete="new-password" minlength="6" />
+          </div>
+          <button type="submit" class="btn btn-primary" id="forgot-reset-btn">${tLogin("forgotReset")}</button>
+          <button type="button" class="btn btn-secondary" id="forgot-back-btn">${tLogin("forgotBack")}</button>
+        </form>
+      `;
+      document.getElementById("forgot-back-btn").onclick = () => location.reload();
+      document.getElementById("forgot-reset-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("forgot-reset-btn");
+        btn.disabled = true;
+        const newPassword = document.getElementById("forgot-newPassword").value;
+        const confirmPassword = document.getElementById("forgot-confirmPassword").value;
+        if (newPassword.length < 6) {
+          showAlert(tLogin("forgotPasswordTooShort"), "error");
+          btn.disabled = false;
+          return;
+        }
+        if (newPassword !== confirmPassword) {
+          showAlert(tLogin("forgotPasswordMismatch"), "error");
+          btn.disabled = false;
+          return;
+        }
+        try {
+          const res = await fetch(`${API.replace(/\/+$/, "")}/api/admin/forgot-password/reset`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clinicCode, email, newPassword, resetToken }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || !json.ok) {
+            const err =
+              json.error === "otp_not_verified" || json.error === "reset_token_required"
+                ? tLogin("forgotOtpRequired")
+                : json.error === "password_too_short"
+                  ? tLogin("forgotPasswordTooShort")
+                  : tLogin("forgotResetFailed");
+            showAlert(err, "error");
+            btn.disabled = false;
+            return;
+          }
+          showAlert(tLogin("forgotSuccess"), "success");
+          setTimeout(() => location.reload(), 1500);
+        } catch (err) {
+          showAlert(tLogin("forgotResetFailed"), "error");
+          btn.disabled = false;
+        }
+      };
+      document.getElementById("forgot-newPassword").focus();
+    }
 
-    document.getElementById("forgot-clinicCode").focus();
+    renderRequestStep();
   }
 
   document.getElementById("forgotPasswordLink").addEventListener("click", (e) => {
