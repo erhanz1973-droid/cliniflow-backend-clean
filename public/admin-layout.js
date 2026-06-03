@@ -74,7 +74,13 @@
   ];
   const NAV2_BASE = [
     { href: '/admin-doctor-applications-v2.html', icon: iconDoctor(), key: 'doctors', badge: 'sbDoctors' },
-    { href: '/admin-leads.html',    icon: iconLeads(),    key: 'leads' },
+    { href: '/admin-leads.html?queue=needs_assignment', icon: iconLeads(), key: 'leads',
+      children: [
+        { href: '/admin-leads.html?queue=needs_assignment', icon: iconLeads(), key: 'leadsNeedsAssignment' },
+        { href: '/admin-leads.html?queue=recent_routed', icon: iconLeads(), key: 'leadsRecentlyRouted' },
+        { href: '/admin-leads.html?queue=assigned', icon: iconLeads(), key: 'leadsAssigned' },
+      ],
+    },
     { href: '/admin-ai-leads.html', icon: iconAi(),       key: 'aiLeads' },
     { href: '/admin-chat.html',     icon: iconChat(),     key: 'chat',    badge: 'sbChat' },
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
@@ -111,6 +117,9 @@
       'dashboard.nav.invitePatients': 'Invite Patients',
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Lead inbox',
+      'dashboard.nav.leadsNeedsAssignment': 'Needs assignment',
+      'dashboard.nav.leadsRecentlyRouted': 'Recently routed',
+      'dashboard.nav.leadsAssigned': 'Assigned',
       'dashboard.nav.aiLeads': 'Coordination Center',
       'dashboard.nav.learningCandidates': 'AI Learning',
       'dashboard.nav.chat': 'Messages',
@@ -155,8 +164,32 @@
 
   function hrefMatchesPage(currentHref, href) {
     if (!href) return false;
-    const file = href.split('/').pop() || href;
-    return currentHref.indexOf(file) !== -1;
+    const pathOnly = String(href).split('?')[0];
+    const file = pathOnly.split('/').pop() || pathOnly;
+    if (currentHref.indexOf(file) === -1) return false;
+    const qIdx = String(href).indexOf('?');
+    if (qIdx === -1) {
+      if (file === 'admin-leads.html') {
+        try {
+          const have = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+          const q = have.get('queue');
+          return !q || q === 'needs_assignment';
+        } catch (_) {
+          return true;
+        }
+      }
+      return true;
+    }
+    try {
+      const want = new URLSearchParams(String(href).slice(qIdx + 1));
+      const have = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+      for (const [k, v] of want.entries()) {
+        if (have.get(k) !== v) return false;
+      }
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   function navItemActive(currentHref, item) {

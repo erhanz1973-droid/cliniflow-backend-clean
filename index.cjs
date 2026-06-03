@@ -3151,6 +3151,15 @@ async function backfillUnassignedLeadsWithClinicLeadRouting(clinicId) {
       console.warn("[LEAD ROUTING backfill]", e?.message || e);
     }
   }
+  try {
+    const { backfillLeadProfileAssignedDoctorFromThreads } = require("./lib/doctorLeadThreadSync");
+    const bf = await backfillLeadProfileAssignedDoctorFromThreads(cid, { limit: 300 });
+    if (bf.synced > 0) {
+      console.log("[LEAD ROUTING backfill] profile doctor sync:", { clinicId: cid.slice(0, 8), synced: bf.synced });
+    }
+  } catch (e) {
+    console.warn("[LEAD ROUTING backfill] profile sync:", e?.message || e);
+  }
 }
 
 function parseClinicSettingsJson(raw) {
@@ -16786,6 +16795,46 @@ async function fetchUnassignedAdminFallback(clinicId) {
   return out;
 }
 
+/**
+ * Lead Inbox queue modes for GET /api/admin/unassigned-messages.
+ * @param {import('express').Request} req
+ * @returns {"needs_assignment"|"assigned"|"recent_routed"|"all"}
+ */
+function resolveLeadInboxQueueMode(req) {
+  const q = String(req.query.queue || req.query.tab || "").trim().toLowerCase();
+  if (q === "assigned" || q === "assigned_leads") return "assigned";
+  if (q === "recent_routed" || q === "auto_routed" || q === "recent") return "recent_routed";
+  if (q === "all") return "all";
+  const includeAssigned =
+    req.query.includeAssigned === "1" ||
+    req.query.include_assigned === "1" ||
+    String(req.query.includeAssigned || "").toLowerCase() === "true";
+  if (includeAssigned) return "all";
+  return "needs_assignment";
+}
+
+/**
+ * Apply Lead Inbox queue filter to a patient_chat_threads query builder.
+ * @param {import('@supabase/supabase-js').PostgrestFilterBuilder} qb
+ * @param {string} queueMode
+ */
+function applyLeadInboxQueueFilter(qb, queueMode) {
+  const mode = String(queueMode || "needs_assignment").trim().toLowerCase();
+  switch (mode) {
+    case "assigned":
+      return qb.not("assigned_doctor_id", "is", null);
+    case "recent_routed": {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      return qb.not("assigned_doctor_id", "is", null).gte("assigned_at", cutoff);
+    }
+    case "all":
+      return qb;
+    case "needs_assignment":
+    default:
+      return qb.is("assigned_doctor_id", null);
+  }
+}
+
 // GET /api/admin/unassigned-messages — lead threads with no doctor assigned (same clinic as admin)
 app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => {
   try {
@@ -16797,10 +16846,8 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       return res.status(503).json({ ok: false, error: "supabase_required" });
     }
 
-    const includeAssigned =
-      req.query.includeAssigned === "1" ||
-      req.query.include_assigned === "1" ||
-      String(req.query.includeAssigned || "").toLowerCase() === "true";
+    const queueMode = resolveLeadInboxQueueMode(req);
+    const includeAssigned = queueMode !== "needs_assignment";
 
     const ignorableMissing = (err) => {
       const code = String(err?.code || "");
@@ -16830,7 +16877,7 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       )
       .eq("clinic_id", clinicId)
       .eq("is_lead", true);
-    if (!includeAssigned) qb = qb.is("assigned_doctor_id", null);
+    qb = applyLeadInboxQueueFilter(qb, queueMode);
     const qFull = await qb.order("created_at", { ascending: false }).limit(200);
 
     if (!qFull.error && Array.isArray(qFull.data)) {
@@ -16848,7 +16895,7 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
         .from("patient_chat_threads")
         .select("id, patient_id, clinic_id, status, assigned_doctor_id, assigned_at, created_at, updated_at")
         .eq("clinic_id", clinicId);
-      if (!includeAssigned) qMin = qMin.is("assigned_doctor_id", null);
+      qMin = applyLeadInboxQueueFilter(qMin, queueMode);
       qMin = await qMin.order("created_at", { ascending: false }).limit(200);
       if (qMin.error) {
         if (ignorableMissing(qMin.error)) return res.json({ ok: true, messages: [] });
@@ -16892,6 +16939,23 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       for (const d of drows || []) {
         const id = String(d.id || "").trim();
         if (id) doctorNameById[id] = normalizeDoctorRowDisplayName(d) || null;
+      }
+    }
+
+    const profileChannelByPatient = {};
+    if (pids.length) {
+      const { data: profRows } = await supabase
+        .from("ai_coordinator_lead_profiles")
+        .select("patient_id, primary_channel, source")
+        .eq("clinic_id", clinicId)
+        .in("patient_id", pids.slice(0, 500));
+      for (const pr of profRows || []) {
+        const pk = String(pr?.patient_id || "").trim();
+        if (pk) {
+          profileChannelByPatient[pk] = String(pr.primary_channel || pr.source || "")
+            .trim()
+            .toLowerCase();
+        }
       }
     }
 
@@ -16945,6 +17009,7 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
         })(),
         assignedAt: t.assigned_at || null,
         adminNotes: t.admin_notes || null,
+        primaryChannel: profileChannelByPatient[pid] || null,
         previewMessageId: previewMessageId || null,
         previewText: previewText || null,
         createdAt: t.created_at || null,
@@ -16952,19 +17017,19 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
       });
     }
 
-    if (!messages.length) {
+    if (!messages.length && queueMode === "needs_assignment") {
       const fb = await fetchUnassignedAdminFallback(clinicId);
       return res.json({
         ok: true,
         messages: fb,
-        meta: fb.length ? { used_fallback: true } : undefined,
+        meta: fb.length ? { used_fallback: true, queue: queueMode } : { queue: queueMode },
       });
     }
 
     return res.json({
       ok: true,
       messages,
-      meta: includeAssigned ? { includeAssigned: true } : undefined,
+      meta: { queue: queueMode, includeAssigned: includeAssigned || undefined },
     });
   } catch (e) {
     console.error("[ADMIN unassigned-messages]", e);
@@ -17046,6 +17111,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         );
         if (fb.ok) {
           await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+          await syncLeadProfileAfterThreadAssignment(patientId, clinicId, doctorUuid);
           bumpUnreadCountsCache(clinicId);
           return res.json({
             ok: true,
@@ -17123,6 +17189,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
           metadata: { mode: "inserted" },
         });
         await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+        await syncLeadProfileAfterThreadAssignment(patientId, clinicId, doctorUuid);
         bumpUnreadCountsCache(clinicId);
         return res.json({
           ok: true,
@@ -17142,6 +17209,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
         );
         if (fb2.ok) {
           await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+          await syncLeadProfileAfterThreadAssignment(patientId, clinicId, doctorUuid);
           bumpUnreadCountsCache(clinicId);
           return res.json({
             ok: true,
@@ -17193,6 +17261,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
               metadata: { mode: "race_retry" },
             });
             await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+            await syncLeadProfileAfterThreadAssignment(patientId, clinicId, doctorUuid);
             bumpUnreadCountsCache(clinicId);
             return res.json({
               ok: true,
@@ -17222,6 +17291,7 @@ app.post("/api/admin/assign-doctor", requireAdminAuth, async (req, res) => {
       metadata: { mode: "updated" },
     });
     await patchPatientAssignmentPointersSticky(patientId, doctorUuid);
+    await syncLeadProfileAfterThreadAssignment(patientId, clinicId, doctorUuid);
     try {
       await reactivatePatientChatThreadOnClinicJoin(patientId, clinicId);
     } catch (reactErr) {
@@ -17289,6 +17359,7 @@ app.post("/api/admin/unassign-lead", requireAdminAuth, async (req, res) => {
     if (!updated?.id) {
       return res.status(404).json({ ok: false, error: "lead_thread_not_found" });
     }
+    await syncLeadProfileAfterThreadAssignment(patientId, clinicId, null);
     return res.json({
       ok: true,
       threadId: updated.id,
@@ -17352,6 +17423,7 @@ async function adminTryAssignUnassignedLeadThread(clinicId, patientId, doctorUui
     reason: ASSIGNMENT_REASON.ADMIN_AUTO_ASSIGN_LEADS,
   });
   await patchPatientAssignmentPointersSticky(pid, doc);
+  await syncLeadProfileAfterThreadAssignment(pid, cid, doc);
   return { ok: true, threadId: updated.id };
 }
 
@@ -17431,6 +17503,17 @@ async function pickDoctorForLeadRoutingIntake(clinicId, settingsRow, eligibleSor
 }
 
 /** Atomic claim + patient sticky pointers; returns ok | skipped | failed */
+async function syncLeadProfileAfterThreadAssignment(patientId, clinicId, doctorUuid) {
+  const pid = String(patientId || "").trim();
+  const cid = String(clinicId || "").trim();
+  if (!UUID_RE.test(pid) || !UUID_RE.test(cid)) return;
+  const { syncLeadProfileAssignedDoctor } = require("./lib/doctorLeadThreadSync");
+  await syncLeadProfileAssignedDoctor(pid, cid, doctorUuid ?? null, { force: true }).catch((e) =>
+    console.warn("[lead_assign] profile sync:", e?.message || e),
+  );
+}
+
+/** Atomic claim + patient sticky pointers; returns ok | skipped | failed */
 async function finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, chosen, via, clinicIdForLog = null) {
   const before = await loadThreadAssignmentSnapshot(tid);
   const assignedAtIso = new Date().toISOString();
@@ -17486,6 +17569,15 @@ async function finalizeInboundThreadDoctorAssignment(tid, resolvedPatientId, cho
     assigned_doctor_id: chosen,
     via,
   });
+
+  const cidSync =
+    clinicIdForLog || before?.clinicId
+      ? String(clinicIdForLog || before?.clinicId || "").trim()
+      : "";
+  if (UUID_RE.test(cidSync)) {
+    void syncLeadProfileAfterThreadAssignment(resolvedPatientId, cidSync, chosen);
+  }
+
   return "ok";
 }
 
