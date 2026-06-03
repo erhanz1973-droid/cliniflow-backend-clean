@@ -1,4 +1,14 @@
 console.log("🚀 STRIPE VERSION DEPLOYED");
+try {
+  const { metaPixelConfigured, metaPixelConfigError } = require("./lib/metaPixelConfig");
+  if (metaPixelConfigured()) {
+    console.log("[metaPixel] META_PIXEL_ID configured for /pricing.html, /admin-register.html, /discovery.html");
+  } else {
+    console.warn("[metaPixel] marketing pixel disabled:", metaPixelConfigError());
+  }
+} catch (metaPixelBootErr) {
+  console.warn("[metaPixel] config load failed:", metaPixelBootErr?.message || metaPixelBootErr);
+}
 
 process.on("unhandledRejection", (reason) => {
   const msg =
@@ -63945,6 +63955,33 @@ app.get("/admin-feature-flags.js", (req, res) => {
       (aiLearningEnabled ? "true" : "false") +
       ";",
   );
+});
+
+/** Meta Pixel ID for static marketing pages (META_PIXEL_ID — not META_APP_ID). */
+app.get("/api/public/meta-pixel-config.js", (_req, res) => {
+  try {
+    const { metaPixelId, metaPixelConfigError } = require("./lib/metaPixelConfig");
+    const id = metaPixelId();
+    const err = metaPixelConfigError();
+    res.type("application/javascript");
+    res.set("Cache-Control", "public, max-age=300");
+    res.send(
+      "window.CLINIFLOW_META_PIXEL_ID=" +
+        JSON.stringify(id || "") +
+        ";" +
+        "window.CLINIFLOW_META_PIXEL_CONFIG_ERROR=" +
+        JSON.stringify(err) +
+        ";" +
+        "window.CLINIFLOW_META_PIXEL_CONFIG_READY=true;" +
+        "window.dispatchEvent(new Event('cliniflow-meta-pixel-config-ready'));",
+    );
+  } catch (e) {
+    console.warn("[meta-pixel-config]", e?.message || e);
+    res.status(500).type("application/javascript").send(
+      "window.CLINIFLOW_META_PIXEL_ID='';window.CLINIFLOW_META_PIXEL_CONFIG_ERROR='config_failed';" +
+        "window.CLINIFLOW_META_PIXEL_CONFIG_READY=true;",
+    );
+  }
 });
 
 /** Coordination Center UI strings for admin-coordination-i18n.js (same source as API X-UI-Language). */

@@ -7,6 +7,8 @@
   <meta http-equiv="Pragma" content="no-cache"/>
   <meta http-equiv="Expires" content="0"/>
   <title id="pageTitle">Cliniflow Admin - Clinic Registration</title>
+  <script src="/api/public/meta-pixel-config.js"></script>
+  <script src="/meta-pixel.js?v=1"></script>
   <script src="/api-base.js?v=202605185"></script>
   <script src="/admin-i18n.js?v=36"></script>
   <style>
@@ -437,6 +439,18 @@
       }));
     }
 
+    function trackMetaLead() {
+      if (window.CliniflowMetaPixel && typeof window.CliniflowMetaPixel.trackLead === 'function') {
+        window.CliniflowMetaPixel.trackLead();
+      }
+    }
+
+    function trackMetaCompleteRegistration() {
+      if (window.CliniflowMetaPixel && typeof window.CliniflowMetaPixel.trackCompleteRegistration === 'function') {
+        window.CliniflowMetaPixel.trackCompleteRegistration();
+      }
+    }
+
     document.getElementById('register-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       
@@ -537,6 +551,7 @@
 
         // Check if OTP verification is required
         if (data.requiresOTP) {
+          trackMetaLead();
           // Show OTP verification form
           showOTPVerificationForm(email, clinicCode, clinicName, invitationCode);
           return;
@@ -544,6 +559,8 @@
 
         // Direct registration (if OTP not required)
         if (data.token) {
+          trackMetaLead();
+          trackMetaCompleteRegistration();
           persistAdminRegistrationSession({
             token: data.token,
             clinicCode: data.clinicCode || clinicCode,
@@ -708,6 +725,7 @@
         }
         
         // Success - save session (both token keys + user) and redirect
+        trackMetaCompleteRegistration();
         persistAdminRegistrationSession({
           token: data.token,
           clinicCode: data.clinic?.clinic_code || clinicCode,

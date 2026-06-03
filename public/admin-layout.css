@@ -687,3 +687,62 @@ body.al-ready .al-main input[style*="background:#fff"] {
   background: #111827 !important;
   color: #e6eaf2 !important;
 }
+
+/* WhatsApp / settings accordions — light “bubbles” inside dark shell */
+body.al-ready .al-main .advanced-setup,
+body.al-ready .al-main details.tech-details .inner {
+  background: rgba(30, 41, 59, 0.92) !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  color: #e6eaf2 !important;
+}
+
+body.al-ready .al-main .advanced-setup > summary,
+body.al-ready .al-main .advanced-setup > summary strong {
+  color: #f1f5f9 !important;
+}
+
+body.al-ready .al-main .advanced-setup .wa-muted,
+body.al-ready .al-main .advanced-setup .helper,
+body.al-ready .al-main .advanced-setup p {
+  color: #94a3b8 !important;
+}
+
+body.al-ready .al-main .advanced-setup label,
+body.al-ready .al-main .advanced-setup .wa-intro {
+  color: #e6eaf2 !important;
+}
+
+body.al-ready .al-main details.tech-details summary {
+  color: #cbd5e1 !important;
+}
+
+body.al-ready .al-main .pending-banner {
+  background: rgba(37, 99, 235, 0.15) !important;
+  border-color: rgba(96, 165, 250, 0.4) !important;
+}
+
+body.al-ready .al-main .pending-banner h3 {
+  color: #93c5fd !important;
+}
+
+body.al-ready .al-main .success-card {
+  background: rgba(16, 185, 129, 0.12) !important;
+  border-color: rgba(52, 211, 153, 0.35) !important;
+}
+
+body.al-ready .al-main .success-card h2,
+body.al-ready .al-main .success-grid dd {
+  color: #e6eaf2 !important;
+}
+
+body.al-ready .al-main .success-grid dt {
+  color: #94a3b8 !important;
+}
+
+body.al-ready .al-main .onboard-steps .step-body strong {
+  color: #f1f5f9 !important;
+}
+
+body.al-ready .al-main .btn-link {
+  color: #6aa6ff !important;
+}
