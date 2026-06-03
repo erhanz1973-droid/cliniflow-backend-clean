@@ -327,6 +327,7 @@
     .lead-timing { font-size: 0.7rem; color: var(--muted); margin-top: 6px; }
     .badge-wait-patient { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
     .badge-wait-clinic { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .badge-phone-linked { background: #eff6ff; color: #1d40af; border: 1px solid #bfdbfe; }
     .badge-ops-status {
       display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 0.68rem;
       font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
@@ -866,6 +867,9 @@
       if (sla.isInactive24h) parts.push('<span class="badge badge-stale">' + esc(ct("badges.inactive24h")) + "</span>");
       if (L.needsReview || L.aiUnresolved) parts.push('<span class="badge badge-unresolved">' + esc(ct("badges.needsReview")) + "</span>");
       if (L.isHot) parts.push('<span class="badge badge-hot">' + esc(ct("badges.hot")) + "</span>");
+      if (L.linkedByPhoneNumber) {
+        parts.push('<span class="badge badge-phone-linked">' + esc(ct("badges.linkedByPhone")) + "</span>");
+      }
       return parts.join("");
     }
 
@@ -1900,6 +1904,9 @@
             : "") +
           (L.hasMissingIntake
             ? '<span class="badge badge-missing-intake">' + esc(ct("detail.missingIntake")) + "</span>"
+            : "") +
+          (L.linkedByPhoneNumber
+            ? '<span class="badge badge-phone-linked">' + esc(ct("badges.linkedByPhone")) + "</span>"
             : "") +
           "</div>";
 
