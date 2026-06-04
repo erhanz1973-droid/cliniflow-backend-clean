@@ -40160,6 +40160,14 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
   const encIds = [...encToPatient.keys()].filter(Boolean);
   if (!encIds.length) return [];
 
+  const clinicDoctorIdSet = new Set();
+  try {
+    const { data: clinicDocIds } = await supabase.from("doctors").select("id").eq("clinic_id", cid);
+    for (const d of clinicDocIds || []) {
+      if (d?.id) clinicDoctorIdSet.add(String(d.id));
+    }
+  } catch (_) {}
+
   /** @type {any[]} */
   const etMerged = [];
   for (let i = 0; i < encIds.length; i += 100) {
@@ -40215,9 +40223,12 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     const didList = [...doctorIds].slice(0, 200);
     const applyDocRows = (docs) => {
       for (const doc of docs || []) {
+        const docClinic = String(doc?.clinic_id || "").trim();
+        if (docClinic && docClinic !== cid) continue;
         const ka = String(doc?.id || "").trim();
         const kb = String(doc?.doctor_id || "").trim();
-        const label = String(doc?.name || doc?.full_name || doc?.email || ka || "").trim();
+        const label = String(doc?.name || doc?.full_name || doc?.email || "").trim();
+        if (!label) continue;
         if (ka) doctorMap.set(ka, label);
         if (kb) doctorMap.set(kb, label);
       }
@@ -40230,17 +40241,11 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     if (!rA.error) applyDocRows(rA.data);
     const missing = didList.filter((id) => !doctorMap.has(String(id).trim()));
     if (missing.length) {
-      let rB = await supabase
+      const rB = await supabase
         .from("doctors")
         .select("id, doctor_id, name, full_name, email, clinic_id")
         .in("doctor_id", missing)
         .eq("clinic_id", cid);
-      if (rB.error && ["42703", "PGRST204"].includes(String(rB.error.code || ""))) {
-        rB = await supabase
-          .from("doctors")
-          .select("id, doctor_id, name, full_name, email")
-          .in("doctor_id", missing);
-      }
       if (!rB.error) applyDocRows(rB.data);
     }
   }
@@ -40264,6 +40269,9 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     const assignDoc = String(
       row.assigned_doctor_id || row.doctor_id || row.created_by_doctor_id || "",
     ).trim();
+    if (assignDoc && clinicDoctorIdSet.size > 0 && !clinicDoctorIdSet.has(assignDoc)) {
+      continue;
+    }
     const procType = String(row.procedure_type || "TREATMENT").trim();
     const treatmentLabel =
       procType === "CONSULT" || procType === "CONSULTATION"
@@ -40532,17 +40540,27 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
     const patientMap = new Map();
     const chairMap = new Map();
 
-    if (doctorIds.length) {
+    if (doctorIds.length && req.clinicId) {
       const doctorAttempts = [
-        () => supabase.from("doctors").select("id,name,full_name,email").in("id", doctorIds),
-        () => supabase.from("doctors").select("doctor_id,name,full_name,email").in("doctor_id", doctorIds),
+        () =>
+          supabase
+            .from("doctors")
+            .select("id,doctor_id,name,full_name,email,clinic_id")
+            .in("id", doctorIds)
+            .eq("clinic_id", req.clinicId),
+        () =>
+          supabase
+            .from("doctors")
+            .select("id,doctor_id,name,full_name,email,clinic_id")
+            .in("doctor_id", doctorIds)
+            .eq("clinic_id", req.clinicId),
       ];
       for (const run of doctorAttempts) {
         const { data, error } = await run();
         if (error) continue;
         (data || []).forEach((doc) => {
           const key = String(getField(doc, ["id", "doctor_id"]) || "");
-          const label = String(getField(doc, ["name", "full_name", "email", "id", "doctor_id"]) || "");
+          const label = String(getField(doc, ["name", "full_name", "email"]) || "");
           if (key && label) doctorMap.set(key, label);
         });
         break;
@@ -40666,9 +40684,15 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
           fallbackDate: getField(row, ["date", "appointment_date"]),
           fallbackTime: getField(row, ["time", "appointment_time"]),
         });
+        const resolvedDoctor =
+          doctorMap.get(doctorId) ||
+          (() => {
+            const inline = String(getField(row, ["doctor", "doctor_name", "doctorName"]) || "").trim();
+            return inline && !UUID_RE.test(inline) ? inline : "";
+          })();
         const payload = {
           id: String(getField(row, ["id"]) || ""),
-          doctor: String(getField(row, ["doctor", "doctor_name", "doctorName"]) || doctorMap.get(doctorId) || doctorId || ""),
+          doctor: resolvedDoctor,
           patient: String(getField(row, ["patient", "patient_name", "patientName"]) || patientMap.get(patientId) || patientId || ""),
           chair: String(getField(row, ["chair", "chair_name", "chairName"]) || chairMap.get(chairId) || chairId || ""),
           startAt: dtNorm.scheduledLocal || toIsoSafe(startAt),
