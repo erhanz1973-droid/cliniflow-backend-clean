@@ -40269,7 +40269,7 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     const assignDoc = String(
       row.assigned_doctor_id || row.doctor_id || row.created_by_doctor_id || "",
     ).trim();
-    if (assignDoc && clinicDoctorIdSet.size > 0 && !clinicDoctorIdSet.has(assignDoc)) {
+    if (assignDoc && (clinicDoctorIdSet.size === 0 || !clinicDoctorIdSet.has(assignDoc))) {
       continue;
     }
     const procType = String(row.procedure_type || "TREATMENT").trim();
@@ -63863,93 +63863,12 @@ server.on("error", (err) => {
 });
 
 // ── Static assets: after every app.get/app.post route; optional files never steal POST /api/* ──
-// Public discovery: list available country codes for dropdowns.
-app.get("/api/discovery/countries", async (_req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("clinics")
-      .select("country")
-      .eq("is_listed", true);
-
-    if (error) throw error;
-
-    const countries = [...new Set(
-      (data || [])
-        .map((row) => String(row?.country || "").trim().toUpperCase())
-        .filter((code) => /^[A-Z]{2}$/.test(code))
-    )].sort();
-
-    return res.json({ ok: true, countries });
-  } catch (e) {
-    console.error("[GET /api/discovery/countries]", e?.message || e);
-    return res.status(500).json({
-      ok: false,
-      error: e?.message || "internal_error",
-    });
-  }
-});
-
-// Public discovery: clinic listing by country (+ optional city text filter).
-app.get("/api/discovery/clinics", async (req, res) => {
-  try {
-    const country = String(req.query?.country || "").trim().toUpperCase();
-    const city = String(req.query?.city || "").trim();
-
-    console.log("[discovery/clinics] query", {
-      country,
-      city,
-    });
-
-    if (!/^[A-Z]{2}$/.test(country)) {
-      return res.status(400).json({
-        ok: false,
-        error: "country_required",
-        message: "country must be ISO-2 code (e.g. TR)",
-      });
-    }
-
-    const { data, error } = await supabase
-      .from("clinics")
-      .select("id, name, city, country, clinic_code, status")
-      .eq("is_listed", true)
-      .eq("country", country)
-      .order("name", { ascending: true })
-      .limit(200);
-
-    if (error) throw error;
-
-    const rows = (data || []).filter((c) => {
-      const s = String(c?.status ?? "active").toLowerCase();
-      return !["suspended", "reject", "rejected", "inactive", "closed"].includes(s);
-    });
-
-    const cityQuery = city.toLowerCase();
-    const clinicsRaw =
-      cityQuery.length >= 2
-        ? rows.filter((c) => String(c?.city || "").toLowerCase().includes(cityQuery))
-        : rows;
-
-    const clinics = clinicsRaw.map((c) => ({
-      ...c,
-      latitude: c?.latitude ?? c?.lat ?? null,
-      longitude: c?.longitude ?? c?.lng ?? null,
-    }));
-
-    console.log("[discovery/clinics] result", {
-      count: clinics?.length,
-      first: clinics?.[0],
-    });
-
-    return res.json({ ok: true, clinics });
-  } catch (e) {
-    console.error("[GET /api/discovery/clinics]", e?.message || e);
-    return res.status(500).json({
-      ok: false,
-      error: "discovery_clinics_failed",
-      message: e?.message || "internal_error",
-    });
-  }
-});
+const { registerDiscoveryRoutes, normalizeDiscoveryClinic } = require("./lib/clinicDiscovery");
+registerDiscoveryRoutes(app, { supabase });
+const { registerPatientMarketplaceRoutes } = require("./lib/patientMarketplace");
+registerPatientMarketplaceRoutes(app, { supabase, requireToken, normalizeDiscoveryClinic });
+const { registerClinicMarketplaceAdminRoutes } = require("./lib/clinicMarketplaceProfile");
+registerClinicMarketplaceAdminRoutes(app, { supabase, requireAdminAuth, superAdminGuard });
 
 registerClinicInvitationRoutes(app, { requireAdminAuth });
 

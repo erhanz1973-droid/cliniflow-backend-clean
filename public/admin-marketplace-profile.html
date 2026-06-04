@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinifly Admin – Public Directory Profile</title>
+  <link rel="stylesheet" href="/admin-layout.css" />
+  <script>
+    (function () {
+      if (!localStorage.getItem("adminToken") && !localStorage.getItem("admin_token")) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --card: #1f2937;
+      --border: rgba(55, 65, 81, 0.6);
+      --muted: #9ca3af;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+    }
+    .page { max-width: 960px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card h2 { font-size: 16px; margin: 0 0 4px; }
+    .card .hint { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+    input, textarea, select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 9px 11px;
+      border-radius: 8px;
+      border: 1px solid #374151;
+      background: #111827;
+      color: #f3f4f6;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    textarea { min-height: 72px; resize: vertical; font-family: inherit; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .row2 { grid-template-columns: 1fr; } }
+    .btn {
+      display: inline-block;
+      padding: 10px 18px;
+      border-radius: 8px;
+      border: none;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.secondary { background: #374151; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .score-wrap {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .score-ring {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: 4px solid #2563eb;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: 700;
+    }
+    .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .chip { font-size: 12px; padding: 4px 8px; border-radius: 999px; }
+    .chip.ok { background: rgba(16,185,129,0.15); color: #6ee7b7; }
+    .chip.miss { background: rgba(239,68,68,0.12); color: #fca5a5; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .badge {
+      font-size: 12px; padding: 5px 10px; border-radius: 8px;
+      background: #374151; color: #e5e7eb;
+    }
+    .badge.on { background: #065f46; color: #a7f3d0; }
+    .badge.admin { border: 1px dashed #6b7280; }
+    .publish-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px; border-radius: 10px;
+      background: #111827; border: 1px solid var(--border);
+      margin-top: 8px;
+    }
+    .publish-row input[type=checkbox] { width: auto; margin: 0; }
+    .status { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 13px; display: none; }
+    .status.show { display: block; }
+    .status.ok { background: #064e3b; color: #6ee7b7; }
+    .status.err { background: #7f1d1d; color: #fecaca; }
+    .loading { color: var(--muted); padding: 40px 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="admin-layout-root"></div>
+  <div class="page">
+    <h1>Public Directory Profile</h1>
+    <p class="sub">
+      Manage how your clinic appears in Clinifly’s patient-facing directory.
+      Reputation data is self-managed — enter your Google and Trustpilot details manually.
+      Verified, featured, and sponsored badges are set by Clinifly.
+    </p>
+
+    <div id="loading" class="loading">Loading profile…</div>
+    <div id="formWrap" style="display:none;">
+
+      <div class="card">
+        <h2>Profile completion</h2>
+        <p class="hint">Richer profiles help patients compare and trust your clinic.</p>
+        <div class="score-wrap">
+          <div class="score-ring" id="scorePct">—</div>
+          <div style="flex:1; min-width:200px;">
+            <div><strong>Completed</strong></div>
+            <div class="chip-list" id="completedChips"></div>
+            <div style="margin-top:10px;"><strong>Missing</strong></div>
+            <div class="chip-list" id="missingChips"></div>
+          </div>
+        </div>
+        <div class="publish-row">
+          <input type="checkbox" id="isListed" />
+          <label for="isListed" style="margin:0; cursor:pointer;">
+            <strong>Publish to public directory</strong><br />
+            <span style="font-weight:400; color:var(--muted); font-size:12px;">
+              Required: logo, description, country, ≥1 specialty, ≥1 language, website or social link
+            </span>
+          </label>
+        </div>
+        <div id="listingWarn" style="display:none; margin-top:10px; color:#fca5a5; font-size:13px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>Platform badges</h2>
+        <p class="hint">Admin-only — contact Clinifly to request changes.</p>
+        <div class="badge-row" id="platformBadges"></div>
+      </div>
+
+      <div class="card">
+        <h2>Reputation &amp; Trust</h2>
+        <p class="hint">Self-managed — copy values from your Google Business and Trustpilot pages.</p>
+        <label>Google Business URL</label>
+        <input id="googleBusinessUrl" type="url" placeholder="https://g.page/…" />
+        <div class="row2">
+          <div>
+            <label>Google Rating (0–5)</label>
+            <input id="googleRating" type="number" min="0" max="5" step="0.1" />
+          </div>
+          <div>
+            <label>Google Review Count</label>
+            <input id="googleReviewCount" type="number" min="0" />
+          </div>
+        </div>
+        <label>Trustpilot URL</label>
+        <input id="trustpilotUrl" type="url" placeholder="https://www.trustpilot.com/review/…" />
+        <div class="row2">
+          <div>
+            <label>Trustpilot Rating (0–5)</label>
+            <input id="trustpilotRating" type="number" min="0" max="5" step="0.1" />
+          </div>
+          <div>
+            <label>Trustpilot Review Count</label>
+            <input id="trustpilotReviewCount" type="number" min="0" />
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label>Years in Operation</label>
+            <input id="yearsInOperation" type="number" min="0" max="200" />
+          </div>
+          <div>
+            <label>International Patients / Year</label>
+            <input id="intlPatients" type="number" min="0" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Social &amp; Web</h2>
+        <label>Website</label>
+        <input id="website" type="url" />
+        <div class="row2">
+          <div><label>Facebook</label><input id="facebook" type="url" /></div>
+          <div><label>Instagram</label><input id="instagram" type="url" /></div>
+        </div>
+        <div class="row2">
+          <div><label>TikTok</label><input id="tiktok" type="url" /></div>
+          <div><label>YouTube</label><input id="youtube" type="url" /></div>
+        </div>
+        <div class="row2">
+          <div><label>LinkedIn</label><input id="linkedin" type="url" /></div>
+          <div><label>Google Maps URL</label><input id="googleMaps" type="url" /></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Clinic Information</h2>
+        <label>Short Description</label>
+        <textarea id="shortDescription" maxlength="280" placeholder="One line for search cards"></textarea>
+        <label>About (optional longer text)</label>
+        <textarea id="aboutText" placeholder="Extended about section on profile page"></textarea>
+        <div class="row2">
+          <div>
+            <label>Country (ISO-2, e.g. TR)</label>
+            <input id="country" maxlength="2" style="text-transform:uppercase" />
+          </div>
+          <div>
+            <label>City</label>
+            <input id="city" />
+          </div>
+        </div>
+        <label>Languages (comma-separated, e.g. English, Turkish, Russian)</label>
+        <input id="languages" />
+        <label>Specialties (comma-separated, e.g. Implantology, Aesthetic Dentistry)</label>
+        <input id="specialties" />
+      </div>
+
+      <div class="card">
+        <h2>Media</h2>
+        <p class="hint">Paste public image/video URLs (one per line in galleries).</p>
+        <label>Logo URL</label>
+        <input id="logoUrl" type="url" />
+        <label>Cover Photo URL</label>
+        <input id="coverPhotoUrl" type="url" />
+        <label>Gallery Images (one URL per line)</label>
+        <textarea id="galleryPhotos" placeholder="https://…"></textarea>
+        <label>Before / After Images (one URL per line)</label>
+        <textarea id="beforeAfter" placeholder="https://…"></textarea>
+        <label>Video URLs (one per line)</label>
+        <textarea id="videoUrls" placeholder="https://youtube.com/…"></textarea>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn" id="saveBtn">Save profile</button>
+        <button type="button" class="btn secondary" id="reloadBtn">Reload</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+  </div>
+
+  <script src="/admin-layout.js?v=202606081"></script>
+  <script>
+    function $(id) { return document.getElementById(id); }
+    function authHeaders() {
+      const t = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      return { Authorization: "Bearer " + t, "Content-Type": "application/json", Accept: "application/json" };
+    }
+    function api(path) {
+      if (typeof adminFetchUrl === "function") return adminFetchUrl(path);
+      return path;
+    }
+    function linesToArr(text) {
+      return String(text || "").split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    function arrToLines(arr) {
+      return (arr || []).join("\n");
+    }
+    function arrToCsv(arr) {
+      return (arr || []).join(", ");
+    }
+    function csvToArr(text) {
+      return String(text || "").split(/[,;|]/).map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+
+    function renderCompleteness(c) {
+      $("scorePct").textContent = (c && c.percent != null ? c.percent : 0) + "%";
+      $("completedChips").innerHTML = (c && c.completed || []).map(function (x) {
+        return '<span class="chip ok">' + x.label + "</span>";
+      }).join("") || '<span class="chip miss">Nothing yet</span>';
+      $("missingChips").innerHTML = (c && c.missing || []).map(function (x) {
+        return '<span class="chip miss">' + x.label + "</span>";
+      }).join("") || '<span class="chip ok">All done</span>';
+    }
+
+    function renderPlatformFlags(f) {
+      f = f || {};
+      var tier = f.listingTier || "standard";
+      var html = [
+        '<span class="badge admin' + (f.isVerified ? " on" : "") + '">Verified: ' + (f.isVerified ? "Yes" : "No") + "</span>",
+        '<span class="badge admin' + (f.isFeatured ? " on" : "") + '">Featured: ' + (f.isFeatured ? "Yes" : "No") + "</span>",
+        '<span class="badge admin">Placement: ' + tier + "</span>",
+      ];
+      if (f.featuredUntil) html.push('<span class="badge admin">Featured until: ' + f.featuredUntil + "</span>");
+      $("platformBadges").innerHTML = html.join("");
+    }
+
+    function fillForm(p) {
+      var rep = p.reputation || {};
+      var soc = p.social || {};
+      var info = p.clinicInfo || {};
+      var med = p.media || {};
+      $("googleBusinessUrl").value = rep.googleBusinessUrl || "";
+      $("googleRating").value = rep.googleRating != null ? rep.googleRating : "";
+      $("googleReviewCount").value = rep.googleReviewCount != null ? rep.googleReviewCount : "";
+      $("trustpilotUrl").value = rep.trustpilotUrl || "";
+      $("trustpilotRating").value = rep.trustpilotRating != null ? rep.trustpilotRating : "";
+      $("trustpilotReviewCount").value = rep.trustpilotReviewCount != null ? rep.trustpilotReviewCount : "";
+      $("yearsInOperation").value = rep.yearsInOperation != null ? rep.yearsInOperation : "";
+      $("intlPatients").value = rep.internationalPatientsPerYear != null ? rep.internationalPatientsPerYear : "";
+      $("website").value = soc.website || "";
+      $("facebook").value = soc.facebook || "";
+      $("instagram").value = soc.instagram || "";
+      $("tiktok").value = soc.tiktok || "";
+      $("youtube").value = soc.youtube || "";
+      $("linkedin").value = soc.linkedin || "";
+      $("googleMaps").value = soc.googleMapsUrl || "";
+      $("shortDescription").value = info.shortDescription || "";
+      $("aboutText").value = info.aboutText || "";
+      $("country").value = info.country || "";
+      $("city").value = info.city || "";
+      $("languages").value = arrToCsv(info.languages);
+      $("specialties").value = arrToCsv(info.specialties);
+      $("logoUrl").value = med.logoUrl || "";
+      $("coverPhotoUrl").value = med.coverPhotoUrl || "";
+      $("galleryPhotos").value = arrToLines(med.galleryPhotos);
+      $("beforeAfter").value = arrToLines(med.beforeAfterImages);
+      $("videoUrls").value = arrToLines(med.videoUrls);
+      $("isListed").checked = !!p.isListed;
+      renderCompleteness(p.completeness);
+      renderPlatformFlags(p.platformFlags);
+      var lr = p.listingRequirements || {};
+      var warn = $("listingWarn");
+      if (!lr.ok && p.isListed) {
+        warn.style.display = "block";
+        warn.textContent = "Listed but missing requirements: " + (lr.missing || []).map(function (m) { return m.label; }).join(", ");
+      } else if (!lr.ok) {
+        warn.style.display = "block";
+        warn.style.color = "#fbbf24";
+        warn.textContent = "To publish, complete: " + (lr.missing || []).map(function (m) { return m.label; }).join(", ");
+      } else {
+        warn.style.display = "none";
+      }
+    }
+
+    function collectPayload() {
+      return {
+        isListed: $("isListed").checked,
+        reputation: {
+          googleBusinessUrl: $("googleBusinessUrl").value.trim(),
+          googleRating: $("googleRating").value === "" ? null : Number($("googleRating").value),
+          googleReviewCount: $("googleReviewCount").value === "" ? null : parseInt($("googleReviewCount").value, 10),
+          trustpilotUrl: $("trustpilotUrl").value.trim(),
+          trustpilotRating: $("trustpilotRating").value === "" ? null : Number($("trustpilotRating").value),
+          trustpilotReviewCount: $("trustpilotReviewCount").value === "" ? null : parseInt($("trustpilotReviewCount").value, 10),
+          yearsInOperation: $("yearsInOperation").value === "" ? null : parseInt($("yearsInOperation").value, 10),
+          internationalPatientsPerYear: $("intlPatients").value === "" ? null : parseInt($("intlPatients").value, 10),
+        },
+        social: {
+          website: $("website").value.trim(),
+          facebook: $("facebook").value.trim(),
+          instagram: $("instagram").value.trim(),
+          tiktok: $("tiktok").value.trim(),
+          youtube: $("youtube").value.trim(),
+          linkedin: $("linkedin").value.trim(),
+          googleMapsUrl: $("googleMaps").value.trim(),
+        },
+        clinicInfo: {
+          shortDescription: $("shortDescription").value.trim(),
+          aboutText: $("aboutText").value.trim(),
+          country: $("country").value.trim().toUpperCase(),
+          city: $("city").value.trim(),
+          languages: csvToArr($("languages").value),
+          specialties: csvToArr($("specialties").value),
+        },
+        media: {
+          logoUrl: $("logoUrl").value.trim(),
+          coverPhotoUrl: $("coverPhotoUrl").value.trim(),
+          galleryPhotos: linesToArr($("galleryPhotos").value),
+          beforeAfterImages: linesToArr($("beforeAfter").value),
+          videoUrls: linesToArr($("videoUrls").value),
+        },
+      };
+    }
+
+    function showStatus(msg, ok) {
+      var el = $("status");
+      el.textContent = msg;
+      el.className = "status show " + (ok ? "ok" : "err");
+    }
+
+    async function loadProfile() {
+      $("loading").style.display = "block";
+      $("formWrap").style.display = "none";
+      try {
+        var res = await fetch(api("/api/admin/marketplace-profile"), { headers: authHeaders() });
+        var json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Load failed");
+        fillForm(json.profile);
+        $("loading").style.display = "none";
+        $("formWrap").style.display = "block";
+      } catch (e) {
+        $("loading").textContent = e.message || "Failed to load";
+      }
+    }
+
+    async function saveProfile() {
+      $("saveBtn").disabled = true;
+      showStatus("Saving…", true);
+      try {
+        var res = await fetch(api("/api/admin/marketplace-profile"), {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify(collectPayload()),
+        });
+        var json = await res.json();
+        if (!res.ok || !json.ok) {
+          var msg = json.message || json.error || "Save failed";
+          if (json.listingRequirements && json.listingRequirements.missing) {
+            msg += " — " + json.listingRequirements.missing.map(function (m) { return m.label; }).join(", ");
+          }
+          throw new Error(msg);
+        }
+        fillForm(json.profile);
+        showStatus("Profile saved.", true);
+      } catch (e) {
+        showStatus(e.message || "Save failed", false);
+      } finally {
+        $("saveBtn").disabled = false;
+      }
+    }
+
+    $("saveBtn").addEventListener("click", saveProfile);
+    $("reloadBtn").addEventListener("click", loadProfile);
+    loadProfile();
+  </script>
+</body>
+</html>

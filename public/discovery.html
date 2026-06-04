@@ -1,99 +1,274 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Klinik Bul — Cliniflow</title>
+  <title>Find a Clinic — Clinifly</title>
   <script src="/api/public/meta-pixel-config.js"></script>
   <script src="/meta-pixel.js?v=1"></script>
-  <script src="/api-base.js?v=202605185"></script>
+  <script src="/api-base.js?v=202606061"></script>
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      background: #0f172a;
-      color: #e6eaf2;
-      margin: 0;
-      padding: 24px 16px 48px;
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --verified: #10b981;
+      --star: #fbbf24;
     }
-    h1 { font-size: 1.5rem; margin: 0 0 8px; }
-    .muted { color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
-    label { display: block; margin-top: 12px; margin-bottom: 6px; font-weight: 600; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 20px 16px 48px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.75rem; margin: 0 0 6px; }
+    .lead { color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    label { display: block; margin-top: 10px; margin-bottom: 6px; font-weight: 600; font-size: 0.9rem; }
     select, input[type="text"] {
       width: 100%;
-      max-width: 420px;
-      box-sizing: border-box;
       padding: 10px 12px;
       border-radius: 8px;
-      border: 1px solid #334155;
-      background: #1e293b;
-      color: #e6eaf2;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--text);
       font-size: 1rem;
     }
-    button {
-      margin-top: 16px;
-      padding: 12px 20px;
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .chip {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+    .chip.active { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
+    button.search {
+      margin-top: 14px;
+      padding: 12px 22px;
       font-weight: 700;
       border: none;
-      border-radius: 8px;
-      background: #2563eb;
+      border-radius: 10px;
+      background: var(--accent);
       color: #fff;
       cursor: pointer;
       font-size: 1rem;
     }
-    button:hover { background: #1d4ed8; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #status { margin-top: 16px; min-height: 1.25rem; }
+    button.search:hover { background: var(--accent-hover); }
+    button.search:disabled { opacity: 0.45; cursor: not-allowed; }
+    #status { margin: 14px 0; min-height: 1.25rem; color: var(--muted); }
     .err { color: #fca5a5; }
     #results {
-      margin-top: 28px;
       display: grid;
       gap: 16px;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     }
     .card {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
       padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
-    .card h2 { margin: 0 0 8px; font-size: 1.1rem; color: #f8fafc; }
-    .card .meta { color: #94a3b8; font-size: 0.9rem; }
-    .card .rating { margin-top: 8px; color: #fbbf24; font-weight: 600; }
-    .wrap { max-width: 960px; margin: 0 auto; }
+    .card-top { display: flex; gap: 12px; align-items: flex-start; }
+    .logo {
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      object-fit: cover;
+      background: #334155;
+      flex-shrink: 0;
+    }
+    .logo-ph {
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      background: #334155;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1.25rem;
+      color: #93c5fd;
+    }
+    .card h2 { margin: 0; font-size: 1.1rem; line-height: 1.3; }
+    .meta { color: var(--muted); font-size: 0.88rem; }
+    .badge {
+      display: inline-block;
+      margin-top: 4px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--verified);
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .desc { font-size: 0.9rem; line-height: 1.45; color: #cbd5e1; }
+    .rating { color: var(--star); font-weight: 700; font-size: 0.88rem; }
+    .rating-tp { color: #5eead4; font-weight: 600; font-size: 0.85rem; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.15);
+      color: #93c5fd;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+    .actions a, .actions button {
+      font-size: 0.8rem;
+      font-weight: 700;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .actions .primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    #profileModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.85);
+      z-index: 50;
+      overflow-y: auto;
+      padding: 24px 16px;
+    }
+    #profileModal.open { display: block; }
+    .profile-sheet {
+      max-width: 720px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+    }
+    .profile-sheet h2 { margin-top: 0; }
+    .close-btn {
+      float: right;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Klinik Bul</h1>
-    <p class="muted">Ülke seçin; isterseniz şehir ile daraltın. Şehir boş bırakılırsa seçilen ülkedeki tüm kayıtlı klinikler listelenir.</p>
+    <h1>Find a Clinic</h1>
+    <p class="lead">Compare clinics by reviews, specialties, and languages before you contact them — like a medical travel marketplace.</p>
 
-    <label for="countrySelect">Ülke</label>
-    <select id="countrySelect" aria-label="Ülke"></select>
-    <div id="countryWarn" class="err" style="margin-top:6px;font-size:0.9rem;">Lütfen ülke seçin</div>
+    <div class="panel">
+      <label for="countrySelect">Country</label>
+      <select id="countrySelect" aria-label="Country"></select>
+      <div id="countryWarn" class="err" style="margin-top:6px;font-size:0.9rem;">Please select a country</div>
 
-    <label for="cityInput">Şehir <span class="muted" style="font-weight:400;">(isteğe bağlı)</span></label>
-    <input type="text" id="cityInput" placeholder="Örn. Antalya" autocomplete="address-level2" />
+      <label for="cityInput">City <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <input type="text" id="cityInput" placeholder="e.g. Antalya" autocomplete="address-level2" />
 
-    <button type="button" id="searchBtn" disabled>Ara</button>
-    <div id="status"></div>
+      <label>Filters</label>
+      <div class="filters" id="filterChips"></div>
+
+      <button type="button" class="search" id="searchBtn" disabled>Search clinics</button>
+      <div id="status"></div>
+    </div>
+
     <div id="results"></div>
+  </div>
+
+  <div id="profileModal" aria-hidden="true">
+    <div class="profile-sheet" id="profileContent"></div>
   </div>
 
   <script>
     (function () {
+      var state = {
+        minGoogleRating: null,
+        minGoogleReviews: null,
+        verifiedOnly: false,
+        specialty: "",
+        language: "",
+      };
+
+      var filterDefs = [
+        { key: "rating45", label: "Google 4.5+", apply: function () { state.minGoogleRating = state.minGoogleRating === 4.5 ? null : 4.5; } },
+        { key: "rating48", label: "Google 4.8+", apply: function () { state.minGoogleRating = state.minGoogleRating === 4.8 ? null : 4.8; } },
+        { key: "rev100", label: "100+ reviews", apply: function () { state.minGoogleReviews = state.minGoogleReviews === 100 ? null : 100; } },
+        { key: "rev500", label: "500+ reviews", apply: function () { state.minGoogleReviews = state.minGoogleReviews === 500 ? null : 500; } },
+        { key: "verified", label: "Verified only", apply: function () { state.verifiedOnly = !state.verifiedOnly; } },
+      ];
+
       var sel = document.getElementById("countrySelect");
       var btn = document.getElementById("searchBtn");
       var countryWarn = document.getElementById("countryWarn");
+      var filterRoot = document.getElementById("filterChips");
 
       function apiOrigin() {
-        return (typeof cliniflowAdminApiOrigin === "function" ? cliniflowAdminApiOrigin() : "https://cliniflow-backend-clean-production.up.railway.app");
+        return (typeof cliniflowAdminApiOrigin === "function"
+          ? cliniflowAdminApiOrigin()
+          : "https://cliniflow-backend-clean-production.up.railway.app"
+        ).replace(/\/+$/, "");
       }
+
+      function escapeHtml(s) {
+        var d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+      }
+
+      function renderFilterChips() {
+        filterRoot.innerHTML = "";
+        filterDefs.forEach(function (def) {
+          var el = document.createElement("span");
+          el.className = "chip";
+          el.textContent = def.label;
+          el.dataset.key = def.key;
+          if (def.key === "rating45" && state.minGoogleRating === 4.5) el.classList.add("active");
+          if (def.key === "rating48" && state.minGoogleRating === 4.8) el.classList.add("active");
+          if (def.key === "rev100" && state.minGoogleReviews === 100) el.classList.add("active");
+          if (def.key === "rev500" && state.minGoogleReviews === 500) el.classList.add("active");
+          if (def.key === "verified" && state.verifiedOnly) el.classList.add("active");
+          el.addEventListener("click", function () {
+            def.apply();
+            renderFilterChips();
+          });
+          filterRoot.appendChild(el);
+        });
+      }
+      renderFilterChips();
 
       function rebuildCountrySelect(codes) {
         sel.innerHTML = "";
         var ph = document.createElement("option");
         ph.value = "";
-        ph.textContent = "Ülke seçin";
+        ph.textContent = "Select country";
         sel.appendChild(ph);
         (codes || []).forEach(function (code) {
           var c = String(code || "").trim().toUpperCase();
@@ -109,17 +284,9 @@
       async function loadCountries() {
         rebuildCountrySelect([]);
         try {
-          var base = apiOrigin().replace(/\/+$/, "");
-          var res = await fetch((base ? base : "") + "/api/discovery/countries", {
-            headers: { Accept: "application/json" },
-          });
-          var data = await res.json().catch(function () {
-            return {};
-          });
-          if (!res.ok || data.ok === false) {
-            console.warn("[discovery/countries]", data.error || res.status);
-            return;
-          }
+          var res = await fetch(apiOrigin() + "/api/discovery/countries", { headers: { Accept: "application/json" } });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok || data.ok === false) return;
           rebuildCountrySelect(Array.isArray(data.countries) ? data.countries : []);
         } catch (e) {
           console.warn("[discovery/countries]", e);
@@ -134,79 +301,128 @@
       }
 
       sel.addEventListener("change", updateCountryRequirementUi);
-
       loadCountries();
+
+      function buildQuery() {
+        var country = String(sel.value || "").trim().toUpperCase();
+        var city = document.getElementById("cityInput").value.trim();
+        var q = "country=" + encodeURIComponent(country) + "&city=" + encodeURIComponent(city);
+        if (state.minGoogleRating != null) q += "&min_google_rating=" + state.minGoogleRating;
+        if (state.minGoogleReviews != null) q += "&min_google_reviews=" + state.minGoogleReviews;
+        if (state.verifiedOnly) q += "&verified_only=true";
+        if (state.specialty) q += "&specialty=" + encodeURIComponent(state.specialty);
+        if (state.language) q += "&language=" + encodeURIComponent(state.language);
+        return q;
+      }
 
       function renderCards(list) {
         var root = document.getElementById("results");
         root.innerHTML = "";
         if (!list || !list.length) {
-          root.innerHTML = '<p class="muted">Klinik bulunamadı.</p>';
+          root.innerHTML = '<p class="lead">No clinics match your search.</p>';
           return;
         }
         list.forEach(function (c) {
           var el = document.createElement("article");
           el.className = "card";
-          var cityLine = c.city ? escapeHtml(c.city) : "—";
-          var ratingLine =
-            c.rating != null && c.rating !== ""
-              ? "★ " + escapeHtml(String(c.rating))
-              : "Henüz puan yok";
+          var loc = [c.city, c.country].filter(Boolean).join(" · ") || "—";
+          var logo = c.logoUrl
+            ? '<img class="logo" src="' + escapeHtml(c.logoUrl) + '" alt="" />'
+            : '<div class="logo-ph">' + escapeHtml((c.name || "C").charAt(0)) + "</div>";
+          var google =
+            c.googleRating != null
+              ? '<div class="rating">Google ★ ' + escapeHtml(String(c.googleRating)) + "/5 · " + escapeHtml(String(c.googleReviewCount || "—")) + " reviews</div>"
+              : '<div class="meta">No Google rating yet</div>';
+          var tp =
+            c.trustpilotRating != null
+              ? '<div class="rating-tp">Trustpilot ★ ' + escapeHtml(String(c.trustpilotRating)) + "/5</div>"
+              : "";
+          var specs = (c.specialties || []).slice(0, 4).map(function (s) {
+            return '<span class="tag">' + escapeHtml(s) + "</span>";
+          }).join("");
           el.innerHTML =
-            "<h2>" + escapeHtml(c.name || "Klinik") + "</h2>" +
-            '<div class="meta">' + cityLine + "</div>" +
-            '<div class="rating">' + ratingLine + "</div>";
+            '<div class="card-top">' + logo + '<div><h2>' + escapeHtml(c.name || "Clinic") +
+            (c.isVerified ? '<span class="badge">Verified</span>' : "") +
+            '</h2><div class="meta">' + escapeHtml(loc) + "</div></div></div>" +
+            (c.shortDescription ? '<p class="desc">' + escapeHtml(c.shortDescription) + "</p>" : "") +
+            google + tp +
+            (specs ? '<div class="tags">' + specs + "</div>" : "") +
+            '<div class="actions">' +
+            '<button type="button" data-action="profile" data-id="' + escapeHtml(c.id) + '">View profile</button>' +
+            '<a class="primary" href="/admin-register.html">Request plan</a>' +
+            (c.googleMapsUrl ? '<a href="' + escapeHtml(c.googleMapsUrl) + '" target="_blank" rel="noopener">Map</a>' : "") +
+            "</div>";
           root.appendChild(el);
+        });
+        root.querySelectorAll('[data-action="profile"]').forEach(function (b) {
+          b.addEventListener("click", function () {
+            openProfile(b.getAttribute("data-id"));
+          });
         });
       }
 
-      function escapeHtml(s) {
-        var d = document.createElement("div");
-        d.textContent = s;
-        return d.innerHTML;
+      async function openProfile(id) {
+        var modal = document.getElementById("profileModal");
+        var content = document.getElementById("profileContent");
+        content.innerHTML = "<p>Loading…</p>";
+        modal.classList.add("open");
+        try {
+          var res = await fetch(apiOrigin() + "/api/discovery/clinics/" + encodeURIComponent(id));
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok || !data.clinic) {
+            content.innerHTML = "<p class='err'>Profile not found.</p>";
+            return;
+          }
+          var c = data.clinic;
+          var links = [];
+          if (c.websiteUrl) links.push('<a href="' + escapeHtml(c.websiteUrl) + '" target="_blank" rel="noopener">Website</a>');
+          if (c.googleReviewsUrl) links.push('<a href="' + escapeHtml(c.googleReviewsUrl) + '" target="_blank" rel="noopener">Google reviews</a>');
+          if (c.trustpilotUrl) links.push('<a href="' + escapeHtml(c.trustpilotUrl) + '" target="_blank" rel="noopener">Trustpilot</a>');
+          var team = (c.team || []).map(function (d) {
+            return "<li><strong>" + escapeHtml(d.name) + "</strong>" + (d.title ? " — " + escapeHtml(d.title) : "") + "</li>";
+          }).join("");
+          content.innerHTML =
+            '<button type="button" class="close-btn" id="closeProfile">&times;</button>' +
+            "<h2>" + escapeHtml(c.name) + "</h2>" +
+            (c.aboutText || c.shortDescription ? "<p>" + escapeHtml(c.aboutText || c.shortDescription) + "</p>" : "") +
+            (team ? "<h3>Team</h3><ul>" + team + "</ul>" : "") +
+            (links.length ? "<p>" + links.join(" · ") + "</p>" : "");
+          document.getElementById("closeProfile").onclick = function () {
+            modal.classList.remove("open");
+          };
+        } catch (e) {
+          content.innerHTML = "<p class='err'>Failed to load profile.</p>";
+        }
       }
+
+      document.getElementById("profileModal").addEventListener("click", function (e) {
+        if (e.target === this) this.classList.remove("open");
+      });
 
       async function runSearch() {
         var status = document.getElementById("status");
         var country = String(sel.value || "").trim().toUpperCase();
-        var city = document.getElementById("cityInput").value.trim();
-
-        status.innerHTML = "";
+        status.textContent = "";
         if (!country || country.length !== 2) {
-          status.innerHTML = '<span class="err">Lütfen ülke seçin</span>';
+          status.innerHTML = '<span class="err">Please select a country</span>';
           updateCountryRequirementUi();
           return;
         }
-
-        var base = apiOrigin().replace(/\/+$/, "");
-        var url =
-          (base ? base : "") +
-          "/api/discovery/clinics?country=" +
-          encodeURIComponent(country) +
-          "&city=" +
-          encodeURIComponent(city);
-
         btn.disabled = true;
         try {
-          var res = await fetch(url, { headers: { Accept: "application/json" } });
-          var data = await res.json().catch(function () {
-            return {};
+          var res = await fetch(apiOrigin() + "/api/discovery/clinics?" + buildQuery(), {
+            headers: { Accept: "application/json" },
           });
+          var data = await res.json().catch(function () { return {}; });
           if (!res.ok) {
-            status.innerHTML =
-              '<span class="err">' +
-              escapeHtml(data.message || data.error || "İstek başarısız") +
-              "</span>";
+            status.innerHTML = '<span class="err">' + escapeHtml(data.message || data.error || "Request failed") + "</span>";
             renderCards([]);
             return;
           }
           renderCards(data.clinics || []);
-          status.innerHTML =
-            '<span class="muted">' +
-            (data.clinics ? data.clinics.length : 0) +
-            " klinik</span>";
+          status.textContent = (data.clinics ? data.clinics.length : 0) + " clinic(s)";
         } catch (e) {
-          status.innerHTML = '<span class="err">Bağlantı hatası.</span>';
+          status.innerHTML = '<span class="err">Connection error.</span>';
           renderCards([]);
         } finally {
           updateCountryRequirementUi();
