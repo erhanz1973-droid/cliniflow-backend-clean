@@ -29,7 +29,12 @@
     .cta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 8px; }
     .tools-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #f1f5f9; }
     .muted { color: #64748b; font-size: 14px; }
-    .page-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+    .page-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; gap: 12px; }
+    .page-row-settings { flex-wrap: wrap; align-items: flex-start; }
+    .page-row-main { flex: 1; min-width: 200px; }
+    .page-row-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .ai-mode-label { font-size: 13px; color: #475569; display: flex; align-items: center; gap: 8px; }
+    .page-ai-mode-select { padding: 6px 8px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 13px; }
     .token-warn {
       background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px;
       padding: 14px 16px; margin: 0 0 16px; font-size: 14px; color: #991b1b; line-height: 1.5;
@@ -197,6 +202,13 @@
           <li>The Page was never created — create one at facebook.com/pages/create, then connect again.</li>
         </ul>
 
+        <h3>Facebook Page AI mode</h3>
+        <ul>
+          <li><strong>Clinic AI</strong> — answers as the clinic coordinator (default).</li>
+          <li><strong>Clinifly Sales AI</strong> — promotes Clinifly product, demos, and the 2-month premium trial; no clinic treatment advice.</li>
+          <li><strong>Human Only</strong> — incoming Messenger messages are logged; staff reply manually (no auto-reply).</li>
+        </ul>
+
         <h3>Troubleshooting</h3>
         <ul>
           <li><strong>Connect Facebook</strong> — start or add another Page connection.</li>
@@ -212,6 +224,6 @@
   </div>
 
   <script src="/admin-layout.js?v=202605201"></script>
-  <script src="/admin-messenger.js?v=8"></script>
+  <script src="/admin-messenger.js?v=9"></script>
 </body>
 </html>

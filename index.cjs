@@ -63878,6 +63878,8 @@ const { registerClinicAiCommunicationRoutes } = require("./lib/clinicAiCommunica
 registerClinicAiCommunicationRoutes(app, { requireAdminAuth });
 setupAiSlaContinuity({ insertClinicMessage: inboundClinicMessageInsert });
 setupAiPatientInboundReply({ insertClinicMessage: inboundClinicMessageInsert });
+const { setupCliniflySalesInbound } = require("./lib/cliniflySalesAi");
+setupCliniflySalesInbound({ insertClinicMessage: inboundClinicMessageInsert });
 registerMetaIntegrationRoutes(app, {
   requireAdminAuth,
   afterPatientInboundMessage,

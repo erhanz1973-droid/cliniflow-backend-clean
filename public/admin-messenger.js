@@ -115,6 +115,33 @@
     return String(s || "").replace(/"/g, "&quot;");
   }
 
+  const PAGE_AI_MODE_OPTIONS = [
+    { value: "clinic", label: "Clinic AI" },
+    { value: "clinifly_sales", label: "Clinifly Sales AI" },
+    { value: "human", label: "Human Only" },
+  ];
+
+  function normalizePageAiModeUi(raw) {
+    const m = String(raw || "")
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, "_");
+    return PAGE_AI_MODE_OPTIONS.some((o) => o.value === m) ? m : "clinic";
+  }
+
+  async function savePageAiMode(pageId, aiMode) {
+    const res = await fetch("/api/integrations/meta/pages/ai-mode", {
+      method: "PATCH",
+      headers: authHeaders(),
+      body: JSON.stringify({ pageId, aiMode }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      throw new Error(json.error || json.message || "AI mode update failed");
+    }
+    return json;
+  }
+
   function openHelpModal() {
     if (!helpModal) return;
     helpModal.classList.add("open");
@@ -229,14 +256,49 @@
     if (pages.length) {
       pagesCard.style.display = "block";
       connectedList.innerHTML = pages
-        .map(
-          (p) =>
-            `<div class="page-row"><span><strong>${escapeHtml(p.pageName || p.pageId)}</strong><br><span class="muted">${p.pageId}</span> · webhook: ${p.webhookSubscribed ? "yes" : "no"} · token: ${p.tokenHealthy === false ? '<span class="err">reconnect required</span>' : "ok"}</span></span>` +
-            `<button type="button" data-page-id="${escapeAttr(p.pageId)}" class="disconnect-btn">Disconnect</button></div>`,
-        )
+        .map((p) => {
+          const mode = normalizePageAiModeUi(p.aiMode);
+          const opts = PAGE_AI_MODE_OPTIONS.map(
+            (o) =>
+              `<option value="${o.value}"${o.value === mode ? " selected" : ""}>${escapeHtml(o.label)}</option>`,
+          ).join("");
+          return (
+            `<div class="page-row page-row-settings">` +
+            `<div class="page-row-main"><strong>${escapeHtml(p.pageName || p.pageId)}</strong><br>` +
+            `<span class="muted">${escapeHtml(p.pageId)} · webhook: ${p.webhookSubscribed ? "yes" : "no"} · token: ${p.tokenHealthy === false ? '<span class="err">reconnect required</span>' : "ok"}</span></div>` +
+            `<div class="page-row-controls">` +
+            `<label class="ai-mode-label">AI Mode <select class="page-ai-mode-select" data-page-id="${escapeAttr(p.pageId)}">${opts}</select></label>` +
+            `<button type="button" data-page-id="${escapeAttr(p.pageId)}" class="disconnect-btn">Disconnect</button>` +
+            `</div></div>`
+          );
+        })
         .join("");
       connectedList.querySelectorAll(".disconnect-btn").forEach((btn) => {
         btn.addEventListener("click", () => disconnectPage(btn.getAttribute("data-page-id")));
+      });
+      connectedList.querySelectorAll(".page-ai-mode-select").forEach((sel) => {
+        const pageId = sel.getAttribute("data-page-id");
+        const initial = normalizePageAiModeUi(sel.value);
+        sel.addEventListener("change", async () => {
+          const next = normalizePageAiModeUi(sel.value);
+          if (next === initial) return;
+          sel.disabled = true;
+          try {
+            await savePageAiMode(pageId, next);
+            setMsg(
+              "AI mode updated for " +
+                (pages.find((p) => p.pageId === pageId)?.pageName || pageId) +
+                ": " +
+                (PAGE_AI_MODE_OPTIONS.find((o) => o.value === next)?.label || next),
+              false,
+            );
+            await loadStatus();
+          } catch (e) {
+            sel.value = initial;
+            setMsg(e?.message || "Could not update AI mode", true);
+            sel.disabled = false;
+          }
+        });
       });
     } else {
       pagesCard.style.display = "none";
