@@ -28532,6 +28532,36 @@ function rowBelongsToClinic(row, expectedClinicId) {
   return got === exp;
 }
 
+/**
+ * Admin calendar row tenancy: explicit clinic_id must match; legacy null clinic_id only if patient is registered at this clinic.
+ * @param {Record<string, unknown>} row
+ * @param {string} expectedClinicId
+ * @param {string} [expectedClinicCode]
+ * @param {Set<string>} strictClinicPatientIds patients from patients.clinic_id only
+ */
+function appointmentRowBelongsToClinic(row, expectedClinicId, expectedClinicCode, strictClinicPatientIds) {
+  const expId = expectedClinicId != null ? String(expectedClinicId).trim() : "";
+  const expCode =
+    expectedClinicCode != null ? String(expectedClinicCode).trim().toUpperCase() : "";
+  const gotId =
+    row && (row.clinic_id != null || row.clinicId != null)
+      ? String(row.clinic_id ?? row.clinicId).trim()
+      : "";
+  if (gotId && UUID_RE.test(gotId)) {
+    return Boolean(expId) && gotId === expId;
+  }
+  const gotCode =
+    row && (row.clinic_code != null || row.clinicCode != null)
+      ? String(row.clinic_code ?? row.clinicCode).trim().toUpperCase()
+      : "";
+  if (gotCode && expCode) {
+    return gotCode === expCode;
+  }
+  const pid = String(row?.patient_id ?? row?.patientId ?? "").trim();
+  if (!pid || !strictClinicPatientIds || strictClinicPatientIds.size === 0) return false;
+  return strictClinicPatientIds.has(pid);
+}
+
 /** Timeline satellite rows (patient_treatments, treatment_plans): null clinic_id OK if scoped by patient list; wrong clinic rejects. */
 function eventsSatelliteRowClinicOk(row, expectedClinicId) {
   const exp = expectedClinicId != null ? String(expectedClinicId).trim() : "";
@@ -40033,20 +40063,47 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
   const cid = clinicId ? String(clinicId).trim() : "";
   if (!cid) return [];
 
-  /** encounter id → patient_id (merge: clinic_id match ∪ patients of this clinic) */
+  /** encounter id → patient_id (this clinic only) */
   const encToPatient = new Map();
-  const ingestEncounterRows = (rows) => {
+  const ingestEncounterRows = (rows, opts = {}) => {
+    const allowNullClinic = opts.allowNullClinic === true;
+    const strictPatients =
+      opts.strictClinicPatientIds instanceof Set ? opts.strictClinicPatientIds : null;
     for (const e of rows || []) {
       const eid = String(e?.id || "").trim();
       const pid = String(e?.patient_id || "").trim();
-      if (eid && pid) encToPatient.set(eid, pid);
+      if (!eid || !pid) continue;
+      const rowClinic = String(e?.clinic_id ?? e?.clinicId ?? "").trim();
+      if (rowClinic && rowClinic !== cid) continue;
+      if (!rowClinic && allowNullClinic) {
+        if (!strictPatients || !strictPatients.has(pid)) continue;
+      } else if (!rowClinic && !allowNullClinic) {
+        continue;
+      }
+      encToPatient.set(eid, pid);
     }
   };
+
+  /** Patients registered on this clinic (strict — no thread/encounter expansion). */
+  const strictClinicPatientIds = new Set();
+  try {
+    const { data: regPts, error: regErr } = await supabase
+      .from("patients")
+      .select("id, patient_id")
+      .eq("clinic_id", cid)
+      .limit(4000);
+    if (!regErr) {
+      for (const p of regPts || []) {
+        if (p?.id) strictClinicPatientIds.add(String(p.id));
+        if (p?.patient_id) strictClinicPatientIds.add(String(p.patient_id));
+      }
+    }
+  } catch (_) {}
 
   try {
     const { data, error } = await supabase
       .from("patient_encounters")
-      .select("id, patient_id")
+      .select("id, patient_id, clinic_id")
       .eq("clinic_id", cid)
       .limit(8000);
     if (error && !["42P01", "PGRST205", "PGRST204"].includes(String(error.code || ""))) {
@@ -40058,26 +40115,43 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
     console.warn("[ADMIN APPOINTMENTS ET] encounters clinic_id ex:", e?.message || e);
   }
 
-  // Çoğu klinikte encounter satırında clinic_id boş kalıyor; doktor ekranı yine patient_id ile buluyor.
-  // Admin takvim yalnızca clinic_id ile sorguladığı için tüm encounter_treatments düşüyordu.
+  // Legacy null clinic_id: only patients registered at this clinic (never all encounters for a shared patient_id).
   try {
     const raw = clinicPatientIds
       ? clinicPatientIds instanceof Set
         ? [...clinicPatientIds]
         : [...(clinicPatientIds || [])]
       : [];
-    // patient_encounters.patient_id is UUID typed — never send p_<uuid>/legacy ids to .in()
-    const uniq = cleanUuids(raw).slice(0, 2500);
+    const uniq = cleanUuids(
+      strictClinicPatientIds.size ? [...strictClinicPatientIds] : raw,
+    ).slice(0, 2500);
     for (let i = 0; i < uniq.length; i += 80) {
       const chunk = uniq.slice(i, i + 80);
-      const { data, error } = await supabase.from("patient_encounters").select("id, patient_id").in("patient_id", chunk);
+      const { data, error } = await supabase
+        .from("patient_encounters")
+        .select("id, patient_id, clinic_id")
+        .in("patient_id", chunk)
+        .eq("clinic_id", cid);
       if (error) {
         if (!["42P01", "PGRST205", "PGRST204"].includes(String(error.code || ""))) {
-          console.warn("[ADMIN APPOINTMENTS ET] patient_encounters patient_id:", error.message);
+          console.warn("[ADMIN APPOINTMENTS ET] patient_encounters patient_id+clinic:", error.message);
         }
         continue;
       }
       ingestEncounterRows(data);
+    }
+    for (let i = 0; i < uniq.length; i += 80) {
+      const chunk = uniq.slice(i, i + 80);
+      const { data, error } = await supabase
+        .from("patient_encounters")
+        .select("id, patient_id, clinic_id")
+        .in("patient_id", chunk)
+        .is("clinic_id", null);
+      if (error) continue;
+      ingestEncounterRows(data, {
+        allowNullClinic: true,
+        strictClinicPatientIds,
+      });
     }
   } catch (e2) {
     console.warn("[ADMIN APPOINTMENTS ET] encounters by patient ex:", e2?.message || e2);
@@ -40148,11 +40222,25 @@ async function fetchAdminEncounterTreatmentAppointmentsForRange({
         if (kb) doctorMap.set(kb, label);
       }
     };
-    const rA = await supabase.from("doctors").select("id, doctor_id, name, full_name, email").in("id", didList);
+    let rA = await supabase
+      .from("doctors")
+      .select("id, doctor_id, name, full_name, email, clinic_id")
+      .in("id", didList)
+      .eq("clinic_id", cid);
     if (!rA.error) applyDocRows(rA.data);
     const missing = didList.filter((id) => !doctorMap.has(String(id).trim()));
     if (missing.length) {
-      const rB = await supabase.from("doctors").select("id, doctor_id, name, full_name, email").in("doctor_id", missing);
+      let rB = await supabase
+        .from("doctors")
+        .select("id, doctor_id, name, full_name, email, clinic_id")
+        .in("doctor_id", missing)
+        .eq("clinic_id", cid);
+      if (rB.error && ["42703", "PGRST204"].includes(String(rB.error.code || ""))) {
+        rB = await supabase
+          .from("doctors")
+          .select("id, doctor_id, name, full_name, email")
+          .in("doctor_id", missing);
+      }
       if (!rB.error) applyDocRows(rB.data);
     }
   }
@@ -40283,6 +40371,8 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
     }
 
     const clinicPatientIds = new Set();
+    /** patients.clinic_id / clinic_code only — used to reject cross-clinic appointment rows */
+    const strictClinicPatientIds = new Set();
     try {
       const patientAttempts = [
         () => supabase.from("patients").select("id,patient_id").eq("clinic_id", req.clinicId),
@@ -40292,8 +40382,14 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
         const { data, error } = await run();
         if (error) continue;
         (data || []).forEach((p) => {
-          if (p?.id) clinicPatientIds.add(String(p.id));
-          if (p?.patient_id) clinicPatientIds.add(String(p.patient_id));
+          if (p?.id) {
+            clinicPatientIds.add(String(p.id));
+            strictClinicPatientIds.add(String(p.id));
+          }
+          if (p?.patient_id) {
+            clinicPatientIds.add(String(p.patient_id));
+            strictClinicPatientIds.add(String(p.patient_id));
+          }
         });
       }
       // Fallback for legacy patients without clinic columns but linked by clinic-scoped tables.
@@ -40410,7 +40506,9 @@ app.get("/api/admin/appointments", requireAdminAuth, async (req, res) => {
         console.error(`[ADMIN APPOINTMENTS] ${tableName} query failed`, lastError);
         throw new Error(`${tableName}_query_failed`);
       }
-      return rows;
+      return (rows || []).filter((row) =>
+        appointmentRowBelongsToClinic(row, req.clinicId, req.clinicCode, strictClinicPatientIds),
+      );
     };
 
     const appointmentRows = await runTableFetch("appointments");
