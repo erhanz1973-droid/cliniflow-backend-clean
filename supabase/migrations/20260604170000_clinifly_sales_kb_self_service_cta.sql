@@ -2,7 +2,7 @@
 
 UPDATE clinifly_sales_kb_entries
 SET
-  answer_long = 'Pain: slow replies and missed leads. CTA: free self-service signup at clinifly.net, no credit card.',
+  answer_long = 'Pain: slow replies and missed leads. CTA: free registration at https://cliniflow-backend-clean-production.up.railway.app/admin-register.html — no credit card.',
   cta = 'trial',
   version = version + 1,
   updated_at = now()
