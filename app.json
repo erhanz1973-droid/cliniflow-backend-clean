@@ -5,7 +5,13 @@
       "buildNumber": "33"
     },
     "android": {
-      "versionCode": 33
+      "versionCode": 33,
+      "package": "com.clinifly.mobile"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "efea2352-7a01-4afb-94b8-17d76ddcb583"
+      }
     }
   }
 }
