@@ -5475,15 +5475,17 @@ function resolveHumanChatPushPreview(opts, insertedRow) {
 /** Sync display label from a patients row (thread-summary, push, inbox). */
 function patientRowDisplayName(row) {
   if (!row || typeof row !== "object") return null;
-  const full = String(row.full_name || "").trim();
+  const { normalizePatientDisplayName } = require("./lib/patientNameSync");
+  const full = normalizePatientDisplayName(row.full_name);
   if (full) return full.slice(0, 120);
-  const name = String(row.name || "").trim();
+  const name = normalizePatientDisplayName(row.name);
   if (name) return name.slice(0, 120);
-  const joined = [row.first_name, row.last_name]
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
+  const joined = normalizePatientDisplayName(
+    [row.first_name, row.last_name]
+      .map((x) => String(x || "").trim())
+      .filter(Boolean)
+      .join(" "),
+  );
   if (joined) return joined.slice(0, 120);
   const phone = String(row.phone || "").replace(/\s+/g, "").trim();
   if (phone.length >= 4) return `…${phone.slice(-4)}`;
@@ -50338,6 +50340,22 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       }
     }
     break;
+  }
+
+  if (clinicId && UUID_RE.test(String(clinicId).trim()) && uuidList.length) {
+    try {
+      const { enrichPatientDisplayNamesForInbox } = require("./lib/omnichannel/channelIdentity");
+      const refreshNames = String(req.query?.refresh || "").trim() === "1";
+      const enriched = await enrichPatientDisplayNamesForInbox(String(clinicId).trim(), uuidList, {
+        maxGraphSync: refreshNames ? 10 : 4,
+      });
+      for (const [pidKey, label] of enriched.entries()) {
+        const prev = patientMeta.get(pidKey) || {};
+        patientMeta.set(pidKey, { ...prev, name: label, name_field: label });
+      }
+    } catch (e) {
+      console.warn("[DOCTOR THREAD SUMMARY] messenger name enrich:", e?.message || e);
+    }
   }
 
   if (clinicId && UUID_RE.test(String(clinicId).trim()) && uuidList.length) {
