@@ -1398,20 +1398,20 @@ function mapPatientMessagesRowToLegacy(row) {
   const senderNameTrim = String(
     row.sender_name || row.senderName || row.doctor_name || row.sender_display_name || "",
   ).trim();
-  let inboundKind =
-    role === "doctor" ? "doctor" : role === "admin" ? "admin" : "clinic";
-  if (actorKind === "clinic_ai" || role === "assistant" || role === "ai") {
-    inboundKind = "clinic";
-  } else if (role === "doctor") {
-    inboundKind = "doctor";
-  } else if (
-    role === "clinic" &&
-    senderNameTrim &&
-    !actorKind.includes("ai") &&
-    !["care team", "ai", "klinik"].includes(senderNameTrim.toLowerCase())
-  ) {
-    inboundKind = "doctor";
-  }
+  const { isClinicAiMessage, careTeamSenderName } = require("./lib/clinicAiMessageActor.cjs");
+  const isAi = isClinicAiMessage({
+    actorKind,
+    messageSource: actorKind,
+    senderRole: role,
+    senderName: senderNameTrim,
+  });
+  let inboundKind = isAi
+    ? "clinic"
+    : role === "doctor"
+      ? "doctor"
+      : role === "admin"
+        ? "admin"
+        : "clinic";
 
   const outPm = {
     id: String(row.message_id || row.id || ""),
@@ -1427,8 +1427,13 @@ function mapPatientMessagesRowToLegacy(row) {
   if (tidRawPm != null && String(tidRawPm).trim()) outPm.thread_id = String(tidRawPm).trim();
   if (from === "CLINIC") {
     outPm.inboundKind = inboundKind;
-    if (senderNameTrim) outPm.senderName = senderNameTrim;
-    else if (inboundKind === "clinic") outPm.senderName = "Care Team";
+    if (isAi) {
+      outPm.senderName = careTeamSenderName();
+    } else if (senderNameTrim) {
+      outPm.senderName = senderNameTrim;
+    } else if (inboundKind === "clinic") {
+      outPm.senderName = careTeamSenderName();
+    }
   }
   if (row.translation && typeof row.translation === "object") {
     outPm.translation = row.translation;
@@ -2570,10 +2575,21 @@ async function insertClinicMessageViaPatientMessages(patientIdParam, text, msgTy
     return { data: null, error: guarded.error || { message: "thread_id_required" } };
   }
   const guardedRow = guarded.payload;
+  const prov =
+    opts.messageProvenance && typeof opts.messageProvenance === "object" ? opts.messageProvenance : {};
+  const messageSource = String(prov.message_source || opts.messageSource || "").toLowerCase();
+  const senderNameOpt = String(opts.senderName || opts.doctorName || "").trim();
+  const isAiOutbound =
+    messageSource.includes("ai") ||
+    String(senderNameOpt || "")
+      .trim()
+      .toLowerCase() === "care team";
   const preferredRole = String(opts.fromRole || "").trim().toLowerCase();
-  const fromRoles = preferredRole
-    ? [preferredRole, "doctor", "admin", "clinic", "CLINIC", "clinic_staff"]
-    : ["doctor", "admin", "clinic", "CLINIC", "clinic_staff"];
+  const fromRoles = isAiOutbound
+    ? ["clinic", "assistant", "admin", "doctor", "CLINIC", "clinic_staff"]
+    : preferredRole
+      ? [preferredRole, "doctor", "admin", "clinic", "CLINIC", "clinic_staff"]
+      : ["doctor", "admin", "clinic", "CLINIC", "clinic_staff"];
   let lastError = null;
   const payloadsToTry =
     guardedRow.clinic_id && Object.prototype.hasOwnProperty.call(guardedRow, "clinic_id")
@@ -58643,6 +58659,13 @@ function mapOfferMessageRowToUnifiedLegacy(row) {
   const text = extractOfferMessageTextFromRow(row);
   const senderName = String(row.sender_name || "").trim();
   const actorKind = String(row.actor_kind || row.message_source || "").toLowerCase();
+  const { isClinicAiMessage, careTeamSenderName } = require("./lib/clinicAiMessageActor.cjs");
+  const isAi = isClinicAiMessage({
+    actorKind,
+    messageSource: actorKind,
+    senderRole: roleRaw,
+    senderName,
+  });
   const out = {
     id: `offer_msg_${String(row.id || "")}`,
     text,
@@ -58653,12 +58676,15 @@ function mapOfferMessageRowToUnifiedLegacy(row) {
     offerId: String(row.offer_id || ""),
   };
   if (from === "CLINIC") {
-    if (senderName) out.senderName = senderName;
-    if (actorKind === "clinic_ai" || roleRaw === "assistant" || roleRaw === "ai") {
+    if (isAi) {
       out.inboundKind = "clinic";
-      if (!out.senderName) out.senderName = "Care Team";
+      out.senderName = careTeamSenderName();
     } else if (roleRaw === "doctor" || roleRaw === "dr" || actorKind === "doctor") {
       out.inboundKind = "doctor";
+      if (senderName) out.senderName = senderName;
+    } else {
+      out.inboundKind = "clinic";
+      out.senderName = senderName || careTeamSenderName();
     }
   }
   return out;
@@ -59681,6 +59707,8 @@ app.get("/api/offer-messages", async (req, res, next) => {
       sender_id: String(m.sender_id || ""),
       sender_role: m.sender_role,
       sender_name: m.sender_name || "",
+      actor_kind: m.actor_kind || null,
+      message_source: m.message_source || null,
       // Some production schemas store body in message/message_text/content/body instead of text.
       text: extractOfferMessageTextFromRow(m),
       attachment_url: normalizeOfferAttachmentUrl(req, m.attachment_url) || m.attachment_url,
