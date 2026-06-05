@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <script src="/api-base.js?v=202603301"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Clinifly Admin – Public Directory Profile</title>
+  <title data-i18n="marketplaceProfile.title">Clinifly Admin – Public Directory Profile</title>
+  <script src="/admin-i18n.js?v=38"></script>
   <link rel="stylesheet" href="/admin-layout.css" />
   <script>
     (function () {
@@ -105,33 +106,33 @@
 <body>
   <div id="admin-layout-root"></div>
   <div class="page">
-    <h1>Public Directory Profile</h1>
-    <p class="sub">
+    <h1 data-i18n="marketplaceProfile.pageTitle">Public Directory Profile</h1>
+    <p class="sub" data-i18n="marketplaceProfile.subtitle">
       Manage how your clinic appears in Clinifly’s patient-facing directory.
       Reputation data is self-managed — enter your Google and Trustpilot details manually.
       Verified, featured, and sponsored badges are set by Clinifly.
     </p>
 
-    <div id="loading" class="loading">Loading profile…</div>
+    <div id="loading" class="loading" data-i18n="marketplaceProfile.loading">Loading profile…</div>
     <div id="formWrap" style="display:none;">
 
       <div class="card">
-        <h2>Profile completion</h2>
-        <p class="hint">Richer profiles help patients compare and trust your clinic.</p>
+        <h2 data-i18n="marketplaceProfile.sectionCompletion">Profile completion</h2>
+        <p class="hint" data-i18n="marketplaceProfile.sectionCompletionHint">Richer profiles help patients compare and trust your clinic.</p>
         <div class="score-wrap">
           <div class="score-ring" id="scorePct">—</div>
           <div style="flex:1; min-width:200px;">
-            <div><strong>Completed</strong></div>
+            <div><strong data-i18n="marketplaceProfile.completed">Completed</strong></div>
             <div class="chip-list" id="completedChips"></div>
-            <div style="margin-top:10px;"><strong>Missing</strong></div>
+            <div style="margin-top:10px;"><strong data-i18n="marketplaceProfile.missing">Missing</strong></div>
             <div class="chip-list" id="missingChips"></div>
           </div>
         </div>
         <div class="publish-row">
           <input type="checkbox" id="isListed" />
           <label for="isListed" style="margin:0; cursor:pointer;">
-            <strong>Publish to public directory</strong><br />
-            <span style="font-weight:400; color:var(--muted); font-size:12px;">
+            <strong data-i18n="marketplaceProfile.publishTitle">Publish to public directory</strong><br />
+            <span style="font-weight:400; color:var(--muted); font-size:12px;" data-i18n="marketplaceProfile.publishHint">
               Required: logo, description, country, ≥1 specialty, ≥1 language, website or social link
             </span>
           </label>
@@ -140,109 +141,109 @@
       </div>
 
       <div class="card">
-        <h2>Platform badges</h2>
-        <p class="hint">Admin-only — contact Clinifly to request changes.</p>
+        <h2 data-i18n="marketplaceProfile.sectionBadges">Platform badges</h2>
+        <p class="hint" data-i18n="marketplaceProfile.sectionBadgesHint">Admin-only — contact Clinifly to request changes.</p>
         <div class="badge-row" id="platformBadges"></div>
       </div>
 
       <div class="card">
-        <h2>Reputation &amp; Trust</h2>
-        <p class="hint">Self-managed — copy values from your Google Business and Trustpilot pages.</p>
-        <label>Google Business URL</label>
-        <input id="googleBusinessUrl" type="url" placeholder="https://g.page/…" />
+        <h2 data-i18n="marketplaceProfile.sectionReputation">Reputation &amp; Trust</h2>
+        <p class="hint" data-i18n="marketplaceProfile.sectionReputationHint">Self-managed — copy values from your Google Business and Trustpilot pages.</p>
+        <label data-i18n="marketplaceProfile.fields.googleBusinessUrl">Google Business URL</label>
+        <input id="googleBusinessUrl" type="url" data-i18n-placeholder="marketplaceProfile.placeholders.googleBusinessUrl" placeholder="https://g.page/…" />
         <div class="row2">
           <div>
-            <label>Google Rating (0–5)</label>
+            <label data-i18n="marketplaceProfile.fields.googleRating">Google Rating (0–5)</label>
             <input id="googleRating" type="number" min="0" max="5" step="0.1" />
           </div>
           <div>
-            <label>Google Review Count</label>
+            <label data-i18n="marketplaceProfile.fields.googleReviewCount">Google Review Count</label>
             <input id="googleReviewCount" type="number" min="0" />
           </div>
         </div>
-        <label>Trustpilot URL</label>
-        <input id="trustpilotUrl" type="url" placeholder="https://www.trustpilot.com/review/…" />
+        <label data-i18n="marketplaceProfile.fields.trustpilotUrl">Trustpilot URL</label>
+        <input id="trustpilotUrl" type="url" data-i18n-placeholder="marketplaceProfile.placeholders.trustpilotUrl" placeholder="https://www.trustpilot.com/review/…" />
         <div class="row2">
           <div>
-            <label>Trustpilot Rating (0–5)</label>
+            <label data-i18n="marketplaceProfile.fields.trustpilotRating">Trustpilot Rating (0–5)</label>
             <input id="trustpilotRating" type="number" min="0" max="5" step="0.1" />
           </div>
           <div>
-            <label>Trustpilot Review Count</label>
+            <label data-i18n="marketplaceProfile.fields.trustpilotReviewCount">Trustpilot Review Count</label>
             <input id="trustpilotReviewCount" type="number" min="0" />
           </div>
         </div>
         <div class="row2">
           <div>
-            <label>Years in Operation</label>
+            <label data-i18n="marketplaceProfile.fields.yearsInOperation">Years in Operation</label>
             <input id="yearsInOperation" type="number" min="0" max="200" />
           </div>
           <div>
-            <label>International Patients / Year</label>
+            <label data-i18n="marketplaceProfile.fields.intlPatients">International Patients / Year</label>
             <input id="intlPatients" type="number" min="0" />
           </div>
         </div>
       </div>
 
       <div class="card">
-        <h2>Social &amp; Web</h2>
-        <label>Website</label>
+        <h2 data-i18n="marketplaceProfile.sectionSocial">Social &amp; Web</h2>
+        <label data-i18n="marketplaceProfile.fields.website">Website</label>
         <input id="website" type="url" />
         <div class="row2">
-          <div><label>Facebook</label><input id="facebook" type="url" /></div>
-          <div><label>Instagram</label><input id="instagram" type="url" /></div>
+          <div><label data-i18n="marketplaceProfile.fields.facebook">Facebook</label><input id="facebook" type="url" /></div>
+          <div><label data-i18n="marketplaceProfile.fields.instagram">Instagram</label><input id="instagram" type="url" /></div>
         </div>
         <div class="row2">
-          <div><label>TikTok</label><input id="tiktok" type="url" /></div>
-          <div><label>YouTube</label><input id="youtube" type="url" /></div>
+          <div><label data-i18n="marketplaceProfile.fields.tiktok">TikTok</label><input id="tiktok" type="url" /></div>
+          <div><label data-i18n="marketplaceProfile.fields.youtube">YouTube</label><input id="youtube" type="url" /></div>
         </div>
         <div class="row2">
-          <div><label>LinkedIn</label><input id="linkedin" type="url" /></div>
-          <div><label>Google Maps URL</label><input id="googleMaps" type="url" /></div>
+          <div><label data-i18n="marketplaceProfile.fields.linkedin">LinkedIn</label><input id="linkedin" type="url" /></div>
+          <div><label data-i18n="marketplaceProfile.fields.googleMaps">Google Maps URL</label><input id="googleMaps" type="url" /></div>
         </div>
       </div>
 
       <div class="card">
-        <h2>Clinic Information</h2>
-        <label>Short Description</label>
-        <textarea id="shortDescription" maxlength="280" placeholder="One line for search cards"></textarea>
-        <label>About (optional longer text)</label>
-        <textarea id="aboutText" placeholder="Extended about section on profile page"></textarea>
+        <h2 data-i18n="marketplaceProfile.sectionClinicInfo">Clinic Information</h2>
+        <label data-i18n="marketplaceProfile.fields.shortDescription">Short Description</label>
+        <textarea id="shortDescription" maxlength="280" data-i18n-placeholder="marketplaceProfile.placeholders.shortDescription" placeholder="One line for search cards"></textarea>
+        <label data-i18n="marketplaceProfile.fields.aboutText">About (optional longer text)</label>
+        <textarea id="aboutText" data-i18n-placeholder="marketplaceProfile.placeholders.aboutText" placeholder="Extended about section on profile page"></textarea>
         <div class="row2">
           <div>
-            <label>Country</label>
+            <label data-i18n="marketplaceProfile.fields.country">Country</label>
             <select id="country"></select>
           </div>
           <div>
-            <label>City</label>
-            <input id="city" placeholder="Tbilisi, Antalya, Istanbul…" />
+            <label data-i18n="marketplaceProfile.fields.city">City</label>
+            <input id="city" data-i18n-placeholder="marketplaceProfile.placeholders.city" placeholder="Tbilisi, Antalya, Istanbul…" />
           </div>
         </div>
-        <p class="hint">Same location as Settings → used for clinic discovery filters.</p>
-        <label>Languages (comma-separated, e.g. English, Turkish, Russian)</label>
+        <p class="hint" data-i18n="marketplaceProfile.locationHint">Same location as Settings → used for clinic discovery filters.</p>
+        <label data-i18n="marketplaceProfile.fields.languages">Languages (comma-separated, e.g. English, Turkish, Russian)</label>
         <input id="languages" />
-        <label>Specialties (comma-separated, e.g. Implantology, Aesthetic Dentistry)</label>
+        <label data-i18n="marketplaceProfile.fields.specialties">Specialties (comma-separated, e.g. Implantology, Aesthetic Dentistry)</label>
         <input id="specialties" />
       </div>
 
       <div class="card">
-        <h2>Media</h2>
-        <p class="hint">Paste public image/video URLs (one per line in galleries).</p>
-        <label>Logo URL</label>
+        <h2 data-i18n="marketplaceProfile.sectionMedia">Media</h2>
+        <p class="hint" data-i18n="marketplaceProfile.sectionMediaHint">Paste public image/video URLs (one per line in galleries).</p>
+        <label data-i18n="marketplaceProfile.fields.logoUrl">Logo URL</label>
         <input id="logoUrl" type="url" />
-        <label>Cover Photo URL</label>
+        <label data-i18n="marketplaceProfile.fields.coverPhotoUrl">Cover Photo URL</label>
         <input id="coverPhotoUrl" type="url" />
-        <label>Gallery Images (one URL per line)</label>
-        <textarea id="galleryPhotos" placeholder="https://…"></textarea>
-        <label>Before / After Images (one URL per line)</label>
-        <textarea id="beforeAfter" placeholder="https://…"></textarea>
-        <label>Video URLs (one per line)</label>
-        <textarea id="videoUrls" placeholder="https://youtube.com/…"></textarea>
+        <label data-i18n="marketplaceProfile.fields.galleryPhotos">Gallery Images (one URL per line)</label>
+        <textarea id="galleryPhotos" data-i18n-placeholder="marketplaceProfile.placeholders.galleryPhotos" placeholder="https://…"></textarea>
+        <label data-i18n="marketplaceProfile.fields.beforeAfter">Before / After Images (one URL per line)</label>
+        <textarea id="beforeAfter" data-i18n-placeholder="marketplaceProfile.placeholders.beforeAfter" placeholder="https://…"></textarea>
+        <label data-i18n="marketplaceProfile.fields.videoUrls">Video URLs (one per line)</label>
+        <textarea id="videoUrls" data-i18n-placeholder="marketplaceProfile.placeholders.videoUrls" placeholder="https://youtube.com/…"></textarea>
       </div>
 
       <div class="actions">
-        <button type="button" class="btn" id="saveBtn">Save profile</button>
-        <button type="button" class="btn secondary" id="reloadBtn">Reload</button>
+        <button type="button" class="btn" id="saveBtn" data-i18n="marketplaceProfile.saveBtn">Save profile</button>
+        <button type="button" class="btn secondary" id="reloadBtn" data-i18n="marketplaceProfile.reloadBtn">Reload</button>
       </div>
       <div id="status" class="status"></div>
     </div>
@@ -250,10 +251,15 @@
 
   <script src="/admin-layout.js?v=202606081"></script>
   <script>
+    function t(key, params) {
+      if (window.i18n && typeof window.i18n.t === "function") return window.i18n.t(key, params || {});
+      return key;
+    }
+
     function $(id) { return document.getElementById(id); }
     function authHeaders() {
-      const t = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
-      return { Authorization: "Bearer " + t, "Content-Type": "application/json", Accept: "application/json" };
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      return { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/json" };
     }
     function api(path) {
       if (typeof adminFetchUrl === "function") return adminFetchUrl(path);
@@ -274,61 +280,93 @@
 
     var initialIsListed = null;
     var locationTouched = false;
+    var lastProfile = null;
 
-    var MARKETPLACE_COUNTRY_OPTIONS = [
-      ["", "Select country"],
-      ["GE", "Georgia"],
-      ["TR", "Turkey"],
-      ["GB", "United Kingdom"],
-      ["DE", "Germany"],
-      ["US", "United States"],
-      ["AE", "United Arab Emirates"],
-      ["AZ", "Azerbaijan"],
-      ["AM", "Armenia"],
-      ["RU", "Russia"],
-      ["UA", "Ukraine"],
-      ["FR", "France"],
-      ["IT", "Italy"],
-      ["ES", "Spain"],
-      ["NL", "Netherlands"],
-      ["SA", "Saudi Arabia"],
-      ["IL", "Israel"],
+    var MARKETPLACE_COUNTRY_CODES = [
+      "", "GE", "TR", "GB", "DE", "US", "AE", "AZ", "AM", "RU", "UA", "FR", "IT", "ES", "NL", "SA", "IL",
     ];
+
+    function checklistLabel(item) {
+      if (!item) return "";
+      var key = "marketplaceProfile.checklist." + (item.id || "");
+      var label = t(key);
+      return label !== key ? label : (item.label || "");
+    }
+
+    function tierLabel(tier) {
+      var key = "marketplaceProfile.tiers." + (tier || "standard");
+      var label = t(key);
+      return label !== key ? label : tier;
+    }
 
     function initMarketplaceCountrySelect() {
       var sel = $("country");
-      if (!sel || sel.getAttribute("data-options-loaded")) return;
-      sel.setAttribute("data-options-loaded", "1");
+      if (!sel) return;
+      var prev = sel.value;
       sel.innerHTML = "";
-      MARKETPLACE_COUNTRY_OPTIONS.forEach(function (pair) {
+      MARKETPLACE_COUNTRY_CODES.forEach(function (code) {
         var o = document.createElement("option");
-        o.value = pair[0];
-        o.textContent = pair[1];
+        o.value = code;
+        var key = "marketplaceProfile.countries." + code;
+        var label = t(key);
+        o.textContent = label !== key ? label : code;
         sel.appendChild(o);
       });
-      sel.addEventListener("change", function () { locationTouched = true; });
+      if (prev) sel.value = prev;
+      if (!sel.getAttribute("data-change-listener")) {
+        sel.setAttribute("data-change-listener", "1");
+        sel.addEventListener("change", function () { locationTouched = true; });
+      }
     }
 
     function renderCompleteness(c) {
       $("scorePct").textContent = (c && c.percent != null ? c.percent : 0) + "%";
       $("completedChips").innerHTML = (c && c.completed || []).map(function (x) {
-        return '<span class="chip ok">' + x.label + "</span>";
-      }).join("") || '<span class="chip miss">Nothing yet</span>';
+        return '<span class="chip ok">' + checklistLabel(x) + "</span>";
+      }).join("") || '<span class="chip miss">' + t("marketplaceProfile.nothingYet") + "</span>";
       $("missingChips").innerHTML = (c && c.missing || []).map(function (x) {
-        return '<span class="chip miss">' + x.label + "</span>";
-      }).join("") || '<span class="chip ok">All done</span>';
+        return '<span class="chip miss">' + checklistLabel(x) + "</span>";
+      }).join("") || '<span class="chip ok">' + t("marketplaceProfile.allDone") + "</span>";
     }
 
     function renderPlatformFlags(f) {
       f = f || {};
       var tier = f.listingTier || "standard";
+      var yes = t("marketplaceProfile.badges.yes");
+      var no = t("marketplaceProfile.badges.no");
       var html = [
-        '<span class="badge admin' + (f.isVerified ? " on" : "") + '">Verified: ' + (f.isVerified ? "Yes" : "No") + "</span>",
-        '<span class="badge admin' + (f.isFeatured ? " on" : "") + '">Featured: ' + (f.isFeatured ? "Yes" : "No") + "</span>",
-        '<span class="badge admin">Placement: ' + tier + "</span>",
+        '<span class="badge admin' + (f.isVerified ? " on" : "") + '">' + t("marketplaceProfile.badges.verified") + ": " + (f.isVerified ? yes : no) + "</span>",
+        '<span class="badge admin' + (f.isFeatured ? " on" : "") + '">' + t("marketplaceProfile.badges.featured") + ": " + (f.isFeatured ? yes : no) + "</span>",
+        '<span class="badge admin">' + t("marketplaceProfile.badges.placement") + ": " + tierLabel(tier) + "</span>",
       ];
-      if (f.featuredUntil) html.push('<span class="badge admin">Featured until: ' + f.featuredUntil + "</span>");
+      if (f.featuredUntil) html.push('<span class="badge admin">' + t("marketplaceProfile.badges.featuredUntil") + ": " + f.featuredUntil + "</span>");
       $("platformBadges").innerHTML = html.join("");
+    }
+
+    function renderListingWarn(p) {
+      var lr = (p && p.listingRequirements) || {};
+      var warn = $("listingWarn");
+      if (!warn) return;
+      if (!lr.ok && p && p.isListed) {
+        warn.style.display = "block";
+        warn.style.color = "#fca5a5";
+        warn.textContent = t("marketplaceProfile.listedButMissing", { items: (lr.missing || []).map(checklistLabel).join(", ") });
+      } else if (!lr.ok) {
+        warn.style.display = "block";
+        warn.style.color = "#fbbf24";
+        warn.textContent = t("marketplaceProfile.toPublishComplete", { items: (lr.missing || []).map(checklistLabel).join(", ") });
+      } else {
+        warn.style.display = "none";
+      }
+    }
+
+    function refreshMarketplaceDynamic() {
+      initMarketplaceCountrySelect();
+      if (lastProfile) {
+        renderCompleteness(lastProfile.completeness);
+        renderPlatformFlags(lastProfile.platformFlags);
+        renderListingWarn(lastProfile);
+      }
     }
 
     function fillForm(p) {
@@ -366,20 +404,10 @@
       $("videoUrls").value = arrToLines(med.videoUrls);
       $("isListed").checked = !!p.isListed;
       initialIsListed = !!p.isListed;
+      lastProfile = p;
       renderCompleteness(p.completeness);
       renderPlatformFlags(p.platformFlags);
-      var lr = p.listingRequirements || {};
-      var warn = $("listingWarn");
-      if (!lr.ok && p.isListed) {
-        warn.style.display = "block";
-        warn.textContent = "Listed but missing requirements: " + (lr.missing || []).map(function (m) { return m.label; }).join(", ");
-      } else if (!lr.ok) {
-        warn.style.display = "block";
-        warn.style.color = "#fbbf24";
-        warn.textContent = "To publish, complete: " + (lr.missing || []).map(function (m) { return m.label; }).join(", ");
-      } else {
-        warn.style.display = "none";
-      }
+      renderListingWarn(p);
     }
 
     function collectPayload() {
@@ -444,18 +472,18 @@
       try {
         var res = await fetch(api("/api/admin/marketplace-profile"), { headers: authHeaders() });
         var json = await res.json();
-        if (!res.ok || !json.ok) throw new Error(json.message || json.error || "Load failed");
+        if (!res.ok || !json.ok) throw new Error(json.message || json.error || t("marketplaceProfile.loadFailed"));
         fillForm(json.profile);
         $("loading").style.display = "none";
         $("formWrap").style.display = "block";
       } catch (e) {
-        $("loading").textContent = e.message || "Failed to load";
+        $("loading").textContent = e.message || t("marketplaceProfile.loadFailed");
       }
     }
 
     async function saveProfile() {
       $("saveBtn").disabled = true;
-      showStatus("Saving…", true);
+      showStatus(t("marketplaceProfile.saving"), true);
       try {
         var res = await fetch(api("/api/admin/marketplace-profile"), {
           method: "PUT",
@@ -464,16 +492,16 @@
         });
         var json = await res.json();
         if (!res.ok || !json.ok) {
-          var msg = json.message || json.error || "Save failed";
+          var msg = json.message || json.error || t("marketplaceProfile.saveFailed");
           if (json.listingRequirements && json.listingRequirements.missing) {
-            msg += " — " + json.listingRequirements.missing.map(function (m) { return m.label; }).join(", ");
+            msg += " — " + json.listingRequirements.missing.map(checklistLabel).join(", ");
           }
           throw new Error(msg);
         }
         fillForm(json.profile);
-        showStatus("Profile saved.", true);
+        showStatus(t("marketplaceProfile.saved"), true);
       } catch (e) {
-        showStatus(e.message || "Save failed", false);
+        showStatus(e.message || t("marketplaceProfile.saveFailed"), false);
       } finally {
         $("saveBtn").disabled = false;
       }
@@ -481,6 +509,8 @@
 
     $("saveBtn").addEventListener("click", saveProfile);
     $("reloadBtn").addEventListener("click", loadProfile);
+    document.addEventListener("admin-language-changed", refreshMarketplaceDynamic);
+    initMarketplaceCountrySelect();
     loadProfile();
   </script>
 </body>
