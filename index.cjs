@@ -5516,13 +5516,66 @@ async function fetchPatientDisplayNameForPush(resolvedPatientId) {
   try {
     const { data } = await supabase
       .from("patients")
-      .select("full_name, name, first_name, last_name, phone, patient_id")
+      .select("full_name, name, first_name, last_name, phone, patient_id, clinic_id")
       .eq("id", pid)
       .maybeSingle();
-    return patientRowDisplayName(data) || "Hasta";
+    let label = patientRowDisplayName(data);
+    if (!label) {
+      const clinicId = String(data?.clinic_id || "").trim();
+      if (UUID_RE.test(clinicId)) {
+        try {
+          const { enrichPatientDisplayNamesForInbox } = require("./lib/omnichannel/channelIdentity");
+          const enriched = await enrichPatientDisplayNamesForInbox(clinicId, [pid], { maxGraphSync: 1 });
+          label = enriched.get(pid.toLowerCase()) || null;
+        } catch (_) {
+          /* optional */
+        }
+      }
+    }
+    return label || "Hasta";
   } catch (_) {
     return "Hasta";
   }
+}
+
+/** Resolve inbox labels — Graph/name sync for Messenger placeholders, then patientRowDisplayName. */
+async function resolveInboxPatientDisplayNames(clinicId, patientRows, opts = {}) {
+  const cid = String(clinicId || "").trim();
+  const rows = Array.isArray(patientRows) ? patientRows : [];
+  const out = new Map();
+  if (!rows.length) return out;
+
+  const byId = new Map();
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!UUID_RE.test(id)) continue;
+    byId.set(id.toLowerCase(), row);
+    out.set(id, patientRowDisplayName(row));
+  }
+
+  if (!UUID_RE.test(cid)) return out;
+
+  try {
+    const { enrichPatientDisplayNamesForInbox } = require("./lib/omnichannel/channelIdentity");
+    const refresh = opts.refresh === true || String(opts.refresh || "") === "1";
+    const enriched = await enrichPatientDisplayNamesForInbox(
+      cid,
+      [...byId.keys()],
+      { maxGraphSync: refresh ? 12 : Math.min(12, Math.max(4, byId.size)) },
+    );
+    for (const [pidKey, label] of enriched.entries()) {
+      const row = byId.get(pidKey);
+      const resolved = patientRowDisplayName({ ...(row || {}), name: label, full_name: label }) || label;
+      if (resolved) {
+        const origId = String(row?.id || pidKey).trim();
+        out.set(origId, resolved);
+      }
+    }
+  } catch (e) {
+    console.warn("[inbox] patient name enrich:", e?.message || e);
+  }
+
+  return out;
 }
 
 async function resolveClinicOutboundSenderLabel(resolvedPatientId, clinicUuid) {
@@ -16777,15 +16830,19 @@ async function fetchUnassignedAdminFallback(clinicId) {
 
   const ids = [...candidateIds].slice(0, 150);
   const patientById = {};
+  let patientRows = [];
   if (ids.length) {
     const { data: prow } = await supabase
       .from("patients")
-      .select("id, name, full_name, email, phone, patient_id")
+      .select("id, name, full_name, first_name, last_name, email, phone, patient_id")
       .in("id", ids.slice(0, 500));
-    for (const p of prow || []) {
+    patientRows = prow || [];
+    for (const p of patientRows) {
       patientById[String(p.id)] = p;
     }
   }
+
+  const displayNames = await resolveInboxPatientDisplayNames(cid, patientRows, { refresh: true });
 
   const out = [];
   for (const pid of ids) {
@@ -16824,7 +16881,7 @@ async function fetchUnassignedAdminFallback(clinicId) {
       threadId: null,
       patientId: pid,
       patientIdPublic: p?.patient_id || null,
-      patientName: String(p?.name || p?.full_name || "").trim() || null,
+      patientName: displayNames.get(pid) || patientRowDisplayName(p) || null,
       email: p?.email || null,
       phone: p?.phone || null,
       status: "unassigned",
@@ -16957,17 +17014,27 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
 
     const pids = [...new Set(rows.map((r) => String(r.patient_id || "").trim()).filter((id) => UUID_RE.test(id)))];
     const patientById = {};
+    let patientRows = [];
     if (pids.length) {
       const { data: prow, error: pErr } = await supabase
         .from("patients")
-        .select("id, name, full_name, email, phone, patient_id, is_lead, status, created_at")
+        .select("id, name, full_name, first_name, last_name, email, phone, patient_id, is_lead, status, created_at")
         .in("id", pids.slice(0, 500));
       if (!pErr && Array.isArray(prow)) {
+        patientRows = prow;
         for (const p of prow) {
           patientById[String(p.id)] = p;
         }
       }
     }
+
+    const refreshNames =
+      req.query.refreshNames === "1" ||
+      req.query.refresh === "1" ||
+      String(req.query.refreshNames || "").toLowerCase() === "true";
+    const displayNames = await resolveInboxPatientDisplayNames(clinicId, patientRows, {
+      refresh: refreshNames,
+    });
 
     const docIds = [
       ...new Set(
@@ -17042,7 +17109,7 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
         threadId: t.id,
         patientId: pid,
         patientIdPublic: p?.patient_id || null,
-        patientName: String(p?.name || p?.full_name || "").trim() || null,
+        patientName: displayNames.get(pid) || patientRowDisplayName(p) || null,
         email: p?.email || null,
         phone: p?.phone || null,
         status: t.status || "unassigned",
@@ -50390,7 +50457,7 @@ async function buildDoctorMessagesThreadSummaryBody(req) {
       const { enrichPatientDisplayNamesForInbox } = require("./lib/omnichannel/channelIdentity");
       const refreshNames = String(req.query?.refresh || "").trim() === "1";
       const enriched = await enrichPatientDisplayNamesForInbox(String(clinicId).trim(), uuidList, {
-        maxGraphSync: refreshNames ? 10 : 4,
+        maxGraphSync: refreshNames ? 12 : 10,
       });
       for (const [pidKey, label] of enriched.entries()) {
         const prev = patientMeta.get(pidKey) || {};
