@@ -485,6 +485,7 @@ const {
 } = require("./lib/patientLeadLifecycle");
 const {
   isCoordinationPlaceholderOffer,
+  isPatientEnrolledAtClinic,
   ensureCoordinationOfferForRequest,
   ensureCoordinationOfferForPatientClinic,
   resolveCoordinationOfferIdForPatientClinic,
@@ -5641,7 +5642,13 @@ async function deliverClinicInboundPatientNotifications(meta) {
   let threadId = null;
   let requestId = null;
   let offerId = null;
+  let enrolled = false;
   if (resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
+    try {
+      enrolled = await isPatientEnrolledAtClinic(resolvedDb, String(clinicUuid));
+    } catch (_) {
+      enrolled = false;
+    }
     try {
       const { data: thr } = await supabase
         .from("patient_chat_threads")
@@ -5665,8 +5672,30 @@ async function deliverClinicInboundPatientNotifications(meta) {
       if (tr?.id) requestId = String(tr.id).trim();
     } catch (_) {}
     try {
-      offerId = await resolveLeadOfferIdForPatientClinicMessage(resolvedDb, clinicUuid, null);
+      offerId = await resolveCoordinationOfferIdForPatientClinic(resolvedDb, String(clinicUuid), {
+        createIfMissing: false,
+      });
     } catch (_) {}
+    if (!offerId) {
+      try {
+        offerId = await resolveLeadOfferIdForPatientClinicMessage(resolvedDb, clinicUuid, null);
+      } catch (_) {}
+    }
+  }
+
+  const senderLabelForLink = String(senderLabel || "Clinic").trim().slice(0, 80) || "Clinic";
+  let pushRoute = "offer_chat";
+  let mainChatUrl = offerId
+    ? `/offer-chat?offerId=${encodeURIComponent(String(offerId))}&otherName=${encodeURIComponent(senderLabelForLink)}`
+    : enrolled && clinicUuid
+      ? `/(patient)/messages?clinicId=${encodeURIComponent(String(clinicUuid))}&clinic_id=${encodeURIComponent(String(clinicUuid))}`
+      : enrolled
+        ? "/(patient)/messages"
+        : clinicUuid
+          ? `/offer-chat?otherName=${encodeURIComponent(senderLabelForLink)}`
+          : "/(tabs)/home";
+  if (enrolled && !offerId) {
+    pushRoute = "patient_chat";
   }
 
   const pushData = buildMessagePushDataPayload({
@@ -5681,12 +5710,10 @@ async function deliverClinicInboundPatientNotifications(meta) {
     senderName: senderLabel,
     senderRole: "clinic",
     preview: pv,
-    route: "patient_chat",
-    enrolled: true,
-    leadThreadIsLead: false,
-    url: clinicUuid
-      ? `/(tabs)/chat?clinicId=${encodeURIComponent(String(clinicUuid))}&clinic_id=${encodeURIComponent(String(clinicUuid))}`
-      : "/(tabs)/chat",
+    route: pushRoute,
+    enrolled: enrolled && !offerId,
+    leadThreadIsLead: enrolled && !offerId ? false : true,
+    url: mainChatUrl,
   });
 
   try {
