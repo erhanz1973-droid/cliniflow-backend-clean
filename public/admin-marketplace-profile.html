@@ -271,6 +271,8 @@
       return String(text || "").split(/[,;|]/).map(function (s) { return s.trim(); }).filter(Boolean);
     }
 
+    var initialIsListed = null;
+
     function renderCompleteness(c) {
       $("scorePct").textContent = (c && c.percent != null ? c.percent : 0) + "%";
       $("completedChips").innerHTML = (c && c.completed || []).map(function (x) {
@@ -325,6 +327,7 @@
       $("beforeAfter").value = arrToLines(med.beforeAfterImages);
       $("videoUrls").value = arrToLines(med.videoUrls);
       $("isListed").checked = !!p.isListed;
+      initialIsListed = !!p.isListed;
       renderCompleteness(p.completeness);
       renderPlatformFlags(p.platformFlags);
       var lr = p.listingRequirements || {};
@@ -342,8 +345,7 @@
     }
 
     function collectPayload() {
-      return {
-        isListed: $("isListed").checked,
+      var payload = {
         reputation: {
           googleBusinessUrl: $("googleBusinessUrl").value.trim(),
           googleRating: $("googleRating").value === "" ? null : Number($("googleRating").value),
@@ -379,6 +381,10 @@
           videoUrls: linesToArr($("videoUrls").value),
         },
       };
+      if ($("isListed").checked !== initialIsListed) {
+        payload.isListed = $("isListed").checked;
+      }
+      return payload;
     }
 
     function showStatus(msg, ok) {
