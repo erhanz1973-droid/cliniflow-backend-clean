@@ -272,6 +272,8 @@
     }
 
     var initialIsListed = null;
+    var initialCountry = "";
+    var initialCity = "";
 
     function renderCompleteness(c) {
       $("scorePct").textContent = (c && c.percent != null ? c.percent : 0) + "%";
@@ -319,6 +321,8 @@
       $("aboutText").value = info.aboutText || "";
       $("country").value = info.country || "";
       $("city").value = info.city || "";
+      initialCountry = String(info.country || "").trim().toUpperCase();
+      initialCity = String(info.city || "").trim();
       $("languages").value = arrToCsv(info.languages);
       $("specialties").value = arrToCsv(info.specialties);
       $("logoUrl").value = med.logoUrl || "";
@@ -365,14 +369,19 @@
           linkedin: $("linkedin").value.trim(),
           googleMapsUrl: $("googleMaps").value.trim(),
         },
-        clinicInfo: {
-          shortDescription: $("shortDescription").value.trim(),
-          aboutText: $("aboutText").value.trim(),
-          country: $("country").value.trim().toUpperCase(),
-          city: $("city").value.trim(),
-          languages: csvToArr($("languages").value),
-          specialties: csvToArr($("specialties").value),
-        },
+        clinicInfo: (function () {
+          var info = {
+            shortDescription: $("shortDescription").value.trim(),
+            aboutText: $("aboutText").value.trim(),
+            languages: csvToArr($("languages").value),
+            specialties: csvToArr($("specialties").value),
+          };
+          var nextCountry = $("country").value.trim().toUpperCase();
+          var nextCity = $("city").value.trim();
+          if (nextCountry && nextCountry !== initialCountry) info.country = nextCountry;
+          if (nextCity !== initialCity) info.city = nextCity;
+          return info;
+        })(),
         media: {
           logoUrl: $("logoUrl").value.trim(),
           coverPhotoUrl: $("coverPhotoUrl").value.trim(),
