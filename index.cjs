@@ -486,6 +486,7 @@ const {
 const {
   isCoordinationPlaceholderOffer,
   ensureCoordinationOfferForRequest,
+  ensureCoordinationOfferForPatientClinic,
   resolveCoordinationOfferIdForPatientClinic,
   clinicHasMessagingDoctor,
   batchClinicHasMessagingDoctor,
@@ -57965,6 +57966,87 @@ app.post(
       });
     } catch (e) {
       console.error("[ensure-coordination-chat]", e);
+      return res.status(500).json({ ok: false, error: "internal_error" });
+    }
+  },
+);
+
+// POST /api/patient/clinics/:clinicId/ensure-coordination-chat
+// Discovery "Chat with clinic" — same offer_messages workspace as Open coordination chat.
+app.post(
+  "/api/patient/clinics/:clinicId/ensure-coordination-chat",
+  requireToken,
+  async (req, res) => {
+    try {
+      if (!isSupabaseEnabled()) {
+        return res.status(503).json({ ok: false, error: "supabase_disabled" });
+      }
+      const tokenPatientId = String(req.patientId || "").trim();
+      if (!tokenPatientId) {
+        return res.status(400).json({ ok: false, error: "patientId_required" });
+      }
+      const clinicId = String(req.params.clinicId || "").trim();
+      if (!UUID_RE.test(clinicId)) {
+        return res.status(400).json({ ok: false, error: "invalid_clinic_id" });
+      }
+
+      const resolvedUuid = await resolveMessagesPatientDbId(tokenPatientId);
+      const patientId = resolvedUuid || tokenPatientId;
+      if (!UUID_RE.test(patientId)) {
+        return res.status(404).json({ ok: false, error: "patient_not_found" });
+      }
+
+      const { data: clinicRow } = await supabase
+        .from("clinics")
+        .select("id, clinic_code, name")
+        .eq("id", clinicId)
+        .maybeSingle();
+      if (!clinicRow?.id) {
+        return res.status(404).json({ ok: false, error: "clinic_not_found" });
+      }
+
+      const result = await ensureCoordinationOfferForPatientClinic(patientId, clinicId, {
+        createIfMissing: true,
+      });
+      if (!result.ok) {
+        if (result.reason === "no_clinic_doctor") {
+          return res.status(422).json({
+            ok: false,
+            error: CLINIC_DOCTOR_NOT_ASSIGNED.error,
+            message: CLINIC_DOCTOR_NOT_ASSIGNED.message,
+            message_en: CLINIC_DOCTOR_NOT_ASSIGNED.message_en,
+          });
+        }
+        return res.status(422).json({
+          ok: false,
+          error: result.reason || "coordination_unavailable",
+        });
+      }
+
+      if (!result.offerId) {
+        return res.status(422).json({
+          ok: false,
+          error: result.reason || "coordination_unavailable",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        route: "offer_chat",
+        enrolled: result.enrolled === true,
+        offer_id: result.offerId,
+        coordination_offer_id: result.offerId,
+        thread_id: result.threadId || null,
+        has_formal_offer: result.hasFormalOffer === true,
+        offer_created: result.offerCreated === true,
+        reused_shared_offer: result.reusedSharedOffer === true,
+        clinic_id: result.clinicId || clinicId,
+        clinic_code: clinicRow.clinic_code || null,
+        patient_id: result.patientId || patientId,
+        request_id: result.requestId || null,
+      });
+    } catch (e) {
+      console.error("[ensure-clinic-coordination-chat]", e);
       return res.status(500).json({ ok: false, error: "internal_error" });
     }
   },
