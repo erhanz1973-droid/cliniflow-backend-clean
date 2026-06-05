@@ -210,14 +210,15 @@
         <textarea id="aboutText" placeholder="Extended about section on profile page"></textarea>
         <div class="row2">
           <div>
-            <label>Country (ISO-2, e.g. TR)</label>
-            <input id="country" maxlength="2" style="text-transform:uppercase" />
+            <label>Country</label>
+            <select id="country"></select>
           </div>
           <div>
             <label>City</label>
-            <input id="city" />
+            <input id="city" placeholder="Tbilisi, Antalya, Istanbul…" />
           </div>
         </div>
+        <p class="hint">Same location as Settings → used for clinic discovery filters.</p>
         <label>Languages (comma-separated, e.g. English, Turkish, Russian)</label>
         <input id="languages" />
         <label>Specialties (comma-separated, e.g. Implantology, Aesthetic Dentistry)</label>
@@ -272,8 +273,41 @@
     }
 
     var initialIsListed = null;
-    var initialCountry = "";
-    var initialCity = "";
+    var locationTouched = false;
+
+    var MARKETPLACE_COUNTRY_OPTIONS = [
+      ["", "Select country"],
+      ["GE", "Georgia"],
+      ["TR", "Turkey"],
+      ["GB", "United Kingdom"],
+      ["DE", "Germany"],
+      ["US", "United States"],
+      ["AE", "United Arab Emirates"],
+      ["AZ", "Azerbaijan"],
+      ["AM", "Armenia"],
+      ["RU", "Russia"],
+      ["UA", "Ukraine"],
+      ["FR", "France"],
+      ["IT", "Italy"],
+      ["ES", "Spain"],
+      ["NL", "Netherlands"],
+      ["SA", "Saudi Arabia"],
+      ["IL", "Israel"],
+    ];
+
+    function initMarketplaceCountrySelect() {
+      var sel = $("country");
+      if (!sel || sel.getAttribute("data-options-loaded")) return;
+      sel.setAttribute("data-options-loaded", "1");
+      sel.innerHTML = "";
+      MARKETPLACE_COUNTRY_OPTIONS.forEach(function (pair) {
+        var o = document.createElement("option");
+        o.value = pair[0];
+        o.textContent = pair[1];
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", function () { locationTouched = true; });
+    }
 
     function renderCompleteness(c) {
       $("scorePct").textContent = (c && c.percent != null ? c.percent : 0) + "%";
@@ -378,8 +412,10 @@
           };
           var nextCountry = $("country").value.trim().toUpperCase();
           var nextCity = $("city").value.trim();
-          if (nextCountry && nextCountry !== initialCountry) info.country = nextCountry;
-          if (nextCity !== initialCity) info.city = nextCity;
+          if (locationTouched || nextCountry || nextCity) {
+            if (nextCountry) info.country = nextCountry;
+            if (nextCity) info.city = nextCity;
+          }
           return info;
         })(),
         media: {

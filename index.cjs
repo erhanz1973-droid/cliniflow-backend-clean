@@ -37305,10 +37305,16 @@ app.get("/api/admin/clinic", requireAdminAuth, (req, res) => {
       safe.branding = { ...safe.branding, googleMapLink: mapsUrlNorm };
     }
 
-    if (!safe.country && safe.settings?.country) {
+    const colCountry = String(safe.country || "").trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(colCountry)) {
+      safe.country = colCountry;
+    } else if (safe.settings?.country) {
       safe.country = String(safe.settings.country).trim().toUpperCase();
     }
-    if (!safe.city && safe.settings?.city) {
+    const colCity = String(safe.city || "").trim();
+    if (colCity) {
+      safe.city = colCity;
+    } else if (safe.settings?.city) {
       safe.city = String(safe.settings.city).trim();
     }
     if (!safe.city_code && safe.settings?.city_code) {
@@ -64016,7 +64022,12 @@ registerDiscoveryRoutes(app, { supabase });
 const { registerPatientMarketplaceRoutes } = require("./lib/patientMarketplace");
 registerPatientMarketplaceRoutes(app, { supabase, requireToken, normalizeDiscoveryClinic });
 const { registerClinicMarketplaceAdminRoutes } = require("./lib/clinicMarketplaceProfile");
-registerClinicMarketplaceAdminRoutes(app, { supabase, requireAdminAuth, superAdminGuard });
+registerClinicMarketplaceAdminRoutes(app, {
+  supabase,
+  requireAdminAuth,
+  superAdminGuard,
+  clearClinicCache,
+});
 
 registerClinicInvitationRoutes(app, { requireAdminAuth });
 
