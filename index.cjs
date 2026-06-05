@@ -27510,10 +27510,31 @@ async function fetchChatAttachmentRows(table, patientUUID, patientIdCandidates) 
 }
 
 // ─── Helper: collect files from all sources for a patient ─────────────────────
-async function collectPatientFiles(patientId) {
-  const filesMap = new Map(); // id → FileItem (dedup)
+function normalizePatientFileUrlKey(url) {
+  const s = String(url || "").trim();
+  if (!s) return "";
+  try {
+    if (/^https?:\/\//i.test(s)) {
+      return decodeURIComponent(new URL(s).pathname).split("?")[0].toLowerCase();
+    }
+  } catch (_) {
+    /* relative url */
+  }
+  return decodeURIComponent(s.split("?")[0]).toLowerCase();
+}
 
-  const addFile = (f) => { if (f && f.id && f.url) filesMap.set(f.id, f); };
+async function collectPatientFiles(patientId) {
+  const filesMap = new Map(); // normalized url → FileItem (dedup across sources)
+
+  const addFile = (f) => {
+    if (!f || !f.id || !f.url) return;
+    const urlKey = normalizePatientFileUrlKey(f.url);
+    if (!urlKey) return;
+    const prev = filesMap.get(urlKey);
+    if (!prev || Number(f.createdAt || 0) > Number(prev.createdAt || 0)) {
+      filesMap.set(urlKey, f);
+    }
+  };
 
   const patientUUID = isSupabaseEnabled() ? await resolvePatientUUID(patientId) : patientId;
   const folderVariants = await resolvePatientFolderIdVariants(patientId);

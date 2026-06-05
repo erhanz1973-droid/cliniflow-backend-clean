@@ -116,6 +116,61 @@ async function dedupeAiResultMessages(pid) {
   return deleteCount;
 }
 
+async function dedupePatientFiles(pid, keepNoHashMax = 6) {
+  let qb = supabase
+    .from("patient_files")
+    .select("id, patient_id, file_url, image_url, content_hash, source, created_at")
+    .order("created_at", { ascending: false });
+  if (pid) qb = qb.eq("patient_id", pid);
+
+  const { data, error } = await qb.limit(5000);
+  if (error) throw error;
+
+  const rows = data || [];
+  const aiRows = rows.filter((r) => String(r.source || "").startsWith("ai_upload"));
+  const keepIds = new Set();
+
+  const byHash = new Map();
+  for (const row of aiRows) {
+    const hash = String(row.content_hash || "").toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(hash)) continue;
+    if (!byHash.has(hash)) {
+      byHash.set(hash, row);
+      keepIds.add(row.id);
+    }
+  }
+
+  let noHashKept = 0;
+  for (const row of aiRows) {
+    if (row.content_hash) continue;
+    if (noHashKept >= keepNoHashMax) continue;
+    keepIds.add(row.id);
+    noHashKept += 1;
+  }
+
+  const toDelete = aiRows.filter((r) => !keepIds.has(r.id));
+  console.log(
+    `[patient_files] total ${rows.length} (ai_upload ${aiRows.length}) — keep ${keepIds.size} (hash groups ${byHash.size}, no-hash kept ${noHashKept}) — delete ${toDelete.length}`,
+  );
+  if (toDelete.length) {
+    console.log(
+      "[patient_files] delete sample ids:",
+      toDelete.slice(0, 5).map((r) => r.id),
+    );
+  }
+
+  if (APPLY && toDelete.length) {
+    const ids = toDelete.map((r) => r.id);
+    const chunk = 50;
+    for (let i = 0; i < ids.length; i += chunk) {
+      const slice = ids.slice(i, i + chunk);
+      const { error: delErr } = await supabase.from("patient_files").delete().in("id", slice);
+      if (delErr) throw delErr;
+    }
+  }
+  return toDelete.length;
+}
+
 async function main() {
   if (!isSupabaseEnabled()) {
     console.error("Supabase not configured.");
@@ -124,9 +179,20 @@ async function main() {
   console.log(APPLY ? "APPLY mode — writing changes" : "DRY RUN — pass --apply to execute");
   if (patientId) console.log("Patient filter:", patientId);
 
-  const docDupes = await dedupeDocuments(patientId);
-  const msgDupes = await dedupeAiResultMessages(patientId);
-  console.log(`Done. document duplicates: ${docDupes}, ai_result duplicates: ${msgDupes}`);
+  const fileDupes = await dedupePatientFiles(patientId);
+  let docDupes = 0;
+  let msgDupes = 0;
+  try {
+    docDupes = await dedupeDocuments(patientId);
+  } catch (e) {
+    console.warn("[documents] skipped:", e?.message || e);
+  }
+  try {
+    msgDupes = await dedupeAiResultMessages(patientId);
+  } catch (e) {
+    console.warn("[ai_result] skipped:", e?.message || e);
+  }
+  console.log(`Done. patient_files duplicates: ${fileDupes}, document duplicates: ${docDupes}, ai_result duplicates: ${msgDupes}`);
 }
 
 main().catch((e) => {
