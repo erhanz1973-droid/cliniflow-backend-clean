@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202606071"></script>
+  <script src="/admin-i18n.js?v=51"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="helpCenter.pageTitle">Getting Started with Clinifly – Help Center</title>
+  <link rel="stylesheet" href="/admin-layout.css?v=202606071" />
+  <script>
+    (function () {
+      if (!localStorage.getItem("adminToken") && !localStorage.getItem("admin_token")) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --hc-card: #1f2937;
+      --hc-border: rgba(55, 65, 81, 0.65);
+      --hc-muted: #9ca3af;
+      --hc-accent: #2563eb;
+      --hc-green: #10b981;
+    }
+    .hc-page {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .hc-hero {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.15), rgba(16, 185, 129, 0.08));
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: 16px;
+      padding: 24px 28px;
+      margin-bottom: 20px;
+    }
+    .hc-hero h1 {
+      font-size: 24px;
+      margin: 0 0 8px;
+      font-weight: 700;
+    }
+    .hc-hero p {
+      margin: 0;
+      color: var(--hc-muted);
+      font-size: 15px;
+      line-height: 1.55;
+      max-width: 720px;
+    }
+    .hc-search-wrap {
+      margin-top: 16px;
+      position: relative;
+      max-width: 480px;
+    }
+    .hc-search-wrap input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px 16px 12px 40px;
+      border-radius: 10px;
+      border: 1px solid #374151;
+      background: #111827;
+      color: #f3f4f6;
+      font-size: 15px;
+    }
+    .hc-search-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      opacity: 0.5;
+    }
+    .hc-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 800px) {
+      .hc-layout { grid-template-columns: 1fr; }
+      .hc-sidebar { position: static; }
+    }
+    .hc-sidebar {
+      position: sticky;
+      top: 72px;
+      background: var(--hc-card);
+      border: 1px solid var(--hc-border);
+      border-radius: 14px;
+      padding: 12px;
+      max-height: calc(100vh - 100px);
+      overflow-y: auto;
+    }
+    .hc-sidebar-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--hc-muted);
+      padding: 8px 10px 6px;
+    }
+    .hc-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: #e5e7eb;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .hc-nav-item:hover { background: rgba(55, 65, 81, 0.6); }
+    .hc-nav-item.active {
+      background: rgba(37, 99, 235, 0.2);
+      color: #93c5fd;
+    }
+    .hc-nav-icon { font-size: 16px; flex-shrink: 0; }
+    .hc-nav-count {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--hc-muted);
+      background: #111827;
+      padding: 2px 7px;
+      border-radius: 999px;
+    }
+    .hc-checklist {
+      background: var(--hc-card);
+      border: 1px solid var(--hc-border);
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+    }
+    .hc-checklist h3 {
+      margin: 0 0 4px;
+      font-size: 15px;
+    }
+    .hc-checklist p {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: var(--hc-muted);
+    }
+    .hc-check-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+    }
+    .hc-check-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      color: #93c5fd;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .hc-check-item:hover { border-color: var(--hc-accent); }
+    .hc-check-num { color: var(--hc-green); }
+    .hc-section {
+      margin-bottom: 28px;
+      scroll-margin-top: 80px;
+    }
+    .hc-section-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--hc-border);
+    }
+    .hc-section-icon { font-size: 28px; line-height: 1; }
+    .hc-section-head h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+    .hc-section-sub {
+      margin: 4px 0 0;
+      font-size: 13px;
+      color: var(--hc-muted);
+    }
+    .hc-article {
+      background: var(--hc-card);
+      border: 1px solid var(--hc-border);
+      border-radius: 12px;
+      margin-bottom: 10px;
+      overflow: hidden;
+      scroll-margin-top: 80px;
+    }
+    .hc-article-toggle {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      background: transparent;
+      border: none;
+      color: #f3f4f6;
+      font-size: 15px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+    }
+    .hc-article-toggle:hover { background: rgba(55, 65, 81, 0.35); }
+    .hc-chevron {
+      font-size: 11px;
+      opacity: 0.5;
+      transition: transform 0.2s;
+    }
+    .hc-article-toggle.open .hc-chevron { transform: rotate(180deg); }
+    .hc-article-body {
+      padding: 0 18px 18px;
+      border-top: 1px solid var(--hc-border);
+    }
+    .hc-screenshot {
+      margin: 16px 0;
+      text-align: center;
+    }
+    .hc-screenshot img {
+      max-width: 100%;
+      border-radius: 10px;
+      border: 1px solid #374151;
+      background: #111827;
+    }
+    .hc-screenshot figcaption {
+      font-size: 11px;
+      color: var(--hc-muted);
+      margin-top: 6px;
+    }
+    .hc-block { margin-top: 14px; }
+    .hc-label {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #6ee7b7;
+      margin-bottom: 6px;
+    }
+    .hc-block p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #d1d5db;
+    }
+    .hc-steps {
+      margin: 8px 0 0;
+      padding-left: 20px;
+      font-size: 14px;
+      line-height: 1.65;
+      color: #d1d5db;
+    }
+    .hc-steps li { margin-bottom: 6px; }
+    .hc-tips {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 8px;
+      font-size: 13px;
+      color: #fde68a;
+    }
+    .hc-tips ul { margin: 6px 0 0; padding-left: 18px; }
+    .hc-action-btn {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 10px 18px;
+      background: var(--hc-accent);
+      color: #fff;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      text-decoration: none;
+    }
+    .hc-action-btn:hover { filter: brightness(1.1); }
+    .hc-empty {
+      padding: 40px;
+      text-align: center;
+      color: var(--hc-muted);
+    }
+    .hc-show-all {
+      display: block;
+      margin-top: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--hc-muted);
+      text-align: center;
+      text-decoration: none;
+    }
+    .hc-show-all:hover { color: #93c5fd; }
+    .hc-support {
+      margin-top: 24px;
+      padding: 16px 20px;
+      background: var(--hc-card);
+      border: 1px solid var(--hc-border);
+      border-radius: 12px;
+      font-size: 14px;
+      color: var(--hc-muted);
+    }
+    .hc-support a { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <div id="admin-layout-root"></div>
+  <div class="hc-page">
+    <div class="hc-hero">
+      <h1 data-i18n="helpCenter.pageTitle">Getting Started with Clinifly</h1>
+      <p data-i18n="helpCenter.subtitle">
+        Step-by-step guides to set up your clinic, complete your profile, connect doctors and patients, and start receiving inquiries. No technical jargon — just what you need to get to 100% profile completion.
+      </p>
+      <div class="hc-search-wrap">
+        <span class="hc-search-icon">🔍</span>
+        <input type="search" id="hcSearch" autocomplete="off"
+          data-i18n-placeholder="helpCenter.searchPlaceholder"
+          placeholder="Search help articles…" />
+      </div>
+    </div>
+
+    <div class="hc-checklist">
+      <h3 data-i18n="helpCenter.checklistTitle">Quick setup checklist</h3>
+      <p data-i18n="helpCenter.checklistHint">Follow this order to start receiving patients as fast as possible.</p>
+      <div class="hc-check-grid" id="hcChecklist"></div>
+    </div>
+
+    <div class="hc-layout">
+      <aside class="hc-sidebar">
+        <div class="hc-sidebar-title" data-i18n="helpCenter.topicsTitle">Topics</div>
+        <nav id="hcNav"></nav>
+        <a href="#" class="hc-show-all" id="hcShowAll" data-i18n="helpCenter.showAll">Show all topics</a>
+      </aside>
+      <main id="hcArticles"></main>
+    </div>
+
+    <div class="hc-support">
+      <span data-i18n="helpCenter.supportText">Still stuck?</span>
+      <a href="mailto:support@clinifly.net">support@clinifly.net</a>
+      ·
+      <a href="https://www.youtube.com/@Clinifly" target="_blank" rel="noopener" data-i18n="helpCenter.videoLink">Watch tutorial videos</a>
+    </div>
+  </div>
+
+  <script src="/admin-help-center-data.js?v=1"></script>
+  <script src="/admin-help-center.js?v=1"></script>
+  <script src="/admin-layout.js?v=202606071"></script>
+</body>
+</html>

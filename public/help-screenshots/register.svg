@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <rect width="640" height="400" fill="#111827"/>
+  <rect x="0" y="0" width="640" height="48" fill="#1f2937"/>
+  <text x="24" y="30" fill="#93c5fd" font-family="system-ui,sans-serif" font-size="14" font-weight="700">Clinifly  Register Clinic</text>
+  <rect x="120" y="72" width="400" height="300" rx="12" fill="#1f2937" stroke="#374151"/>
+  <text x="148" y="108" fill="#e5e7eb" font-family="system-ui,sans-serif" font-size="13" font-weight="600">Clinic Name</text>
+  <rect x="148" y="116" width="344" height="32" rx="6" fill="#111827" stroke="#4b5563"/>
+  <text x="148" y="168" fill="#e5e7eb" font-family="system-ui,sans-serif" font-size="13" font-weight="600">Clinic Code</text>
+  <rect x="148" y="176" width="344" height="32" rx="6" fill="#111827" stroke="#4b5563"/>
+  <text x="160" y="198" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">MOON</text>
+  <text x="148" y="228" fill="#e5e7eb" font-family="system-ui,sans-serif" font-size="13" font-weight="600">Email &amp; Password</text>
+  <rect x="148" y="236" width="344" height="32" rx="6" fill="#111827" stroke="#4b5563"/>
+  <rect x="148" y="284" width="344" height="40" rx="8" fill="#2563eb"/>
+  <text x="268" y="310" fill="#fff" font-family="system-ui,sans-serif" font-size="14" font-weight="700">Register Clinic</text>
+</svg>

@@ -86,6 +86,7 @@
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
     { href: '/admin-referrals.html', icon: iconReferrals(), key: 'referrals', badge: 'sbReferrals' },
     { href: '/admin-marketplace-profile.html', icon: iconGlobe(), key: 'marketplaceProfile' },
+    { href: '/admin-help-center.html', icon: iconHelp(), key: 'helpCenter' },
     { href: '/admin-settings.html', icon: iconSettings(), key: 'settings' },
   ];
   const NAV2_AI_LEARNING = {
@@ -124,7 +125,7 @@
       'dashboard.nav.aiLeads': 'Coordination Center',
       'dashboard.nav.learningCandidates': 'AI Learning',
       'dashboard.nav.chat': 'Messages',
-      'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.marketplaceProfile': 'Directory Profile', 'dashboard.nav.settings': 'Settings',
+      'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.marketplaceProfile': 'Directory Profile', 'dashboard.nav.helpCenter': 'Help Center', 'dashboard.nav.settings': 'Settings',
       'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
       'dashboard.sidebar.logout': 'Logout', 'dashboard.sidebar.clinic': 'Clinic',
       'dashboard.sidebar.openMenu': 'Open menu', 'dashboard.sidebar.closeMenu': 'Close menu',
@@ -148,6 +149,9 @@
   }
   function iconAi() {
     return svg('<path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v1a3 3 0 0 1-3 3h-1v1a4 4 0 0 1-8 0v-1H7a3 3 0 0 1-3-3v-1a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/>');
+  }
+  function iconHelp() {
+    return svg('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>');
   }
   function iconSettings() { return svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'); }
   function iconGlobe() { return svg('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'); }
