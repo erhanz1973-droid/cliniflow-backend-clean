@@ -20,7 +20,7 @@ node scripts/verify-rollout-http.cjs --base=https://YOUR-RAILWAY-HOST
 |---------------|---------|----------|----------|-------------|
 | **Local** | `cd cliniflow-backend-clean && npm start` | Supabase dev project or local | Open `public/admin-*.html` via backend or Netlify dev | Expo dev client → `EXPO_PUBLIC_API_URL` |
 | **Staging** (recommended) | Railway service branch / preview + `RAILWAY_ENVIRONMENT=staging` | Dedicated Supabase project or branch | Netlify deploy preview | EAS internal build profile `staging` |
-| **Production** | Railway `main` → Root Directory `cliniflow-backend-clean` | Production Supabase | Netlify production admin | App Store / Play production |
+| **Production** | Railway native GitHub → `cliniflow-backend-clean` repo `main` (see [`DEPLOYMENT.md`](DEPLOYMENT.md)) | Production Supabase | Netlify production admin | App Store / Play production |
 
 **Rules**
 
@@ -65,7 +65,7 @@ After apply, confirm:
 ## Production rollout checklist
 
 1. **Migrations** — Supabase SQL editor or CLI; log applied filenames in team channel.
-2. **Railway** — push `cliniflow-backend-clean/` only; confirm log shows `cliniflow-backend-clean/index.cjs`.
+2. **Railway** — push to `cliniflow-backend-clean` repo `main` (Railway native GitHub deploy); confirm Railway deployment source is **GitHub** and logs show `index.cjs`. See [`DEPLOYMENT.md`](DEPLOYMENT.md).
 3. **Env** — `SUPABASE_*`, `JWT_SECRET`, `OPENAI_API_KEY`, `CORS_ORIGINS` / `RAILWAY_PUBLIC_URL` (see `REQUIRED_ENV.md`).
 4. **Smoke API**
    - `GET /health` or admin login

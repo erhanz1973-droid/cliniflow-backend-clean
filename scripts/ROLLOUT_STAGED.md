@@ -8,7 +8,7 @@ Use verification scripts in `scripts/` after each stage.
 
 ## Stage 1 — Railway backend (first)
 
-**Deploy:** push `cliniflow-backend-clean/` to Railway (`main` → Root Directory = this folder).
+**Deploy:** push to **`cliniflow-backend-clean` repo `main`** — Railway native GitHub integration auto-deploys (see [`../DEPLOYMENT.md`](../DEPLOYMENT.md)).
 
 **Railway healthcheck:** `/api/health` (see repo `railway.json`).
 
