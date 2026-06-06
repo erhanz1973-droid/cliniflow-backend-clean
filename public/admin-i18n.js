@@ -596,6 +596,9 @@
         clinicCodeRequired: "*",
         clinicCodePlaceholder: "e.g. MOON, CLINIC01, ISTANBUL",
         clinicCodeHelp: "Bu kod, hastalarınızın gelecekte kliniğinize bağlanmak için kullanacağı koddur.",
+        invitationCode: "Davet Kodu",
+        invitationCodeOptional: "(İsteğe bağlı)",
+        invitationCodeHelp: "Kampanya kodunuz varsa, premium deneme sürenizi etkinleştirmek için girin.",
         name: "Clinic Name",
         nameRequired: "*",
         namePlaceholder: "Moon Clinic",
@@ -641,7 +644,23 @@
         copyToken: "📋 Token'ı Kopyala",
         goToPatients: "Hasta Listesine Git",
         goToDashboard: "Dashboard'a Git",
-        termsText: "Clinifly Dijital Platform Hizmet Sözleşmesi'ni okudum, anladım ve kabul ediyorum. Free Paket kapsamındaki hizmetlerin ücretsiz olduğunu, Free Paket dışındaki dijital hizmetlerin ücretli olduğunu ve bu hizmetlerin kapsam ile bedelinin ayrıca belirleneceğini kabul ederim."
+        termsText: "Clinifly Dijital Platform Hizmet Sözleşmesi'ni okudum, anladım ve kabul ediyorum. Free Paket kapsamındaki hizmetlerin ücretsiz olduğunu, Free Paket dışındaki dijital hizmetlerin ücretli olduğunu ve bu hizmetlerin kapsam ile bedelinin ayrıca belirleneceğini kabul ederim.",
+        connectingRetry: "⏳ Bağlanıyor… {seconds}s sonra tekrar",
+        otp: {
+          title: "E-posta Doğrulama",
+          intro: "{email} adresine bir doğrulama kodu gönderdik. Klinik kaydını tamamlamak için kodu aşağıya girin.",
+          codeLabel: "Doğrulama Kodu",
+          codeHelp: "E-postanızdaki 6 haneli kodu girin",
+          verify: "Doğrula ve Kaydı Tamamla",
+          verifying: "Doğrulanıyor...",
+          resend: "Kodu Yeniden Gönder",
+          sending: "Gönderiliyor...",
+          back: "Kayda Geri Dön",
+          invalidCode: "Lütfen geçerli 6 haneli bir doğrulama kodu girin",
+          resent: "E-postanıza yeni bir doğrulama kodu gönderildi",
+          clinicCodeExists: "Klinik kodu {code} zaten kayıtlı. Giriş sayfasına yönlendiriliyorsunuz...",
+          emailExists: "E-posta {email} zaten kayıtlı. Giriş sayfasına yönlendiriliyorsunuz..."
+        }
       },
       
       // Settings (admin-settings.html)
@@ -2260,6 +2279,9 @@
         clinicCodeRequired: "*",
         clinicCodePlaceholder: "e.g. MOON, CLINIC01, ISTANBUL",
         clinicCodeHelp: "This code is what your patients will use to connect to your clinic in the future.",
+        invitationCode: "Invitation Code",
+        invitationCodeOptional: "(Optional)",
+        invitationCodeHelp: "If you have a campaign code, enter it to activate your premium trial.",
         name: "Clinic Name",
         nameRequired: "*",
         namePlaceholder: "Moon Clinic",
@@ -2305,7 +2327,23 @@
         copyToken: "📋 Copy Token",
         goToPatients: "Go to Patients List",
         goToDashboard: "Go to Dashboard",
-        termsText: "I have read, understood and agree to the Clinifly Digital Platform Service Agreement. I acknowledge that services within the Free Package are free of charge, services outside the Free Package are paid, and the scope and price of these services will be determined separately."
+        termsText: "I have read, understood and agree to the Clinifly Digital Platform Service Agreement. I acknowledge that services within the Free Package are free of charge, services outside the Free Package are paid, and the scope and price of these services will be determined separately.",
+        connectingRetry: "⏳ Connecting… retrying in {seconds}s",
+        otp: {
+          title: "Email Verification",
+          intro: "We've sent a verification code to {email}. Please enter the code below to complete your clinic registration.",
+          codeLabel: "Verification Code",
+          codeHelp: "Enter the 6-digit code from your email",
+          verify: "Verify & Complete Registration",
+          verifying: "Verifying...",
+          resend: "Resend Code",
+          sending: "Sending...",
+          back: "Back to Registration",
+          invalidCode: "Please enter a valid 6-digit verification code",
+          resent: "A new verification code has been sent to your email",
+          clinicCodeExists: "Clinic code {code} already exists. Redirecting to login...",
+          emailExists: "Email {email} is already registered. Redirecting to login..."
+        }
       },
       
       // Settings (admin-settings.html)
@@ -4901,6 +4939,9 @@
         clinicCodeRequired: "*",
         clinicCodePlaceholder: "მაგ. MOON, CLINIC01, TBILISI",
         clinicCodeHelp: "ეს კოდი პაციენტები გამოიყენებენ თქვენს კლინიკასთან დასაკავშირებლად.",
+        invitationCode: "მოწვევის კოდი",
+        invitationCodeOptional: "(არასავალდებულო)",
+        invitationCodeHelp: "თუ გაქვთ კამპანიის კოდი, შეიყვანეთ premium საცდელი პერიოდის გასააქტიურებლად.",
         name: "კლინიკის სახელი",
         nameRequired: "*",
         namePlaceholder: "ჩემი კლინიკა",
@@ -4946,7 +4987,23 @@
         copyToken: "📋 ტოკენის კოპირება",
         goToPatients: "პაციენტების სიაზე",
         goToDashboard: "პანელზე გადასვლა",
-        termsText: "წავიკითხე, გავიგე და ვეთანხმები Clinifly ციფრული პლატფორმის მომსახურების ხელშეკრულებას. ვაცნობიერებ, რომ უფასო პაკეტის ფარგლებში მომსახურება უფასოა, უფასო პაკეტის გარეთ — ფასიანი, და მომსახურების მოცულობა და ღირებულება ცალკე განისაზღვრება."
+        termsText: "წავიკითხე, გავიგე და ვეთანხმები Clinifly ციფრული პლატფორმის მომსახურების ხელშეკრულებას. ვაცნობიერებ, რომ უფასო პაკეტის ფარგლებში მომსახურება უფასოა, უფასო პაკეტის გარეთ — ფასიანი, და მომსახურების მოცულობა და ღირებულება ცალკე განისაზღვრება.",
+        connectingRetry: "⏳ უკავშირდება… ხელახლა {seconds} წმ-ში",
+        otp: {
+          title: "ელ-ფოსტის დადასტურება",
+          intro: "დადასტურების კოდი გამოგზავნილია {email} მისამართზე. კლინიკის რეგისტრაციის დასასრულებლად შეიყვანეთ კოდი ქვემოთ.",
+          codeLabel: "დადასტურების კოდი",
+          codeHelp: "შეიყვანეთ ელ-ფოსტაში მიღებული 6-ნიშნა კოდი",
+          verify: "დადასტურება და რეგისტრაციის დასრულება",
+          verifying: "მოწმდება...",
+          resend: "კოდის ხელახლა გაგზავნა",
+          sending: "იგზავნება...",
+          back: "რეგისტრაციაზე დაბრუნება",
+          invalidCode: "გთხოვთ, შეიყვანოთ სწორი 6-ნიშნა დადასტურების კოდი",
+          resent: "ახალი დადასტურების კოდი გამოგზავნილია თქვენს ელ-ფოსტაზე",
+          clinicCodeExists: "კლინიკის კოდი {code} უკვე არსებობს. გადამისამართება შესვლის გვერდზე...",
+          emailExists: "ელ-ფოსტა {email} უკვე რეგისტრირებულია. გადამისამართება შესვლის გვერდზე..."
+        }
       },
       patients: {
         title: "👥 Clinifly Admin – პაციენტები",
