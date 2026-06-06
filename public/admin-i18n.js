@@ -731,20 +731,27 @@
         aiCommunication: {
           title: "YZ İletişimi",
           desc: "Messenger, Instagram ve WhatsApp'ta ilk yanıt hızını ayarlayın. <strong>Anında</strong> modda YZ saniyeler içinde karşılar. <strong>İnsanı bekle</strong> modunda ekip yanıtlamazsa belirlediğiniz süre sonunda YZ devreye girer.",
-          instant: "Anında YZ yanıtları (Messenger/WhatsApp'ta ~1–5 sn)",
+          instant: "Anında YZ yanıtları (Messenger/WhatsApp — mesajları gruplayarak tek yanıt)",
           waitHuman: "YZ'den önce insanı bekle",
           humanOnly: "Yalnızca insan (otomatik YZ yanıtı yok)",
           timingHintInstant:
-            "Anında mod: YZ hasta yazdıktan sonra yaklaşık 1–5 saniye içinde yanıtlar. Aşağıdaki gecikme (saniye) bunu ince ayarlar — 30 sn’lik «ekip sessizliği» ayarı bu modda kullanılmaz.",
+            "Anında mod: Hasta art arda birkaç kısa mesaj yazarsa YZ kısa bir süre bekler, sonra hepsine tek yanıt verir. Önerilen: 5 saniye.",
           timingHintWait:
             "«İnsanı bekle» modunda ekip belirtilen süre içinde yazmazsa YZ ilk mesajı gönderir. Anında karşılama yoktur.",
           timingHintHumanOnly:
-            "Messenger ve WhatsApp’ta otomatik YZ yanıtı kapalıdır; tüm mesajları ekibiniz yanıtlar.",
+            "Messenger ve WhatsApp'ta otomatik YZ yanıtı kapalıdır; tüm mesajları ekibiniz yanıtlar.",
           humanTakeoverLabel: "Ekip yanıtlamazsa YZ devreye girsin (bekleme süresi)",
           secondsWord: "sn",
+          messageBufferLabel: "YZ yanıt gecikmesi (hızlı mesajları grupla)",
+          bufferInstant: "Anında (gruplama yok)",
+          buffer3s: "3 saniye",
+          buffer5s: "5 saniye (önerilen)",
+          buffer10s: "10 saniye",
+          messageBufferHelp:
+            "Hasta art arda kısa mesajlar gönderirse, son mesajdan sonra bu süre kadar beklenir; ardından tümüne tek YZ yanıtı gider (Messenger / WhatsApp / Instagram).",
           omniDelayLabel: "Anında yanıt gecikmesi (Messenger / WhatsApp)",
           omniDelayHelp:
-            "Önerilen: 0,1–0,3 sn (çok hızlı). 1 sn üzeri yavaş hissedilir. Bu ayar yalnızca «Anında» modda geçerlidir.",
+            "Artık «YZ yanıt gecikmesi» ayarını kullanın. Hızlı mesajları gruplayarak tek yanıt için 5 sn önerilir.",
           fallbackHelp:
             "Yalnızca «İnsanı bekle» modunda: ekip bu süre içinde yazmazsa YZ ilk mesajı atar.",
           bookingModeLabel: "YZ takvim randevu modu",
@@ -2445,20 +2452,27 @@
         aiCommunication: {
           title: "AI Communication",
           desc: "Set first-response speed on Messenger, Instagram, and WhatsApp. <strong>Instant</strong> mode greets patients within seconds. <strong>Wait for human</strong> lets AI step in after your team does not reply within the time below.",
-          instant: "Instant AI replies (~1–5 sec on Messenger/WhatsApp)",
+          instant: "Instant AI replies (group rapid messages into one reply on Messenger/WhatsApp)",
           waitHuman: "Wait for human before AI",
           humanOnly: "Human-only (no AI auto-reply)",
           timingHintInstant:
-            "Instant mode: AI replies in about 1–5 seconds. The delay below (seconds) fine-tunes that speed — not the 30+ second team-silence setting.",
+            "Instant mode: when patients send several short messages in a row, AI waits briefly then replies once to the whole burst. Recommended: 5 seconds.",
           timingHintWait:
             "Wait for human: if your team does not reply within the time below, AI sends the first message. No instant auto-greeting.",
           timingHintHumanOnly:
             "No automatic AI replies on Messenger or WhatsApp — your team handles every message.",
           humanTakeoverLabel: "Team silence before AI steps in",
           secondsWord: "sec",
+          messageBufferLabel: "AI response delay (group rapid messages)",
+          bufferInstant: "Instant (no grouping)",
+          buffer3s: "3 seconds",
+          buffer5s: "5 seconds (recommended)",
+          buffer10s: "10 seconds",
+          messageBufferHelp:
+            "When patients send several short messages in a row, wait this long after the last one, then send one AI reply to the whole burst (Messenger / WhatsApp / Instagram).",
           omniDelayLabel: "Instant reply delay (Messenger / WhatsApp)",
           omniDelayHelp:
-            "Recommended: 0.1–0.3 s for fastest replies. Above ~1 s feels slow. Only applies in Instant mode.",
+            "Use «AI response delay» above instead. Recommended 5 seconds to group rapid messages into one natural reply.",
           fallbackHelp:
             "Only in &quot;Wait for human&quot; mode: AI sends the first message if your team is silent for this long.",
           bookingModeLabel: "AI calendar booking mode",
@@ -5404,20 +5418,27 @@
         aiCommunication: {
           title: "AI კომუნიკაცია",
           desc: "დააყენეთ პირველი პასუხის სიჩქარე Messenger-ში, Instagram-ში და WhatsApp-ში. <strong>მყისიერი</strong> რეჟიმი პაციენტებს წამებში ხვდება. <strong>ადამიანის მოლოდინი</strong> რეჟიმში AI ჩაერთვება, თუ გუნდი ქვემოთ მითითებულ დროში არ პასუხობს.",
-          instant: "მყისიერი AI პასუხები (Messenger/WhatsApp-ზე ~1–5 წმ)",
+          instant: "მყისიერი AI პასუხები (სწრაფ შეტყობინებების გაერთიანება Messenger/WhatsApp-ზე)",
           waitHuman: "ადამიანის მოლოდინი AI-მდე",
           humanOnly: "მხოლოდ ადამიანი (AI ავტომატური პასუხი არა)",
           timingHintInstant:
-            "მყისიერი რეჟიმი: AI პასუხობს დაახლოებით 1–5 წამში. ქვემოთ მითითებული დაყოვნება (წამები) ამ სიჩქარეს აზუსტებს — არა 30+ წამიან გუნდის დუმილას.",
+            "მყისიერი რეჟიმი: თუ პაციენტი რამდენიმე მოკლე შეტყობინებას გაგზავნის, AI ცოტა ხანს ელოდება და ერთ პასუხს აგზავნის. რეკომენდებული: 5 წამი.",
           timingHintWait:
             "ადამიანის მოლოდინი: თუ გუნდი ქვემოთ მითითებულ დროში არ პასუხობს, AI გააგზავნის პირველ შეტყობინებას. მყისიერი მისასალმებელი არ არის.",
           timingHintHumanOnly:
             "Messenger-სა და WhatsApp-ზე ავტომატური AI პასუხები გამორთულია — ყველა შეტყობინებას თქვენი გუნდი პასუხობს.",
           humanTakeoverLabel: "გუნდის დუმილი სანამ AI ჩაერთვება",
           secondsWord: "წმ",
+          messageBufferLabel: "AI პასუხის დაყოვნება (სწრაფი შეტყობინებების გაერთიანება)",
+          bufferInstant: "მყისიერი (გაერთიანება არა)",
+          buffer3s: "3 წამი",
+          buffer5s: "5 წამი (რეკომენდებული)",
+          buffer10s: "10 წამი",
+          messageBufferHelp:
+            "თუ პაციენტი რამდენიმე მოკლე შეტყობინებას გაგზავნის, ბოლო შეტყობინების შემდეგ ეს ხანს ელოდება და ერთ AI პასუხს აგზავნის (Messenger / WhatsApp / Instagram).",
           omniDelayLabel: "მყისიერი პასუხის დაყოვნება (Messenger / WhatsApp)",
           omniDelayHelp:
-            "რეკომენდებული: 0,1–0,3 წმ უსწრაფესი პასუხისთვის. ~1 წმ-ზე მეტი ნელს გაგრძნობთ. მხოლოდ მყისიერ რეჟიმში მოქმედებს.",
+            "გამოიყენეთ ზემოთ «AI პასუხის დაყოვნება». რეკომენდებულია 5 წამი სწრაფ შეტყობინებების ერთ პასუხად გაერთიანებისთვის.",
           fallbackHelp:
             "მხოლოდ «ადამიანის მოლოდინი» რეჟიმში: AI გააგზავნის პირველ შეტყობინებას, თუ გუნდი ამ ხანს დუმს.",
           bookingModeLabel: "AI კალენდრის ჯავშნის რეჟიმი",

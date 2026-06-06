@@ -335,15 +335,15 @@
           In Instant mode, AI replies in about 1–5 seconds. The delay below fine-tunes that speed (not the 30+ second human fallback).
         </p>
         <div id="aiInstantDelayBlock">
-          <label data-i18n="settings.aiCommunication.omniDelayLabel">Instant reply delay (Messenger / WhatsApp)</label>
-          <input type="range" id="aiOmniInstantSec" min="0.1" max="2" step="0.05" value="0.15" style="width:100%;" />
-          <div class="muted" style="margin-bottom:12px;">
-            <span id="aiOmniInstantSecLabel">0.15</span>
-            <span data-i18n="settings.aiCommunication.secondsWord">sec</span>
-            <span id="aiOmniInstantMsHint" class="muted" style="margin-left:6px;">(150 ms)</span>
-          </div>
-          <p class="muted" style="margin:0 0 12px;font-size:0.82rem;line-height:1.4;" data-i18n="settings.aiCommunication.omniDelayHelp">
-            Typical: 0.2–1 s. Values above ~2 s feel slow to patients. This setting does not apply in &quot;Wait for human&quot; mode.
+          <label data-i18n="settings.aiCommunication.messageBufferLabel">AI response delay (group rapid messages)</label>
+          <select id="aiMessageBufferPreset" style="width:100%;margin-bottom:8px;padding:8px;">
+            <option value="instant" data-i18n="settings.aiCommunication.bufferInstant">Instant (no grouping)</option>
+            <option value="3s" data-i18n="settings.aiCommunication.buffer3s">3 seconds</option>
+            <option value="5s" data-i18n="settings.aiCommunication.buffer5s">5 seconds (recommended)</option>
+            <option value="10s" data-i18n="settings.aiCommunication.buffer10s">10 seconds</option>
+          </select>
+          <p class="muted" style="margin:0 0 12px;font-size:0.82rem;line-height:1.4;" data-i18n="settings.aiCommunication.messageBufferHelp">
+            When patients send several short messages in a row, wait this long after the last one, then reply once to the whole burst (Messenger / WhatsApp / Instagram).
           </p>
         </div>
         <div id="aiFallbackBlock" style="display:none;">
@@ -1221,9 +1221,7 @@
       const stepped = Math.round(base / 15) * 15;
       return Math.min(300, Math.max(30, stepped));
     }
-    const omniSecSlider = $("aiOmniInstantSec");
-    const omniSecLabel = $("aiOmniInstantSecLabel");
-    const omniMsHint = $("aiOmniInstantMsHint");
+    const bufferPresetSelect = $("aiMessageBufferPreset");
     const instantDelayBlock = $("aiInstantDelayBlock");
     const fallbackBlock = $("aiFallbackBlock");
     const timingHintEl = $("aiTimingHint");
@@ -1242,23 +1240,17 @@
       return checked ? checked.value : "instant";
     }
 
-    function omniSecToMs(sec) {
-      const n = Number(sec);
-      if (!Number.isFinite(n) || n < 0) return 150;
-      return Math.min(2000, Math.max(100, Math.round(n * 1000)));
+    function bufferPresetToMs(preset) {
+      const map = { instant: 0, "3s": 3000, "5s": 5000, "10s": 10000 };
+      return Object.prototype.hasOwnProperty.call(map, preset) ? map[preset] : 5000;
     }
 
-    function omniMsToSec(ms) {
+    function msToBufferPreset(ms) {
       const n = Number(ms);
-      if (!Number.isFinite(n) || n <= 0) return 0.15;
-      return Math.min(2, Math.max(0.1, Math.round((n / 1000) * 100) / 100));
-    }
-
-    function updateOmniSecLabel() {
-      if (!omniSecSlider || !omniSecLabel) return;
-      const sec = Number(omniSecSlider.value);
-      omniSecLabel.textContent = String(sec);
-      if (omniMsHint) omniMsHint.textContent = "(" + omniSecToMs(sec) + " ms)";
+      if (!Number.isFinite(n) || n <= 0) return "instant";
+      if (n <= 3000) return "3s";
+      if (n <= 5000) return "5s";
+      return "10s";
     }
 
     function syncAiCommunicationUi() {
@@ -1283,7 +1275,7 @@
             ? "If your team does not reply within the time below, AI sends the first message. No instant auto-greeting."
             : mode === "human_only"
               ? "AI will not auto-reply on Messenger or WhatsApp. Your team handles every message."
-              : "Instant mode: AI greets patients in about 1–5 seconds. The delay slider below is seconds, not the 30+ s team fallback.",
+              : "Instant mode: AI waits briefly to group rapid messages, then replies once. Recommended: 5 seconds on Messenger/WhatsApp.",
         );
       }
     }
@@ -1322,9 +1314,11 @@
         fbSec = clampFallbackSeconds(fbSec);
         if (fallbackSlider) fallbackSlider.value = String(fbSec);
         if (fallbackLabel) fallbackLabel.textContent = String(fbSec);
-        if (omniSecSlider) {
-          omniSecSlider.value = String(omniMsToSec(cfg.omnichannelInstantDelayMs || 200));
-          updateOmniSecLabel();
+        if (bufferPresetSelect) {
+          const preset =
+            cfg.messageBufferPreset ||
+            msToBufferPreset(cfg.messageBufferDelayMs || cfg.omnichannelInstantDelayMs || 5000);
+          bufferPresetSelect.value = preset;
         }
         syncAiCommunicationUi();
         const booking = data.aiBooking || {};
@@ -1354,9 +1348,6 @@
         fallbackLabel.textContent = fallbackSlider.value;
       });
     }
-    if (omniSecSlider) {
-      omniSecSlider.addEventListener("input", updateOmniSecLabel);
-    }
     document.querySelectorAll('input[name="aiReplyMode"]').forEach((el) => {
       el.addEventListener("change", syncAiCommunicationUi);
     });
@@ -1367,10 +1358,14 @@
       saveBtn.disabled = true;
       if (msgEl) msgEl.textContent = ti("settings.aiCommunication.saving", "Saving…");
       try {
+        const preset = bufferPresetSelect?.value || "5s";
+        const bufferMs = bufferPresetToMs(preset);
         const body = {
           replyMode: selectedReplyMode(),
           fallbackDelaySeconds: clampFallbackSeconds(fallbackSlider?.value || 60),
-          omnichannelInstantDelayMs: omniSecToMs(omniSecSlider?.value || 0.15),
+          messageBufferPreset: preset,
+          messageBufferDelayMs: bufferMs,
+          omnichannelInstantDelayMs: bufferMs,
           aiBookingMode: bookingModeSelect?.value || "draft_booking",
           clinicWeekdayStart: clinicWeekdayStart?.value || "08:00",
           clinicWeekdayEnd: clinicWeekdayEnd?.value || "18:00",
