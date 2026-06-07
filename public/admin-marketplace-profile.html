@@ -258,13 +258,23 @@
 
       <div class="card" id="media">
         <h2 data-i18n="marketplaceProfile.sectionMedia">Media</h2>
-        <p class="hint" data-i18n="marketplaceProfile.sectionMediaHint">Paste public image/video URLs (one per line in galleries).</p>
+        <p class="hint" data-i18n="marketplaceProfile.sectionMediaHint">Upload clinic photos or paste public image URLs (one per line in galleries).</p>
         <label data-i18n="marketplaceProfile.fields.logoUrl">Logo URL</label>
-        <input id="logoUrl" type="url" />
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <input id="logoUrl" type="url" style="flex:1;min-width:200px;" />
+          <input type="file" id="logoUpload" accept="image/*" style="max-width:160px;" />
+        </div>
         <label data-i18n="marketplaceProfile.fields.coverPhotoUrl">Cover Photo URL</label>
-        <input id="coverPhotoUrl" type="url" />
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <input id="coverPhotoUrl" type="url" style="flex:1;min-width:200px;" />
+          <input type="file" id="coverUpload" accept="image/*" style="max-width:160px;" />
+        </div>
         <label data-i18n="marketplaceProfile.fields.galleryPhotos">Gallery Images (one URL per line)</label>
-        <textarea id="galleryPhotos" data-i18n-placeholder="marketplaceProfile.placeholders.galleryPhotos" placeholder="https://…"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <textarea id="galleryPhotos" data-i18n-placeholder="marketplaceProfile.placeholders.galleryPhotos" placeholder="https://…" style="flex:1;min-width:200px;"></textarea>
+          <input type="file" id="galleryUpload" accept="image/*" multiple style="max-width:160px;" />
+        </div>
+        <p class="hint" id="uploadStatus" style="margin:0 0 10px;font-size:0.82rem;display:none;"></p>
         <label data-i18n="marketplaceProfile.fields.beforeAfter">Before / After Images (one URL per line)</label>
         <textarea id="beforeAfter" data-i18n-placeholder="marketplaceProfile.placeholders.beforeAfter" placeholder="https://…"></textarea>
         <label data-i18n="marketplaceProfile.fields.videoUrls">Video URLs (one per line)</label>
@@ -593,6 +603,62 @@
         $("saveBtn").disabled = false;
       }
     }
+
+    function showUploadStatus(msg, ok) {
+      var el = $("uploadStatus");
+      if (!el) return;
+      el.textContent = msg;
+      el.style.display = msg ? "block" : "none";
+      el.style.color = ok ? "var(--ok, #059669)" : "var(--err, #dc2626)";
+    }
+
+    async function uploadMarketplaceImage(file) {
+      var fd = new FormData();
+      fd.append("file", file);
+      var token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      var res = await fetch(api("/api/admin/marketplace-profile/upload-image"), {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+        body: fd,
+      });
+      var json = await res.json().catch(function () { return {}; });
+      if (!res.ok || !json.ok || !json.url) {
+        throw new Error(json.message || json.error || "Upload failed");
+      }
+      return String(json.url).trim();
+    }
+
+    async function handleImageUpload(input, targetId, mode) {
+      var files = input.files ? Array.from(input.files) : [];
+      input.value = "";
+      if (!files.length) return;
+      showUploadStatus(t("marketplaceProfile.uploading", "Uploading…"), true);
+      try {
+        var urls = [];
+        for (var i = 0; i < files.length; i += 1) {
+          urls.push(await uploadMarketplaceImage(files[i]));
+        }
+        if (mode === "gallery") {
+          var prev = linesToArr($(targetId).value);
+          $(targetId).value = arrToLines(prev.concat(urls));
+        } else {
+          $(targetId).value = urls[0];
+        }
+        showUploadStatus(t("marketplaceProfile.uploadOk", "Photo uploaded — click Save profile."), true);
+      } catch (e) {
+        showUploadStatus(e.message || t("marketplaceProfile.uploadFailed", "Upload failed"), false);
+      }
+    }
+
+    $("logoUpload").addEventListener("change", function () {
+      handleImageUpload(this, "logoUrl", "single");
+    });
+    $("coverUpload").addEventListener("change", function () {
+      handleImageUpload(this, "coverPhotoUrl", "single");
+    });
+    $("galleryUpload").addEventListener("change", function () {
+      handleImageUpload(this, "galleryPhotos", "gallery");
+    });
 
     $("saveBtn").addEventListener("click", saveProfile);
     $("reloadBtn").addEventListener("click", loadProfile);

@@ -64244,6 +64244,7 @@ registerClinicMarketplaceAdminRoutes(app, {
   requireAdminAuth,
   superAdminGuard,
   clearClinicCache,
+  imageUpload: chatUpload,
 });
 
 const { registerClinicSuccessCenterRoutes } = require("./lib/clinicSuccessCenter");

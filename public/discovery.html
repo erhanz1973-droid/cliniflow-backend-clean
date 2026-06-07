@@ -390,10 +390,19 @@
           var team = (c.team || []).map(function (d) {
             return "<li><strong>" + escapeHtml(d.name) + "</strong>" + (d.title ? " — " + escapeHtml(d.title) : "") + "</li>";
           }).join("");
+          var gallery = c.mediaGallery && Array.isArray(c.mediaGallery.photos) ? c.mediaGallery.photos : [];
+          var galleryHtml = gallery.length
+            ? "<h3>Photos</h3><div style='display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;'>" +
+              gallery.map(function (u) {
+                return '<img src="' + escapeHtml(u) + '" alt="" style="width:120px;height:90px;object-fit:cover;border-radius:8px;" />';
+              }).join("") +
+              "</div>"
+            : "";
           content.innerHTML =
             '<button type="button" class="close-btn" id="closeProfile">&times;</button>' +
             "<h2>" + escapeHtml(c.name) + "</h2>" +
             (c.aboutText || c.shortDescription ? "<p>" + escapeHtml(c.aboutText || c.shortDescription) + "</p>" : "") +
+            galleryHtml +
             repBlock +
             (team ? "<h3>Team</h3><ul>" + team + "</ul>" : "") +
             (links.length ? "<p>" + links.join(" · ") + "</p>" : "");
