@@ -140,6 +140,7 @@
   </style>
 </head>
 <body>
+  <div id="admin-layout-root"></div>
   <div class="page">
     <h1 data-i18n="successCenter.pageTitle">Clinic Success Center</h1>
     <p class="sub" data-i18n="successCenter.subtitle">
@@ -150,10 +151,11 @@
     <div id="content" style="display:none;"></div>
   </div>
 
+  <script src="/admin-layout.js?v=202606131"></script>
   <script>
     function $(id) { return document.getElementById(id); }
     function t(key, vars) {
-      if (typeof window.t === "function") return window.t(key, vars);
+      if (window.i18n && typeof window.i18n.t === "function") return window.i18n.t(key, vars || {});
       return key;
     }
     function authHeaders() {
@@ -161,9 +163,15 @@
       return tok ? { Authorization: "Bearer " + tok, Accept: "application/json" } : { Accept: "application/json" };
     }
     function api(path) {
-      if (typeof adminFetchUrl === "function") return adminFetchUrl(path);
-      if (typeof apiUrl === "function") return apiUrl(path);
-      return path;
+      var p = String(path || "");
+      if (!p.startsWith("/")) p = "/" + p;
+      if (typeof window.adminFetchUrl === "function") return window.adminFetchUrl(p);
+      if (typeof window.cliniflowAdminFetchUrl === "function") return window.cliniflowAdminFetchUrl(p);
+      if (typeof window.cliniflowAdminApiOrigin === "function") {
+        var base = window.cliniflowAdminApiOrigin();
+        if (base) return String(base).replace(/\/+$/, "") + p;
+      }
+      return p;
     }
     function esc(s) {
       return s == null ? "" : String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -322,13 +330,13 @@
       try {
         var res = await fetch(api("/api/admin/success-center"), { headers: authHeaders() });
         var data = await res.json().catch(function () { return {}; });
-        if (!res.ok || !data.successCenter) {
+        if (!res.ok || !data.ok || !data.successCenter) {
           $("status").innerHTML = '<span class="err">' + esc(data.message || data.error || t("successCenter.loadFailed")) + "</span>";
           return;
         }
         render(data.successCenter);
       } catch (e) {
-        $("status").innerHTML = '<span class="err">' + esc(t("successCenter.loadFailed")) + "</span>";
+        $("status").innerHTML = '<span class="err">' + esc(e && e.message ? e.message : t("successCenter.loadFailed")) + "</span>";
       }
     }
 
@@ -337,6 +345,5 @@
     });
     load();
   </script>
-  <script src="/admin-layout.js"></script>
 </body>
 </html>
