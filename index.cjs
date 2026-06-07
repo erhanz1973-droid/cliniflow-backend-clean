@@ -510,7 +510,10 @@ const {
   loadThreadAssignmentSnapshotByPatientClinic,
   fetchThreadAssignmentChanges,
 } = require("./lib/patientChatThreadAssignmentAudit");
-const { mirrorDoctorReplyToCoordinatorChannel } = require("./lib/doctorPatientChatMirror");
+const {
+  mirrorDoctorReplyToCoordinatorChannel,
+  mirrorDoctorReplyToOfferThread,
+} = require("./lib/doctorPatientChatMirror");
 const {
   setupTreatmentRequestOrchestration,
   orchestrateTreatmentRequestCreated,
@@ -52030,6 +52033,15 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       }).catch((e) =>
         console.warn("[POST /api/messages/:id/reply] coordinator mirror:", e?.message || e),
       );
+      void mirrorDoctorReplyToOfferThread({
+        patientId,
+        clinicId: clinicIdForInsert,
+        text,
+        doctorId: doctorUuid,
+        doctorName: doctorDisplayName || "Doktor",
+      }).catch((e) =>
+        console.warn("[POST /api/messages/:id/reply] offer mirror:", e?.message || e),
+      );
       const socketResult = await emitRealtimeChatMessageToThread(
         {
           patientId,
@@ -52135,6 +52147,15 @@ app.post("/api/messages/:id/reply", requireDoctorAuth, async (req, res) => {
       doctorName: doctorDisplayNameFallback || "Doktor",
     }).catch((e) =>
       console.warn("[POST /api/messages/:id/reply] coordinator mirror (fallback):", e?.message || e),
+    );
+    void mirrorDoctorReplyToOfferThread({
+      patientId,
+      clinicId: clinicIdForInsert,
+      text,
+      doctorId: doctorUuid,
+      doctorName: doctorDisplayNameFallback || "Doktor",
+    }).catch((e) =>
+      console.warn("[POST /api/messages/:id/reply] offer mirror (fallback):", e?.message || e),
     );
     const fallbackThreadId = await resolveDoctorChatThreadId(
       patientId,
