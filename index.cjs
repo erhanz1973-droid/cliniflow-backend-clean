@@ -44688,34 +44688,56 @@ app.post("/api/super-admin/clinics/:clinicId/assign-plan", superAdminGuard, asyn
     if (!planVal) {
       return res.status(400).json({ ok: false, error: "plan_required" });
     }
+    const planForDb = normalizeClinicPlan(planVal);
 
     const expiry = new Date();
     expiry.setDate(expiry.getDate() + Math.floor(daysN));
     const planExpiryIso = expiry.toISOString();
 
-    const { data, error } = await supabase
-      .from("clinics")
-      .update({
-        plan: planVal,
-        plan_expiry: planExpiryIso,
-        plan_source: "ADMIN",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", clinicId)
-      .select();
+    let patch = {
+      plan: planForDb,
+      plan_expiry: planExpiryIso,
+      plan_source: "ADMIN",
+      updated_at: new Date().toISOString(),
+    };
+    let lastError = null;
+    for (let i = 0; i < 8; i += 1) {
+      const { data, error } = await supabase
+        .from("clinics")
+        .update(patch)
+        .eq("id", clinicId)
+        .select();
 
-    console.log("PLAN UPDATE RESULT:", data);
-    console.log("PLAN UPDATE ERROR:", error);
-
-    if (error) {
-      return res.status(500).json({ ok: false, error });
+      if (!error && data?.length) {
+        return res.json({ ok: true, updated: data });
+      }
+      lastError = error;
+      if (!error) break;
+      const msg = String(error.message || "");
+      if (/clinics_plan_check|check constraint/i.test(msg)) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_plan_value",
+          message: "Plan must be FREE, BASIC, or PRO (PREMIUM/Enterprise is stored as PRO).",
+        });
+      }
+      if (String(error.code || "") !== "PGRST204" && !/does not exist/i.test(msg)) {
+        return res.status(500).json({ ok: false, error: error.message || "update_failed" });
+      }
+      const missing = getMissingColumnName(error);
+      if (!missing || !(missing in patch)) {
+        return res.status(500).json({ ok: false, error: error.message || "update_failed" });
+      }
+      patch = { ...patch };
+      delete patch[missing];
     }
-    if (!data || data.length === 0) {
-      console.warn("[assign-plan] no rows updated clinicId=", clinicId);
-      return res.status(404).json({ ok: false, error: "no_row_updated", clinicId });
-    }
 
-    return res.json({ ok: true, updated: data });
+    console.log("PLAN UPDATE ERROR:", lastError);
+    if (lastError) {
+      return res.status(500).json({ ok: false, error: lastError.message || "update_failed" });
+    }
+    console.warn("[assign-plan] no rows updated clinicId=", clinicId);
+    return res.status(404).json({ ok: false, error: "no_row_updated", clinicId });
   } catch (err) {
     console.error("[assign-plan]", err);
     return res.status(500).json({ ok: false, error: "internal_error", message: err?.message || "Error" });

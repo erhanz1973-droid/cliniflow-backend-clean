@@ -237,6 +237,7 @@ function render(d){
               <option value="PREMIUM">Enterprise</option>
             </select>
             <div class="actions">
+              <button class="btn" type="button" onclick="runAction('set_plan')">Apply selected plan</button>
               <button class="btn" type="button" onclick="runAction('upgrade')">Upgrade</button>
               <button class="btn ghost" type="button" onclick="runAction('downgrade')">Downgrade</button>
               <button class="btn" type="button" onclick="runAction('extend')">Extend</button>
@@ -268,6 +269,11 @@ async function load(){
     if(!res.ok||!json.ok||!json.dashboard) throw new Error(json.message||json.error||"Load failed");
     dash=json.dashboard;
     document.getElementById("content").innerHTML=render(dash);
+    const planSel=document.getElementById("saPlan");
+    if(planSel&&dash.subscription&&dash.subscription.plan){
+      const p=String(dash.subscription.plan).toUpperCase();
+      if([...planSel.options].some(o=>o.value===p)) planSel.value=p;
+    }
   }catch(e){
     document.getElementById("content").innerHTML=`<div class="err">${esc(e.message)}</div>`;
   }
@@ -278,6 +284,10 @@ async function runAction(action){
   const days=Number(document.getElementById("saDays")?.value||90);
   const plan=document.getElementById("saPlan")?.value||"";
   const statusEl=document.getElementById("actionStatus");
+  if((action==="set_plan"||action==="grant_temporary")&&!plan){
+    if(statusEl) statusEl.textContent="Error: Select a plan from the dropdown first.";
+    return;
+  }
   if(statusEl) statusEl.textContent="Applying…";
   try{
     const body={action,notes,days};
@@ -288,8 +298,11 @@ async function runAction(action){
       headers:authH({"Content-Type":"application/json"}),
       body:JSON.stringify(body)
     });
-    const json=await res.json();
-    if(!res.ok||!json.ok) throw new Error(json.message||json.error||"Action failed");
+    const json=await res.json().catch(()=>({}));
+    if(!res.ok||!json.ok){
+      const msg=json.message||(typeof json.error==="string"?json.error:json.error?.message)||("HTTP "+res.status);
+      throw new Error(msg);
+    }
     if(statusEl) statusEl.textContent="✓ Action applied";
     await load();
   }catch(e){
