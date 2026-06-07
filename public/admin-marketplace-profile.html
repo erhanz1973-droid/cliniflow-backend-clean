@@ -151,9 +151,11 @@
         <div class="badge-row" id="platformBadges"></div>
       </div>
 
-      <div class="card">
+      <div class="card" id="reputation">
         <h2 data-i18n="marketplaceProfile.sectionReputation">Reputation &amp; Trust</h2>
-        <p class="hint" data-i18n="marketplaceProfile.sectionReputationHint">Self-managed — copy values from your Google Business and Trustpilot pages.</p>
+        <p class="hint" data-i18n="marketplaceProfile.sectionReputationHint">Self-managed — copy values from your Google Business, Facebook Page, and Trustpilot profiles.</p>
+
+        <h3 style="margin:16px 0 8px; font-size:15px;" data-i18n="marketplaceProfile.sectionGoogleReviews">Google Reviews</h3>
         <label data-i18n="marketplaceProfile.fields.googleBusinessUrl">Google Business URL</label>
         <input id="googleBusinessUrl" type="url" data-i18n-placeholder="marketplaceProfile.placeholders.googleBusinessUrl" placeholder="https://g.page/…" />
         <div class="row2">
@@ -166,6 +168,23 @@
             <input id="googleReviewCount" type="number" min="0" />
           </div>
         </div>
+
+        <h3 style="margin:20px 0 8px; font-size:15px;" data-i18n="marketplaceProfile.sectionFacebookReviews">Facebook Reviews</h3>
+        <p class="hint" data-i18n="marketplaceProfile.facebookReviewsHelp">Open your Facebook Page and copy the page URL. Enter your recommendation score and recommendation count from Facebook.</p>
+        <label data-i18n="marketplaceProfile.fields.facebookPageUrl">Facebook Page URL</label>
+        <input id="facebookPageUrl" type="url" data-i18n-placeholder="marketplaceProfile.placeholders.facebookPageUrl" placeholder="https://www.facebook.com/yourclinic" />
+        <div class="row2">
+          <div>
+            <label data-i18n="marketplaceProfile.fields.facebookRecommendationScore">Facebook Recommendation Score</label>
+            <input id="facebookRecommendationScore" type="number" min="0" max="100" step="0.1" data-i18n-placeholder="marketplaceProfile.placeholders.facebookRecommendationScore" placeholder="96" />
+          </div>
+          <div>
+            <label data-i18n="marketplaceProfile.fields.facebookRecommendationCount">Facebook Review / Recommendation Count</label>
+            <input id="facebookRecommendationCount" type="number" min="0" data-i18n-placeholder="marketplaceProfile.placeholders.facebookRecommendationCount" placeholder="145" />
+          </div>
+        </div>
+
+        <h3 style="margin:20px 0 8px; font-size:15px;" data-i18n="marketplaceProfile.sectionTrustpilotReviews">Trustpilot Reviews</h3>
         <label data-i18n="marketplaceProfile.fields.trustpilotUrl">Trustpilot URL</label>
         <input id="trustpilotUrl" type="url" data-i18n-placeholder="marketplaceProfile.placeholders.trustpilotUrl" placeholder="https://www.trustpilot.com/review/…" />
         <div class="row2">
@@ -178,7 +197,13 @@
             <input id="trustpilotReviewCount" type="number" min="0" />
           </div>
         </div>
-        <div class="row2">
+
+        <div id="reputationPreviewWrap" style="margin-top:16px; padding:12px; background:#0f172a; border:1px solid #334155; border-radius:8px;">
+          <div style="font-size:12px; color:var(--muted); margin-bottom:8px;" data-i18n="marketplaceProfile.reputationPreviewLabel">Patient-facing preview</div>
+          <div id="reputationPreview" style="font-size:14px; line-height:1.6; color:#e2e8f0;"></div>
+        </div>
+
+        <div class="row2" style="margin-top:16px;">
           <div>
             <label data-i18n="marketplaceProfile.fields.yearsInOperation">Years in Operation</label>
             <input id="yearsInOperation" type="number" min="0" max="200" />
@@ -374,6 +399,48 @@
       }
     }
 
+    function renderReputationPreview() {
+      var el = $("reputationPreview");
+      if (!el) return;
+      var lines = [];
+      var gRating = $("googleRating").value;
+      var gCount = $("googleReviewCount").value;
+      if (gRating !== "" && Number(gRating) > 0) {
+        var gr = Math.round(Number(gRating) * 10) / 10;
+        var gc = gCount === "" ? 0 : parseInt(gCount, 10) || 0;
+        lines.push("⭐ Google " + gr + " (" + gc + " reviews)");
+      }
+      var fbScore = $("facebookRecommendationScore").value;
+      var fbCount = $("facebookRecommendationCount").value;
+      if (fbScore !== "" && Number(fbScore) > 0) {
+        var fs = Math.round(Number(fbScore) * 10) / 10;
+        var fc = fbCount === "" ? 0 : parseInt(fbCount, 10) || 0;
+        lines.push("👍 Facebook " + fs + "% (" + fc + " recommendations)");
+      }
+      var tpRating = $("trustpilotRating").value;
+      var tpCount = $("trustpilotReviewCount").value;
+      if (tpRating !== "" && Number(tpRating) > 0) {
+        var tr = Math.round(Number(tpRating) * 10) / 10;
+        var tc = tpCount === "" ? 0 : parseInt(tpCount, 10) || 0;
+        lines.push("⭐ Trustpilot " + tr + " (" + tc + " reviews)");
+      }
+      el.textContent = lines.length ? lines.join("\n") : t("marketplaceProfile.reputationPreviewEmpty");
+    }
+
+    function bindReputationPreview() {
+      [
+        "googleRating",
+        "googleReviewCount",
+        "facebookRecommendationScore",
+        "facebookRecommendationCount",
+        "trustpilotRating",
+        "trustpilotReviewCount",
+      ].forEach(function (id) {
+        var node = $(id);
+        if (node) node.addEventListener("input", renderReputationPreview);
+      });
+    }
+
     function fillForm(p) {
       var rep = p.reputation || {};
       var soc = p.social || {};
@@ -382,6 +449,11 @@
       $("googleBusinessUrl").value = rep.googleBusinessUrl || "";
       $("googleRating").value = rep.googleRating != null ? rep.googleRating : "";
       $("googleReviewCount").value = rep.googleReviewCount != null ? rep.googleReviewCount : "";
+      $("facebookPageUrl").value = rep.facebookPageUrl || "";
+      $("facebookRecommendationScore").value =
+        rep.facebookRecommendationScore != null ? rep.facebookRecommendationScore : "";
+      $("facebookRecommendationCount").value =
+        rep.facebookRecommendationCount != null ? rep.facebookRecommendationCount : "";
       $("trustpilotUrl").value = rep.trustpilotUrl || "";
       $("trustpilotRating").value = rep.trustpilotRating != null ? rep.trustpilotRating : "";
       $("trustpilotReviewCount").value = rep.trustpilotReviewCount != null ? rep.trustpilotReviewCount : "";
@@ -413,6 +485,7 @@
       renderCompleteness(p.completeness);
       renderPlatformFlags(p.platformFlags);
       renderListingWarn(p);
+      renderReputationPreview();
     }
 
     function collectPayload() {
@@ -421,6 +494,15 @@
           googleBusinessUrl: $("googleBusinessUrl").value.trim(),
           googleRating: $("googleRating").value === "" ? null : Number($("googleRating").value),
           googleReviewCount: $("googleReviewCount").value === "" ? null : parseInt($("googleReviewCount").value, 10),
+          facebookPageUrl: $("facebookPageUrl").value.trim(),
+          facebookRecommendationScore:
+            $("facebookRecommendationScore").value === ""
+              ? null
+              : Number($("facebookRecommendationScore").value),
+          facebookRecommendationCount:
+            $("facebookRecommendationCount").value === ""
+              ? null
+              : parseInt($("facebookRecommendationCount").value, 10),
           trustpilotUrl: $("trustpilotUrl").value.trim(),
           trustpilotRating: $("trustpilotRating").value === "" ? null : Number($("trustpilotRating").value),
           trustpilotReviewCount: $("trustpilotReviewCount").value === "" ? null : parseInt($("trustpilotReviewCount").value, 10),
@@ -516,6 +598,7 @@
     $("reloadBtn").addEventListener("click", loadProfile);
     document.addEventListener("admin-language-changed", refreshMarketplaceDynamic);
     initMarketplaceCountrySelect();
+    bindReputationPreview();
     loadProfile();
   </script>
 </body>

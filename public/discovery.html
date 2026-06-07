@@ -329,14 +329,17 @@
           var logo = c.logoUrl
             ? '<img class="logo" src="' + escapeHtml(c.logoUrl) + '" alt="" />'
             : '<div class="logo-ph">' + escapeHtml((c.name || "C").charAt(0)) + "</div>";
-          var google =
-            c.googleRating != null
-              ? '<div class="rating">Google ★ ' + escapeHtml(String(c.googleRating)) + "/5 · " + escapeHtml(String(c.googleReviewCount || "—")) + " reviews</div>"
-              : '<div class="meta">No Google rating yet</div>';
-          var tp =
-            c.trustpilotRating != null
-              ? '<div class="rating-tp">Trustpilot ★ ' + escapeHtml(String(c.trustpilotRating)) + "/5</div>"
-              : "";
+          var repLines = Array.isArray(c.reputationDisplayLines) ? c.reputationDisplayLines : [];
+          var repHtml = repLines.length
+            ? repLines.slice(0, 2).map(function (line) {
+                return '<div class="rating">' + escapeHtml(line) + "</div>";
+              }).join("")
+            : (c.googleRating != null
+                ? '<div class="rating">Google ★ ' + escapeHtml(String(c.googleRating)) + "/5 · " + escapeHtml(String(c.googleReviewCount || "—")) + " reviews</div>"
+                : '<div class="meta">No reputation data yet</div>') +
+              (c.trustpilotRating != null
+                ? '<div class="rating-tp">Trustpilot ★ ' + escapeHtml(String(c.trustpilotRating)) + "/5</div>"
+                : "");
           var specs = (c.specialties || []).slice(0, 4).map(function (s) {
             return '<span class="tag">' + escapeHtml(s) + "</span>";
           }).join("");
@@ -345,7 +348,7 @@
             (c.isVerified ? '<span class="badge">Verified</span>' : "") +
             '</h2><div class="meta">' + escapeHtml(loc) + "</div></div></div>" +
             (c.shortDescription ? '<p class="desc">' + escapeHtml(c.shortDescription) + "</p>" : "") +
-            google + tp +
+            repHtml +
             (specs ? '<div class="tags">' + specs + "</div>" : "") +
             '<div class="actions">' +
             '<button type="button" data-action="profile" data-id="' + escapeHtml(c.id) + '">View profile</button>' +
@@ -377,7 +380,13 @@
           var links = [];
           if (c.websiteUrl) links.push('<a href="' + escapeHtml(c.websiteUrl) + '" target="_blank" rel="noopener">Website</a>');
           if (c.googleReviewsUrl) links.push('<a href="' + escapeHtml(c.googleReviewsUrl) + '" target="_blank" rel="noopener">Google reviews</a>');
+          if (c.facebookPageUrl) links.push('<a href="' + escapeHtml(c.facebookPageUrl) + '" target="_blank" rel="noopener">Facebook</a>');
           if (c.trustpilotUrl) links.push('<a href="' + escapeHtml(c.trustpilotUrl) + '" target="_blank" rel="noopener">Trustpilot</a>');
+          var repBlock = Array.isArray(c.reputationDisplayLines) && c.reputationDisplayLines.length
+            ? "<h3>Reputation</h3><ul>" + c.reputationDisplayLines.map(function (line) {
+                return "<li>" + escapeHtml(line) + "</li>";
+              }).join("") + "</ul>"
+            : "";
           var team = (c.team || []).map(function (d) {
             return "<li><strong>" + escapeHtml(d.name) + "</strong>" + (d.title ? " — " + escapeHtml(d.title) : "") + "</li>";
           }).join("");
@@ -385,6 +394,7 @@
             '<button type="button" class="close-btn" id="closeProfile">&times;</button>' +
             "<h2>" + escapeHtml(c.name) + "</h2>" +
             (c.aboutText || c.shortDescription ? "<p>" + escapeHtml(c.aboutText || c.shortDescription) + "</p>" : "") +
+            repBlock +
             (team ? "<h3>Team</h3><ul>" + team + "</ul>" : "") +
             (links.length ? "<p>" + links.join(" · ") + "</p>" : "");
           document.getElementById("closeProfile").onclick = function () {
