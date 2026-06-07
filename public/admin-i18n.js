@@ -8,7 +8,7 @@
   }
   window.__cliniflowI18nModuleRan = true;
   console.log('I18N INIT RUN', Date.now());
-  console.log('I18N FILE VERSION:', 'v51');
+  console.log('I18N FILE VERSION:', 'v52');
 
   // Reentrancy guard to prevent update recursion (stack overflow)
   let isUpdatingI18n = false;
@@ -613,10 +613,15 @@
       register: {
         title: "Create Your Clinic",
         subtitle: "Get started in minutes — it's free.",
-        clinicCode: "Clinic Code",
+        clinicCode: "Klinik Kodu",
         clinicCodeRequired: "*",
-        clinicCodePlaceholder: "e.g. MOON, CLINIC01, ISTANBUL",
-        clinicCodeHelp: "Bu kod, hastalarınızın gelecekte kliniğinize bağlanmak için kullanacağı koddur.",
+        clinicCodeWhat: "Klinik kodu nedir?",
+        clinicCodeHelp: "Klinik kodu, kliniğinizin kısa ve benzersiz sembolüdür — tıpkı bir plaka veya kısaltma gibi. Kayıt sırasında siz belirlersiniz; hastalar uygulamada bu kodu girerek kliniğinize bağlanır.",
+        clinicCodeTip1: "3–12 karakter; sadece büyük harf ve rakam (ör. CEM, ELKO, MOON)",
+        clinicCodeTip2: "Klinik adınızdan türetin veya kolay hatırlanacak bir sembol seçin",
+        clinicCodeTip3: "Bu kod şifreniz değildir — hastalarınızla paylaşabilirsiniz",
+        clinicCodePlaceholder: "ör. CEM, ELKO, MOON",
+        clinicCodeHint: "Örnekler: CEM, ELKO, SMILE",
         invitationCode: "Davet Kodu",
         invitationCodeOptional: "(İsteğe bağlı)",
         invitationCodeHelp: "Kampanya kodunuz varsa, premium deneme sürenizi etkinleştirmek için girin.",
@@ -2438,8 +2443,13 @@
         subtitle: "Get started in minutes — it's free.",
         clinicCode: "Clinic Code",
         clinicCodeRequired: "*",
-        clinicCodePlaceholder: "e.g. MOON, CLINIC01, ISTANBUL",
-        clinicCodeHelp: "This code is what your patients will use to connect to your clinic in the future.",
+        clinicCodeWhat: "What is a clinic code?",
+        clinicCodeHelp: "Your clinic code is a short unique symbol for your clinic — like an abbreviation or badge. You choose it now; patients enter this code in the app to connect with you.",
+        clinicCodeTip1: "3–12 characters; uppercase letters and numbers only (e.g. CEM, ELKO, MOON)",
+        clinicCodeTip2: "Derive it from your clinic name or pick something easy to remember",
+        clinicCodeTip3: "This is not your password — you can share it with patients",
+        clinicCodePlaceholder: "e.g. CEM, ELKO, MOON",
+        clinicCodeHint: "Examples: CEM, ELKO, SMILE",
         invitationCode: "Invitation Code",
         invitationCodeOptional: "(Optional)",
         invitationCodeHelp: "If you have a campaign code, enter it to activate your premium trial.",
@@ -3926,6 +3936,16 @@
       },
       login: { title: "Вход в Clinifly Admin", clinicCode: "Код клиники", password: "Пароль", login: "Войти", loading: "Загрузка...", error: "Ошибка входа", invalidCredentials: "Неверный код клиники или пароль.", sessionExpired: "⏰ Срок сессии истёк или токен недействителен. Пожалуйста, войдите снова." },
       auth: { email: "Эл. почта", password: "Пароль", confirm_password: "Подтвердите пароль", name: "Имя и фамилия" },
+      register: {
+        clinicCode: "Код клиники",
+        clinicCodeWhat: "Что такое код клиники?",
+        clinicCodeHelp: "Код клиники — это короткий уникальный символ вашей клиники, как аббревиатура или знак. Вы выбираете его при регистрации; пациенты вводят этот код в приложении, чтобы связаться с вами.",
+        clinicCodeTip1: "3–12 символов; только заглавные буквы и цифры (напр. CEM, ELKO, MOON)",
+        clinicCodeTip2: "Возьмите из названия клиники или придумайте запоминающийся символ",
+        clinicCodeTip3: "Это не ваш пароль — код можно сообщать пациентам",
+        clinicCodePlaceholder: "напр. CEM, ELKO, MOON",
+        clinicCodeHint: "Примеры: CEM, ELKO, SMILE",
+      },
       patients: {
         title: "Clinifly Admin – Пациенты",
         search: "Поиск пациентов...",
@@ -5344,8 +5364,13 @@
         subtitle: "დაიწყეთ რამდენიმე წუთში — ეს უფასოა.",
         clinicCode: "კლინიკის კოდი",
         clinicCodeRequired: "*",
-        clinicCodePlaceholder: "მაგ. MOON, CLINIC01, TBILISI",
-        clinicCodeHelp: "ეს კოდი პაციენტები გამოიყენებენ თქვენს კლინიკასთან დასაკავშირებლად.",
+        clinicCodeWhat: "რა არის კლინიკის კოდი?",
+        clinicCodeHelp: "კლინიკის კოდი — თქვენი კლინიკის მოკლე, უნიკალური სიმბოლოა, როგორც აბრევიატურა ან ნიშანი. რეგისტრაციისას თქვენ ირჩევთ; პაციენტები აპლიკაციაში ამ კოდს შეიყვანენ თქვენთან დასაკავშირებლად.",
+        clinicCodeTip1: "3–12 სიმბოლო; მხოლოდ დიდი ასოები და ციფრები (მაგ. CEM, ELKO, MOON)",
+        clinicCodeTip2: "აირჩიეთ კლინიკის სახელიდან ან ისეთი სიმბოლო, რომელიც ადვილად დაგიმახსოვრდებათ",
+        clinicCodeTip3: "ეს არ არის თქვენი პაროლი — შეგიძლიათ პაციენტებთან გაუზიაროთ",
+        clinicCodePlaceholder: "მაგ. CEM, ELKO, MOON",
+        clinicCodeHint: "მაგალითები: CEM, ELKO, SMILE",
         invitationCode: "მოწვევის კოდი",
         invitationCodeOptional: "(არასავალდებულო)",
         invitationCodeHelp: "თუ გაქვთ კამპანიის კოდი, შეიყვანეთ premium საცდელი პერიოდის გასააქტიურებლად.",
