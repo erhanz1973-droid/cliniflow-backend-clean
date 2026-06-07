@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js?v=202603301"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="successCenter.title">Clinifly Admin – Success Center</title>
+  <script src="/admin-i18n.js?v=39"></script>
+  <link rel="stylesheet" href="/admin-layout.css" />
+  <script>
+    (function () {
+      if (!localStorage.getItem("adminToken") && !localStorage.getItem("admin_token")) {
+        window.location.href = "/admin-login.html";
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --card: #1f2937;
+      --border: rgba(55, 65, 81, 0.6);
+      --muted: #9ca3af;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --accent: #2563eb;
+    }
+    .page { max-width: 980px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card h2 { font-size: 16px; margin: 0 0 4px; }
+    .card .hint { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+    .hero {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 20px;
+      align-items: center;
+    }
+    @media (max-width: 640px) { .hero { grid-template-columns: 1fr; text-align: center; } }
+    .score-ring {
+      width: 96px; height: 96px;
+      border-radius: 50%;
+      border: 5px solid var(--accent);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      font-weight: 800;
+      margin: 0 auto;
+    }
+    .score-ring .pct { font-size: 26px; line-height: 1; }
+    .score-ring .lbl { font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .4px; }
+    .readiness {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.15);
+      color: #93c5fd;
+      margin-top: 8px;
+    }
+    .breakdown {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .check-item {
+      font-size: 13px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #111827;
+      border: 1px solid #374151;
+    }
+    .check-item.done { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35); }
+    .check-item.miss { color: #fca5a5; border-color: rgba(239, 68, 68, 0.25); }
+    .rec-card {
+      border: 1px solid #374151;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: #111827;
+    }
+    .rec-card h3 { margin: 0 0 6px; font-size: 15px; }
+    .rec-card p { margin: 0 0 8px; font-size: 13px; color: #d1d5db; line-height: 1.5; }
+    .rec-card .why { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+    .btn {
+      display: inline-block;
+      padding: 9px 16px;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .btn.secondary { background: #374151; }
+    .campaign-steps { display: flex; flex-direction: column; gap: 8px; }
+    .campaign-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #111827;
+      border: 1px solid #374151;
+      font-size: 13px;
+    }
+    .campaign-step.done { border-color: rgba(16,185,129,.35); }
+    .campaign-step.due { border-color: rgba(245,158,11,.45); }
+    .campaign-step .day {
+      min-width: 52px;
+      font-weight: 700;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .msg {
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #374151;
+      background: #111827;
+      margin-bottom: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .msg.unread { border-color: rgba(37, 99, 235, 0.45); background: rgba(37, 99, 235, 0.08); }
+    .msg-meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+    .all-done { color: var(--ok); font-size: 14px; padding: 12px 0; }
+    .loading { color: var(--muted); padding: 40px; text-align: center; }
+    .err { color: #fca5a5; padding: 12px 0; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1 data-i18n="successCenter.pageTitle">Clinic Success Center</h1>
+    <p class="sub" data-i18n="successCenter.subtitle">
+      Complete your setup to increase visibility and receive more patient inquiries. Follow the recommendations below — like having a success manager on your team.
+    </p>
+
+    <div id="status" class="loading" data-i18n="successCenter.loading">Loading your success plan…</div>
+    <div id="content" style="display:none;"></div>
+  </div>
+
+  <script>
+    function $(id) { return document.getElementById(id); }
+    function t(key, vars) {
+      if (typeof window.t === "function") return window.t(key, vars);
+      return key;
+    }
+    function authHeaders() {
+      var tok = localStorage.getItem("adminToken") || localStorage.getItem("admin_token") || "";
+      return tok ? { Authorization: "Bearer " + tok, Accept: "application/json" } : { Accept: "application/json" };
+    }
+    function api(path) {
+      if (typeof adminFetchUrl === "function") return adminFetchUrl(path);
+      if (typeof apiUrl === "function") return apiUrl(path);
+      return path;
+    }
+    function esc(s) {
+      return s == null ? "" : String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function fmtDate(d) {
+      if (!d) return "—";
+      try { return new Date(d).toLocaleString(); } catch (_) { return d; }
+    }
+    function scoreColor(pct) {
+      if (pct >= 85) return "var(--ok)";
+      if (pct >= 55) return "var(--warn)";
+      return "var(--bad)";
+    }
+    function checklistLabel(id) {
+      var map = {
+        logo: t("successCenter.items.logo"),
+        description: t("successCenter.items.description"),
+        doctors: t("successCenter.items.doctors"),
+        photos: t("successCenter.items.photos"),
+        googleReviews: t("successCenter.items.googleReviews"),
+        facebookReviews: t("successCenter.items.facebookReviews"),
+        socialLinks: t("successCenter.items.socialLinks"),
+        languages: t("successCenter.items.languages"),
+        aiSetup: t("successCenter.items.aiSetup"),
+      };
+      return map[id] || id;
+    }
+    function readinessLabel(key) {
+      var map = {
+        "Ready for inquiries": t("successCenter.readiness.ready"),
+        "Almost there": t("successCenter.readiness.almost"),
+        "Getting started": t("successCenter.readiness.started"),
+        "Needs setup": t("successCenter.readiness.needsSetup"),
+      };
+      return map[key] || key;
+    }
+    function campaignStatusLabel(status) {
+      var map = {
+        completed: t("successCenter.campaign.completed"),
+        due: t("successCenter.campaign.due"),
+        upcoming: t("successCenter.campaign.upcoming"),
+        scheduled: t("successCenter.campaign.scheduled"),
+      };
+      return map[status] || status;
+    }
+
+    var lastData = null;
+
+    function renderBreakdown(breakdown) {
+      return (breakdown || []).map(function (item) {
+        return '<div class="check-item ' + (item.complete ? "done" : "miss") + '">' +
+          (item.complete ? "✓" : "○") + " " + esc(checklistLabel(item.id)) +
+          "</div>";
+      }).join("");
+    }
+
+    function renderRecommendations(recs) {
+      if (!recs || !recs.length) {
+        return '<div class="all-done">' + esc(t("successCenter.allRecommendationsDone")) + "</div>";
+      }
+      return recs.map(function (r) {
+        return '<div class="rec-card">' +
+          "<h3>" + esc(r.title) + "</h3>" +
+          "<p>" + esc(r.message) + "</p>" +
+          (r.whyItMatters ? '<div class="why"><strong>' + esc(t("successCenter.whyItMatters")) + ":</strong> " + esc(r.whyItMatters) + "</div>" : "") +
+          '<a class="btn" href="' + esc(r.actionHref) + '">' + esc(r.actionLabel) + "</a>" +
+          "</div>";
+      }).join("");
+    }
+
+    function renderCampaign(campaign) {
+      if (!campaign || !campaign.steps || !campaign.steps.length) return "";
+      var steps = campaign.steps.map(function (s) {
+        var cls = s.complete ? "done" : s.status === "due" ? "due" : "";
+        return '<div class="campaign-step ' + cls + '">' +
+          '<span class="day">' + esc(t("successCenter.campaign.dayLabel", { day: s.day })) + "</span>" +
+          "<span>" + esc(s.label) + " — " + esc(campaignStatusLabel(s.status)) + "</span>" +
+          "</div>";
+      }).join("");
+      return '<div class="card">' +
+        "<h2>" + esc(t("successCenter.sectionCampaign")) + "</h2>" +
+        '<p class="hint">' + esc(t("successCenter.sectionCampaignHint")) + "</p>" +
+        '<div class="campaign-steps">' + steps + "</div>" +
+        "</div>";
+    }
+
+    function renderMessages(msgs) {
+      if (!msgs || !msgs.length) {
+        return '<div class="empty">' + esc(t("successCenter.noGuidanceYet")) + "</div>";
+      }
+      return msgs.map(function (m) {
+        var unread = !m.read_at;
+        return '<div class="msg ' + (unread ? "unread" : "") + '" data-id="' + esc(m.id) + '">' +
+          esc(m.message) +
+          '<div class="msg-meta">' + esc(m.sent_by || "Clinifly") + " · " + fmtDate(m.created_at) +
+          (unread ? ' · <button type="button" class="btn secondary mark-read" data-id="' + esc(m.id) + '" style="padding:4px 8px;font-size:11px;margin-left:6px;">' + esc(t("successCenter.markRead")) + "</button>" : "") +
+          "</div></div>";
+      }).join("");
+    }
+
+    function render(data) {
+      lastData = data;
+      var pct = data.profileCompletionPercent || 0;
+      $("content").innerHTML =
+        '<div class="card">' +
+          '<div class="hero">' +
+            '<div class="score-ring" style="border-color:' + scoreColor(pct) + '">' +
+              '<div class="pct">' + pct + "%</div>" +
+              '<div class="lbl">' + esc(t("successCenter.profileCompletion")) + "</div>" +
+            "</div>" +
+            "<div>" +
+              "<h2>" + esc(t("successCenter.completionHeading")) + "</h2>" +
+              '<p class="hint">' + esc(t("successCenter.completionHint", { done: data.completedCount, total: data.totalCount })) + "</p>" +
+              '<span class="readiness">' + esc(readinessLabel(data.readinessLabel)) + "</span>" +
+              '<div class="breakdown">' + renderBreakdown(data.breakdown) + "</div>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+
+        (data.guidanceMessages && data.guidanceMessages.length
+          ? '<div class="card"><h2>' + esc(t("successCenter.sectionGuidance")) + "</h2>" +
+            '<p class="hint">' + esc(t("successCenter.sectionGuidanceHint")) + "</p>" +
+            renderMessages(data.guidanceMessages) + "</div>"
+          : "") +
+
+        '<div class="card"><h2>' + esc(t("successCenter.sectionRecommendations")) + "</h2>" +
+          '<p class="hint">' + esc(t("successCenter.sectionRecommendationsHint")) + "</p>" +
+          renderRecommendations(data.recommendations) + "</div>" +
+
+        renderCampaign(data.onboardingCampaign);
+
+      $("content").style.display = "block";
+      $("status").style.display = "none";
+
+      $("content").querySelectorAll(".mark-read").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          markRead(btn.getAttribute("data-id"));
+        });
+      });
+    }
+
+    async function markRead(messageId) {
+      try {
+        await fetch(api("/api/admin/success-center/messages/" + encodeURIComponent(messageId) + "/read"), {
+          method: "PATCH",
+          headers: authHeaders(),
+        });
+        load();
+      } catch (_) {}
+    }
+
+    async function load() {
+      $("status").style.display = "block";
+      $("status").textContent = t("successCenter.loading");
+      $("content").style.display = "none";
+      try {
+        var res = await fetch(api("/api/admin/success-center"), { headers: authHeaders() });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok || !data.successCenter) {
+          $("status").innerHTML = '<span class="err">' + esc(data.message || data.error || t("successCenter.loadFailed")) + "</span>";
+          return;
+        }
+        render(data.successCenter);
+      } catch (e) {
+        $("status").innerHTML = '<span class="err">' + esc(t("successCenter.loadFailed")) + "</span>";
+      }
+    }
+
+    document.addEventListener("admin-language-changed", function () {
+      if (lastData) render(lastData);
+    });
+    load();
+  </script>
+  <script src="/admin-layout.js"></script>
+</body>
+</html>

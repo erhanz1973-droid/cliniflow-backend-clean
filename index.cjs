@@ -64246,6 +64246,13 @@ registerClinicMarketplaceAdminRoutes(app, {
   clearClinicCache,
 });
 
+const { registerClinicSuccessCenterRoutes } = require("./lib/clinicSuccessCenter");
+registerClinicSuccessCenterRoutes(app, {
+  supabase,
+  requireAdminAuth,
+  superAdminGuard,
+});
+
 registerClinicInvitationRoutes(app, { requireAdminAuth });
 
 const { registerTreatmentProposalAdminRoutes } = require("./lib/treatmentProposalAdminRoutes");

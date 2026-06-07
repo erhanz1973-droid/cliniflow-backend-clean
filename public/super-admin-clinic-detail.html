@@ -94,6 +94,7 @@ const API = typeof cliniflowApiBase === "function" ? cliniflowApiBase() : "";
 const params = new URLSearchParams(location.search);
 const clinicId = params.get("id") || params.get("clinicId") || "";
 let dash = null;
+let successCenter = null;
 
 function token(){ try{return localStorage.getItem("super_admin_token")||"";}catch{return "";} }
 function authH(extra={}){ return {...(token()?{Authorization:"Bearer "+token()}:{}),...extra}; }
@@ -113,6 +114,16 @@ function checklistHtml(checklist){
   }).join("");
 }
 
+function successBreakdownHtml(breakdown){
+  if(!breakdown||!breakdown.length) return "<div class='check miss'>No success data</div>";
+  return breakdown.map(item=>`<div class="check ${item.complete?"done":"miss"}">${item.complete?"✓":"✗"} ${esc(item.label||item.id)}</div>`).join("");
+}
+
+function successRecommendationsHtml(recs){
+  if(!recs||!recs.length) return "<div style='font-size:12px;color:var(--ok)'>Profile complete — no open recommendations.</div>";
+  return recs.slice(0,4).map(r=>`<div style="font-size:12px;padding:6px 0;border-bottom:1px solid rgba(42,58,85,.35)"><strong>${esc(r.title)}</strong><br><span style="color:var(--muted)">${esc(r.message)}</span></div>`).join("");
+}
+
 function trainingHtml(sources){
   const labels={clinicInformation:"Clinic information",treatments:"Treatments",faqs:"FAQs",uploadedDocuments:"Uploaded documents",websiteImported:"Website imported",manualKnowledgeBase:"Manual knowledge base"};
   return Object.entries(labels).map(([k,l])=>{
@@ -121,7 +132,7 @@ function trainingHtml(sources){
   }).join("");
 }
 
-function render(d){
+function render(d, successCenter){
   const s=d.summary||{};
   const c=d.clinic||{};
   const comm=d.communication||{};
@@ -131,6 +142,7 @@ function render(d){
   const act=d.activity||{};
   const intl=d.international||{};
   const alerts=d.alerts||[];
+  const sc=successCenter||{};
 
   document.getElementById("pageTitle").textContent = c.name ? c.name + " — Cockpit" : "Clinic Cockpit";
 
@@ -213,6 +225,31 @@ function render(d){
       </div>
 
       <div class="card span-12">
+        <h2>Success Center &amp; Guidance</h2>
+        <div class="grid" style="gap:12px">
+          <div class="span-4" style="grid-column:span 4">
+            ${pctBar(sc.profileCompletionPercent||0)}
+            <div style="font-size:13px;font-weight:700;margin-bottom:8px">Profile completion</div>
+            <div class="checklist">${successBreakdownHtml(sc.breakdown)}</div>
+          </div>
+          <div class="span-4" style="grid-column:span 4">
+            <div style="font-size:13px;font-weight:700;margin-bottom:8px">Top recommendations</div>
+            ${successRecommendationsHtml(sc.recommendations)}
+          </div>
+          <div class="span-4" style="grid-column:span 4">
+            <label>Send guidance message</label>
+            <textarea id="guidanceMessage" placeholder="Your profile is 55% complete…">${esc(sc.suggestedGuidanceMessage||"")}</textarea>
+            <div class="actions">
+              <button class="btn" type="button" onclick="sendGuidance(false)">Send message</button>
+              <button class="btn ghost" type="button" onclick="sendGuidance(true)">Use suggested text</button>
+            </div>
+            <div id="guidanceStatus" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+            ${(sc.guidanceMessages||[]).length?`<label style="margin-top:12px">Recent messages</label><div class="log">${(sc.guidanceMessages||[]).slice(0,5).map(m=>`<div>${fmtDate(m.created_at)} — ${esc(m.message)}</div>`).join("")}</div>`:""}
+          </div>
+        </div>
+      </div>
+
+      <div class="card span-12">
         <h2>Subscription &amp; Package</h2>
         <div class="grid" style="gap:12px">
           <div class="span-6" style="grid-column:span 6">
@@ -263,12 +300,19 @@ async function load(){
   }
   document.getElementById("content").innerHTML='<div class="loading">Loading operational dashboard…</div>';
   try{
-    const res=await fetch(`${API}/api/super-admin/clinics/${encodeURIComponent(clinicId)}/operational-dashboard`,{headers:authH({Accept:"application/json"})});
-    if(res.status===401){ logout(); return; }
-    const json=await res.json();
-    if(!res.ok||!json.ok||!json.dashboard) throw new Error(json.message||json.error||"Load failed");
+    const [dashRes, scRes]=await Promise.all([
+      fetch(`${API}/api/super-admin/clinics/${encodeURIComponent(clinicId)}/operational-dashboard`,{headers:authH({Accept:"application/json"})}),
+      fetch(`${API}/api/super-admin/clinics/${encodeURIComponent(clinicId)}/success-center`,{headers:authH({Accept:"application/json"})}).catch(()=>null),
+    ]);
+    if(dashRes.status===401){ logout(); return; }
+    const json=await dashRes.json();
+    if(!dashRes.ok||!json.ok||!json.dashboard) throw new Error(json.message||json.error||"Load failed");
     dash=json.dashboard;
-    document.getElementById("content").innerHTML=render(dash);
+    if(scRes&&scRes.ok){
+      const scJson=await scRes.json().catch(()=>({}));
+      successCenter=scJson.successCenter||null;
+    }
+    document.getElementById("content").innerHTML=render(dash, successCenter);
     const planSel=document.getElementById("saPlan");
     if(planSel&&dash.subscription&&dash.subscription.plan){
       const p=String(dash.subscription.plan).toUpperCase();
@@ -311,6 +355,28 @@ async function runAction(action){
 }
 
 function reload(){ load(); }
+
+async function sendGuidance(useSuggested){
+  const statusEl=document.getElementById("guidanceStatus");
+  const ta=document.getElementById("guidanceMessage");
+  if(statusEl) statusEl.textContent="Sending…";
+  try{
+    const body={ useSuggested: !!useSuggested };
+    if(!useSuggested) body.message=ta?.value.trim()||"";
+    const res=await fetch(`${API}/api/super-admin/clinics/${encodeURIComponent(clinicId)}/guidance-message`,{
+      method:"POST",
+      headers:authH({"Content-Type":"application/json"}),
+      body:JSON.stringify(body)
+    });
+    const json=await res.json().catch(()=>({}));
+    if(!res.ok||!json.ok) throw new Error(json.message||json.error||"Send failed");
+    if(statusEl) statusEl.textContent="✓ Guidance message sent";
+    await load();
+  }catch(e){
+    if(statusEl) statusEl.textContent="Error: "+e.message;
+  }
+}
+
 if(checkAuth()) load();
 </script>
 </body>
