@@ -9598,8 +9598,26 @@ app.get("/super-admin.html", (req, res) => {
   const filePath = path.join(__dirname, "public", "super-admin.html");
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
-  } else {
+    } else {
     res.status(404).send("Super Admin Dashboard page not found");
+  }
+});
+
+app.get("/super-admin-clinic-detail.html", (req, res) => {
+  const filePath = path.join(__dirname, "public", "super-admin-clinic-detail.html");
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send("Super Admin clinic detail page not found");
+  }
+});
+
+app.get("/super-admin-analytics.html", (req, res) => {
+  const filePath = path.join(__dirname, "public", "super-admin-analytics.html");
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send("Super Admin analytics page not found");
   }
 });
 
@@ -44886,6 +44904,16 @@ app.patch("/api/super-admin/clinics/:clinicId/subscription", superAdminGuard, as
   } catch (e) {
     return res.status(500).json({ ok: false, error: "internal_error", message: e?.message || "error" });
   }
+});
+
+const {
+  registerSuperAdminClinicDashboardRoutes,
+} = require("./lib/superAdminClinicDashboard");
+registerSuperAdminClinicDashboardRoutes(app, {
+  superAdminGuard,
+  supabase,
+  resolveClinicSubscriptionSnapshot,
+  planToMaxPatients,
 });
 
 // GET /api/super-admin/clinics/:clinicId/statistics

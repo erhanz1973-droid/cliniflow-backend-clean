@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="/api-base.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Clinic Operational Cockpit — Super Admin</title>
+  <style>
+    :root{
+      --bg:#0b1220;--card:#151f32;--card2:#1a2740;--b:#2a3a55;--p:#8b5cf6;--g:#22c55e;--r:#ef4444;
+      --warn:#f59e0b;--muted:#94a3b8;--text:#e2e8f0;--link:#93c5fd;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{max-width:1440px;margin:0 auto;padding:20px}
+    a{color:var(--link);text-decoration:none}
+    .nav{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--b)}
+    .nav h1{margin:0;font-size:20px}
+    .nav-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .btn{border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;background:var(--p);color:#fff}
+    .btn.ghost{background:transparent;border:1px solid var(--b);color:var(--muted)}
+    .btn.warn{background:#b45309}
+    .btn.ok{background:#15803d}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+
+    .hero{display:grid;grid-template-columns:140px 1fr;gap:20px;align-items:center;background:linear-gradient(135deg,#1e293b,#111827);border:1px solid var(--b);border-radius:16px;padding:20px;margin-bottom:18px}
+    @media(max-width:720px){.hero{grid-template-columns:1fr;text-align:center}}
+    .score-ring{width:120px;height:120px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-direction:column;border:6px solid var(--p);margin:0 auto}
+    .score-ring .num{font-size:34px;font-weight:800;line-height:1}
+    .score-ring .lbl{font-size:11px;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+    .hero-title{font-size:26px;font-weight:800;margin:0 0 6px}
+    .hero-meta{color:var(--muted);font-size:13px;margin-bottom:12px}
+    .pill-row{display:flex;flex-wrap:wrap;gap:8px}
+    .pill{font-size:12px;font-weight:700;padding:6px 10px;border-radius:999px;border:1px solid var(--b);background:var(--card2)}
+    .pill.ok{border-color:rgba(34,197,94,.4);color:#86efac;background:rgba(34,197,94,.12)}
+    .pill.bad{border-color:rgba(239,68,68,.4);color:#fca5a5;background:rgba(239,68,68,.12)}
+    .pill.warn{border-color:rgba(245,158,11,.4);color:#fde68a;background:rgba(245,158,11,.12)}
+
+    .alerts{display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+    .alert{padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600;border:1px solid var(--b);background:var(--card)}
+    .alert.warn{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08);color:#fde68a}
+    .alert.info{border-color:rgba(147,197,253,.25);background:rgba(59,130,246,.08);color:#bfdbfe}
+
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}
+    .card{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:16px}
+    .card h2{margin:0 0 12px;font-size:14px;text-transform:uppercase;letter-spacing:.6px;color:var(--p)}
+    .span-4{grid-column:span 4}.span-6{grid-column:span 6}.span-8{grid-column:span 8}.span-12{grid-column:span 12}
+    @media(max-width:980px){.span-4,.span-6,.span-8{grid-column:span 12}}
+
+    .kv{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:13px;padding:6px 0;border-bottom:1px solid rgba(42,58,85,.5)}
+    .kv:last-child{border-bottom:none}
+    .kv .k{color:var(--muted)}
+    .kv .v{font-weight:600;text-align:right}
+    .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .stat{background:var(--card2);border-radius:10px;padding:12px;text-align:center}
+    .stat .n{font-size:22px;font-weight:800}
+    .stat .l{font-size:11px;color:var(--muted);margin-top:4px;text-transform:uppercase}
+
+    .checklist{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .check{font-size:12px;padding:6px 8px;border-radius:8px;background:var(--card2)}
+    .check.done{color:#86efac}.check.miss{color:#fca5a5}
+    .progress{height:8px;background:#0f172a;border-radius:999px;overflow:hidden;margin:8px 0 12px}
+    .progress>i{display:block;height:100%;background:linear-gradient(90deg,var(--p),#6366f1);border-radius:999px}
+
+    .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .actions .btn{font-size:12px;padding:7px 12px}
+    textarea,input,select{width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--b);background:#0f172a;color:var(--text);font:inherit;font-size:13px}
+    textarea{min-height:72px;resize:vertical}
+    label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;display:block;margin:10px 0 4px}
+    .log{font-size:12px;color:var(--muted);max-height:120px;overflow:auto}
+    .log div{padding:4px 0;border-bottom:1px solid rgba(42,58,85,.35)}
+    .loading{padding:60px;text-align:center;color:var(--muted)}
+    .err{color:#fca5a5;padding:20px;text-align:center}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <div>
+      <a href="/super-admin.html">← Clinics</a>
+      <h1 id="pageTitle">Clinic Cockpit</h1>
+    </div>
+    <div class="nav-actions">
+      <button class="btn ghost" type="button" onclick="reload()">↻ Refresh</button>
+      <button class="btn ghost" type="button" onclick="logout()">Logout</button>
+    </div>
+  </nav>
+
+  <div id="content"><div class="loading">Loading operational dashboard…</div></div>
+</div>
+
+<script>
+const API = typeof cliniflowApiBase === "function" ? cliniflowApiBase() : "";
+const params = new URLSearchParams(location.search);
+const clinicId = params.get("id") || params.get("clinicId") || "";
+let dash = null;
+
+function token(){ try{return localStorage.getItem("super_admin_token")||"";}catch{return "";} }
+function authH(extra={}){ return {...(token()?{Authorization:"Bearer "+token()}:{}),...extra}; }
+function checkAuth(){ if(!token()){ location.href="/super-admin-login.html"; return false; } return true; }
+function logout(){ localStorage.removeItem("super_admin_token"); location.href="/super-admin-login.html"; }
+function esc(s){ return s==null?"":String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function fmtDate(d){ if(!d) return "—"; try{return new Date(d).toLocaleString();}catch{return d;} }
+function yesNo(v){ return v?'<span class="pill ok">Yes</span>':'<span class="pill bad">No</span>'; }
+function connBadge(v){ return v?'<span class="pill ok">Connected</span>':'<span class="pill bad">Not Connected</span>'; }
+function pctBar(n){ n=Math.max(0,Math.min(100,Number(n)||0)); return `<div class="progress"><i style="width:${n}%"></i></div><div style="font-size:12px;color:var(--muted)">${n}%</div>`; }
+
+function checklistHtml(checklist){
+  const labels={logo:"Logo",description:"Description",doctors:"Doctors",photos:"Photos",specialties:"Specialties",languages:"Languages",googleReviews:"Google Reviews",socialLinks:"Social Links"};
+  return Object.entries(labels).map(([k,l])=>{
+    const ok=checklist&&checklist[k];
+    return `<div class="check ${ok?"done":"miss"}">${ok?"✓":"✗"} ${l}</div>`;
+  }).join("");
+}
+
+function trainingHtml(sources){
+  const labels={clinicInformation:"Clinic information",treatments:"Treatments",faqs:"FAQs",uploadedDocuments:"Uploaded documents",websiteImported:"Website imported",manualKnowledgeBase:"Manual knowledge base"};
+  return Object.entries(labels).map(([k,l])=>{
+    const ok=sources&&sources[k];
+    return `<div class="check ${ok?"done":"miss"}">${ok?"✓":"✗"} ${l}</div>`;
+  }).join("");
+}
+
+function render(d){
+  const s=d.summary||{};
+  const c=d.clinic||{};
+  const comm=d.communication||{};
+  const ai=d.ai||{};
+  const mp=d.marketplace||{};
+  const sub=d.subscription||{};
+  const act=d.activity||{};
+  const intl=d.international||{};
+  const alerts=d.alerts||[];
+
+  document.getElementById("pageTitle").textContent = c.name ? c.name + " — Cockpit" : "Clinic Cockpit";
+
+  const alertHtml = alerts.length
+    ? `<div class="alerts">${alerts.map(a=>`<div class="alert ${a.severity==="warn"?"warn":"info"}">${esc(a.message)}</div>`).join("")}</div>`
+    : `<div class="alerts"><div class="alert info" style="border-color:rgba(34,197,94,.3);color:#86efac">No critical alerts — clinic looks healthy.</div></div>`;
+
+  return `
+    <section class="hero">
+      <div class="score-ring" style="border-color:${s.healthScore>=70?"var(--g)":s.healthScore>=40?"var(--warn)":"var(--r)"}">
+        <div class="num">${s.healthScore??0}</div>
+        <div class="lbl">${esc(s.healthLabel||"Score")}</div>
+      </div>
+      <div>
+        <h2 class="hero-title">${esc(c.name||"Clinic")}</h2>
+        <div class="hero-meta">${esc(c.clinicCode||"")} · ${esc(c.city||"—")}, ${esc(c.country||"")} · ${esc(sub.package||"Free")} · ${esc(c.status||"")}</div>
+        <div class="pill-row">
+          <span class="pill ${s.fullyConfigured?"ok":"warn"}">${s.fullyConfigured?"Fully configured":"Setup incomplete"}</span>
+          <span class="pill ${s.aiReady?"ok":"bad"}">AI ${s.aiReady?"ready":"not ready"}</span>
+          <span class="pill ${s.channelsConnected?"ok":"bad"}">Channels ${s.channelsConnected?"connected":"missing"}</span>
+          <span class="pill ${s.activelyUsing?"ok":"warn"}">${s.activelyUsing?"Active usage":"Low activity"}</span>
+        </div>
+      </div>
+    </section>
+
+    ${alertHtml}
+
+    <div class="grid">
+      <div class="card span-4">
+        <h2>Communication Status</h2>
+        <div class="kv"><span class="k">WhatsApp</span><span class="v">${connBadge(comm.whatsapp&&comm.whatsapp.connected)}</span></div>
+        <div class="kv"><span class="k">WA last message</span><span class="v">${fmtDate(comm.whatsapp&&comm.whatsapp.lastMessageAt)}</span></div>
+        <div class="kv"><span class="k">WA AI enabled</span><span class="v">${yesNo(comm.whatsapp&&comm.whatsapp.aiEnabled)}</span></div>
+        <div class="kv"><span class="k">Messenger</span><span class="v">${connBadge(comm.messenger&&comm.messenger.connected)}</span></div>
+        <div class="kv"><span class="k">Messenger last message</span><span class="v">${fmtDate(comm.messenger&&comm.messenger.lastMessageAt)}</span></div>
+        <div class="kv"><span class="k">Messenger AI enabled</span><span class="v">${yesNo(comm.messenger&&comm.messenger.aiEnabled)}</span></div>
+        <div class="kv"><span class="k">Clinifly Chat</span><span class="v">${comm.cliniflyChat&&comm.cliniflyChat.enabled?'<span class="pill ok">Enabled</span>':'<span class="pill bad">Disabled</span>'}</span></div>
+        <div class="kv"><span class="k">Chat last message</span><span class="v">${fmtDate(comm.cliniflyChat&&comm.cliniflyChat.lastMessageAt)}</span></div>
+      </div>
+
+      <div class="card span-4">
+        <h2>AI Assistant Status</h2>
+        <div class="kv"><span class="k">AI Enabled</span><span class="v">${yesNo(ai.enabled)}</span></div>
+        <div class="kv"><span class="k">Reply mode</span><span class="v">${esc(ai.replyMode||"—")}</span></div>
+        ${pctBar(ai.trainingProgress)}
+        <div class="checklist">${trainingHtml(ai.trainingSources)}</div>
+        <div class="kv"><span class="k">Last AI training</span><span class="v">${fmtDate(ai.lastTrainingDate)}</span></div>
+        <div class="kv"><span class="k">AI conversations</span><span class="v">${ai.conversationCount??0}</span></div>
+      </div>
+
+      <div class="card span-4">
+        <h2>Marketplace Profile</h2>
+        ${pctBar(mp.completionPercent)}
+        <div class="checklist">${checklistHtml(mp.checklist)}</div>
+        <div class="kv"><span class="k">Listed</span><span class="v">${yesNo(mp.isListed)}</span></div>
+        <div class="kv"><span class="k">Verified</span><span class="v">${yesNo(mp.isVerified)}</span></div>
+      </div>
+
+      <div class="card span-6">
+        <h2>Clinic Activity</h2>
+        <div class="stat-grid">
+          <div class="stat"><div class="n">${act.patients??0}</div><div class="l">Patients</div></div>
+          <div class="stat"><div class="n">${act.doctors??0}</div><div class="l">Doctors</div></div>
+          <div class="stat"><div class="n">${act.appointments??0}</div><div class="l">Appointments</div></div>
+          <div class="stat"><div class="n">${act.messages??0}</div><div class="l">Messages</div></div>
+          <div class="stat"><div class="n">${act.offersSent??0}</div><div class="l">Offers sent</div></div>
+          <div class="stat"><div class="n">${act.activeUsers??0}</div><div class="l">Active users</div></div>
+        </div>
+      </div>
+
+      <div class="card span-6">
+        <h2>International Patient Readiness</h2>
+        <div class="kv"><span class="k">Languages configured</span><span class="v">${esc((intl.languagesConfigured||[]).join(", ")||"—")}</span></div>
+        <div class="kv"><span class="k">AI languages supported</span><span class="v">${esc((intl.aiLanguagesSupported||[]).join(", ")||"—")}</span></div>
+        <div class="kv"><span class="k">Dental tourism enabled</span><span class="v">${yesNo(intl.dentalTourismEnabled)}</span></div>
+        <div class="kv"><span class="k">Contact</span><span class="v">${esc(c.contactName||"—")}</span></div>
+        <div class="kv"><span class="k">Phone / Email</span><span class="v">${esc(c.phone||"—")} · ${esc(c.email||"—")}</span></div>
+        <div class="kv"><span class="k">CRM status</span><span class="v">${esc(c.crmStatus||"—")}</span></div>
+        <div class="kv"><span class="k">Last contact</span><span class="v">${fmtDate(c.lastContactAt)}</span></div>
+      </div>
+
+      <div class="card span-12">
+        <h2>Subscription &amp; Package</h2>
+        <div class="grid" style="gap:12px">
+          <div class="span-6" style="grid-column:span 6">
+            <div class="kv"><span class="k">Current package</span><span class="v">${esc(sub.package||"Free")}</span></div>
+            <div class="kv"><span class="k">Plan code</span><span class="v">${esc(sub.plan||"FREE")}</span></div>
+            <div class="kv"><span class="k">Status</span><span class="v">${esc(sub.status||"—")}</span></div>
+            <div class="kv"><span class="k">Trial ends</span><span class="v">${fmtDate(sub.trialEndsAt)}</span></div>
+            <div class="kv"><span class="k">Plan expiry</span><span class="v">${fmtDate(sub.planExpiry)}</span></div>
+            <div class="kv"><span class="k">Max patients</span><span class="v">${sub.maxPatients==null?"Unlimited":esc(sub.maxPatients)}</span></div>
+          </div>
+          <div class="span-6" style="grid-column:span 6">
+            <label>Super Admin notes</label>
+            <textarea id="saNotes" placeholder="Granted 3 months Professional plan">${esc(sub.superAdminNotes||"")}</textarea>
+            <label>Action days (extend / trial)</label>
+            <input id="saDays" type="number" min="1" value="90" />
+            <label>Target plan (optional)</label>
+            <select id="saPlan">
+              <option value="">Keep current</option>
+              <option value="FREE">Free</option>
+              <option value="BASIC">Starter</option>
+              <option value="PRO">Professional</option>
+              <option value="PREMIUM">Enterprise</option>
+            </select>
+            <div class="actions">
+              <button class="btn" type="button" onclick="runAction('upgrade')">Upgrade</button>
+              <button class="btn ghost" type="button" onclick="runAction('downgrade')">Downgrade</button>
+              <button class="btn" type="button" onclick="runAction('extend')">Extend</button>
+              <button class="btn warn" type="button" onclick="runAction('grant_temporary')">Grant temporary access</button>
+              <button class="btn ok" type="button" onclick="runAction('add_bonus')">Add bonus features</button>
+              <button class="btn ghost" type="button" onclick="runAction('remove_limits')">Remove limits</button>
+            </div>
+            <div id="actionStatus" style="margin-top:10px;font-size:13px;color:var(--muted)"></div>
+            <label style="margin-top:14px">Activity log</label>
+            <div class="log" id="subLog">${(sub.activityLog||[]).map(e=>`<div>${fmtDate(e.at)} — ${esc(e.message||"")}</div>`).join("")||"<div>No subscription actions yet.</div>"}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function load(){
+  if(!checkAuth()) return;
+  if(!clinicId){
+    document.getElementById("content").innerHTML='<div class="err">Missing clinic id. Open from <a href="/super-admin.html">clinic list</a>.</div>';
+    return;
+  }
+  document.getElementById("content").innerHTML='<div class="loading">Loading operational dashboard…</div>';
+  try{
+    const res=await fetch(`${API}/api/super-admin/clinics/${encodeURIComponent(clinicId)}/operational-dashboard`,{headers:authH({Accept:"application/json"})});
+    if(res.status===401){ logout(); return; }
+    const json=await res.json();
+    if(!res.ok||!json.ok||!json.dashboard) throw new Error(json.message||json.error||"Load failed");
+    dash=json.dashboard;
+    document.getElementById("content").innerHTML=render(dash);
+  }catch(e){
+    document.getElementById("content").innerHTML=`<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
+async function runAction(action){
+  const notes=document.getElementById("saNotes")?.value.trim()||"";
+  const days=Number(document.getElementById("saDays")?.value||90);
+  const plan=document.getElementById("saPlan")?.value||"";
+  const statusEl=document.getElementById("actionStatus");
+  if(statusEl) statusEl.textContent="Applying…";
+  try{
+    const body={action,notes,days};
+    if(plan) body.plan=plan;
+    if(action==="add_bonus") body.bonusModules=["priority_support","extended_ai"];
+    const res=await fetch(`${API}/api/super-admin/clinics/${encodeURIComponent(clinicId)}/operational-actions`,{
+      method:"POST",
+      headers:authH({"Content-Type":"application/json"}),
+      body:JSON.stringify(body)
+    });
+    const json=await res.json();
+    if(!res.ok||!json.ok) throw new Error(json.message||json.error||"Action failed");
+    if(statusEl) statusEl.textContent="✓ Action applied";
+    await load();
+  }catch(e){
+    if(statusEl) statusEl.textContent="Error: "+e.message;
+  }
+}
+
+function reload(){ load(); }
+if(checkAuth()) load();
+</script>
+</body>
+</html>

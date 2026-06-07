@@ -1,10 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <script src="/api-base.js?v=202605185"></script>
-  <script src="/i18n.js"></script>
-  <script src="/auth-field-labels.js?v=2"></script>
+  <script src="/api-base.js?v=202603301"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Clinifly Super Admin – Login</title>
   <style>
@@ -58,12 +56,12 @@
     .form-group{
       margin-bottom:20px;
     }
-    .field-label-muted{
+    label{
       display:block;
-      font-size:13px;
-      font-weight:500;
-      color:#94a3b8;
-      margin-bottom:6px;
+      font-size:14px;
+      font-weight:600;
+      color:#e6eaf2;
+      margin-bottom:8px;
     }
     .required{
       color:var(--r);
@@ -82,6 +80,9 @@
     input:focus{
       outline:none;
       border-color:var(--p);
+    }
+    input::placeholder{
+      color:#6b7280;
     }
     .help-text{
       font-size:12px;
@@ -145,8 +146,8 @@
 <body>
   <div class="container">
     <div class="header">
-      <h1 data-auth-i18n="super_admin.title">🔐 Super Admin Login</h1>
-      <p class="subtitle" data-auth-i18n="super_admin.subtitle">System administrator access</p>
+      <h1>🔐 Super Admin Login</h1>
+      <p class="subtitle">Sistem yöneticisi girişi</p>
     </div>
 
     <div id="alert-container"></div>
@@ -154,61 +155,49 @@
     <div class="form-container">
       <form id="login-form">
         <div class="form-group">
-          <label class="field-label-muted" for="email">
-            <span data-i18n-label="auth.email"></span> <span class="required">*</span>
+          <label>
+            Email <span class="required">*</span>
           </label>
           <input
             type="email"
             id="email"
             name="email"
-            autocomplete="email"
-            inputmode="email"
+            placeholder="superadmin@clinifly.net"
             required
             autofocus
           />
-          <div class="help-text"><span data-i18n-label="patient.super_admin.help_email"></span></div>
+          <div class="help-text">Super admin email adresi</div>
         </div>
 
         <div class="form-group">
-          <label class="field-label-muted" for="password">
-            <span data-i18n-label="auth.password"></span> <span class="required">*</span>
+          <label>
+            Password <span class="required">*</span>
           </label>
           <input
             type="password"
             id="password"
             name="password"
-            autocomplete="current-password"
+            autocomplete="off"
             required
           />
-          <div class="help-text"><span data-i18n-label="patient.super_admin.help_password"></span></div>
+          <div class="help-text">Super admin şifresi</div>
         </div>
 
-        <button type="submit" class="btn btn-primary" id="submit-btn" data-auth-i18n="super_admin.btn_login">
-          Log in
+        <button type="submit" class="btn btn-primary" id="submit-btn">
+          Login
         </button>
+        <div id="v4u9qz" style="text-align:center;margin-top:14px;">
+          <a href="/super-admin-forgot.html"
+             style="color:#8b5cf6;font-size:14px;text-decoration:none;">
+            Şifremi unuttum
+          </a>
+        </div>
       </form>
     </div>
   </div>
 
 <script>
-  const PRODUCTION_API = 'https://cliniflow-backend-clean-production.up.railway.app';
-  const _superLoginApi =
-    typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app';
-  const API =
-    _superLoginApi && /^https?:\/\//i.test(String(_superLoginApi))
-      ? String(_superLoginApi).replace(/\/+$/, '')
-      : PRODUCTION_API;
-  if (!_superLoginApi || !/^https?:\/\//i.test(String(_superLoginApi))) {
-    try {
-      console.error('[SUPER-ADMIN LOGIN] API origin missing or invalid — using production:', API);
-    } catch (_) {}
-  }
-
-  function L(key) {
-    return typeof cliniflowAuthLabel === "function"
-      ? cliniflowAuthLabel(key)
-      : key;
-  }
+  const API = typeof cliniflowApiBase === 'function' ? cliniflowApiBase() : '';
   
   function setMsg(msg, type = "ok") {
     const container = document.getElementById("alert-container");
@@ -216,11 +205,6 @@
     setTimeout(() => {
       container.innerHTML = "";
     }, 5000);
-  }
-
-  function resetSubmitBtn(btn) {
-    btn.disabled = false;
-    btn.textContent = L("super_admin.btn_login");
   }
 
   document.getElementById("login-form").addEventListener("submit", async (e) => {
@@ -231,17 +215,17 @@
     const password = document.getElementById("password").value;
     
     if (!email) {
-      setMsg(L("super_admin.err_email_required"), "error");
+      setMsg("Email gereklidir.", "error");
       return;
     }
     
     if (!password) {
-      setMsg(L("super_admin.err_password_required"), "error");
+      setMsg("Şifre gereklidir.", "error");
       return;
     }
     
     submitBtn.disabled = true;
-    submitBtn.textContent = L("super_admin.btn_loading");
+    submitBtn.textContent = "Giriş yapılıyor...";
     
     try {
       const res = await fetch(`${API}/api/super-admin/login`, {
@@ -253,39 +237,37 @@
       const json = await res.json();
       
       if (!res.ok) {
-        let errorMsg = json.message || json.error || L("super_admin.err_login_failed");
+        let errorMsg = json.message || json.error || "Giriş başarısız";
         if (json.error === "invalid_credentials") {
-          errorMsg = L("super_admin.err_invalid_credentials");
+          errorMsg = "Geçersiz email veya şifre";
         } else if (json.error === "missing_credentials") {
-          errorMsg = L("super_admin.err_missing_credentials");
+          errorMsg = "Email ve şifre gereklidir";
         } else if (json.error === "configuration_error") {
-          errorMsg = L("super_admin.err_configuration");
+          errorMsg = "Super admin yapılandırılmamış";
         }
         setMsg(errorMsg, "error");
-        resetSubmitBtn(submitBtn);
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Login";
         return;
       }
       
       if (json.ok && json.token) {
         localStorage.setItem("super_admin_token", json.token);
-        setMsg(L("super_admin.success_redirect"), "success");
+        setMsg("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
         
         setTimeout(() => {
           window.location.href = "/super-admin.html";
         }, 1000);
       } else {
-        setMsg(L("super_admin.err_login_failed"), "error");
-        resetSubmitBtn(submitBtn);
+        setMsg("Giriş başarısız", "error");
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Login";
       }
     } catch (error) {
       console.error("Login error:", error);
-      setMsg(
-        L("super_admin.err_network") +
-          " " +
-          (error && error.message ? error.message : L("super_admin.err_unknown")),
-        "error"
-      );
-      resetSubmitBtn(submitBtn);
+      setMsg("Bağlantı hatası: " + (error.message || "Bilinmeyen hata"), "error");
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Login";
     }
   });
 
