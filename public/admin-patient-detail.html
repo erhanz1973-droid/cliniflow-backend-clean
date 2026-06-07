@@ -197,6 +197,27 @@
       color: var(--text);
       font-weight: 600;
     }
+    .display-name-card {
+      margin-top: 16px;
+      padding: 16px 18px;
+      border: 1px solid var(--b);
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+    .display-name-card h3 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .display-name-source {
+      font-size: 14px;
+      color: var(--text-soft);
+      margin-bottom: 12px;
+    }
+    .display-name-source strong { color: var(--text); }
+    .display-name-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; align-items: center; }
+    .display-name-status { font-size: 13px; color: var(--g); }
 
     .treatment-groups-section {
       background: var(--card);
@@ -717,6 +738,20 @@
             </div>
           </div>
 
+          <div class="display-name-card" id="displayNameCard">
+            <h3>Display name</h3>
+            <p class="display-name-source">Current source name: <strong id="externalNameValue">—</strong></p>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label" for="displayNameOverrideInput">Display name</label>
+              <input type="text" id="displayNameOverrideInput" class="form-input" maxlength="120" placeholder="Enter a name your team will recognize" />
+            </div>
+            <div class="display-name-actions">
+              <button type="button" class="btn btn-primary" id="saveDisplayNameBtn">Save</button>
+              <button type="button" class="btn btn-secondary" id="resetDisplayNameBtn">Reset to source name</button>
+              <span id="displayNameSaveStatus" class="display-name-status"></span>
+            </div>
+          </div>
+
           <div class="info-grid">
             <div class="info-item">
               <div class="info-label">Klinik Kodu</div>
@@ -968,7 +1003,18 @@
     function displayPatientDetails() {
       if (!currentPatient) return;
 
-      document.getElementById('patientName').textContent = currentPatient.name || '-';
+      const displayName = currentPatient.displayName || currentPatient.name || '-';
+      document.getElementById('patientName').textContent = displayName;
+      const extEl = document.getElementById('externalNameValue');
+      const overrideInput = document.getElementById('displayNameOverrideInput');
+      if (extEl) {
+        extEl.textContent = currentPatient.externalName || currentPatient.external_name || currentPatient.name || '—';
+      }
+      if (overrideInput) {
+        overrideInput.value = currentPatient.displayNameOverride || currentPatient.display_name_override || '';
+      }
+      const statusEl = document.getElementById('displayNameSaveStatus');
+      if (statusEl) statusEl.textContent = '';
       document.getElementById('patientId').textContent = `ID: ${currentPatient.patient_id || currentPatient.id || '-'}`;
       document.getElementById('patientPhone').textContent = `📱 ${currentPatient.phone || '-'}`;
       document.getElementById('patientEmail').textContent = `📧 ${currentPatient.email || '-'}`;
@@ -1520,9 +1566,38 @@
       `;
     }
 
+    async function savePatientDisplayName(reset) {
+      if (!currentPatient?.id) return;
+      const statusEl = document.getElementById('displayNameSaveStatus');
+      const inputEl = document.getElementById('displayNameOverrideInput');
+      try {
+        const body = reset ? { reset: true } : { displayNameOverride: inputEl ? inputEl.value : '' };
+        const response = await fetch(`/api/admin/patients/${currentPatient.id}/display-name`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${getAdminToken()}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Save failed');
+        currentPatient.displayName = data.displayName;
+        currentPatient.displayNameOverride = data.displayNameOverride;
+        currentPatient.externalName = data.externalName;
+        currentPatient.name = data.displayName;
+        displayPatientDetails();
+        if (statusEl) statusEl.textContent = reset ? 'Reset to source name.' : 'Display name saved.';
+      } catch (err) {
+        if (statusEl) statusEl.textContent = String(err.message || err);
+      }
+    }
+
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
       loadPatientDetails();
+      document.getElementById('saveDisplayNameBtn')?.addEventListener('click', () => savePatientDisplayName(false));
+      document.getElementById('resetDisplayNameBtn')?.addEventListener('click', () => savePatientDisplayName(true));
       
       // Check for tab parameter in URL
       const urlParams = new URLSearchParams(window.location.search);

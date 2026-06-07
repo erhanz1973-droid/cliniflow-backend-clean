@@ -5491,18 +5491,9 @@ function resolveHumanChatPushPreview(opts, insertedRow) {
 /** Sync display label from a patients row (thread-summary, push, inbox). */
 function patientRowDisplayName(row) {
   if (!row || typeof row !== "object") return null;
-  const { normalizePatientDisplayName } = require("./lib/patientNameSync");
-  const full = normalizePatientDisplayName(row.full_name);
-  if (full) return full.slice(0, 120);
-  const name = normalizePatientDisplayName(row.name);
-  if (name) return name.slice(0, 120);
-  const joined = normalizePatientDisplayName(
-    [row.first_name, row.last_name]
-      .map((x) => String(x || "").trim())
-      .filter(Boolean)
-      .join(" "),
-  );
-  if (joined) return joined.slice(0, 120);
+  const { resolvePatientDisplayLabel } = require("./lib/patientNameSync");
+  const label = resolvePatientDisplayLabel(row);
+  if (label) return label.slice(0, 120);
   const phone = String(row.phone || "").replace(/\s+/g, "").trim();
   if (phone.length >= 4) return `…${phone.slice(-4)}`;
   const leg = String(row.patient_id || "").trim();
@@ -5516,7 +5507,7 @@ async function fetchPatientDisplayNameForPush(resolvedPatientId) {
   try {
     const { data } = await supabase
       .from("patients")
-      .select("full_name, name, first_name, last_name, phone, patient_id, clinic_id")
+      .select("full_name, name, first_name, last_name, phone, patient_id, clinic_id, external_name, display_name_override")
       .eq("id", pid)
       .maybeSingle();
     let label = patientRowDisplayName(data);
@@ -5557,15 +5548,21 @@ async function resolveInboxPatientDisplayNames(clinicId, patientRows, opts = {})
 
   try {
     const { enrichPatientDisplayNamesForInbox } = require("./lib/omnichannel/channelIdentity");
+    const { normalizePatientDisplayName: normName } = require("./lib/patientNameSync");
     const refresh = opts.refresh === true || String(opts.refresh || "") === "1";
+    const needEnrich = [...byId.entries()].filter(([, row]) => {
+      const override = normName(row?.display_name_override);
+      return !override;
+    });
     const enriched = await enrichPatientDisplayNamesForInbox(
       cid,
-      [...byId.keys()],
-      { maxGraphSync: refresh ? 12 : Math.min(12, Math.max(4, byId.size)) },
+      needEnrich.map(([k]) => k),
+      { maxGraphSync: refresh ? 12 : Math.min(12, Math.max(4, needEnrich.length)) },
     );
     for (const [pidKey, label] of enriched.entries()) {
       const row = byId.get(pidKey);
-      const resolved = patientRowDisplayName({ ...(row || {}), name: label, full_name: label }) || label;
+      if (normName(row?.display_name_override)) continue;
+      const resolved = patientRowDisplayName({ ...(row || {}), name: label, full_name: label, external_name: row?.external_name || label }) || label;
       if (resolved) {
         const origId = String(row?.id || pidKey).trim();
         out.set(origId, resolved);
@@ -16467,12 +16464,17 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
 
     console.log("[ADMIN PATIENTS] fetched", patients.length, "of", total, "patients in", Date.now() - t0, "ms");
 
+    const { resolvePatientDisplayLabel } = require("./lib/patientNameSync");
     const normalized = (patients || []).map((p) => {
       const createdAt = p.created_at ? new Date(p.created_at).getTime() : (p.createdAt || 0);
+      const displayName = resolvePatientDisplayLabel(p) || p.name || "";
       return {
         id: p.id,
         patient_id: p.patient_id,
-        name: p.name || "",
+        name: displayName,
+        displayName,
+        externalName: p.external_name || null,
+        displayNameOverride: p.display_name_override || null,
         phone: p.phone || "",
         status: p.status,
         is_lead: p.is_lead === true,
@@ -16488,6 +16490,7 @@ app.get("/api/admin/patients", requireAdminAuth, async (req, res) => {
       const { resolvePatientDisplayLabels, looksLikeOpaquePatientId } = require("./lib/appointmentCoordinationSync");
       const needLabelIds = normalized
         .filter((p) => {
+          if (p.displayNameOverride) return false;
           const n = String(p.name || "").trim();
           return !n || looksLikeOpaquePatientId(n);
         })
@@ -17018,7 +17021,7 @@ app.get("/api/admin/unassigned-messages", requireAdminAuth, async (req, res) => 
     if (pids.length) {
       const { data: prow, error: pErr } = await supabase
         .from("patients")
-        .select("id, name, full_name, first_name, last_name, email, phone, patient_id, is_lead, status, created_at")
+        .select("id, name, full_name, first_name, last_name, email, phone, patient_id, is_lead, status, created_at, external_name, display_name_override")
         .in("id", pids.slice(0, 500));
       if (!pErr && Array.isArray(prow)) {
         patientRows = prow;
@@ -18163,7 +18166,9 @@ app.get("/api/admin/patients/:patientId", requireAdminAuth, async (req, res) => 
         assigned_doctor_id,
         created_at,
         updated_at,
-        status
+        status,
+        external_name,
+        display_name_override
       `)
       .eq("id", patientId)
       .eq("clinic_id", req.clinicId)
@@ -18173,6 +18178,21 @@ app.get("/api/admin/patients/:patientId", requireAdminAuth, async (req, res) => 
       console.error("[ADMIN PATIENT DETAIL] Error:", error);
       return res.status(404).json({ ok: false, error: "patient_not_found" });
     }
+
+    const {
+      resolvePatientDisplayLabel,
+      resolvePatientSourceName,
+    } = require("./lib/patientNameSync");
+    const displayName = resolvePatientDisplayLabel(patient);
+    const externalName = resolvePatientSourceName(patient);
+    const patientEnriched = {
+      ...patient,
+      externalName,
+      external_name: externalName,
+      displayName,
+      displayNameOverride: patient.display_name_override || null,
+      name: displayName || patient.name || "",
+    };
 
     let visits = [];
     let diagnoses = [];
@@ -18426,7 +18446,7 @@ app.get("/api/admin/patients/:patientId", requireAdminAuth, async (req, res) => 
     res.json({
       ok: true,
       patient: {
-        ...patient,
+        ...patientEnriched,
         visits: visitBoard,
       },
       visits: visitBoard,
@@ -18434,6 +18454,58 @@ app.get("/api/admin/patients/:patientId", requireAdminAuth, async (req, res) => 
   } catch (error) {
     console.error("[ADMIN PATIENT DETAIL] Error:", error);
     res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+/* ================= ADMIN PATIENT DISPLAY NAME ================= */
+app.patch("/api/admin/patients/:patientId/display-name", requireAdminAuth, async (req, res) => {
+  try {
+    const patientId = String(req.params.patientId || "").trim();
+    if (!patientId) {
+      return res.status(400).json({ ok: false, error: "patientId_required" });
+    }
+    if (!isSupabaseEnabled()) {
+      return res.status(500).json({ ok: false, error: "supabase_not_configured" });
+    }
+    if (!req.clinicId) {
+      return res.status(403).json({ ok: false, error: "clinic_not_authenticated" });
+    }
+
+    const { data: existing, error: loadErr } = await supabase
+      .from("patients")
+      .select("id")
+      .eq("id", patientId)
+      .eq("clinic_id", req.clinicId)
+      .maybeSingle();
+    if (loadErr || !existing) {
+      return res.status(404).json({ ok: false, error: "patient_not_found" });
+    }
+
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const reset =
+      body.reset === true ||
+      String(body.reset || "").toLowerCase() === "true" ||
+      body.displayNameOverride === null;
+    const rawOverride = reset
+      ? null
+      : body.displayNameOverride ?? body.display_name_override ?? body.displayName;
+
+    const { setPatientDisplayNameOverride } = require("./lib/patientNameSync");
+    const result = await setPatientDisplayNameOverride(patientId, rawOverride);
+    if (!result.ok) {
+      const status = result.error === "patient_not_found" ? 404 : 400;
+      return res.status(status).json({ ok: false, error: result.error || "update_failed" });
+    }
+
+    return res.json({
+      ok: true,
+      displayName: result.displayName,
+      displayNameOverride: result.displayNameOverride,
+      externalName: result.externalName,
+    });
+  } catch (error) {
+    console.error("[ADMIN PATIENT DISPLAY NAME]", error);
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
 

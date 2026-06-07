@@ -208,6 +208,22 @@
       flex-shrink: 0;
     }
     .chat-header{ padding:16px; border-bottom:1px solid #1f2937; background:#0b1220; flex-shrink:0; }
+    .display-name-panel {
+      padding: 12px 16px;
+      border-bottom: 1px solid #1f2937;
+      background: #111827;
+      flex-shrink: 0;
+    }
+    .display-name-row { margin-bottom: 8px; }
+    .display-name-label { display: block; font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    .display-name-source { font-size: 14px; color: #e5e7eb; }
+    .display-name-input {
+      width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid #374151; background: #0b1220; color: #f3f4f6; font-size: 14px;
+    }
+    .display-name-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+    .display-name-status { font-size: 12px; color: #6ee7b7; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
     .chat-messages{ flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:0; }
     .message{ max-width:70%; padding:12px 16px; border-radius:12px; font-size:14px; line-height:1.5; }
     .message.from-CLINIC{ background:var(--p); color:#fff; align-self:flex-end; }
@@ -289,6 +305,22 @@
               <div data-i18n="chat.selectPatient">Select a patient</div>
             </div>
           </div>
+
+          <div id="displayNamePanel" class="display-name-panel" style="display:none;">
+            <div class="display-name-row">
+              <span class="display-name-label">Source name</span>
+              <span id="displayNameSource" class="display-name-source">—</span>
+            </div>
+            <div class="display-name-row">
+              <label class="display-name-label" for="displayNameInput">Display name</label>
+              <input type="text" id="displayNameInput" class="display-name-input" maxlength="120" placeholder="Enter a friendly name" />
+            </div>
+            <div class="display-name-actions">
+              <button type="button" class="btn-secondary btn-sm" id="displayNameSaveBtn">Save</button>
+              <button type="button" class="btn-secondary btn-sm" id="displayNameResetBtn">Reset to source</button>
+              <span id="displayNameStatus" class="display-name-status"></span>
+            </div>
+          </div>
           
           <div id="leadAssignmentBanner" class="lead-assignment-banner" style="display:none;" role="status" aria-live="polite"></div>
 
@@ -326,6 +358,7 @@
     const API_BASE = (typeof cliniflowAdminApiOrigin === 'function' ? cliniflowAdminApiOrigin() : 'https://cliniflow-backend-clean-production.up.railway.app');
     let selectedPatientId = null;
     let selectedPatientName = null;
+    let patientsCache = [];
     let clinicName = null;
     let refreshInterval = null;
     /** Last seen tip of thread — skip redundant render + POST /messages/read when unchanged. */
@@ -480,6 +513,7 @@
         });
 
         renderPatients(patientsWithUnread);
+        patientsCache = patientsWithUnread;
 
         // Restore highlight + header only — do NOT call selectPatient (that re-fires loadMessages + timers).
         if (selectedPatientId) {
@@ -488,13 +522,9 @@
             return pid === selectedPatientId;
           });
           if (patient) {
-            const name = patient.name || patient.fullName || t("chat.unnamed");
-            const phone = patient.phone || "-";
-            selectedPatientName = name;
-            const hn = document.getElementById("selectedPatientName");
-            const hp = document.getElementById("selectedPatientPhone");
-            if (hn) hn.textContent = name;
-            if (hp) hp.textContent = phone;
+            selectPatient(patientId, patient.name || patient.fullName || t("chat.unnamed"), patient.phone || "-", patient);
+          } else {
+            updateDisplayNamePanel(null);
           }
           const items = document.querySelectorAll(".patient-item");
           items.forEach((item) => {
@@ -543,7 +573,7 @@
         const escapedPreview = escapeHtml(lastPreview);
         
         return `
-          <div class="patient-item ${isActive ? 'active' : ''} ${hasUnread ? 'unread' : ''}" data-patient-id="${escapedPatientId}" onclick="selectPatient('${escapedPatientId}', '${escapedName}', '${escapedPhone}')">
+          <div class="patient-item ${isActive ? 'active' : ''} ${hasUnread ? 'unread' : ''}" data-patient-id="${escapedPatientId}" onclick="selectPatientById('${escapedPatientId}')">
             <div class="patient-name">
               ${escapedName}
               ${unreadCount > 0 ? `<span class="patient-badge">${unreadCount > 99 ? '99+' : unreadCount}</span>` : ''}
@@ -566,7 +596,66 @@
       return div.innerHTML;
     }
 
-    function selectPatient(patientId, name, phone) {
+    function selectPatientById(patientId) {
+      const p = patientsCache.find((x) => (x.patientId || x.patient_id || x.id) === patientId);
+      const name = p?.name || p?.fullName || t("chat.unnamed");
+      const phone = p?.phone || "-";
+      selectPatient(patientId, name, phone, p);
+    }
+
+    function updateDisplayNamePanel(patient) {
+      const panel = document.getElementById("displayNamePanel");
+      const sourceEl = document.getElementById("displayNameSource");
+      const inputEl = document.getElementById("displayNameInput");
+      const statusEl = document.getElementById("displayNameStatus");
+      if (!panel || !sourceEl || !inputEl) return;
+      if (!patient) {
+        panel.style.display = "none";
+        return;
+      }
+      panel.style.display = "block";
+      const source = patient.externalName || patient.external_name || patient.name || "—";
+      sourceEl.textContent = source;
+      inputEl.value = patient.displayNameOverride || patient.display_name_override || "";
+      if (statusEl) statusEl.textContent = "";
+    }
+
+    async function saveDisplayNameOverride(reset) {
+      if (!selectedPatientId) return;
+      const statusEl = document.getElementById("displayNameStatus");
+      const inputEl = document.getElementById("displayNameInput");
+      const token = localStorage.getItem("adminToken") || localStorage.getItem("admin_token");
+      try {
+        const body = reset ? { reset: true } : { displayNameOverride: inputEl ? inputEl.value : "" };
+        const res = await fetch(`/api/admin/patients/${encodeURIComponent(selectedPatientId)}/display-name`, {
+          method: "PATCH",
+          headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) throw new Error(json.error || "Save failed");
+        const displayName = json.displayName || json.externalName || "—";
+        selectedPatientName = displayName;
+        document.getElementById("selectedPatientName").textContent = displayName;
+        const idx = patientsCache.findIndex((p) => (p.patientId || p.patient_id || p.id) === selectedPatientId);
+        if (idx >= 0) {
+          patientsCache[idx] = {
+            ...patientsCache[idx],
+            name: displayName,
+            displayName,
+            displayNameOverride: json.displayNameOverride || null,
+            externalName: json.externalName || patientsCache[idx].externalName,
+          };
+          renderPatients(patientsCache);
+        }
+        updateDisplayNamePanel(patientsCache[idx] || { externalName: json.externalName, displayNameOverride: json.displayNameOverride });
+        if (statusEl) statusEl.textContent = reset ? "Reset to source name." : "Display name saved.";
+      } catch (e) {
+        if (statusEl) statusEl.textContent = String(e.message || e);
+      }
+    }
+
+    function selectPatient(patientId, name, phone, patientMeta) {
       selectedPatientId = patientId;
       selectedPatientName = name;
       messagesReadFingerprint = "";
@@ -577,6 +666,7 @@
       document.getElementById('selectedPatientPhone').textContent = phone;
       document.getElementById('selectedPatientInfo').style.display = 'block';
       document.getElementById('noPatientSelected').style.display = 'none';
+      updateDisplayNamePanel(patientMeta || patientsCache.find((p) => (p.patientId || p.patient_id || p.id) === patientId));
       document.getElementById('chatMessages').style.display = 'flex';
       document.getElementById('chatInputArea').style.display = 'flex';
       document.getElementById('uploadHelp').style.display = 'block';
@@ -1386,6 +1476,8 @@
     }
     
     loadClinicName();
+    document.getElementById("displayNameSaveBtn")?.addEventListener("click", () => saveDisplayNameOverride(false));
+    document.getElementById("displayNameResetBtn")?.addEventListener("click", () => saveDisplayNameOverride(true));
     // Chain so cold start does not fire two parallel GET /api/admin/patients (list + pending badge).
     loadPatients()
       .then(() => loadAllBadges())

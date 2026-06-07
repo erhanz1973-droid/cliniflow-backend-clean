@@ -5,12 +5,38 @@
   var DATA = window.CliniflyHelpCenterData;
   if (!DATA) return;
 
+  function currentLang() {
+    if (window.i18n && typeof window.i18n.getLang === "function") {
+      return window.i18n.getLang() || "en";
+    }
+    return "en";
+  }
+
+  function isMissingTranslation(fullKey, value) {
+    if (value == null || value === "") return true;
+    var s = String(value);
+    if (s === fullKey) return true;
+    if (s === "helpCenter." + fullKey) return true;
+    if (/^articles\.[^.]+\.how\.\d+$/.test(s)) return true;
+    if (s.startsWith("helpCenter.") && s.indexOf(fullKey) !== -1) return true;
+    return false;
+  }
+
   function ht(key, fallback) {
+    var fullKey = "helpCenter." + key;
     if (window.i18n && typeof window.i18n.t === "function") {
-      var v = window.i18n.t("helpCenter." + key);
-      if (v && !String(v).startsWith("helpCenter.")) return v;
+      var v = window.i18n.t(fullKey);
+      if (!isMissingTranslation(fullKey, v)) return v;
     }
     return fallback;
+  }
+
+  function articleLocalePack(article) {
+    var lang = currentLang();
+    if (lang === "en") return null;
+    var packs = window.CliniflyHelpCenterI18n;
+    if (!packs || !packs[lang]) return null;
+    return packs[lang][article.id] || null;
   }
 
   function esc(s) {
@@ -30,34 +56,35 @@
   }
 
   function articleTitle(article) {
+    var loc = articleLocalePack(article);
+    if (loc && loc.title) return loc.title;
     return ht("articles." + article.id + ".title", article.title || article.id);
   }
 
   function localizedField(article, field) {
-    return ht("articles." + article.id + "." + field, article[field] || "");
+    var loc = articleLocalePack(article);
+    if (loc && loc[field]) return loc[field];
+    return article[field] || "";
   }
 
   function localizedSteps(article) {
-    var key = "articles." + article.id + ".how";
-    if (window.i18n && typeof window.i18n.t === "function") {
-      var steps = [];
-      for (var i = 0; i < 20; i++) {
-        var v = window.i18n.t(key + "." + i);
-        if (!v || String(v).startsWith("helpCenter.")) break;
-        steps.push(v);
-      }
-      if (steps.length) return steps;
-    }
+    var loc = articleLocalePack(article);
+    if (loc && Array.isArray(loc.how) && loc.how.length) return loc.how;
     return article.how || [];
   }
 
   function localizedTips(article) {
+    var loc = articleLocalePack(article);
+    if (loc && Array.isArray(loc.tips) && loc.tips.length) return loc.tips;
     if (!article.tips || !article.tips.length) return [];
-    var tips = [];
-    for (var i = 0; i < article.tips.length; i++) {
-      tips.push(ht("articles." + article.id + ".tips." + i, article.tips[i]));
-    }
-    return tips;
+    return article.tips.slice();
+  }
+
+  function localizedLinkLabel(article) {
+    var loc = articleLocalePack(article);
+    if (loc && loc.linkLabel) return loc.linkLabel;
+    if (!article.adminLinkLabel) return ht("openPage", "Open related page");
+    return ht("articles." + article.id + ".linkLabel", article.adminLinkLabel);
   }
 
   function renderChecklist() {
@@ -124,7 +151,7 @@
             " " +
             localizedField(a, "why") +
             " " +
-            (a.how || []).join(" ");
+            localizedSteps(a).join(" ");
           return blob.toLowerCase().indexOf(q) !== -1;
         });
       }
@@ -162,9 +189,7 @@
   function renderArticleCard(article) {
     var steps = localizedSteps(article);
     var tips = localizedTips(article);
-    var linkLabel = article.adminLinkLabel
-      ? ht("articles." + article.id + ".linkLabel", article.adminLinkLabel)
-      : ht("openPage", "Open related page");
+    var linkLabel = localizedLinkLabel(article);
 
     var screenshot = "";
     if (article.screenshot) {
@@ -186,9 +211,11 @@
         '<div class="hc-tips"><strong>' +
         esc(ht("tipsLabel", "Tips")) +
         ":</strong><ul>" +
-        tips.map(function (t) {
-          return "<li>" + esc(t) + "</li>";
-        }).join("") +
+        tips
+          .map(function (t) {
+            return "<li>" + esc(t) + "</li>";
+          })
+          .join("") +
         "</ul></div>";
     }
 
