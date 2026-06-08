@@ -5578,15 +5578,55 @@ async function resolveInboxPatientDisplayNames(clinicId, patientRows, opts = {})
   return out;
 }
 
-async function resolveClinicOutboundSenderLabel(resolvedPatientId, clinicUuid) {
+/**
+ * Push notification title for clinic→patient outbound — never show assigned doctor for AI/coordinator.
+ * @param {Record<string, unknown>|null|undefined} opts
+ * @param {Record<string, unknown>|null|undefined} insertedRow
+ */
+function buildClinicOutboundPushSenderContext(opts, insertedRow) {
+  const { isClinicAiMessage, careTeamSenderName } = require("./lib/clinicAiMessageActor.cjs");
+  const o = opts && typeof opts === "object" ? opts : {};
+  const row = insertedRow && typeof insertedRow === "object" ? insertedRow : {};
+  const prov = o.messageProvenance && typeof o.messageProvenance === "object" ? o.messageProvenance : {};
+  const senderNameOpt = String(
+    o.senderName || o.doctorName || row.sender_name || row.senderName || row.doctor_name || "",
+  ).trim();
+  const isDoctorHuman =
+    o.asDoctor === true ||
+    o.authorKind === "doctor" ||
+    String(o.fromRole || row.from_role || "").toLowerCase() === "doctor";
+  const isAi = !isDoctorHuman &&
+    isClinicAiMessage({
+      actorKind: prov.actor_kind || row.actor_kind || o.actorKind,
+      messageSource: prov.message_source || o.messageSource || row.message_source,
+      senderRole: row.sender_role || row.from_role || o.fromRole,
+      senderName: senderNameOpt,
+    });
+  let senderHint = null;
+  if (isAi) {
+    senderHint = senderNameOpt || careTeamSenderName();
+  } else if (senderNameOpt) {
+    senderHint = senderNameOpt;
+  }
+  return { isClinicAiOutbound: isAi, isDoctorHuman, senderHint };
+}
+
+async function resolveClinicOutboundSenderLabel(resolvedPatientId, clinicUuid, labelOpts = {}) {
   if (!UUID_RE.test(String(resolvedPatientId || "")) || !UUID_RE.test(String(clinicUuid || ""))) return "Klinik";
+  const preferClinicName =
+    labelOpts.preferClinicName === true ||
+    labelOpts.isClinicAiOutbound === true ||
+    labelOpts.isDoctorHuman !== true;
   try {
+    const { data: c } = await supabase.from("clinics").select("name").eq("id", clinicUuid).maybeSingle();
+    const clinicName = String(c?.name || "").trim();
+    if (preferClinicName) {
+      return clinicName ? clinicName.slice(0, 120) : "Klinik";
+    }
     const la = await fetchLeadThreadAssignmentForPatient(resolvedPatientId, clinicUuid);
     const dn = la?.doctorName ? String(la.doctorName).trim() : "";
     if (dn) return dn.slice(0, 120);
-    const { data: c } = await supabase.from("clinics").select("name").eq("id", clinicUuid).maybeSingle();
-    const nm = String(c?.name || "").trim();
-    return nm ? nm.slice(0, 120) : "Klinik";
+    return clinicName ? clinicName.slice(0, 120) : "Klinik";
   } catch (_) {
     return "Klinik";
   }
@@ -5677,7 +5717,15 @@ async function resolveMessagingDoctorForPatientClinic(resolvedPatientId, clinicU
 }
 
 async function deliverClinicInboundPatientNotifications(meta) {
-  const { patientLookupId, previewRaw, clinicUuid, senderHint, messageStableId = null } = meta;
+  const {
+    patientLookupId,
+    previewRaw,
+    clinicUuid,
+    senderHint,
+    messageStableId = null,
+    isClinicAiOutbound = false,
+    isDoctorHuman = false,
+  } = meta;
   const pv = truncateChatPreview(previewRaw || "Yeni mesaj");
   let resolvedDb = null;
   try {
@@ -5688,7 +5736,11 @@ async function deliverClinicInboundPatientNotifications(meta) {
   let senderLabel =
     senderHint && String(senderHint).trim().length ? String(senderHint).trim().slice(0, 120) : null;
   if (!senderLabel && resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
-    senderLabel = await resolveClinicOutboundSenderLabel(resolvedDb, clinicUuid);
+    senderLabel = await resolveClinicOutboundSenderLabel(resolvedDb, clinicUuid, {
+      preferClinicName: isClinicAiOutbound || !isDoctorHuman,
+      isClinicAiOutbound,
+      isDoctorHuman,
+    });
   }
   if (!senderLabel) senderLabel = "Klinik";
   const title = `${senderLabel}`;
@@ -5703,9 +5755,9 @@ async function deliverClinicInboundPatientNotifications(meta) {
   } catch (_) {}
   let messageComposerRole = "clinic";
   let messageComposerId = null;
-  if (resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
+  if (!isClinicAiOutbound && resolvedDb && clinicUuid && UUID_RE.test(String(clinicUuid))) {
     const aid = await resolveLeadAssignedDoctorForPatientClinic(resolvedDb, clinicUuid);
-    if (aid) {
+    if (aid && isDoctorHuman) {
       messageComposerRole = "doctor";
       messageComposerId = aid;
     }
@@ -5826,6 +5878,8 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
     messageStableId = null,
     clinicUuid = null,
     senderHint = null,
+    isClinicAiOutbound = false,
+    isDoctorHuman = false,
     skipDispatchClaim = false,
     messageType = null,
   } = extra || {};
@@ -5839,6 +5893,8 @@ async function notifyPatientInboundChannels(patientLookupId, previewRaw, extra =
     previewRaw,
     clinicUuid,
     senderHint,
+    isClinicAiOutbound,
+    isDoctorHuman,
     messageStableId,
   });
 }
@@ -6236,10 +6292,13 @@ function enqueueChatMessagePushNotifications(opts, insertedRow, insertedTableHin
         })
       );
 
+      const pushSender = buildClinicOutboundPushSenderContext(opts, insertedRow || {});
       await notifyPatientInboundChannels(pidSrc, clip, {
         messageStableId: stableId,
         clinicUuid,
-        senderHint: null,
+        senderHint: pushSender.senderHint,
+        isClinicAiOutbound: pushSender.isClinicAiOutbound,
+        isDoctorHuman: pushSender.isDoctorHuman,
         skipDispatchClaim: true,
       });
 
@@ -12458,13 +12517,13 @@ app.post("/api/register/doctor", async (req, res) => {
       });
     }
 
-    // Phone validation
+    // Phone validation — E.164 with country code (+90..., +995..., etc.)
     const phoneNormalized = normalizePhone(phone);
-    if (phoneNormalized.length < 10) {
+    if (!phoneNormalized || phoneNormalized.length < 10) {
       return res.status(400).json({ 
         ok: false, 
         error: "invalid_phone", 
-        message: "Telefon numarası en az 10 haneli olmalıdır" 
+        message: "Telefon formatı hatalı. Başında ülke kodu olacak şekilde yazın (ör. +90 555 123 4567)." 
       });
     }
 
@@ -64306,6 +64365,49 @@ setupOfferInboundOrchestration({
   emitOfferNewMessage: (offerId, message) => {
     if (chatSocketIo) {
       chatSocketIo.to(`offer:${offerId}`).emit("offer_new_message", message);
+    }
+  },
+  notifyClinicOfferReply: async ({ offerId, patientId, clinicId, messageRow, authorKind }) => {
+    if (!messageRow?.id || !UUID_RE.test(String(offerId || ""))) return;
+    try {
+      const { data: offer } = await supabase
+        .from("treatment_offers")
+        .select("id, doctor_id, clinic_id, request_id")
+        .eq("id", offerId)
+        .maybeSingle();
+      let tr = null;
+      if (offer?.request_id) {
+        const { data } = await supabase
+          .from("treatment_requests")
+          .select("id, patient_id, clinic_id")
+          .eq("id", offer.request_id)
+          .maybeSingle();
+        tr = data;
+      }
+      if (!tr?.patient_id) {
+        tr = {
+          id: null,
+          patient_id: patientId,
+          clinic_id: clinicId || offer?.clinic_id || null,
+        };
+      }
+      const actor =
+        authorKind === "doctor"
+          ? { kind: "doctor", doctorId: offer?.doctor_id || null }
+          : { kind: "clinic" };
+      await getOfferNotificationsApi().enqueueOfferMessagePush({
+        actor,
+        offerId: String(offerId),
+        tr,
+        messageRow: {
+          id: messageRow.id,
+          text: messageRow.text,
+          sender_name: messageRow.sender_name,
+        },
+        doctorRow: offer,
+      });
+    } catch (e) {
+      console.warn("[offerInboundOrchestration] notifyClinicOfferReply:", e?.message || e);
     }
   },
 });
