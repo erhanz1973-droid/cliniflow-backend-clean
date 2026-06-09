@@ -12525,13 +12525,21 @@ app.post("/api/register/doctor", async (req, res) => {
       });
     }
 
-    // Phone validation — E.164 with country code (+90..., +995..., etc.)
-    const phoneNormalized = normalizePhone(phone);
+    // Phone validation — explicit country code required (+995..., +90..., or 00…)
+    const phoneTrimmed = String(phone || "").trim();
+    if (!hasExplicitInternationalPrefix(phoneTrimmed)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_phone",
+        message: "Telefon formatı hatalı. Başında ülke kodu olacak şekilde yazın (ör. +995 574 399 999).",
+      });
+    }
+    const phoneNormalized = normalizePhone(phoneTrimmed);
     if (!phoneNormalized || phoneNormalized.length < 10) {
       return res.status(400).json({ 
         ok: false, 
         error: "invalid_phone", 
-        message: "Telefon formatı hatalı. Başında ülke kodu olacak şekilde yazın (ör. +90 555 123 4567)." 
+        message: "Telefon formatı hatalı. Başında ülke kodu olacak şekilde yazın (ör. +995 574 399 999)." 
       });
     }
 
