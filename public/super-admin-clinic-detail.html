@@ -81,6 +81,7 @@
       <h1 id="pageTitle">Clinic Cockpit</h1>
     </div>
     <div class="nav-actions">
+      <button class="btn" type="button" id="btnLoginAsClinic" onclick="loginAsClinic()" style="display:none">👤 Login as Clinic</button>
       <button class="btn ghost" type="button" onclick="reload()">↻ Refresh</button>
       <button class="btn ghost" type="button" onclick="logout()">Logout</button>
     </div>
@@ -318,6 +319,9 @@ async function load(){
       const p=String(dash.subscription.plan).toUpperCase();
       if([...planSel.options].some(o=>o.value===p)) planSel.value=p;
     }
+    const impBtn=document.getElementById("btnLoginAsClinic");
+    const st=String(dash.clinic&&dash.clinic.status||"").toUpperCase();
+    if(impBtn) impBtn.style.display=st==="SUSPENDED"?"none":"inline-block";
   }catch(e){
     document.getElementById("content").innerHTML=`<div class="err">${esc(e.message)}</div>`;
   }
@@ -377,7 +381,20 @@ async function sendGuidance(useSuggested){
   }
 }
 
+async function loginAsClinic(){
+  if(!clinicId) return;
+  const name=dash&&dash.clinic&&dash.clinic.name?dash.clinic.name:clinicId;
+  if(!confirm(`Login as clinic "${name}"?\n\nYou will enter their admin dashboard with full support access.`)) return;
+  try{
+    if(typeof startClinicImpersonation!=="function") throw new Error("Impersonation helper not loaded");
+    await startClinicImpersonation(clinicId,{mode:"support"});
+  }catch(e){
+    alert("Impersonation failed: "+(e&&e.message?e.message:e));
+  }
+}
+
 if(checkAuth()) load();
 </script>
+<script src="/super-admin-impersonate.js?v=202606141"></script>
 </body>
 </html>

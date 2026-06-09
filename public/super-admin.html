@@ -399,6 +399,9 @@ function renderTable(list){
           ${hasMail?`<a href="mailto:${esc(c.email)}" class="qa qa-mail">✉️ Mail</a>`:""}
           <button class="qa qa-note" onclick="openCrm('${cid}')">📝 CRM</button>
           <button class="qa qa-detail" onclick="openClinicCockpit('${rawId}')">📊 Cockpit</button>
+          ${(c.status||"").toUpperCase()==="SUSPENDED"
+            ? ""
+            : `<button type="button" class="qa" style="background:rgba(59,130,246,.14);color:#bfdbfe;border:1px solid rgba(59,130,246,.35)" onclick="loginAsClinic('${cid}')" title="Login as Clinic">👤 Login as Clinic</button>`}
           <button type="button" class="qa" style="background:rgba(245,158,11,.12);color:#fde68a;border:1px solid rgba(245,158,11,.3)" onclick="openPlanModal('${rawId}')">💰 Plan</button>
           ${(c.status||"").toUpperCase()==="SUSPENDED"
             ?`<button class="qa" style="background:rgba(22,163,74,.15);color:#86efac;border:1px solid rgba(22,163,74,.3)" onclick="activateClinic('${cid}')">✅</button>`
@@ -711,8 +714,20 @@ function closeModal(id, event){
   document.getElementById(id)?.classList.remove("active");
 }
 
+async function loginAsClinic(clinicId){
+  if(!clinicId) return;
+  const row=allClinics.find(x=>(x.clinicId||x.id)===clinicId);
+  const label=(row&&row.name)||clinicId;
+  if(!confirm(`Login as clinic "${label}"?\n\nYou will enter their admin dashboard with full support access. A red banner will stay visible until you return.`)) return;
+  try{
+    if(typeof startClinicImpersonation!=="function") throw new Error("Impersonation helper not loaded");
+    await startClinicImpersonation(clinicId,{mode:"support"});
+  }catch(e){setAlert("Impersonation failed: "+(e&&e.message?e.message:e),"error");}
+}
+
 /* ─── Init ──────────────────────────── */
 if(checkAuth()) loadClinics();
 </script>
+<script src="/super-admin-impersonate.js?v=202606141"></script>
 </body>
 </html>

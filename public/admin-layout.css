@@ -746,3 +746,84 @@ body.al-ready .al-main .onboard-steps .step-body strong {
 body.al-ready .al-main .btn-link {
   color: #6aa6ff !important;
 }
+
+/* ── Super Admin impersonation banner ───────────────────────── */
+#cf-impersonation-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10050;
+  background: linear-gradient(90deg, #7f1d1d, #991b1b);
+  color: #fff;
+  border-bottom: 2px solid #fca5a5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  font-size: 14px;
+}
+
+.cf-imp-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cf-imp-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.35);
+  flex-shrink: 0;
+}
+
+.cf-imp-text {
+  flex: 1 1 220px;
+  line-height: 1.4;
+}
+
+.cf-imp-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cf-imp-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cf-imp-btn-primary {
+  background: #fff;
+  color: #991b1b;
+}
+
+.cf-imp-btn-ghost {
+  background: rgba(0, 0, 0, 0.2);
+  color: #fecaca;
+  border: 1px solid rgba(254, 202, 202, 0.45);
+}
+
+body.cf-impersonating.al-ready {
+  padding-top: 52px;
+}
+
+body.cf-impersonating.al-ready .al-sidebar {
+  top: 52px;
+  height: calc(100vh - 52px);
+}
+
+body.cf-impersonating.al-ready .al-topbar {
+  top: 52px;
+}
+
+body.cf-impersonating:not(.al-ready) {
+  padding-top: 52px;
+}

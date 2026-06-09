@@ -357,6 +357,10 @@ const {
 } = require("./lib/adminTimelineNormalize.cjs");
 const { attachAdminTenantContext, logAdminQuery } = require("./lib/clinicTenant.cjs");
 const {
+  registerSuperAdminImpersonationRoutes,
+  attachImpersonationContext,
+} = require("./lib/superAdminImpersonation");
+const {
   normalizePhone: normalizePhoneE164,
   tryParseE164,
   normalizeRegisterEmail: normalizeRegisterEmailLib,
@@ -43140,6 +43144,7 @@ async function requireAdminAuth(req, res, next) {
 
         const tenantErr = attachAdminTenantContext(req, decoded, { pathLabel: req.path });
         if (tenantErr) return res.status(tenantErr.status).json(tenantErr.body);
+        attachImpersonationContext(req, decoded, res);
         return next();
       }
       
@@ -43189,6 +43194,7 @@ async function requireAdminAuth(req, res, next) {
 
     const tenantErr2 = attachAdminTenantContext(req, decoded, { pathLabel: req.path });
     if (tenantErr2) return res.status(tenantErr2.status).json(tenantErr2.body);
+    attachImpersonationContext(req, decoded, res);
     next();
   } catch (error) {
 
@@ -43785,7 +43791,7 @@ app.post("/api/super-admin/login", async (req, res) => {
         return res.status(401).json({ ok: false, error: "invalid_credentials", message: "Invalid credentials" });
       }
       const token = jwt.sign(
-        { role: "super-admin", email: emailNorm },
+        { role: "super-admin", email: emailNorm, userId: null },
         SUPER_ADMIN_JWT_SECRET,
         { expiresIn: "12h" },
       );
@@ -43839,7 +43845,7 @@ app.post("/api/super-admin/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-      { role: "super-admin", email: emailNorm },
+      { role: "super-admin", email: emailNorm, userId: row.id || null },
       SUPER_ADMIN_JWT_SECRET,
       { expiresIn: "12h" },
     );
@@ -44998,6 +45004,15 @@ registerSuperAdminClinicDashboardRoutes(app, {
   supabase,
   resolveClinicSubscriptionSnapshot,
   planToMaxPatients,
+});
+
+registerSuperAdminImpersonationRoutes(app, {
+  superAdminGuard,
+  requireAdminAuth,
+  supabase,
+  jwt,
+  JWT_SECRET,
+  getClinicById,
 });
 
 // GET /api/super-admin/clinics/:clinicId/statistics

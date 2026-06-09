@@ -57,6 +57,17 @@
     document.body.appendChild(s);
   }
 
+  function loadImpersonationBanner() {
+    if (window.__CLINIFLOW_IMPERSONATION_LOADED__) return;
+    var p = window.location.pathname || '';
+    if (p.includes('login') || p.includes('register') || p.includes('super-admin')) return;
+    window.__CLINIFLOW_IMPERSONATION_LOADED__ = true;
+    var s = document.createElement('script');
+    s.src = '/admin-impersonation.js?v=202606141';
+    s.defer = true;
+    document.body.appendChild(s);
+  }
+
   /* ── Navigation items (key maps to dashboard.nav.{key}) ────── */
   const NAV = [
     { href: '/admin.html', icon: iconGrid(),     key: 'dashboard' },
@@ -309,6 +320,25 @@
 
   /* ── Inject layout ───────────────────────────────────────── */
   function inject() {
+    // Cross-origin impersonation handoff (query params) before auth guard
+    if (typeof window.endClinicImpersonation === 'function') {
+      /* consumeImpersonationHandoff already ran in admin-impersonation.js */
+    } else {
+      try {
+        var hp = new URLSearchParams(window.location.search || '');
+        var ht = hp.get('cf_imp_token');
+        if (ht) {
+          localStorage.setItem('admin_token', ht);
+          localStorage.setItem('adminToken', ht);
+          var hc = String(hp.get('cf_imp_clinic') || '').trim().toUpperCase();
+          var hn = String(hp.get('cf_imp_name') || hc || 'Clinic').trim();
+          if (hc) localStorage.setItem('clinic_code', hc);
+          if (hn) localStorage.setItem('clinic_name', hn);
+          window.history.replaceState({}, document.title, window.location.pathname + (window.location.hash || ''));
+        }
+      } catch (_) { /* ignore */ }
+    }
+
     // Auth guard (must match admin.html: adminToken OR admin_token)
     const token = getStoredAdminToken();
     const p = window.location.pathname || '';
@@ -370,6 +400,7 @@
     startBadgePolling();
 
     loadOpsStrip();
+    loadImpersonationBanner();
 
     // Hook into i18n updates to refresh sidebar labels
     const prevOnI18nUpdated = window.onI18nUpdated;
@@ -470,6 +501,13 @@
 
   /* ── Logout ──────────────────────────────────────────────── */
   window.__alLogout = function () {
+    try {
+      var impRaw = localStorage.getItem('cliniflow_impersonation');
+      if (impRaw && typeof window.endClinicImpersonation === 'function') {
+        window.endClinicImpersonation({ redirectUrl: '/super-admin.html' });
+        return;
+      }
+    } catch (_) { /* fall through */ }
     localStorage.removeItem('adminToken');
     localStorage.removeItem('admin_token');
     localStorage.removeItem('selected_patient_id');
@@ -618,6 +656,7 @@
     }
   }
 
+  loadImpersonationBanner();
   loadAdminFeatureFlags(bootAdminLayout);
 
   document.addEventListener('visibilitychange', function () {

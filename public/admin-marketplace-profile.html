@@ -499,12 +499,15 @@
     }
 
     function collectPayload() {
+      var fbPage = $("facebookPageUrl").value.trim();
+      var fbSocial = $("facebook").value.trim();
+      var fbUnified = fbPage || fbSocial;
       var payload = {
         reputation: {
           googleBusinessUrl: $("googleBusinessUrl").value.trim(),
           googleRating: $("googleRating").value === "" ? null : Number($("googleRating").value),
           googleReviewCount: $("googleReviewCount").value === "" ? null : parseInt($("googleReviewCount").value, 10),
-          facebookPageUrl: $("facebookPageUrl").value.trim(),
+          facebookPageUrl: fbUnified,
           facebookRecommendationScore:
             $("facebookRecommendationScore").value === ""
               ? null
@@ -521,7 +524,7 @@
         },
         social: {
           website: $("website").value.trim(),
-          facebook: $("facebook").value.trim(),
+          facebook: fbUnified,
           instagram: $("instagram").value.trim(),
           tiktok: $("tiktok").value.trim(),
           youtube: $("youtube").value.trim(),
