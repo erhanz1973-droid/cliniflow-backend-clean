@@ -548,6 +548,10 @@ function maskEmailForLog(email) {
   return `${e.slice(0, 2)}***${e.slice(at)}`;
 }
 
+function isApplePrivateRelayEmail(email) {
+  return /@privaterelay\.appleid\.com$/i.test(String(email || "").trim());
+}
+
 /** Step markers for register debugging (Railway logs). Opt-in: REGISTER_DEBUG_TRACE=1 */
 function logRegisterTrace(route, step, meta = {}) {
   if (!REGISTER_DEBUG_TRACE) return;
@@ -9993,14 +9997,22 @@ async function runPatientRegister(req, res, route, otpMode) {
       });
     }
     const tokEmail = String(picked.email || "").trim().toLowerCase();
+    const formEmail = emailNormalized;
     if (tokEmail) {
-      if (emailNormalized && tokEmail !== emailNormalized) {
-        console.log("[REGISTER] oauth email canonicalized (form differed)", {
-          form: maskEmailForLog(emailNormalized),
+      if (
+        formEmail &&
+        tokEmail !== formEmail &&
+        isApplePrivateRelayEmail(tokEmail) &&
+        !isApplePrivateRelayEmail(formEmail)
+      ) {
+        console.log("[REGISTER] using form contact email (Apple relay on OAuth token)", {
+          form: maskEmailForLog(formEmail),
           token: maskEmailForLog(tokEmail),
         });
+        emailNormalized = formEmail;
+      } else {
+        emailNormalized = tokEmail;
       }
-      emailNormalized = tokEmail;
     }
     const rAuthDup = await supabaseCallOrCrash("register preflight oauth auth_user_id", () =>
       supabase.from("patients").select("id, patient_id").eq("auth_user_id", picked.authUserId).maybeSingle(),
