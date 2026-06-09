@@ -363,6 +363,7 @@ const {
 const {
   normalizePhone: normalizePhoneE164,
   tryParseE164,
+  hasExplicitInternationalPrefix,
   normalizeRegisterEmail: normalizeRegisterEmailLib,
   phoneSearchVariants,
 } = require("./lib/phoneIdentity.cjs");
@@ -9818,6 +9819,9 @@ async function runPatientRegister(req, res, route, otpMode) {
 
   // Phone is OPTIONAL (email-only OTP). If present, validate and normalize to E.164 for storage + SMS.
   const phoneTrimmed = String(phone || "").trim();
+  if (phoneTrimmed && !hasExplicitInternationalPrefix(phoneTrimmed)) {
+    return sendRegisterUserError(res, "invalid_phone", { language: patientLanguage });
+  }
   const phoneNormalized = phoneTrimmed ? normalizePhone(phoneTrimmed) : "";
   // DB `patients.phone` often stores national/international digits only (e.g. 9955…) — must match for unique + preflight
   const phoneDigits = phoneNormalized.replace(/\D/g, "");
