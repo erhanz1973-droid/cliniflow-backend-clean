@@ -97,7 +97,7 @@
     { href: '/admin-files.html',    icon: iconFiles(),    key: 'files' },
     { href: '/admin-referrals.html', icon: iconReferrals(), key: 'referrals', badge: 'sbReferrals' },
     { href: '/admin-marketplace-profile.html', icon: iconGlobe(), key: 'marketplaceProfile' },
-    { href: '/admin-success-center.html', icon: iconSuccess(), key: 'successCenter' },
+    { href: '/admin-success-center.html', icon: iconSuccess(), key: 'successCenter', badge: 'sbSuccessCenter' },
     { href: '/admin-help-center.html', icon: iconHelp(), key: 'helpCenter' },
     { href: '/admin-settings.html', icon: iconSettings(), key: 'settings' },
   ];
@@ -137,7 +137,7 @@
       'dashboard.nav.aiLeads': 'Coordination Center',
       'dashboard.nav.learningCandidates': 'AI Learning',
       'dashboard.nav.chat': 'Messages',
-      'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.marketplaceProfile': 'Directory Profile', 'dashboard.nav.helpCenter': 'Help Center', 'dashboard.nav.settings': 'Settings',
+      'dashboard.nav.files': 'Files', 'dashboard.nav.referrals': 'Referrals', 'dashboard.nav.marketplaceProfile': 'Directory Profile', 'dashboard.nav.successCenter': 'Success Center', 'dashboard.nav.helpCenter': 'Help Center', 'dashboard.nav.settings': 'Settings',
       'dashboard.sidebar.mainMenu': 'Main Menu', 'dashboard.sidebar.management': 'Management',
       'dashboard.sidebar.logout': 'Logout', 'dashboard.sidebar.clinic': 'Clinic',
       'dashboard.sidebar.openMenu': 'Open menu', 'dashboard.sidebar.closeMenu': 'Close menu',
@@ -563,6 +563,19 @@
     }
   }
 
+  /** Okunmamış Clinifly rehberlik mesajları (Başarı Merkezi — #sbSuccessCenter) */
+  function updateSuccessCenterBadge(count) {
+    const el = document.getElementById('sbSuccessCenter');
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = count > 99 ? '99+' : String(count);
+      el.style.display = 'inline-flex';
+    } else {
+      el.style.display = 'none';
+    }
+  }
+  window.updateSuccessCenterBadge = updateSuccessCenterBadge;
+
   async function pollUnreadCount() {
     try {
       const token = getStoredAdminToken();
@@ -599,6 +612,25 @@
     } catch (_) {}
   }
 
+  async function pollUnreadGuidance() {
+    try {
+      const token = getStoredAdminToken();
+      if (!token) return;
+      const res = await fetch(adminFetchUrl('/api/admin/success-center/unread-count'), {
+        headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        if (res.status === 401 && typeof window.handle401 === 'function') window.handle401(401);
+        return;
+      }
+      const data = await res.json();
+      if (!data.ok) return;
+      updateSuccessCenterBadge(Number(data.unreadGuidanceCount || 0));
+    } catch (_) {}
+  }
+  window.pollUnreadGuidance = pollUnreadGuidance;
+
   async function pollPendingDoctorApplications() {
     try {
       const token = getStoredAdminToken();
@@ -628,11 +660,13 @@
     pollUnreadCount();
     pollPendingDoctorApplications();
     pollPendingReferrals();
+    pollUnreadGuidance();
     setInterval(function () {
       if (typeof document !== 'undefined' && document.hidden) return;
       pollUnreadCount();
       pollPendingDoctorApplications();
       pollPendingReferrals();
+      pollUnreadGuidance();
     }, 45000);
   }
 
@@ -664,6 +698,7 @@
       pollUnreadCount();
       pollPendingDoctorApplications();
       pollPendingReferrals();
+      pollUnreadGuidance();
     }
   });
 
