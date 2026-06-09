@@ -9812,7 +9812,7 @@ async function runPatientRegister(req, res, route, otpMode) {
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const emailNormalized = normalizeRegisterEmailLib(email);
+  let emailNormalized = normalizeRegisterEmailLib(email);
   if (!emailRegex.test(emailNormalized)) {
     return sendRegisterUserError(res, "invalid_email", { language: patientLanguage });
   }
@@ -9993,12 +9993,14 @@ async function runPatientRegister(req, res, route, otpMode) {
       });
     }
     const tokEmail = String(picked.email || "").trim().toLowerCase();
-    if (tokEmail && emailNormalized && tokEmail !== emailNormalized) {
-      return res.status(400).json({
-        ok: false,
-        error: "email_oauth_mismatch",
-        message: REGISTER_USER_MSG.emailOauthMismatch,
-      });
+    if (tokEmail) {
+      if (emailNormalized && tokEmail !== emailNormalized) {
+        console.log("[REGISTER] oauth email canonicalized (form differed)", {
+          form: maskEmailForLog(emailNormalized),
+          token: maskEmailForLog(tokEmail),
+        });
+      }
+      emailNormalized = tokEmail;
     }
     const rAuthDup = await supabaseCallOrCrash("register preflight oauth auth_user_id", () =>
       supabase.from("patients").select("id, patient_id").eq("auth_user_id", picked.authUserId).maybeSingle(),
