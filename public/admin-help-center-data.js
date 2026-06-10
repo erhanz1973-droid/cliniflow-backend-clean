@@ -691,6 +691,27 @@
     /* ── 10. FAQ ───────────────────────────────────────────── */
     {
       section: "faq",
+      id: "faq-patients-reach",
+      screenshot: "/help-screenshots/directory-profile.svg",
+      adminLink: "/admin-marketplace-profile.html",
+      adminLinkLabel: "Open Directory Profile",
+      what: "On Clinifly, patients can find your clinic in the directory, review your profile, and message you directly.",
+      why: "Your website, social media accounts, Google reviews, and services are displayed in one place — so patients abroad can discover you and trust you before they travel.",
+      how: [
+        "Patients browse the clinic catalog in the Clinifly app and open your Directory Profile.",
+        "Your website, social links, Google reviews, specialties, and photos appear together on that profile.",
+        "Patients can send photos, ask questions, and start a conversation with your clinic from the app (and connected WhatsApp or Messenger channels).",
+        "Messages land in your admin panel (Lead inbox and Messages).",
+        "Doctors you approve can reply from the Clinifly mobile app on their own phones.",
+        "Soon, Clinifly's AI assistant will answer first questions automatically and guide patients to the right next step.",
+      ],
+      tips: [
+        "Complete Directory Profile and turn on Publish to public directory.",
+        "Share your Invite Patients link on WhatsApp, Instagram, and at reception.",
+      ],
+    },
+    {
+      section: "faq",
       id: "faq-clinic-code",
       what: "Clinic Code is a short word your clinic chooses at registration (for example your clinic name or abbreviation).",
       why: "Doctors and patients use this same code in the mobile app to connect to your clinic.",
@@ -820,6 +841,7 @@
     "referral-how": "How referrals work",
     "referral-invite-friends": "How patients invite friends",
     "referral-benefits": "How clinics benefit from referrals",
+    "faq-patients-reach": "How will patients reach my clinic?",
     "faq-clinic-code": "What is Clinic Code?",
     "faq-doctor-or-ai": "Doctor or AI — who answers?",
     "faq-profile-vs-settings": "Directory Profile vs Settings",

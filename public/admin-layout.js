@@ -127,8 +127,8 @@
     if (window.i18n && typeof window.i18n.t === 'function') return window.i18n.t(key);
     // Fallbacks
     const fallbacks = {
-      'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Patients',
-      'dashboard.nav.invitePatients': 'Invite Patients',
+      'dashboard.nav.dashboard': 'Dashboard', 'dashboard.nav.patients': 'Users',
+      'dashboard.nav.invitePatients': 'Invite Users',
       'dashboard.nav.treatment': 'Treatments', 'dashboard.nav.schedule': 'Calendar',
       'dashboard.nav.doctors': 'Doctors', 'dashboard.nav.leads': 'Lead inbox',
       'dashboard.nav.leadsNeedsAssignment': 'Needs assignment',

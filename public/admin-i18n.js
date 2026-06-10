@@ -149,11 +149,11 @@
 
       adminPages: {
         travelH1: "✈️ Clinifly Admin – Travel",
-        travelGlobalWarning: "⚠️ UYARI: Hasta tarafından doldurulacak alan(lar) var. Aşağıdaki uyarıları kontrol edin.",
+        travelGlobalWarning: "⚠️ UYARI: Kullanıcı tarafından doldurulacak alan(lar) var. Aşağıdaki uyarıları kontrol edin.",
         travelWordHotel: "Otel",
         travelWordFlights: "Uçuş",
         travelListSeparator: " ve ",
-        travelDynamicWarning: "⚠️ UYARI: {list} bilgilerini hasta dolduracak. Bu alanları değiştiremezsiniz. Hasta mobil uygulamadan bu bilgileri girecek.",
+        travelDynamicWarning: "⚠️ UYARI: {list} bilgilerini kullanıcı dolduracak. Bu alanları değiştiremezsiniz. Kullanıcı mobil uygulamadan bu bilgileri girecek.",
         healthH1: "🩺 Clinifly Admin – Health",
         doctorApplicationsH1: "Doktor Başvuruları",
         doctorAppsStatPending: "Beklemede",
@@ -163,19 +163,19 @@
         doctorAppsLoading: "Doktorlar yükleniyor...",
         doctorAppsEmptyTitle: "Henüz doktor bulunmuyor",
         doctorAppsEmptyDesc: "Doktor başvurusu henüz yapılmadı.",
-        activePatientsH1: "👨‍⚕️ Aktif Hastalar",
-        activePatientsStatActive: "Aktif Hasta",
-        activePatientsStatPending: "Bekleyen Hasta",
-        activePatientsStatTotal: "Toplam Hasta",
+        activePatientsH1: "👨‍⚕️ Aktif Kullanıcılar",
+        activePatientsStatActive: "Aktif Kullanıcı",
+        activePatientsStatPending: "Bekleyen Kullanıcı",
+        activePatientsStatTotal: "Toplam Kullanıcı",
         activePatientsStatClinic: "Klinik Sayısı",
-        activePatientsSearchPlaceholder: "Hasta adı, email veya telefon ile ara...",
+        activePatientsSearchPlaceholder: "Kullanıcı adı, email veya telefon ile ara...",
         activePatientsAllClinics: "Tüm Klinikler",
         activePatientsRefresh: "🔄 Yenile",
         activePatientsLoading: "🔄 Yükleniyor...",
-        activePatientsEmpty: "Henüz aktif hasta bulunmuyor",
+        activePatientsEmpty: "Henüz aktif kullanıcı bulunmuyor",
         treatmentCreateH1: "🏥 Treatment Oluştur",
         treatmentCreateSubtitle: "Yeni tedavi grubu oluşturun ve doktor atayın",
-        patientDetailH1: "Hasta Detay",
+        patientDetailH1: "Kullanıcı Detay",
         patientDetailBack: "Geri",
         legacyNavClinics: "Klinikler"
       },
@@ -183,7 +183,7 @@
       // Suspended Clinic Messages
       clinicSuspended: {
         title: "Hesabınız Geçici Olarak Askıya Alındı",
-        description: "Klinik hesabınız şu anda aktif değildir. Bu süre boyunca dashboard ve hasta işlemlerine erişim kısıtlanmıştır.",
+        description: "Klinik hesabınız şu anda aktif değildir. Bu süre boyunca dashboard ve kullanıcı işlemlerine erişim kısıtlanmıştır.",
         reasonTitle: "Askıya Alma Nedeni",
         reasonGeneric: "Hesabınız sistem ve güvenlik kontrolleri kapsamında incelenmektedir.",
         whatToDoTitle: "Nasıl Tekrar Aktif Olur?",
@@ -208,8 +208,8 @@
         },
         nav: {
           dashboard: "Dashboard",
-          patients: "Hastalar",
-          invitePatients: "Hasta Daveti",
+          patients: "Kullanıcılar",
+          invitePatients: "Kullanıcı Daveti",
           travel: "Seyahat",
           treatment: "Tedaviler",
           schedule: "Takvim",
@@ -232,16 +232,16 @@
           register: "Klinik Kaydı"
         },
         charts: {
-          metricTitleMonthlyPatients: "Aylık Kaydolan Hasta Sayısı",
+          metricTitleMonthlyPatients: "Aylık Kaydolan Kullanıcı Sayısı",
           metricTitleMonthlyProcedures: "Aylık İşlem Sayısı",
           chartLabelMonthlyRegistered: "Aylık kayıt",
-          activePatients: "Aktif Hastalar",
+          activePatients: "Aktif Kullanıcılar",
           procedures: "Prosedürler",
           noData: "Veri yok",
           trendNote: "Daha fazla veri toplandıkça trend iyileşecek",
           vsPreviousMonth: "önceki aya göre",
           noPreviousData: "Önceki veri yok",
-          summaryActivePatients: "{count} aktif hasta • {month}",
+          summaryActivePatients: "{count} aktif kullanıcı • {month}",
           summaryMonthlyRegistered: "{count} kayıt • {month}",
           summaryProcedures: "{count} prosedür • {month}"
         },
@@ -295,7 +295,7 @@
         monthlyUploads: "Aylık yüklemeler",
         referralInvites: "Referans davetleri",
         totalReferrers: "Toplam referans veren",
-        patientRoster: "Hasta kaydı (limit)",
+        patientRoster: "Kullanıcı kaydı (limit)",
         usagePeriodNote: "Aylık kullanım dönemi (UTC): {period}",
         usageFreshness: "Verilerin güncellenme zamanı: {time}",
         upgrade: "Yükselt",
@@ -338,24 +338,24 @@
       // Pricing (pricing.html)
       pricing: {
         title: "Clinifly Fiyatlandırma",
-        subtitle: "Aktif hasta sayınıza göre esnek planlar",
-        info: "Sadece aktif hasta sayınıza göre ödeme yapın.",
+        subtitle: "Aktif kullanıcı sayınıza göre esnek planlar",
+        info: "Sadece aktif kullanıcı sayınıza göre ödeme yapın.",
         free: {
           name: "Free",
-          patients: "5 Hasta",
-          description: "Clinifly'i gerçek hastalarla denemeniz için.",
+          patients: "5 Kullanıcı",
+          description: "Clinifly'i gerçek kullanıcılarla denemeniz için.",
           cta: "Başla"
         },
         basic: {
           name: "Pro",
           badge: "Popüler",
-          patients: "15 Hasta",
+          patients: "15 Kullanıcı",
           description: "Büyüyen klinikler için güçlü paket.",
           cta: "Upgrade Et"
         },
         pro: {
           name: "Premium",
-          patients: "Sınırsız hasta",
+          patients: "Sınırsız kullanıcı",
           description: "Kurumsal klinikler için premium destek.",
           cta: "Upgrade Et",
           contactCta: "İletişime Geç"
@@ -363,14 +363,14 @@
         periodMonthly: "/ay",
         features: {
           allCore: "Tüm core özellikler",
-          patientCommunication: "Hasta iletişimi",
+          patientCommunication: "Kullanıcı iletişimi",
           fileSharing: "Dosya paylaşımı",
           referral: "Referral sistemi",
           branding: "Clinifly branding",
           customBranding: "Özel branding",
           analytics: "Temel analizler",
           support: "E-posta desteği",
-          unlimitedPatients: "Sınırsız hasta",
+          unlimitedPatients: "Sınırsız kullanıcı",
           advancedReferral: "Gelişmiş referral (level, kampanya)",
           prioritySupport: "Öncelikli destek",
           onboarding: "Özel onboarding"
@@ -380,7 +380,7 @@
           free: "Free",
           basic: "Pro",
           pro: "Premium",
-          patients: "Aktif Hasta Sayısı",
+          patients: "Aktif Kullanıcı Sayısı",
           unlimited: "Sınırsız",
           coreFeatures: "Core Özellikler",
           branding: "Clinifly Branding",
@@ -396,12 +396,12 @@
         faq: {
           title: "Sıkça Sorulan Sorular",
           q1: {
-            question: "Aktif hasta sayısı nasıl hesaplanır?",
-            answer: "Sadece APPROVED (onaylı) durumundaki hastalar sayılır. Pending, rejected veya cancelled durumundaki hastalar limite dahil edilmez."
+            question: "Aktif kullanıcı sayısı nasıl hesaplanır?",
+            answer: "Sadece APPROVED (onaylı) durumundaki kullanıcılar sayılır. Pending, rejected veya cancelled durumundaki kullanıcılar limite dahil edilmez."
           },
           q2: {
             question: "Limit dolduğunda ne olur?",
-            answer: "Mevcut hastalarınızla çalışmaya devam edebilirsiniz. Sadece yeni hasta onayı engellenir. Upgrade yaptığınızda işlemlerinize devam edebilirsiniz."
+            answer: "Mevcut kullanıcılarınızla çalışmaya devam edebilirsiniz. Sadece yeni kullanıcı onayı engellenir. Upgrade yaptığınızda işlemlerinize devam edebilirsiniz."
           },
           q3: {
             question: "Plan değiştirebilir miyim?",
@@ -421,12 +421,12 @@
       
       // Treatment (admin-treatment.html) — tek `treatment` objesi (duplicate key yok)
       treatment: {
-        patientName: "Hasta Adı (Seç)",
-        selectPatient: "— Hasta seç —",
-        patientHelp: "Hasta listesinden Treatment'a basınca otomatik seçilir. Buradan hasta değiştirince otomatik yüklenir.",
-        noPatientSelected: "Hasta seçilmedi. Lütfen hasta seçin.",
+        patientName: "Kullanıcı Adı (Seç)",
+        selectPatient: "— Kullanıcı seç —",
+        patientHelp: "Kullanıcı listesinden Treatment'a basınca otomatik seçilir. Buradan kullanıcı değiştirince otomatik yüklenir.",
+        noPatientSelected: "Kullanıcı seçilmedi. Lütfen kullanıcı seçin.",
         loadingTreatments: "Tedaviler yükleniyor...",
-        noTreatments: "Bu hasta için tedavi planı bulunamadı.",
+        noTreatments: "Bu kullanıcı için tedavi planı bulunamadı.",
         addTreatment: "Tedavi Ekle",
         saveTreatment: "Tedaviyi Kaydet",
         treatmentSaved: "✅ Tedavi başarıyla kaydedildi!",
@@ -478,12 +478,12 @@
         thDateTime: "Tarih/Saat",
         thType: "Tip",
         thTitle: "Başlık",
-        patientToothDiagnoses: "Hastanın Diş Tanıları",
+        patientToothDiagnoses: "Kullanıcının Diş Tanıları",
         badgeToothDoctor: "Diş No + Doktor Tanısı",
         noDiagnosisSummary: "Tanı kaydı bulunamadı.",
         emptyStateTitle: "Henüz treatment kaydı yok",
         emptyStateSub: "Treatment'lar yüklendiğinde burada görünecek.",
-        selectPatientAbove: "Yukarıdan bir hasta seçin.",
+        selectPatientAbove: "Yukarıdan bir kullanıcı seçin.",
         loadingTreatmentsMsg: "Treatments yükleniyor...",
         loadFailed: "Yüklenemedi: {error}",
         noRecordsYet: "Henüz treatment kaydı yok. Diş seçip işlem ekleyebilirsiniz.",
@@ -616,10 +616,10 @@
         clinicCode: "Klinik Kodu",
         clinicCodeRequired: "*",
         clinicCodeWhat: "Klinik kodu nedir?",
-        clinicCodeHelp: "Klinik kodu, kliniğinizin kısa ve benzersiz sembolüdür — tıpkı bir plaka veya kısaltma gibi. Kayıt sırasında siz belirlersiniz; hastalar uygulamada bu kodu girerek kliniğinize bağlanır.",
+        clinicCodeHelp: "Klinik kodu, kliniğinizin kısa ve benzersiz sembolüdür — tıpkı bir plaka veya kısaltma gibi. Kayıt sırasında siz belirlersiniz; kullanıcılar uygulamada bu kodu girerek kliniğinize bağlanır.",
         clinicCodeTip1: "3–12 karakter; sadece büyük harf ve rakam (ör. CEM, ELKO, MOON)",
         clinicCodeTip2: "Klinik adınızdan türetin veya kolay hatırlanacak bir sembol seçin",
-        clinicCodeTip3: "Bu kod şifreniz değildir — hastalarınızla paylaşabilirsiniz",
+        clinicCodeTip3: "Bu kod şifreniz değildir — kullanıcılarınızla paylaşabilirsiniz",
         clinicCodePlaceholder: "ör. CEM, ELKO, MOON",
         clinicCodeHint: "Örnekler: CEM, ELKO, SMILE",
         invitationCode: "Davet Kodu",
@@ -668,7 +668,7 @@
         clinicInformation: "Klinik Bilgileri",
         adminToken: "Admin Token",
         copyToken: "📋 Token'ı Kopyala",
-        goToPatients: "Hasta Listesine Git",
+        goToPatients: "Kullanıcı Listesine Git",
         goToDashboard: "Dashboard'a Git",
         termsText: "Clinifly Dijital Platform Hizmet Sözleşmesi'ni okudum, anladım ve kabul ediyorum. Free Paket kapsamındaki hizmetlerin ücretsiz olduğunu, Free Paket dışındaki dijital hizmetlerin ücretli olduğunu ve bu hizmetlerin kapsam ile bedelinin ayrıca belirleneceğini kabul ederim.",
         connectingRetry: "⏳ Bağlanıyor… {seconds}s sonra tekrar",
@@ -702,7 +702,7 @@
         usageMonthlyUploads: "Aylık yüklemeler (UTC ayı)",
         usageReferrals: "Referans davetleri (bu UTC ayı)",
         usagePeriodNote: "Ölçüm dönemi (UTC ay): {period}",
-        usagePatients: "Kayıtlı hastalar (limit)",
+        usagePatients: "Kayıtlı kullanıcılar (limit)",
         usageLoadFailed: "Kullanım bilgisi alınamadı.",
         usageFreshness: "Anlık görüntü zamanı: {time}",
         currentPlan: "Mevcut Plan: {plan}",
@@ -713,7 +713,7 @@
         countryLabel: "Ülke",
         cityLabel: "Şehir",
         cityPlaceholder: "Antalya, İstanbul, Londra, Tbilisi...",
-        locationDiscoveryHelp: "Hastalar keşifte ülke ve şehre göre klinik filtreleyebilir.",
+        locationDiscoveryHelp: "Kullanıcılar keşifte ülke ve şehre göre klinik filtreleyebilir.",
         selectCountry: "Ülke seçin",
         countryRequiredAlert: "Lütfen bir ülke seçin.",
         cityRequiredAlert: "Şehir gereklidir.",
@@ -732,9 +732,9 @@
         primaryColor: "Birincil Renk (Hex)",
         secondaryColor: "İkincil Renk (Hex)",
         referralDiscounts: "🎁 Referans İndirimleri",
-        referralDiscountsHelp: "Başarılı referanslar için indirim yüzdelerini ayarlayın. Hem davet eden hem de davet edilen hasta bu indirimleri alır.",
+        referralDiscountsHelp: "Başarılı referanslar için indirim yüzdelerini ayarlayın. Hem davet eden hem de davet edilen kullanıcı bu indirimleri alır.",
         referralDiscount: "Referans İndirimi (%)",
-        referralDiscountHelp: "Hem davet eden hem davet edilen hastaya uygulanan indirim",
+        referralDiscountHelp: "Hem davet eden hem davet edilen kullanıcıya uygulanan indirim",
         aiCommunication: {
           title: "YZ İletişimi",
           desc: "Messenger, Instagram ve WhatsApp'ta ilk yanıt hızını ayarlayın. <strong>Anında</strong> modda YZ saniyeler içinde karşılar. <strong>İnsanı bekle</strong> modunda ekip yanıtlamazsa belirlediğiniz süre sonunda YZ devreye girer.",
@@ -742,7 +742,7 @@
           waitHuman: "YZ'den önce insanı bekle",
           humanOnly: "Yalnızca insan (otomatik YZ yanıtı yok)",
           timingHintInstant:
-            "Anında mod: Hasta art arda birkaç kısa mesaj yazarsa YZ kısa bir süre bekler, sonra hepsine tek yanıt verir. Önerilen: 5 saniye.",
+            "Anında mod: Kullanıcı art arda birkaç kısa mesaj yazarsa YZ kısa bir süre bekler, sonra hepsine tek yanıt verir. Önerilen: 5 saniye.",
           timingHintWait:
             "«İnsanı bekle» modunda ekip belirtilen süre içinde yazmazsa YZ ilk mesajı gönderir. Anında karşılama yoktur.",
           timingHintHumanOnly:
@@ -755,7 +755,7 @@
           buffer5s: "5 saniye (önerilen)",
           buffer10s: "10 saniye",
           messageBufferHelp:
-            "Hasta art arda kısa mesajlar gönderirse, son mesajdan sonra bu süre kadar beklenir; ardından tümüne tek YZ yanıtı gider (Messenger / WhatsApp / Instagram).",
+            "Kullanıcı art arda kısa mesajlar gönderirse, son mesajdan sonra bu süre kadar beklenir; ardından tümüne tek YZ yanıtı gider (Messenger / WhatsApp / Instagram).",
           omniDelayLabel: "Anında yanıt gecikmesi (Messenger / WhatsApp)",
           omniDelayHelp:
             "Artık «YZ yanıt gecikmesi» ayarını kullanın. Hızlı mesajları gruplayarak tek yanıt için 5 sn önerilir.",
@@ -770,7 +770,7 @@
           clinicOpenLabel: "Açılış",
           clinicCloseLabel: "Kapanış",
           clinicTimezoneLabel: "Klinik saat dilimi",
-          clinicHoursHint: "YZ yalnızca bu saatler arasında randevu önerir (klinik yerel saati). Hasta mesai dışı saat isterse bir sonraki uygun slotu sunar.",
+          clinicHoursHint: "YZ yalnızca bu saatler arasında randevu önerir (klinik yerel saati). Kullanıcı mesai dışı saat isterse bir sonraki uygun slotu sunar.",
           weekdayBlockTitle: "Hafta içi (Pazartesi–Cuma)",
           saturdayBlockTitle: "Cumartesi saatleri",
           sundayBlockTitle: "Pazar saatleri",
@@ -789,7 +789,7 @@
         },
         communicationChannels: {
           title: "İletişim Kanalları",
-          desc: "Harici kanalları bağlayın; hasta mesajları YZ koordinatör gelen kutunuzda kaynak rozetleriyle görünsün (WhatsApp, Messenger, Instagram, Web).",
+          desc: "Harici kanalları bağlayın; kullanıcı mesajları YZ koordinatör gelen kutunuzda kaynak rozetleriyle görünsün (WhatsApp, Messenger, Instagram, Web).",
           whatsapp: "WhatsApp →",
           messenger: "Messenger →",
         },
@@ -838,16 +838,16 @@
         referralLevel2Help: "2. başarılı referral sonrası toplam indirim",
         referralLevel3: "Seviye 3 (%)",
         referralLevel3Help: "3+ referral için maksimum indirim",
-        temporaryPatientLimit: "🔧 Geçici Hasta Limiti",
-        temporaryPatientLimitHelp: "Satış ve onboarding süreçleri için geçici hasta limiti ekleyin. Bu, normal plan limitinin üzerine eklenir.",
+        temporaryPatientLimit: "🔧 Geçici Kullanıcı Limiti",
+        temporaryPatientLimitHelp: "Satış ve onboarding süreçleri için geçici kullanıcı limiti ekleyin. Bu, normal plan limitinin üzerine eklenir.",
         temporaryLimit: "Geçici Limit",
-        temporaryLimitPlaceholder: "Ek hasta sayısı (örn: 5)",
+        temporaryLimitPlaceholder: "Ek kullanıcı sayısı (örn: 5)",
         saveTemporaryLimit: "Geçici Limiti Kaydet",
         removeTemporaryLimit: "Geçici Limiti Kaldır",
-        temporaryLimitActive: "Mevcut geçici limit: +{count} hasta",
+        temporaryLimitActive: "Mevcut geçici limit: +{count} kullanıcı",
         referralPreviewLabel: "💡 Önizleme:",
         referralPreviewNone: "❌ İndirim uygulanmayacak",
-        referralPreviewLow: "✅ <strong>{discount}% indirim</strong> hem davet eden hem de davet edilen hastaya uygulanacak.<br><span style=\"color:#10b981\">💡 Yeni hasta çekmek için harika bir başlangıç!</span>",
+        referralPreviewLow: "✅ <strong>{discount}% indirim</strong> hem davet eden hem de davet edilen kullanıcıya uygulanacak.<br><span style=\"color:#10b981\">💡 Yeni kullanıcı çekmek için harika bir başlangıç!</span>",
         referralPreviewMid: "🎉 <strong>{discount}% indirim</strong> her iki tarafa da uygulanacak.<br><span style=\"color:#f59e0b\">⚠️ Daha yüksek indirim ama daha çekici referanslar!</span>",
         referralPreviewHigh: "🚀 <strong>{discount}% indirim</strong> - Maksimum seviye!<br><span style=\"color:#ef4444\">⚠️ Çok cömert - kârlılığı kontrol edin!</span>",
         save: "💾 Ayarları Kaydet",
@@ -887,7 +887,7 @@
         recommendedDuration: "~{minutes} dk",
         minutes: "dk",
         opsProfileCardTitle: "Klinik YZ Eğitimi",
-        opsProfileCardDesc: "Yapay zekanın kliniğinizi nasıl temsil edeceğini, hangi bilgileri kullanacağını ve hastalara nasıl yanıt vereceğini yapılandırın.",
+        opsProfileCardDesc: "Yapay zekanın kliniğinizi nasıl temsil edeceğini, hangi bilgileri kullanacağını ve kullanıcılara nasıl yanıt vereceğini yapılandırın.",
         opsProfileCardPricing: "Fiyatlandırma ve marka varyantları aşağıdaki <strong>Tedavi Fiyat Listesi</strong>nde yapılandırılır (randevu + YZ için tek kaynak).",
         opsProfileOpen: "YZ Eğitim Merkezi →",
       },
@@ -895,10 +895,10 @@
       opsProfile: {
         pageTitle: "Klinik YZ Eğitimi — Clinifly Admin",
         title: "Klinik YZ Eğitimi",
-        lead: "Yapay zekanın kliniğinizi nasıl temsil edeceğini, hangi bilgileri kullanacağını ve hastalara nasıl yanıt vereceğini yapılandırın.",
+        lead: "Yapay zekanın kliniğinizi nasıl temsil edeceğini, hangi bilgileri kullanacağını ve kullanıcılara nasıl yanıt vereceğini yapılandırın.",
         policyLayerTitle: "Klinik geneli YZ kuralları (izin verilen üst sınır)",
-        policyLayerBody: "YZ'nin klinik genelinde ne yapabileceğini tanımlayın — kategoriler, güvenlik, diller ve eskalasyon. Bu üst sınırdır; koordinatör ve hekimler her hasta için Koordinasyon Merkezi veya hekim uygulamasında canlı modu seçer.",
-        liveControlNote: "Hasta bazlı Kapalı / Destek / Aktif burada ayarlanmaz — her başvuruda canlı YZ koordinasyonunu kullanın.",
+        policyLayerBody: "YZ'nin klinik genelinde ne yapabileceğini tanımlayın — kategoriler, güvenlik, diller ve eskalasyon. Bu üst sınırdır; koordinatör ve hekimler her kullanıcı için Koordinasyon Merkezi veya hekim uygulamasında canlı modu seçer.",
+        liveControlNote: "Kullanıcı bazlı Kapalı / Destek / Aktif burada ayarlanmaz — her başvuruda canlı YZ koordinasyonunu kullanın.",
         backSettings: "← Hesap ayarları",
         counts: "Oteller: {hotels} · İş akışı protokolleri: {protocols}",
         loading: "Yükleniyor…",
@@ -953,7 +953,7 @@
             dental_tourism: "Diş turizmi",
             implant_focused: "İmplant odaklı",
             cosmetic_dentistry: "Estetik diş hekimliği",
-            international_patients: "Uluslararası hastalar",
+            international_patients: "Uluslararası kullanıcılar",
             consultation_focused: "Konsültasyon odaklı",
           },
           intensity: {
@@ -976,7 +976,7 @@
             book_consultation: "Konsültasyon planla",
             start_whatsapp: "WhatsApp görüşmesi başlat",
             schedule_visit: "Klinik ziyareti planla",
-            collect_patient_info: "Hasta bilgisi topla",
+            collect_user_info: "Kullanıcı bilgisi topla",
             explain_treatment_process: "Tedavi sürecini açıkla",
           },
         },
@@ -1004,7 +1004,7 @@
           post_op_guidance: "Operasyon sonrası rehberlik"
         },
         handoff: {
-          angryPatient: "Kızgın hasta",
+          angryUser: "Kızgın kullanıcı",
           refundRequest: "İade talebi",
           severePain: "Şiddetli ağrı",
           legalLanguage: "Hukuki dil",
@@ -1026,7 +1026,7 @@
           aiPrefix: "YZ:"
         },
         visibility: {
-          patient_visible: { short: "Hastaya görünür", label: "Hasta mesajlarında görünebilir" },
+          patient_visible: { short: "Kullanıcıya görünür", label: "Kullanıcı mesajlarında görünebilir" },
           ai_reply: { short: "YZ yanıtları", label: "YZ yanıtlarında kullanılır" },
           internal: { short: "Dahili", label: "Yalnızca dahili / operasyonel" }
         },
@@ -1046,7 +1046,7 @@
         sectionHelp: {
           aiProfile: {
             intro: "Hangi dillerde yanıt verileceğini ve asistanınızın nasıl konuşacağını ayarlayın. Marka, fiyat ve süreç bilgisi tek yerde kalır — YZ her dilde doğal yanıt verir.",
-            aiUsageSummary: "Dil seçimi, karşılama, imza ve hasta iletişim tonu."
+            aiUsageSummary: "Dil seçimi, karşılama, imza ve kullanıcı iletişim tonu."
           },
           conversionCoordinator: {
             intro: "Güven odaklı yumuşak dönüşüm — ton, CTA, fiyatlandırma ve yasak ifadeler. Satış botu değil; Dönüşüm Motoru koordinatör yanıtlarını yönlendirir.",
@@ -1066,7 +1066,7 @@
           },
           workflow: {
             intro: "Ziyaret süreleri, iyileşme ve tedavi sonrası koordinasyon. Yalnızca operasyonel rehber — tanı değil.",
-            aiUsageSummary: "Tedavi süreci, iyileşme, takip ve operasyon sonrası hasta soruları."
+            aiUsageSummary: "Tedavi süreci, iyileşme, takip ve operasyon sonrası kullanıcı soruları."
           },
           aiSafety: {
             intro: "YZ ne kadar bağımsız yanıt verebilir. Tıbbi konular her zaman insan incelemesi gerektirir.",
@@ -1077,7 +1077,7 @@
             aiUsageSummary: "Görüşmede insan devrine geçiş tetikleyicileri."
           },
           internalNotes: {
-            intro: "Klinik konumlandırma ve strateji. YZ markanızla uyum sağlar — hastaya aynen gösterilmez.",
+            intro: "Klinik konumlandırma ve strateji. YZ markanızla uyum sağlar — kullanıcıya aynen gösterilmez.",
             aiUsageSummary: "Ton, öncelikler ve vurgulanacaklar için dahili bağlam."
           },
           travel: {
@@ -1094,15 +1094,15 @@
         fieldHelp: {
           supportedLanguages: {
             label: "Çok dilli YZ desteği",
-            helper: "Hasta sohbetlerinde hangi dillerin kullanılacağını seçin. Klinik bilgisi tek yerde kalır — YZ her dilde yanıt verir.",
-            aiUsage: "Hasta dili algılama, yanıt dili ve insan personel yönlendirme ipuçları.",
+            helper: "Kullanıcı sohbetlerinde hangi dillerin kullanılacağını seçin. Klinik bilgisi tek yerde kalır — YZ her dilde yanıt verir.",
+            aiUsage: "Kullanıcı dili algılama, yanıt dili ve insan personel yönlendirme ipuçları.",
             example: "Birincil İngilizce; diş turizmi için Türkçe, Rusça, Gürcüce."
           },
           displayNameLocalized: {
             label: "Asistan adı (yerelleştirilmiş)",
             helper: "İsteğe bağlı dil bazlı asistan görünen adları. Boş bırakılırsa YZ İngilizceden çevirir.",
-            aiUsage: "Hastanın dilinde karşılama ve imzalar.",
-            example: "en: DentX Care Team · tr: DentX Hasta Destek Ekibi"
+            aiUsage: "Kullanıcının dilinde karşılama ve imzalar.",
+            example: "en: DentX Care Team · tr: DentX Kullanıcı Destek Ekibi"
           },
           welcomeMessageLocalized: {
             label: "Karşılama mesajı (yerelleştirilmiş)",
@@ -1112,19 +1112,19 @@
           },
           toneStyle: {
             label: "Ton / üslup",
-            helper: "Hasta sohbetleri için genel iletişim tarzı.",
+            helper: "Kullanıcı sohbetleri için genel iletişim tarzı.",
             aiUsage: "Yanıtlarda sıcaklık, resmiyet ve lüks seviyesini belirler.",
             example: "Uluslararası diş turizmi için sıcak + profesyonel."
           },
           signatureStyle: {
             label: "İmza stili",
             helper: "Mesajların sonunda nasıl imzalanacağı.",
-            aiUsage: "YZ tarafından üretilen hasta mesajlarına eklenir."
+            aiUsage: "YZ tarafından üretilen kullanıcı mesajlarına eklenir."
           },
           profileTags: {
             label: "Profil etiketleri",
             helper: "Klinik havanızı tanımlayan kısa etiketler (lüks, hızlı yanıt vb.).",
-            aiUsage: "Dahili ton ipuçları — hastaya doğrudan gösterilmez.",
+            aiUsage: "Dahili ton ipuçları — kullanıcıya doğrudan gösterilmez.",
             placeholder: "lüks, samimi, premium, hızlı_yanıt",
             example: "premium, samimi, hızlı_yanıt"
           },
@@ -1167,7 +1167,7 @@
           forbidden_claims: {
             label: "Yasak pazarlama iddiaları",
             helper: "Kaçınılacak abartılı veya karşılaştırmalı iddialar.",
-            aiUsage: "Markaya uygun, uyumlu hasta mesajları.",
+            aiUsage: "Markaya uygun, uyumlu kullanıcı mesajları.",
           },
           forbidden_urgency: {
             label: "Yasak aciliyet baskısı",
@@ -1204,7 +1204,7 @@
           },
           sedationAvailability: {
             label: "Sedasyon mevcut",
-            helper: "Kaygılı hastalar için sedasyon sunuluyor mu.",
+            helper: "Kaygılı kullanıcılar için sedasyon sunuluyor mu.",
             aiUsage: "Konfor ve kaygı ile ilgili sorular."
           },
           weekdayHours: {
@@ -1216,12 +1216,12 @@
           timezone: {
             label: "Klinik saat dilimi",
             helper: "Randevu ve yanıt süreleri için IANA saat dilimi.",
-            aiUsage: "Uluslararası hastalar için saat ve yanıt penceresi dönüşümü.",
+            aiUsage: "Uluslararası kullanıcılar için saat ve yanıt penceresi dönüşümü.",
             placeholder: "Europe/Istanbul"
           },
           averageResponseSlaMinutes: {
             label: "Hedef yanıt süresi (dakika)",
-            helper: "YZ devrettiğinde ekibinizin ne kadar sürede yanıt vermesini beklediğiniz. Hastaya gösterilmez.",
+            helper: "YZ devrettiğinde ekibinizin ne kadar sürede yanıt vermesini beklediğiniz. Kullanıcıya gösterilmez.",
             aiUsage: "İnsan yanıtı gecikirse koordinatöre hatırlatma.",
             placeholder: "120"
           },
@@ -1235,7 +1235,7 @@
             label: "Ulaşım notları",
             helper: "Havalimanı karşılama, VIP transfer, servis detayları.",
             aiUsage: "Seyahat ve varış koordinasyonu.",
-            example: "Tedavi hastaları için Pzt–Cmt ücretsiz havalimanı karşılama; istek üzerine VIP transfer."
+            example: "Tedavi kullanıcıları için Pzt–Cmt ücretsiz havalimanı karşılama; istek üzerine VIP transfer."
           },
           refundPolicy: {
             label: "İade politikası",
@@ -1252,16 +1252,16 @@
             label: "Konumlandırma maddeleri",
             helper: "Kliniği nasıl konumlandırmak istediğiniz (estetik, muhafazakâr planlama, tipik kalış). Satır başına bir madde.",
             aiUsage: "YZ vurgu ve öneri tarzını şekillendirir — aynen alıntılanmaz.",
-            example: "Doğal estetiğe odaklanırız\nÇoğu uluslararası hasta 5–7 gün kalır"
+            example: "Doğal estetiğe odaklanırız\nÇoğu uluslararası kullanıcı 5–7 gün kalır"
           },
           freeformNotes: {
             label: "Ek dahili notlar",
-            helper: "YZ hasta koordine ederken ekibinizin bilmesi gereken diğer bilgiler.",
-            aiUsage: "Hasta koordinasyonu için ek bağlam."
+            helper: "YZ kullanıcı koordine ederken ekibinizin bilmesi gereken diğer bilgiler.",
+            aiUsage: "Kullanıcı koordinasyonu için ek bağlam."
           },
           protocol_postOpNotes: {
             label: "Operasyon sonrası koordinasyon notları",
-            helper: "Tedavi sonrası hastaları kliniğinizin nasıl yönlendirdiğini açıklayın. YZ iyileşme, takip, şişlik, beslenme ve kontrol sorularında kullanabilir.",
+            helper: "Tedavi sonrası kullanıcıları kliniğinizin nasıl yönlendirdiğini açıklayın. YZ iyileşme, takip, şişlik, beslenme ve kontrol sorularında kullanabilir.",
             aiUsage: "Operasyon sonrası koordinasyon yanıtları — doktor tavsiyesi yerine geçmez.",
             placeholder: "İmplant cerrahisinden sonra 48 saat sert gıdalardan kaçınılır. İlk 2–3 gün hafif şişlik normaldir.",
             example: "Yumuşak diyet 48 saat, ilk gün buz, uçuş öncesi kontrol, 3. gün WhatsApp takibi."
@@ -1327,7 +1327,7 @@
         breadcrumbCurrent: "Tedavi iş akışları",
         title: "Tedavi iş akışları",
         lead: "Yapay zekaya kliniğinizde tedavi süreçlerinin genelde nasıl işlediğini öğretin — ziyaret zamanlaması, iyileşme beklentileri ve takip adımları dahil.",
-        intro: "Her tedavi türü için tipik ziyaret sayısı, kalış süresi ve operasyon sonrası rehberliği ekleyin. YZ bunu hastalara kliniğinizin rutinini anlatmak için kullanır — tıbbi tanı veya reçete değildir.",
+        intro: "Her tedavi türü için tipik ziyaret sayısı, kalış süresi ve operasyon sonrası rehberliği ekleyin. YZ bunu kullanıcılara kliniğinizin rutinini anlatmak için kullanır — tıbbi tanı veya reçete değildir.",
         panelTitle: "Tedavi iş akışlarınız",
         addWorkflow: "+ İş akışı ekle",
         editWorkflow: "İş akışını düzenle",
@@ -1341,7 +1341,7 @@
         fieldLangs: "Diller",
         checkXray: "Genelde röntgen / görüntüleme gerekir",
         checkTemp: "Geçici diş mümkün",
-        checkActive: "Hasta görüşmelerinde kullan",
+        checkActive: "Kullanıcı görüşmelerinde kullan",
         saveWorkflow: "İş akışını kaydet",
         cancel: "İptal",
         delete: "Sil",
@@ -1365,41 +1365,41 @@
       },
 
       patientInvite: {
-        dashboardTitle: "Hasta Daveti",
-        quickTitle: "Hasta davet et",
-        quickHint: "Hastalarınız klinik kodu girmeden QR veya link ile otomatik kayıt olur.",
-        pageTitle: "Hasta Daveti",
-        pageSubtitle: "Davet linki veya QR kodunu paylaşın. Yeni hastalar kayıt sonrası kliniğinize otomatik bağlanır.",
+        dashboardTitle: "Kullanıcı Daveti",
+        quickTitle: "Kullanıcı davet et",
+        quickHint: "Kullanıcılarınız klinik kodu girmeden QR veya link ile otomatik kayıt olur.",
+        pageTitle: "Kullanıcı Daveti",
+        pageSubtitle: "Davet linki veya QR kodunu paylaşın. Yeni kullanıcılar kayıt sonrası kliniğinize otomatik bağlanır.",
         copyLink: "Davet Linkini Kopyala",
         showQr: "QR Kodu Göster",
         downloadQr: "QR İndir",
         printPoster: "Poster Yazdır",
         invitationUrl: "Davet URL",
-        modalTitle: "Hasta daveti",
+        modalTitle: "Kullanıcı daveti",
         clinicLabel: "Klinik",
         copied: "Kopyalandı!",
         allowPopups: "Poster için açılır pencereye izin verin.",
         posterTagline: "Clinifly'de kliniğimize katılmak için tarayın",
         openFullPage: "Davet sayfasını aç",
         codeHint: "Klinik kodu: {code}",
-        codeHintSuffix: "QR tarayan hastalar kayıt sonrası kliniğinize bağlanır.",
+        codeHintSuffix: "QR tarayan kullanıcılar kayıt sonrası kliniğinize bağlanır.",
         qrLoadError: "QR yüklenemedi. Tekrar deneyin veya davet linkini kopyalayın."
       },
 
       // Patients (admin-patients.html)
       patients: {
-        title: "Clinifly Admin – Patients",
-        registeredPatients: "Kayıtlı Hastalar",
+        title: "Clinifly Admin – Users",
+        registeredPatients: "Kayıtlı Kullanıcılar",
         searchPlaceholder: "Ara: isim / telefon / patientId / clinicCode",
         filterAll: "Tümü",
         clearFilters: "Temizle",
         refresh: "Yenile",
         loading: "Yükleniyor...",
         noResults: "Sonuç yok",
-        selectedPatient: "Seçili Hasta: {name}",
-        patientId: "Patient ID: {id}",
+        selectedPatient: "Seçili Kullanıcı: {name}",
+        patientId: "User ID: {id}",
         copyId: "Copy ID",
-        copyIdSuccess: "✅ Patient ID kopyalandı",
+        copyIdSuccess: "✅ Kullanıcı ID kopyalandı",
         clear: "Clear",
         travel: "Seyahat",
         treatment: "Tedavi",
@@ -1407,10 +1407,10 @@
         chat: "Chat",
         files: "📁 Dosyalar",
         approve: "Onayla",
-        approveConfirm: "Hastayı onaylamak istediğinize emin misiniz? ({patientId})",
-        approveSuccess: "✅ Hasta onaylandı",
-        addPatient: "➕ Hasta ekle",
-        addPatientTitle: "Yeni hasta ekle",
+        approveConfirm: "Kullanıcıyı onaylamak istediğinize emin misiniz? ({patientId})",
+        approveSuccess: "✅ Kullanıcı onaylandı",
+        addPatient: "➕ Kullanıcı ekle",
+        addPatientTitle: "Yeni kullanıcı ekle",
         firstName: "Ad *",
         lastName: "Soyad *",
         email: "E-posta",
@@ -1418,9 +1418,9 @@
         address: "Adres",
         notes: "Notlar",
         cancel: "İptal",
-        add: "Hasta ekle",
-        addSuccess: "✅ Hasta başarıyla eklendi",
-        addError: "❌ Hasta eklenemedi",
+        add: "Kullanıcı ekle",
+        addSuccess: "✅ Kullanıcı başarıyla eklendi",
+        addError: "❌ Kullanıcı eklenemedi",
         assignDoctorLabel: "Doktor ata:",
         assignButton: "Ata",
         selectDoctorPlaceholder: "Doktor seçin",
@@ -1435,17 +1435,17 @@
         errors: {
           noToken: "⚠️ Admin token bulunamadı. Lütfen önce giriş yapın.",
           unauthorized: "❌ Yetkilendirme hatası. Lütfen tekrar giriş yapın.",
-          loadFailed: "❌ Hasta listesi yüklenemedi: {error}",
+          loadFailed: "❌ Kullanıcı listesi yüklenemedi: {error}",
           approveFailed: "❌ Onaylama hatası: {error}",
-          patientLimitReached: "⚠️ Aktif hasta limitinize ulaştınız. Yeni hasta eklemek için planınızı yükseltebilirsiniz.",
-          patientLimitReachedTitle: "Hasta Limiti Doldu"
+          patientLimitReached: "⚠️ Aktif kullanıcı limitinize ulaştınız. Yeni kullanıcı eklemek için planınızı yükseltebilirsiniz.",
+          patientLimitReachedTitle: "Kullanıcı Limiti Doldu"
         },
         limits: {
-          title: "Aktif Hasta Limiti",
-          message: "Mevcut planınızda {current}/{limit} aktif hasta bulunuyor.",
-          upgradeMessage: "Yeni hasta eklemek için planınızı yükseltebilirsiniz.",
+          title: "Aktif Kullanıcı Limiti",
+          message: "Mevcut planınızda {current}/{limit} aktif kullanıcı bulunuyor.",
+          upgradeMessage: "Yeni kullanıcı eklemek için planınızı yükseltebilirsiniz.",
           upgradeButton: "Planı Yükselt",
-          continueButton: "Mevcut Hastalarla Devam Et"
+          continueButton: "Mevcut Kullanıcılarla Devam Et"
         }
       },
       
@@ -1492,7 +1492,7 @@
         thInvitedCount: "Davet",
         thRegisteredCount: "Kayıtlı",
         thTreatedCount: "Tedavi",
-        thInvitedPatients: "Davet edilen hastalar",
+        thInvitedPatients: "Davet edilen kullanıcılar",
         loadingMain: "Yükleniyor…",
         sessionExpired: "Oturum süresi doldu. Lütfen tekrar giriş yapın.",
         errorLoad: "Hata: {message}",
@@ -1525,8 +1525,8 @@
       },
       marketplaceProfile: {
         title: "Clinifly Admin – Dizin Profili",
-        pageTitle: "Hasta Dizin Profili",
-        subtitle: "Kliniğinizin Clinifly hasta dizinindeki görünümünü yönetin. İtibar verileri klinik tarafından girilir — Google ve Trustpilot bilgilerini elle ekleyin. Onaylı, öne çıkan ve sponsor rozetleri Clinifly tarafından atanır.",
+        pageTitle: "Kullanıcı Dizin Profili",
+        subtitle: "Kliniğinizin Clinifly kullanıcı dizinindeki görünümünü yönetin. İtibar verileri klinik tarafından girilir — Google ve Trustpilot bilgilerini elle ekleyin. Onaylı, öne çıkan ve sponsor rozetleri Clinifly tarafından atanır.",
         loading: "Profil yükleniyor…",
         loadFailed: "Yüklenemedi",
         saving: "Kaydediliyor…",
@@ -1535,12 +1535,12 @@
         saveBtn: "Profili kaydet",
         reloadBtn: "Yeniden yükle",
         sectionCompletion: "Profil tamamlama",
-        sectionCompletionHint: "Dolu profiller hastaların karşılaştırma yapmasına ve güvenmesine yardımcı olur.",
+        sectionCompletionHint: "Dolu profiller kullanıcıların karşılaştırma yapmasına ve güvenmesine yardımcı olur.",
         completed: "Tamamlanan",
         missing: "Eksik",
         nothingYet: "Henüz yok",
         allDone: "Tamamlandı",
-        publishTitle: "Hasta dizinine yayınla",
+        publishTitle: "Kullanıcı dizinine yayınla",
         publishHint: "Gerekli: logo, açıklama, ülke, ≥1 uzmanlık, ≥1 dil, web sitesi veya sosyal bağlantı",
         sectionBadges: "Platform rozetleri",
         sectionBadgesHint: "Yalnızca Clinifly — değişiklik için Clinifly ile iletişime geçin.",
@@ -1550,7 +1550,7 @@
         sectionFacebookReviews: "Facebook Yorumları",
         sectionTrustpilotReviews: "Trustpilot Yorumları",
         facebookReviewsHelp: "Facebook Sayfanızı açın ve sayfa URL'sini kopyalayın. Facebook'taki öneri puanınızı ve öneri sayınızı girin.",
-        reputationPreviewLabel: "Hasta tarafında görünüm",
+        reputationPreviewLabel: "Kullanıcı tarafında görünüm",
         reputationPreviewEmpty: "Puan girildiğinde önizleme burada görünür.",
         sectionSocial: "Sosyal ve Web",
         sectionClinicInfo: "Klinik Bilgileri",
@@ -1570,7 +1570,7 @@
           trustpilotRating: "Trustpilot Puanı (0–5)",
           trustpilotReviewCount: "Trustpilot Yorum Sayısı",
           yearsInOperation: "Faaliyet Yılı",
-          intlPatients: "Yıllık Uluslararası Hasta",
+          intlPatients: "Yıllık Uluslararası Kullanıcı",
           website: "Web Sitesi",
           facebook: "Facebook",
           instagram: "Instagram",
@@ -1656,7 +1656,7 @@
       successCenter: {
         title: "Clinifly Admin – Başarı Merkezi",
         pageTitle: "Klinik Başarı Merkezi",
-        subtitle: "Kurulumu tamamlayarak görünürlüğünüzü artırın ve daha fazla hasta talebi alın. Aşağıdaki önerileri takip edin — ekibinizde bir başarı yöneticisi gibi.",
+        subtitle: "Kurulumu tamamlayarak görünürlüğünüzü artırın ve daha fazla kullanıcı talebi alın. Aşağıdaki önerileri takip edin — ekibinizde bir başarı yöneticisi gibi.",
         loading: "Başarı planınız yükleniyor…",
         loadFailed: "Yüklenemedi",
         profileCompletion: "Profil",
@@ -1671,7 +1671,7 @@
         sectionCampaign: "Onboarding Yol Haritası",
         sectionCampaignHint: "Yakında: otomatik kurulum kampanyaları (Gün 1 logo, Gün 3 Google yorumları…).",
         whyItMatters: "Neden önemli",
-        allRecommendationsDone: "Harika! Profiliniz tamamlandı — hasta taleplerine hazırsınız.",
+        allRecommendationsDone: "Harika! Profiliniz tamamlandı — kullanıcı taleplerine hazırsınız.",
         noGuidanceYet: "Henüz rehberlik mesajı yok.",
         markRead: "Okundu",
         items: {
@@ -1701,11 +1701,11 @@
       },
       helpCenter: {
         pageTitle: "Clinifly ile Başlarken",
-        subtitle: "Klinik kurulumu, profil tamamlama, doktor ve hasta bağlantısı, yapay zeka ve daha fazlası için adım adım rehberler. Teknik jargon yok — klinik sahipleri için yazıldı.",
+        subtitle: "Klinik kurulumu, profil tamamlama, doktor ve kullanıcı bağlantısı, yapay zeka ve daha fazlası için adım adım rehberler. Teknik jargon yok — klinik sahipleri için yazıldı.",
         searchPlaceholder: "Yardım makalelerinde ara…",
         searchNoResults: "Aramanızla eşleşen makale bulunamadı. Farklı kelimeler deneyin veya bölümlere göz atın.",
         checklistTitle: "Hızlı kurulum kontrol listesi",
-        checklistHint: "Hasta almaya en hızlı başlamak için bu sırayı izleyin.",
+        checklistHint: "Kullanıcı almaya en hızlı başlamak için bu sırayı izleyin.",
         topicsTitle: "Konular",
         showAll: "Tüm konuları göster",
         supportText: "Hâlâ takıldınız mı?",
@@ -1717,7 +1717,7 @@
         openPage: "İlgili sayfayı aç",
         screenshotCaption: "Örnek ekran — admin paneliniz biraz farklı görünebilir.",
         dashboardBannerTitle: "Clinifly ile Başlarken",
-        dashboardBannerDesc: "Klinik profili, doktorlar, hastalar, yapay zeka ve daha fazlası için kurulum rehberleri — klinik sahipleri için yazıldı.",
+        dashboardBannerDesc: "Klinik profili, doktorlar, kullanıcılar, yapay zeka ve daha fazlası için kurulum rehberleri — klinik sahipleri için yazıldı.",
         dashboardBannerBtn: "Yardım Merkezi →",
         settingsBanner: "Klinik kurulumu, yapay zeka veya referanslar hakkında yardım mı lazım? Adım adım rehberler için Yardım Merkezi'ni ziyaret edin.",
         openLink: "Yardım Merkezi →",
@@ -1732,17 +1732,17 @@
           doctors: "Doktor onayı",
           leadInbox: "Lead gelen kutusu ataması",
           whatsapp: "WhatsApp bağlantısı",
-          invitePatients: "Hasta davet linki",
+          invitePatients: "Kullanıcı davet linki",
         },
         sections: {
           "create-clinic": { title: "Klinik Oluşturun", subtitle: "Hesap oluşturma, onay ve bilgi güncelleme" },
           "connect-doctors": { title: "Doktor Bağlayın", subtitle: "Davet, kayıt, onay ve roller" },
-          "add-patients": { title: "Hasta Ekleyin", subtitle: "Katılım, onay, davet ve doktor ataması" },
+          "add-patients": { title: "Kullanıcı Ekleyin", subtitle: "Katılım, onay, davet ve doktor ataması" },
           "public-profile": { title: "Halka Açık Profilinizi Tamamlayın", subtitle: "Logo, açıklama, fotoğraflar, uzmanlıklar ve diller" },
           "google-reviews": { title: "Google Yorumları", subtitle: "Google Business profilinizi Clinifly'a ekleyin" },
           "social-media": { title: "Sosyal Medya Bağlantıları", subtitle: "Web sitesi, Instagram, Facebook ve daha fazlası" },
           "ai-assistant": { title: "Yapay Zeka Asistanı", subtitle: "AI'yi etkinleştirin, WhatsApp ve Messenger" },
-          "international-patients": { title: "Uluslararası Hastalar", subtitle: "Keşif, çok dilli iletişim ve tedavi talepleri" },
+          "international-patients": { title: "Uluslararası Kullanıcılar", subtitle: "Keşif, çok dilli iletişim ve tedavi talepleri" },
           "referral-system": { title: "Referans Sistemi", subtitle: "Arkadaş davetleri ve klinik faydaları" },
           faq: { title: "Sık Sorulan Sorular", subtitle: "Hızlı cevaplar" },
         },
@@ -1757,10 +1757,10 @@
         weekdays: ["Paz", "Pzt", "Sal", "Çar", "Per", "Cum", "Cmt"]
       },
       files: {
-        pageTitle: "Admin – Hasta Dosyaları",
-        title: "📁 Hasta Dosyaları",
-        selectPatient: "Hasta:",
-        selectPlaceholder: "Hasta seçin...",
+        pageTitle: "Admin – Kullanıcı Dosyaları",
+        title: "📁 Kullanıcı Dosyaları",
+        selectPatient: "Kullanıcı:",
+        selectPlaceholder: "Kullanıcı seçin...",
         filterAll: "Tümü",
         filterPhoto: "📸 Fotoğraf",
         filterXray: "🦷 Röntgen",
@@ -1768,7 +1768,7 @@
         filterChat: "💬 Chat",
         upload: "Yükle",
         empty: "Dosya bulunamadı.",
-        selectToView: "Dosyaları görmek için hasta seçin.",
+        selectToView: "Dosyaları görmek için kullanıcı seçin.",
         badgeImage: "Fotoğraf",
         badgeXray: "Röntgen",
         badgePdf: "PDF",
@@ -1826,10 +1826,10 @@
         documentTitle: "Sohbet - Clinifly Admin",
         pageHeading: "💬 Clinifly Admin – Sohbet",
         title: "Mesajlar",
-        patientsHeading: "Hastalar",
+        patientsHeading: "Kullanıcılar",
         loading: "Yükleniyor...",
-        selectPatient: "Bir hasta seçin",
-        noPatients: "Henüz hasta yok",
+        selectPatient: "Bir kullanıcı seçin",
+        noPatients: "Henüz kullanıcı yok",
         unnamed: "İsimsiz",
         placeholder: "Mesaj yazın...",
         send: "Gönder",
@@ -1850,10 +1850,10 @@
         errAuth: "❌ Yetkilendirme hatası. Lütfen tekrar giriş yapın.",
         errAuthShort: "❌ Yetkilendirme hatası",
         errUnknown: "Bilinmeyen hata",
-        errLoadList: "❌ Hasta listesi yüklenemedi: {message}",
+        errLoadList: "❌ Kullanıcı listesi yüklenemedi: {message}",
         errLoadMessages: "Mesajlar yüklenemedi",
         errLoadMessagesFull: "❌ Mesajlar yüklenemedi: {message}",
-        errSelectFirst: "❌ Lütfen önce hasta seçin",
+        errSelectFirst: "❌ Lütfen önce kullanıcı seçin",
         errNoTokenSend: "❌ Admin token bulunamadı",
         errSend: "Mesaj gönderilemedi",
         errSendFull: "❌ Mesaj gönderilemedi: {message}",
@@ -1866,7 +1866,7 @@
         errPhotoSize: "❌ Fotoğraf boyutu 10MB'dan küçük olmalıdır.",
         errZipSize: "❌ ZIP dosyası 50MB'dan küçük olmalıdır.",
         errDocSize: "❌ Doküman 20MB'dan küçük olmalıdır.",
-        errSelectPatient: "❌ Lütfen önce bir hasta seçin",
+        errSelectPatient: "❌ Lütfen önce bir kullanıcı seçin",
         before: "Önce",
         after: "Sonra",
         doctorReview: "👨‍⚕️ Doktor incelemesi",
@@ -1874,7 +1874,7 @@
         defaultPhoto: "Fotoğraf",
         defaultFile: "Dosya",
         navClinicSettings: "Klinik Ayarları",
-        patientAssignedBanner: "Bu hasta Dr. {doctorName}'e atandı",
+        patientAssignedBanner: "Bu kullanıcı Dr. {doctorName}'e atandı",
       },
       leads: {
         documentTitle: "Lead yönetimi — Clinifly Admin",
@@ -1885,7 +1885,7 @@
         refreshList: "Listeyi yenile",
         statusLoading: "Yükleniyor…",
         statusUnassigned: "{count} kayıt",
-        thPatient: "Hasta",
+        thPatient: "Kullanıcı",
         thContact: "İletişim",
         thPreview: "Son mesaj",
         thAssign: "Doktor ata",
@@ -1939,7 +1939,7 @@
         tabAssigned: "Atanmış",
         thChannel: "Kanal",
         thAssignedAt: "Atandı",
-        searchPlaceholder: "Hasta, telefon, mesaj ara…",
+        searchPlaceholder: "Kullanıcı, telefon, mesaj ara…",
         channelMessenger: "Messenger",
         channelWhatsapp: "WhatsApp",
         channelWeb: "Web",
@@ -1980,11 +1980,11 @@
 
       adminPages: {
         travelH1: "✈️ Clinifly Admin – Travel",
-        travelGlobalWarning: "⚠️ WARNING: Some fields are reserved for the patient. Review the notes below.",
+        travelGlobalWarning: "⚠️ WARNING: Some fields are reserved for the user. Review the notes below.",
         travelWordHotel: "Hotel",
         travelWordFlights: "Flights",
         travelListSeparator: " and ",
-        travelDynamicWarning: "⚠️ WARNING: The patient will enter {list} details. You cannot edit these fields. The patient will complete them in the mobile app.",
+        travelDynamicWarning: "⚠️ WARNING: The user will enter {list} details. You cannot edit these fields. The user will complete them in the mobile app.",
         healthH1: "🩺 Clinifly Admin – Health",
         doctorApplicationsH1: "Doctor applications",
         doctorAppsStatPending: "Pending",
@@ -1994,19 +1994,19 @@
         doctorAppsLoading: "Loading doctors...",
         doctorAppsEmptyTitle: "No doctors yet",
         doctorAppsEmptyDesc: "No doctor application has been submitted yet.",
-        activePatientsH1: "👨‍⚕️ Active patients",
-        activePatientsStatActive: "Active patients",
-        activePatientsStatPending: "Pending patients",
-        activePatientsStatTotal: "Total patients",
+        activePatientsH1: "👨‍⚕️ Active users",
+        activePatientsStatActive: "Active users",
+        activePatientsStatPending: "Pending users",
+        activePatientsStatTotal: "Total users",
         activePatientsStatClinic: "Clinics",
         activePatientsSearchPlaceholder: "Search by name, email or phone...",
         activePatientsAllClinics: "All clinics",
         activePatientsRefresh: "🔄 Refresh",
         activePatientsLoading: "🔄 Loading...",
-        activePatientsEmpty: "No active patients yet",
+        activePatientsEmpty: "No active users yet",
         treatmentCreateH1: "🏥 Create treatment",
         treatmentCreateSubtitle: "Create a new treatment group and assign doctors",
-        patientDetailH1: "Patient detail",
+        patientDetailH1: "User detail",
         patientDetailBack: "Back",
         legacyNavClinics: "Clinics"
       },
@@ -2014,7 +2014,7 @@
       // Suspended Clinic Messages
       clinicSuspended: {
         title: "Your Account Has Been Temporarily Suspended",
-        description: "Your clinic account is currently inactive. Access to the dashboard and patient features is restricted.",
+        description: "Your clinic account is currently inactive. Access to the dashboard and user features is restricted.",
         reasonTitle: "Suspension Reason",
         reasonGeneric: "Your account is under review for system and security checks.",
         whatToDoTitle: "How to Reactivate?",
@@ -2039,8 +2039,8 @@
         },
         nav: {
           dashboard: "Dashboard",
-          patients: "Patients",
-          invitePatients: "Invite Patients",
+          patients: "Users",
+          invitePatients: "Invite Users",
           travel: "Travel",
           treatment: "Treatments",
           schedule: "Schedule",
@@ -2063,16 +2063,16 @@
           register: "Register Clinic"
         },
         charts: {
-          metricTitleMonthlyPatients: "Monthly registered patients",
+          metricTitleMonthlyPatients: "Monthly registered users",
           metricTitleMonthlyProcedures: "Monthly procedure count",
           chartLabelMonthlyRegistered: "Monthly registrations",
-          activePatients: "Active Patients",
+          activePatients: "Active Users",
           procedures: "Procedures",
           noData: "No data",
           trendNote: "Trend will improve as more data is collected",
           vsPreviousMonth: "vs previous month",
           noPreviousData: "No previous data",
-          summaryActivePatients: "{count} active patients • {month}",
+          summaryActivePatients: "{count} active users • {month}",
           summaryMonthlyRegistered: "{count} registered • {month}",
           summaryProcedures: "{count} procedures • {month}"
         },
@@ -2117,7 +2117,7 @@
             overdue: "Overdue:",
             today: "Today:",
             tomorrow: "Tomorrow:",
-            patients: "patients",
+            patients: "users",
             events: "events"
           }
         },
@@ -2125,7 +2125,7 @@
         activeTreatments: "Active treatments",
         monthlyUploads: "Monthly uploads",
         referralInvites: "Referral invites",
-        patientRoster: "Patients (roster cap)",
+        patientRoster: "Users (roster cap)",
         usagePeriodNote: "Monthly usage window (UTC): {period}",
         usageFreshness: "Counts refreshed at: {time}",
         upgrade: "Upgrade",
@@ -2168,24 +2168,24 @@
       // Pricing (pricing.html)
       pricing: {
         title: "Clinifly Pricing",
-        subtitle: "Flexible plans based on your active patient count",
-        info: "Pay only based on your active patient count.",
+        subtitle: "Flexible plans based on your active user count",
+        info: "Pay only based on your active user count.",
         free: {
           name: "Free",
-          patients: "5 patients",
-          description: "Try Clinifly with real patients.",
+          patients: "5 users",
+          description: "Try Clinifly with real users.",
           cta: "Get Started"
         },
         basic: {
           name: "Pro",
           badge: "Popular",
-          patients: "15 patients",
+          patients: "15 users",
           description: "Powerful package for growing clinics.",
           cta: "Upgrade"
         },
         pro: {
           name: "Premium",
-          patients: "Unlimited patients",
+          patients: "Unlimited users",
           description: "Premium support for enterprise clinics.",
           cta: "Upgrade",
           contactCta: "Contact Us"
@@ -2193,14 +2193,14 @@
         periodMonthly: "/month",
         features: {
           allCore: "All core features",
-          patientCommunication: "Patient communication",
+          patientCommunication: "User communication",
           fileSharing: "File sharing",
           referral: "Referral system",
           branding: "Clinifly branding",
           customBranding: "Custom branding",
           analytics: "Basic analytics",
           support: "Email support",
-          unlimitedPatients: "Unlimited patients",
+          unlimitedPatients: "Unlimited users",
           advancedReferral: "Advanced referral (levels, campaigns)",
           prioritySupport: "Priority support",
           onboarding: "Custom onboarding"
@@ -2210,7 +2210,7 @@
           free: "Free",
           basic: "Pro",
           pro: "Premium",
-          patients: "Active Patients",
+          patients: "Active Users",
           unlimited: "Unlimited",
           coreFeatures: "Core Features",
           branding: "Clinifly Branding",
@@ -2226,12 +2226,12 @@
         faq: {
           title: "Frequently Asked Questions",
           q1: {
-            question: "How is active patient count calculated?",
-            answer: "Only APPROVED (active) patients are counted. Pending, rejected, or cancelled patients are not included in the limit."
+            question: "How is active user count calculated?",
+            answer: "Only APPROVED (active) users are counted. Pending, rejected, or cancelled users are not included in the limit."
           },
           q2: {
             question: "What happens when I reach the limit?",
-            answer: "You can continue working with your existing patients. Only new patient approvals are blocked. You can upgrade to continue operations."
+            answer: "You can continue working with your existing users. Only new user approvals are blocked. You can upgrade to continue operations."
           },
           q3: {
             question: "Can I change plans?",
@@ -2251,12 +2251,12 @@
       
       // Treatment (admin-treatment.html)
       treatment: {
-        patientName: "Patient Name (Select)",
-        selectPatient: "— Select patient —",
-        patientHelp: "Automatically selected when opening Treatment from the patient list. Changing the patient here reloads data.",
-        noPatientSelected: "No patient selected. Please select a patient.",
+        patientName: "User Name (Select)",
+        selectPatient: "— Select user —",
+        patientHelp: "Automatically selected when opening Treatment from the user list. Changing the user here reloads data.",
+        noPatientSelected: "No user selected. Please select a user.",
         loadingTreatments: "Loading treatments...",
-        noTreatments: "No treatment plan found for this patient.",
+        noTreatments: "No treatment plan found for this user.",
         addTreatment: "Add Treatment",
         saveTreatment: "Save Treatment",
         treatmentSaved: "✅ Treatment saved successfully!",
@@ -2308,12 +2308,12 @@
         thDateTime: "Date/Time",
         thType: "Type",
         thTitle: "Title",
-        patientToothDiagnoses: "Patient tooth diagnoses",
+        patientToothDiagnoses: "User tooth diagnoses",
         badgeToothDoctor: "Tooth No + doctor diagnosis",
         noDiagnosisSummary: "No diagnosis records.",
         emptyStateTitle: "No treatment records yet",
         emptyStateSub: "Treatments will appear here when loaded.",
-        selectPatientAbove: "Select a patient above.",
+        selectPatientAbove: "Select a user above.",
         loadingTreatmentsMsg: "Loading treatments...",
         loadFailed: "Failed to load: {error}",
         noRecordsYet: "No treatment records yet. Select a tooth and add a procedure.",
@@ -2446,10 +2446,10 @@
         clinicCode: "Clinic Code",
         clinicCodeRequired: "*",
         clinicCodeWhat: "What is a clinic code?",
-        clinicCodeHelp: "Your clinic code is a short unique symbol for your clinic — like an abbreviation or badge. You choose it now; patients enter this code in the app to connect with you.",
+        clinicCodeHelp: "Your clinic code is a short unique symbol for your clinic — like an abbreviation or badge. You choose it now; users enter this code in the app to connect with you.",
         clinicCodeTip1: "3–12 characters; uppercase letters and numbers only (e.g. CEM, ELKO, MOON)",
         clinicCodeTip2: "Derive it from your clinic name or pick something easy to remember",
-        clinicCodeTip3: "This is not your password — you can share it with patients",
+        clinicCodeTip3: "This is not your password — you can share it with users",
         clinicCodePlaceholder: "e.g. CEM, ELKO, MOON",
         clinicCodeHint: "Examples: CEM, ELKO, SMILE",
         invitationCode: "Invitation Code",
@@ -2498,7 +2498,7 @@
         clinicInformation: "Clinic Information",
         adminToken: "Admin Token",
         copyToken: "📋 Copy Token",
-        goToPatients: "Go to Patients List",
+        goToPatients: "Go to Users List",
         goToDashboard: "Go to Dashboard",
         termsText: "I have read, understood and agree to the Clinifly Digital Platform Service Agreement. I acknowledge that services within the Free Package are free of charge, services outside the Free Package are paid, and the scope and price of these services will be determined separately.",
         connectingRetry: "⏳ Connecting… retrying in {seconds}s",
@@ -2532,7 +2532,7 @@
         usageMonthlyUploads: "Monthly uploads (UTC month)",
         usageReferrals: "Referral invites (this UTC month)",
         usagePeriodNote: "Billing window (UTC month): {period}",
-        usagePatients: "Patients on roster",
+        usagePatients: "Users on roster",
         usageLoadFailed: "Could not load usage.",
         usageFreshness: "Snapshot time: {time}",
         currentPlan: "Current plan: {plan}",
@@ -2543,16 +2543,16 @@
         countryLabel: "Country",
         cityLabel: "City",
         cityPlaceholder: "Antalya, Istanbul, London, Tbilisi...",
-        locationDiscoveryHelp: "Patients can filter clinics by country and city on discovery.",
+        locationDiscoveryHelp: "Users can filter clinics by country and city on discovery.",
         selectCountry: "Select country",
         countryRequiredAlert: "Please select a country.",
         cityRequiredAlert: "City is required.",
         plan: "Plan",
         branding: "Branding",
         referralDiscounts: "🎁 Referral Discounts",
-        referralDiscountsHelp: "Configure discount percentages for successful referrals. Both the referrer and the referred patient receive these discounts.",
+        referralDiscountsHelp: "Configure discount percentages for successful referrals. Both the referrer and the referred user receive these discounts.",
         referralDiscount: "Referral Discount (%)",
-        referralDiscountHelp: "Discount applied to both referrer and referred patient",
+        referralDiscountHelp: "Discount applied to both referrer and referred user",
         referralSettings: "🎯 Referral Settings",
         referralSettingsHelp: "Set referral earnings rates. Flexible settings available in PRO plan.",
         referralPerInvite: "Per Invite Earnings (%)",
@@ -2576,10 +2576,10 @@
         referralDiscounts: "🎁 Referral Discounts",
         referralDiscountsHelp: "Discount levels used in the referral system",
         referralDiscount: "Referral Discount (%)",
-        referralDiscountHelp: "Discount applied to both referrer and referred patient",
+        referralDiscountHelp: "Discount applied to both referrer and referred user",
         aiCommunication: {
           title: "AI Communication",
-          desc: "Set first-response speed on Messenger, Instagram, and WhatsApp. <strong>Instant</strong> mode greets patients within seconds. <strong>Wait for human</strong> lets AI step in after your team does not reply within the time below.",
+          desc: "Set first-response speed on Messenger, Instagram, and WhatsApp. <strong>Instant</strong> mode greets users within seconds. <strong>Wait for human</strong> lets AI step in after your team does not reply within the time below.",
           instant: "Instant AI replies (group rapid messages into one reply on Messenger/WhatsApp)",
           waitHuman: "Wait for human before AI",
           humanOnly: "Human-only (no AI auto-reply)",
@@ -2612,7 +2612,7 @@
           clinicOpenLabel: "Opens",
           clinicCloseLabel: "Closes",
           clinicTimezoneLabel: "Clinic timezone",
-          clinicHoursHint: "AI only offers appointment slots within these hours (clinic local time). If a patient asks outside hours, the AI offers the next available slot.",
+          clinicHoursHint: "AI only offers appointment slots within these hours (clinic local time). If a user asks outside hours, the AI offers the next available slot.",
           weekdayBlockTitle: "Weekday hours (Monday–Friday)",
           saturdayBlockTitle: "Saturday hours",
           sundayBlockTitle: "Sunday hours",
@@ -2631,7 +2631,7 @@
         },
         communicationChannels: {
           title: "Communication Channels",
-          desc: "Connect external channels so patient messages appear in your AI coordinator inbox with source badges (WhatsApp, Messenger, Instagram, Web).",
+          desc: "Connect external channels so user messages appear in your AI coordinator inbox with source badges (WhatsApp, Messenger, Instagram, Web).",
           whatsapp: "WhatsApp →",
           messenger: "Messenger →",
         },
@@ -2672,16 +2672,16 @@
         referralLevel2Help: "Total discount after 2 successful referrals",
         referralLevel3: "Level 3 (%)",
         referralLevel3Help: "Maximum discount for 3+ referrals",
-        temporaryPatientLimit: "🔧 Temporary Patient Limit",
-        temporaryPatientLimitHelp: "Add temporary patient limit for sales and onboarding processes. This is added on top of the normal plan limit.",
+        temporaryPatientLimit: "🔧 Temporary User Limit",
+        temporaryPatientLimitHelp: "Add temporary user limit for sales and onboarding processes. This is added on top of the normal plan limit.",
         temporaryLimit: "Temporary Limit",
-        temporaryLimitPlaceholder: "Additional patients (e.g., 5)",
+        temporaryLimitPlaceholder: "Additional users (e.g., 5)",
         saveTemporaryLimit: "Save Temporary Limit",
         removeTemporaryLimit: "Remove Temporary Limit",
-        temporaryLimitActive: "Current temporary limit: +{count} patients",
+        temporaryLimitActive: "Current temporary limit: +{count} users",
         referralPreviewLabel: "💡 Preview:",
         referralPreviewNone: "❌ No discount will be applied",
-        referralPreviewLow: "✅ <strong>{discount}% discount</strong> will be applied to both referrer and referred patient.<br><span style=\"color:#10b981\">💡 Great starting point for attracting new patients!</span>",
+        referralPreviewLow: "✅ <strong>{discount}% discount</strong> will be applied to both referrer and referred user.<br><span style=\"color:#10b981\">💡 Great starting point for attracting new users!</span>",
         referralPreviewMid: "🎉 <strong>{discount}% discount</strong> for both parties.<br><span style=\"color:#f59e0b\">⚠️ Higher discount but more attractive referrals!</span>",
         referralPreviewHigh: "🚀 <strong>{discount}% discount</strong> - Maximum level!<br><span style=\"color:#ef4444\">⚠️ Very generous - ensure profitability!</span>",
         save: "💾 Save Settings",
@@ -2721,7 +2721,7 @@
         recommendedDuration: "~{minutes} min",
         minutes: "min",
         opsProfileCardTitle: "Clinic AI Training",
-        opsProfileCardDesc: "Teach your AI how your clinic works — what it should know, how it should talk to patients, and when to bring in your team.",
+        opsProfileCardDesc: "Teach your AI how your clinic works — what it should know, how it should talk to users, and when to bring in your team.",
         opsProfileCardPricing: "Pricing & brand variants are configured in the <strong>Treatment Price List</strong> below (one source for appointments + AI).",
         opsProfileOpen: "Open AI Training Center →",
       },
@@ -2729,10 +2729,10 @@
       opsProfile: {
         pageTitle: "Clinic AI Training — Clinifly Admin",
         title: "Clinic AI Training",
-        lead: "Teach your AI assistant how your clinic works — what it knows, how it responds to patients, and when to escalate to your team.",
+        lead: "Teach your AI assistant how your clinic works — what it knows, how it responds to users, and when to escalate to your team.",
         policyLayerTitle: "Clinic-wide AI rules (maximum allowed)",
-        policyLayerBody: "Define what AI may do across your clinic — categories, safety limits, languages, and escalation. This is the ceiling; coordinators and doctors set what is active per patient in the Coordination Center or doctor app.",
-        liveControlNote: "Per-patient Off / Assist / Active is not set here — use live AI coordination on each inquiry.",
+        policyLayerBody: "Define what AI may do across your clinic — categories, safety limits, languages, and escalation. This is the ceiling; coordinators and doctors set what is active per user in the Coordination Center or doctor app.",
+        liveControlNote: "Per-user Off / Assist / Active is not set here — use live AI coordination on each inquiry.",
         backSettings: "← Account settings",
         counts: "Hotels: {hotels} · Workflow protocols: {protocols}",
         loading: "Loading…",
@@ -2787,7 +2787,7 @@
             dental_tourism: "Dental Tourism",
             implant_focused: "Implant Focused",
             cosmetic_dentistry: "Cosmetic Dentistry",
-            international_patients: "International Patients",
+            international_patients: "International Users",
             consultation_focused: "Consultation Focused",
           },
           intensity: {
@@ -2810,7 +2810,7 @@
             book_consultation: "Book consultation",
             start_whatsapp: "Start WhatsApp conversation",
             schedule_visit: "Schedule clinic visit",
-            collect_patient_info: "Collect patient information",
+            collect_user_info: "Collect user information",
             explain_treatment_process: "Explain treatment process",
           },
         },
@@ -2838,7 +2838,7 @@
           post_op_guidance: "Post-op guidance"
         },
         handoff: {
-          angryPatient: "Angry patient",
+          angryUser: "Angry user",
           refundRequest: "Refund request",
           severePain: "Severe pain",
           legalLanguage: "Legal language",
@@ -2860,7 +2860,7 @@
           aiPrefix: "AI:"
         },
         visibility: {
-          patient_visible: { short: "Patient-visible", label: "May appear in patient messages" },
+          patient_visible: { short: "User-visible", label: "May appear in user messages" },
           ai_reply: { short: "AI replies", label: "Used by AI replies" },
           internal: { short: "Internal", label: "Internal / operational only" }
         },
@@ -2879,7 +2879,7 @@
         },
         sectionHelp: {
           aiProfile: {
-            intro: "Choose which languages patients can use and how your assistant should sound. Clinic knowledge stays in one place — the AI responds naturally in each language.",
+            intro: "Choose which languages users can use and how your assistant should sound. Clinic knowledge stays in one place — the AI responds naturally in each language.",
             aiUsageSummary: "Language choice, greetings, signatures, and communication tone."
           },
           conversionCoordinator: {
@@ -2900,7 +2900,7 @@
           },
           workflow: {
             intro: "Visit timelines, healing periods, and post-treatment coordination. Operational guidance only — not diagnosis.",
-            aiUsageSummary: "Treatment process, recovery, follow-up, and post-op patient questions."
+            aiUsageSummary: "Treatment process, recovery, follow-up, and post-op user questions."
           },
           aiSafety: {
             intro: "How much the AI can act alone vs suggest drafts. Medical topics always stay human-reviewed.",
@@ -2911,7 +2911,7 @@
             aiUsageSummary: "Triggers that move a conversation to your team."
           },
           internalNotes: {
-            intro: "Clinic positioning and strategy. Helps AI align with your brand — not shown verbatim to patients.",
+            intro: "Clinic positioning and strategy. Helps AI align with your brand — not shown verbatim to users.",
             aiUsageSummary: "Internal context for tone, priorities, and what to emphasize."
           },
           travel: {
@@ -2928,15 +2928,15 @@
         fieldHelp: {
           supportedLanguages: {
             label: "Multilingual AI support",
-            helper: "Choose languages for patient chats. Clinic knowledge stays in one place — the AI responds in each enabled language.",
-            aiUsage: "Patient language detection, reply language, and human-staff routing hints.",
+            helper: "Choose languages for user chats. Clinic knowledge stays in one place — the AI responds in each enabled language.",
+            aiUsage: "User language detection, reply language, and human-staff routing hints.",
             example: "English (primary), Turkish, Russian, Georgian for dental tourism."
           },
           displayNameLocalized: {
             label: "Assistant name (localized)",
             helper: "Optional per-language assistant display names. Leave blank to let AI translate from English.",
-            aiUsage: "Greetings and signatures in the patient's language.",
-            example: "en: DentX Care Team · tr: DentX Hasta Destek Ekibi"
+            aiUsage: "Greetings and signatures in the user's language.",
+            example: "en: DentX Care Team · tr: DentX Kullanıcı Destek Ekibi"
           },
           welcomeMessageLocalized: {
             label: "Welcome message (localized)",
@@ -2946,19 +2946,19 @@
           },
           toneStyle: {
             label: "Tone / style",
-            helper: "Overall communication style for patient chats.",
+            helper: "Overall communication style for user chats.",
             aiUsage: "Sets warmth, formality, and luxury level in replies.",
             example: "Warm + professional for international dental tourists."
           },
           signatureStyle: {
             label: "Signature style",
             helper: "How messages are signed at the end.",
-            aiUsage: "Appended to AI-generated patient messages."
+            aiUsage: "Appended to AI-generated user messages."
           },
           profileTags: {
             label: "Profile tags",
             helper: "Short tags describing your clinic vibe (luxury, fast response, etc.).",
-            aiUsage: "Internal tone hints — not shown directly to patients.",
+            aiUsage: "Internal tone hints — not shown directly to users.",
             placeholder: "luxury, friendly, premium, fast_response",
             example: "premium, friendly, fast_response"
           },
@@ -2969,7 +2969,7 @@
           },
           coordinatorIntensity: {
             label: "Coordinator intensity",
-            helper: "How actively the AI guides patients toward next steps while staying trust-first.",
+            helper: "How actively the AI guides users toward next steps while staying trust-first.",
             aiUsage: "Sets conversion posture: gentle (informational), balanced, or proactive.",
           },
           ctaStyle: {
@@ -2980,7 +2980,7 @@
           pricingBehavior: {
             label: "Pricing behavior",
             helper: "Whether the AI educates before giving ranges, gives brief ranges only, or defers to a human coordinator.",
-            aiUsage: "Controls price-related replies when patients ask about cost.",
+            aiUsage: "Controls price-related replies when users ask about cost.",
           },
           nextStepPreference: {
             label: "Preferred next steps",
@@ -3001,7 +3001,7 @@
           forbidden_claims: {
             label: "Forbidden marketing claims",
             helper: "Overpromising or comparative claims to avoid.",
-            aiUsage: "Brand-safe, compliant patient messaging.",
+            aiUsage: "Brand-safe, compliant user messaging.",
           },
           forbidden_urgency: {
             label: "Forbidden urgency pressure",
@@ -3030,7 +3030,7 @@
           freeformNotes: { label: "Additional internal notes", helper: "Anything else your team should know when the AI coordinates patients.", aiUsage: "Extra context for patient coordination." },
           protocol_postOpNotes: {
             label: "Post-op coordination notes",
-            helper: "Describe how your clinic usually guides patients after treatment.",
+            helper: "Describe how your clinic usually guides users after treatment.",
             aiUsage: "Post-operative coordination replies — not a substitute for doctor advice."
           }
         }
@@ -3094,7 +3094,7 @@
         breadcrumbCurrent: "Treatment workflows",
         title: "Treatment workflows",
         lead: "Teach the AI how treatment journeys usually work at your clinic, including visit timing, recovery expectations, and follow-up steps.",
-        intro: "Add typical visit counts, stay duration, and post-treatment guidance for each treatment type. The AI uses this to explain your clinic’s usual process to patients — not as medical diagnosis or prescriptions.",
+        intro: "Add typical visit counts, stay duration, and post-treatment guidance for each treatment type. The AI uses this to explain your clinic’s usual process to users — not as medical diagnosis or prescriptions.",
         panelTitle: "Your treatment workflows",
         addWorkflow: "+ Add workflow",
         editWorkflow: "Edit workflow",
@@ -3108,7 +3108,7 @@
         fieldLangs: "Languages",
         checkXray: "X-ray / imaging usually required",
         checkTemp: "Temporary teeth possible",
-        checkActive: "Use in patient conversations",
+        checkActive: "Use in user conversations",
         saveWorkflow: "Save workflow",
         cancel: "Cancel",
         delete: "Delete",
@@ -3132,41 +3132,41 @@
       },
 
       patientInvite: {
-        dashboardTitle: "Patient Invitation",
-        quickTitle: "Invite patients",
-        quickHint: "Share your link or QR so patients join automatically — no manual clinic code.",
-        pageTitle: "Invite Patients",
-        pageSubtitle: "Share your invitation link or QR code. New patients are linked to your clinic automatically after signup.",
+        dashboardTitle: "User Invitation",
+        quickTitle: "Invite users",
+        quickHint: "Share your link or QR so users join automatically — no manual clinic code.",
+        pageTitle: "Invite Users",
+        pageSubtitle: "Share your invitation link or QR code. New users are linked to your clinic automatically after signup.",
         copyLink: "Copy Invitation Link",
         showQr: "Show QR Code",
         downloadQr: "Download QR",
         printPoster: "Print Poster",
         invitationUrl: "Invitation URL",
-        modalTitle: "Patient invitation",
+        modalTitle: "User invitation",
         clinicLabel: "Clinic",
         copied: "Copied!",
         allowPopups: "Allow pop-ups to print the poster.",
         posterTagline: "Scan to join our clinic on Clinifly",
         openFullPage: "Open invite page",
         codeHint: "Clinic code: {code}",
-        codeHintSuffix: "Patients who scan the QR are linked to your clinic after signup.",
+        codeHintSuffix: "Users who scan the QR are linked to your clinic after signup.",
         qrLoadError: "QR could not be loaded. Try again or use Copy Link."
       },
 
       // Patients (admin-patients.html)
       patients: {
-        title: "Clinifly Admin – Patients",
-        registeredPatients: "Registered Patients",
+        title: "Clinifly Admin – Users",
+        registeredPatients: "Registered Users",
         searchPlaceholder: "Search: name / phone / patientId / clinicCode",
         filterAll: "All",
         clearFilters: "Clear",
         refresh: "Refresh",
         loading: "Loading...",
         noResults: "No results",
-        selectedPatient: "Selected Patient: {name}",
-        patientId: "Patient ID: {id}",
+        selectedPatient: "Selected User: {name}",
+        patientId: "User ID: {id}",
         copyId: "Copy ID",
-        copyIdSuccess: "✅ Patient ID copied",
+        copyIdSuccess: "✅ Kullanıcı ID copied",
         clear: "Clear",
         travel: "Travel",
         treatment: "Treatment",
@@ -3175,9 +3175,9 @@
         files: "📁 Files",
         approve: "Approve",
         approveConfirm: "Are you sure you want to approve this patient? ({patientId})",
-        approveSuccess: "✅ Patient approved",
-        addPatient: "➕ Add patient",
-        addPatientTitle: "Add new patient",
+        approveSuccess: "✅ User approved",
+        addPatient: "➕ Add user",
+        addPatientTitle: "Add new user",
         firstName: "First name *",
         lastName: "Last name *",
         email: "Email",
@@ -3185,9 +3185,9 @@
         address: "Address",
         notes: "Notes",
         cancel: "Cancel",
-        add: "Add patient",
-        addSuccess: "✅ Patient added successfully",
-        addError: "❌ Could not add patient",
+        add: "Add user",
+        addSuccess: "✅ User added successfully",
+        addError: "❌ Could not add user",
         assignDoctorLabel: "Assign doctor:",
         assignButton: "Assign",
         selectDoctorPlaceholder: "Select doctor",
@@ -3202,17 +3202,17 @@
         errors: {
           noToken: "⚠️ Admin token not found. Please login first.",
           unauthorized: "❌ Authorization error. Please login again.",
-          loadFailed: "❌ Failed to load patient list: {error}",
+          loadFailed: "❌ Failed to load user list: {error}",
           approveFailed: "❌ Approval error: {error}",
-          patientLimitReached: "⚠️ You've reached your active patient limit. Upgrade your plan to add new patients.",
-          patientLimitReachedTitle: "Patient Limit Reached"
+          patientLimitReached: "⚠️ You've reached your active user limit. Upgrade your plan to add new users.",
+          patientLimitReachedTitle: "User Limit Reached"
         },
         limits: {
-          title: "Active Patient Limit",
-          message: "Your current plan has {current}/{limit} active patients.",
-          upgradeMessage: "Upgrade your plan to add new patients.",
+          title: "Active User Limit",
+          message: "Your current plan has {current}/{limit} active users.",
+          upgradeMessage: "Upgrade your plan to add new users.",
           upgradeButton: "Upgrade Plan",
-          continueButton: "Continue with Existing Patients"
+          continueButton: "Continue with Existing Users"
         }
       },
       
@@ -3259,7 +3259,7 @@
         thInvitedCount: "Invited",
         thRegisteredCount: "Registered",
         thTreatedCount: "Treated",
-        thInvitedPatients: "Invited patients",
+        thInvitedPatients: "Invited users",
         loadingMain: "Loading…",
         sessionExpired: "Session expired. Please log in again.",
         errorLoad: "Error: {message}",
@@ -3293,7 +3293,7 @@
       marketplaceProfile: {
         title: "Clinifly Admin – Directory Profile",
         pageTitle: "Public Directory Profile",
-        subtitle: "Manage how your clinic appears in Clinifly's patient-facing directory. Reputation data is self-managed — enter your Google and Trustpilot details manually. Verified, featured, and sponsored badges are set by Clinifly.",
+        subtitle: "Manage how your clinic appears in Clinifly's user-facing directory. Reputation data is self-managed — enter your Google and Trustpilot details manually. Verified, featured, and sponsored badges are set by Clinifly.",
         loading: "Loading profile…",
         loadFailed: "Failed to load",
         saving: "Saving…",
@@ -3302,7 +3302,7 @@
         saveBtn: "Save profile",
         reloadBtn: "Reload",
         sectionCompletion: "Profile completion",
-        sectionCompletionHint: "Richer profiles help patients compare and trust your clinic.",
+        sectionCompletionHint: "Richer profiles help users compare and trust your clinic.",
         completed: "Completed",
         missing: "Missing",
         nothingYet: "Nothing yet",
@@ -3317,7 +3317,7 @@
         sectionFacebookReviews: "Facebook Reviews",
         sectionTrustpilotReviews: "Trustpilot Reviews",
         facebookReviewsHelp: "Open your Facebook Page and copy the page URL. Enter your recommendation score and recommendation count from Facebook.",
-        reputationPreviewLabel: "Patient-facing preview",
+        reputationPreviewLabel: "User-facing preview",
         reputationPreviewEmpty: "Enter scores above to see a preview here.",
         sectionSocial: "Social & Web",
         sectionClinicInfo: "Clinic Information",
@@ -3337,7 +3337,7 @@
           trustpilotRating: "Trustpilot Rating (0–5)",
           trustpilotReviewCount: "Trustpilot Review Count",
           yearsInOperation: "Years in Operation",
-          intlPatients: "International Patients / Year",
+          intlPatients: "International Users / Year",
           website: "Website",
           facebook: "Facebook",
           instagram: "Instagram",
@@ -3423,7 +3423,7 @@
       successCenter: {
         title: "Clinifly Admin – Success Center",
         pageTitle: "Clinic Success Center",
-        subtitle: "Complete your setup to increase visibility and receive more patient inquiries. Follow the recommendations below — like having a success manager on your team.",
+        subtitle: "Complete your setup to increase visibility and receive more user inquiries. Follow the recommendations below — like having a success manager on your team.",
         loading: "Loading your success plan…",
         loadFailed: "Could not load",
         profileCompletion: "Profile",
@@ -3438,7 +3438,7 @@
         sectionCampaign: "Onboarding Roadmap",
         sectionCampaignHint: "Coming soon: automated onboarding campaigns (Day 1 logo, Day 3 Google Reviews…).",
         whyItMatters: "Why it matters",
-        allRecommendationsDone: "Excellent! Your profile is complete — you're ready for patient inquiries.",
+        allRecommendationsDone: "Excellent! Your profile is complete — you're ready for user inquiries.",
         noGuidanceYet: "No guidance messages yet.",
         markRead: "Mark read",
         items: {
@@ -3468,11 +3468,11 @@
       },
       helpCenter: {
         pageTitle: "Getting Started with Clinifly",
-        subtitle: "Step-by-step guides to set up your clinic, complete your profile, connect doctors and patients, and start receiving inquiries. No technical jargon — just what you need to get to 100% profile completion.",
+        subtitle: "Step-by-step guides to set up your clinic, complete your profile, connect doctors and users, and start receiving inquiries. No technical jargon — just what you need to get to 100% profile completion.",
         searchPlaceholder: "Search help articles…",
         searchNoResults: "No articles match your search. Try different words or browse the sections.",
         checklistTitle: "Quick setup checklist",
-        checklistHint: "Follow this order to start receiving patients as fast as possible.",
+        checklistHint: "Follow this order to start receiving users as fast as possible.",
         topicsTitle: "Topics",
         showAll: "Show all topics",
         supportText: "Still stuck?",
@@ -3484,7 +3484,7 @@
         openPage: "Open related page",
         screenshotCaption: "Example screen — your admin may look slightly different.",
         dashboardBannerTitle: "Getting Started with Clinifly",
-        dashboardBannerDesc: "Complete setup guides for your clinic profile, doctors, patients, AI, and more — written for clinic owners, not developers.",
+        dashboardBannerDesc: "Complete setup guides for your clinic profile, doctors, users, AI, and more — written for clinic owners, not developers.",
         dashboardBannerBtn: "Open Help Center →",
         settingsBanner: "Need help with clinic setup, AI, or referrals? Visit the Help Center for step-by-step guides.",
         openLink: "Open Help Center →",
@@ -3499,17 +3499,17 @@
           doctors: "Approve doctors",
           leadInbox: "Lead inbox assignment",
           whatsapp: "Connect WhatsApp",
-          invitePatients: "Patient invite link",
+          invitePatients: "User invite link",
         },
         sections: {
           "create-clinic": { title: "Create Your Clinic", subtitle: "Registration, approval, and updating clinic info" },
           "connect-doctors": { title: "Connect Doctors", subtitle: "Invite, join, approve, and roles" },
-          "add-patients": { title: "Add Patients", subtitle: "Join, approve, invite, and doctor assignment" },
+          "add-patients": { title: "Add Users", subtitle: "Join, approve, invite, and doctor assignment" },
           "public-profile": { title: "Complete Your Public Profile", subtitle: "Logo, description, photos, specialties, and languages" },
           "google-reviews": { title: "Google Reviews", subtitle: "Add your Google Business profile to Clinifly" },
           "social-media": { title: "Social Media Links", subtitle: "Website, Instagram, Facebook, and more" },
           "ai-assistant": { title: "AI Assistant", subtitle: "Enable AI, WhatsApp, and Messenger" },
-          "international-patients": { title: "International Patients", subtitle: "Discovery, multilingual chat, and treatment requests" },
+          "international-patients": { title: "International Users", subtitle: "Discovery, multilingual chat, and treatment requests" },
           "referral-system": { title: "Referral System", subtitle: "Friend invites and clinic benefits" },
           faq: { title: "Frequently Asked Questions", subtitle: "Quick answers" },
         },
@@ -3524,10 +3524,10 @@
         weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
       },
       files: {
-        pageTitle: "Admin – Patient Files",
-        title: "📁 Patient Files",
-        selectPatient: "Patient:",
-        selectPlaceholder: "Select patient...",
+        pageTitle: "Admin – User Files",
+        title: "📁 User Files",
+        selectPatient: "User:",
+        selectPlaceholder: "Select user...",
         filterAll: "All",
         filterPhoto: "📸 Photos",
         filterXray: "🦷 X-Rays",
@@ -3535,7 +3535,7 @@
         filterChat: "💬 Chat",
         upload: "Upload",
         empty: "No files found.",
-        selectToView: "Select a patient to view their files.",
+        selectToView: "Select a user to view their files.",
         badgeImage: "Photo",
         badgeXray: "X-Ray",
         badgePdf: "PDF",
@@ -3593,10 +3593,10 @@
         documentTitle: "Chat - Clinifly Admin",
         pageHeading: "💬 Clinifly Admin – Chat",
         title: "Messages",
-        patientsHeading: "Patients",
+        patientsHeading: "Users",
         loading: "Loading...",
-        selectPatient: "Select a patient",
-        noPatients: "No patients yet",
+        selectPatient: "Select a user",
+        noPatients: "No users yet",
         unnamed: "Unnamed",
         placeholder: "Type a message...",
         send: "Send",
@@ -3617,10 +3617,10 @@
         errAuth: "❌ Authorization error. Please sign in again.",
         errAuthShort: "❌ Authorization error",
         errUnknown: "Unknown error",
-        errLoadList: "❌ Could not load patients: {message}",
+        errLoadList: "❌ Could not load users: {message}",
         errLoadMessages: "Could not load messages",
         errLoadMessagesFull: "❌ Could not load messages: {message}",
-        errSelectFirst: "❌ Please select a patient first",
+        errSelectFirst: "❌ Please select a user first",
         errNoTokenSend: "❌ No admin token",
         errSend: "Could not send message",
         errSendFull: "❌ Could not send message: {message}",
@@ -3633,7 +3633,7 @@
         errPhotoSize: "❌ Photo must be under 10MB",
         errZipSize: "❌ ZIP must be under 50MB",
         errDocSize: "❌ Document must be under 20MB",
-        errSelectPatient: "❌ Please select a patient first",
+        errSelectPatient: "❌ Please select a user first",
         before: "Before",
         after: "After",
         doctorReview: "👨‍⚕️ Doctor review",
@@ -3641,7 +3641,7 @@
         defaultPhoto: "Photo",
         defaultFile: "File",
         navClinicSettings: "Clinic settings",
-        patientAssignedBanner: "This patient is assigned to Dr. {doctorName}.",
+        patientAssignedBanner: "This user is assigned to Dr. {doctorName}.",
       },
       leads: {
         documentTitle: "Lead management — Clinifly Admin",
@@ -3652,7 +3652,7 @@
         refreshList: "Refresh list",
         statusLoading: "Loading…",
         statusUnassigned: "{count} threads",
-        thPatient: "Patient",
+        thPatient: "User",
         thContact: "Contact",
         thPreview: "Last message",
         thAssign: "Assign doctor",
@@ -3706,7 +3706,7 @@
         tabAssigned: "Assigned",
         thChannel: "Channel",
         thAssignedAt: "Assigned",
-        searchPlaceholder: "Search patient, phone, message…",
+        searchPlaceholder: "Search user, phone, message…",
         channelMessenger: "Messenger",
         channelWhatsapp: "WhatsApp",
         channelWeb: "Web",
@@ -3731,11 +3731,11 @@
       },
       adminPages: {
         travelH1: "✈️ Clinifly Admin — Поездки",
-        travelGlobalWarning: "⚠️ ВНИМАНИЕ: часть полей заполняет пациент. Проверьте подсказки ниже.",
+        travelGlobalWarning: "⚠️ ВНИМАНИЕ: часть полей заполняет пользователь. Проверьте подсказки ниже.",
         travelWordHotel: "Отель",
         travelWordFlights: "Рейсы",
         travelListSeparator: " и ",
-        travelDynamicWarning: "⚠️ ВНИМАНИЕ: пациент заполнит данные: {list}. Эти поля нельзя менять. Пациент внесёт их в мобильном приложении.",
+        travelDynamicWarning: "⚠️ ВНИМАНИЕ: пользователь заполнит данные: {list}. Эти поля нельзя менять. Пользователь внесёт их в мобильном приложении.",
         healthH1: "🩺 Clinifly Admin — Здоровье",
         doctorApplicationsH1: "Заявки врачей",
         doctorAppsStatPending: "Ожидают",
@@ -3745,19 +3745,19 @@
         doctorAppsLoading: "Загрузка врачей...",
         doctorAppsEmptyTitle: "Врачей пока нет",
         doctorAppsEmptyDesc: "Заявок ещё не было.",
-        activePatientsH1: "👨‍⚕️ Активные пациенты",
+        activePatientsH1: "👨‍⚕️ Активные пользователи",
         activePatientsStatActive: "Активные",
         activePatientsStatPending: "В ожидании",
-        activePatientsStatTotal: "Всего пациентов",
+        activePatientsStatTotal: "Всего пользовательов",
         activePatientsStatClinic: "Клиник",
         activePatientsSearchPlaceholder: "Поиск по имени, email или телефону...",
         activePatientsAllClinics: "Все клиники",
         activePatientsRefresh: "🔄 Обновить",
         activePatientsLoading: "🔄 Загрузка...",
-        activePatientsEmpty: "Активных пациентов пока нет",
+        activePatientsEmpty: "Активных пользовательов пока нет",
         treatmentCreateH1: "🏥 Создать лечение",
         treatmentCreateSubtitle: "Создайте группу лечения и назначьте врачей",
-        patientDetailH1: "Карта пациента",
+        patientDetailH1: "Карта пользовательа",
         patientDetailBack: "Назад",
         legacyNavClinics: "Клиники"
       },
@@ -3771,16 +3771,16 @@
         },
         nav: { dashboard: "Панель", patients: "Пациенты", invitePatients: "Пригласить пациентов", travel: "Поездки", treatment: "Лечение", schedule: "Расписание", doctors: "Врачи", chat: "Чат", leads: "Входящие лидов", leadsNeedsAssignment: "Требуют назначения", leadsRecentlyRouted: "Недавно направленные", leadsAssigned: "Назначенные", aiLeads: "Центр координации", files: "Файлы", referrals: "Рефералы", marketplaceProfile: "Профиль в каталоге", helpCenter: "Справочный центр", learningCandidates: "Обучение ИИ", health: "Здоровье", settings: "Настройки" },
         charts: {
-          metricTitleMonthlyPatients: "Количество зарегистрированных пациентов по месяцам",
+          metricTitleMonthlyPatients: "Количество зарегистрированных пользовательов по месяцам",
           metricTitleMonthlyProcedures: "Количество процедур по месяцам",
           chartLabelMonthlyRegistered: "Регистрации по месяцам",
-          activePatients: "Активные пациенты",
+          activePatients: "Активные пользователи",
           procedures: "Процедуры",
           noData: "Нет данных",
           trendNote: "Тренд улучшится по мере накопления данных",
           vsPreviousMonth: "по сравнению с прошлым месяцем",
           noPreviousData: "Нет данных за предыдущий период",
-          summaryActivePatients: "{count} активных пациентов • {month}",
+          summaryActivePatients: "{count} активных пользовательов • {month}",
           summaryMonthlyRegistered: "{count} регистраций • {month}",
           summaryProcedures: "{count} процедур • {month}"
         },
@@ -3818,7 +3818,7 @@
         monthlyUploads: "Ежемесячные загрузки",
         referralInvites: "Реферальные приглашения",
         totalReferrers: "Всего рефереров",
-        patientRoster: "Пациенты (лимит списка)",
+        patientRoster: "Пользователи (лимит списка)",
         usagePeriodNote: "Месячное окно использования (UTC): {period}",
         usageFreshness: "Данные на момент: {time}",
         upgrade: "Повысить тариф",
@@ -3858,39 +3858,39 @@
       },
       pricing: {
         title: "Тарифы Clinifly",
-        subtitle: "Гибкие планы по числу активных пациентов",
-        info: "Платите только за количество активных пациентов.",
+        subtitle: "Гибкие планы по числу активных пользовательов",
+        info: "Платите только за количество активных пользовательов.",
         periodMonthly: "/месяц",
         free: {
           name: "Free",
-          patients: "5 пациентов",
-          description: "Попробуйте Clinifly с реальными пациентами.",
+          patients: "5 пользовательов",
+          description: "Попробуйте Clinifly с реальными пользовательами.",
           cta: "Начать"
         },
         basic: {
           name: "Pro",
           badge: "Популярно",
-          patients: "15 пациентов",
+          patients: "15 пользовательов",
           description: "Сильный пакет для растущих клиник.",
           cta: "Обновить"
         },
         pro: {
           name: "Premium",
-          patients: "Безлимит пациентов",
+          patients: "Безлимит пользовательов",
           description: "Премиум-поддержка для крупных клиник.",
           cta: "Обновить",
           contactCta: "Связаться"
         },
         features: {
           allCore: "Все базовые функции",
-          patientCommunication: "Коммуникация с пациентами",
+          patientCommunication: "Коммуникация с пользовательами",
           fileSharing: "Обмен файлами",
           referral: "Реферальная система",
           branding: "Брендинг Clinifly",
           customBranding: "Кастомный брендинг",
           analytics: "Аналитика",
           support: "Поддержка по email",
-          unlimitedPatients: "Безлимит пациентов",
+          unlimitedPatients: "Безлимит пользовательов",
           advancedReferral: "Расширенные рефералы (уровни, кампании)",
           prioritySupport: "Приоритетная поддержка",
           onboarding: "Онбординг-поддержка"
@@ -3900,7 +3900,7 @@
           free: "Free",
           basic: "Pro",
           pro: "Premium",
-          patients: "Активные пациенты",
+          patients: "Активные пользователи",
           unlimited: "Безлимит",
           coreFeatures: "Базовые функции",
           branding: "Брендинг Clinifly",
@@ -3916,12 +3916,12 @@
         faq: {
           title: "Частые вопросы",
           q1: {
-            question: "Как считается число активных пациентов?",
-            answer: "Учитываются только APPROVED (активные) пациенты. Pending, rejected и cancelled не входят в лимит."
+            question: "Как считается число активных пользовательов?",
+            answer: "Учитываются только APPROVED (активные) пользователи. Pending, rejected и cancelled не входят в лимит."
           },
           q2: {
             question: "Что будет при достижении лимита?",
-            answer: "С текущими пациентами можно продолжать работу. Ограничивается только одобрение новых пациентов."
+            answer: "С текущими пользовательами можно продолжать работу. Ограничивается только одобрение новых пользовательов."
           },
           q3: {
             question: "Можно ли сменить план?",
@@ -3943,28 +3943,28 @@
       register: {
         clinicCode: "Код клиники",
         clinicCodeWhat: "Что такое код клиники?",
-        clinicCodeHelp: "Код клиники — это короткий уникальный символ вашей клиники, как аббревиатура или знак. Вы выбираете его при регистрации; пациенты вводят этот код в приложении, чтобы связаться с вами.",
+        clinicCodeHelp: "Код клиники — это короткий уникальный символ вашей клиники, как аббревиатура или знак. Вы выбираете его при регистрации; пользователи вводят этот код в приложении, чтобы связаться с вами.",
         clinicCodeTip1: "3–12 символов; только заглавные буквы и цифры (напр. CEM, ELKO, MOON)",
         clinicCodeTip2: "Возьмите из названия клиники или придумайте запоминающийся символ",
-        clinicCodeTip3: "Это не ваш пароль — код можно сообщать пациентам",
+        clinicCodeTip3: "Это не ваш пароль — код можно сообщать пользовательам",
         clinicCodePlaceholder: "напр. CEM, ELKO, MOON",
         clinicCodeHint: "Примеры: CEM, ELKO, SMILE",
       },
       patients: {
-        title: "Clinifly Admin – Пациенты",
-        search: "Поиск пациентов...",
+        title: "Clinifly Admin – Пользователи",
+        search: "Поиск пользовательов...",
         filter: "Фильтр",
-        registeredPatients: "Зарегистрированные пациенты",
+        registeredPatients: "Зарегистрированные пользователи",
         searchPlaceholder: "Поиск: имя / телефон / patientId / clinicCode",
         filterAll: "Все",
         clearFilters: "Сбросить",
         refresh: "Обновить",
         loading: "Загрузка...",
         noResults: "Нет результатов",
-        selectedPatient: "Выбранный пациент: {name}",
+        selectedPatient: "Выбранный пользователь: {name}",
         patientId: "ID пациента: {id}",
         copyId: "Копировать ID",
-        copyIdSuccess: "✅ ID пациента скопирован",
+        copyIdSuccess: "✅ ID пользовательа скопирован",
         clear: "Очистить",
         travel: "Поездки",
         treatment: "Лечение",
@@ -3973,9 +3973,9 @@
         files: "📁 Файлы",
         approve: "Одобрить",
         approveConfirm: "Одобрить этого пациента? ({patientId})",
-        approveSuccess: "✅ Пациент одобрен",
-        addPatient: "➕ Добавить пациента",
-        addPatientTitle: "Новый пациент",
+        approveSuccess: "✅ Пользователь одобрен",
+        addPatient: "➕ Добавить пользовательа",
+        addPatientTitle: "Новый пользователь",
         firstName: "Имя *",
         lastName: "Фамилия *",
         email: "Эл. почта",
@@ -3984,8 +3984,8 @@
         notes: "Заметки",
         cancel: "Отмена",
         add: "Добавить",
-        addSuccess: "✅ Пациент успешно добавлен",
-        addError: "❌ Не удалось добавить пациента",
+        addSuccess: "✅ Пользователь успешно добавлен",
+        addError: "❌ Не удалось добавить пользовательа",
         assignDoctorLabel: "Назначить врача:",
         assignButton: "Назначить",
         selectDoctorPlaceholder: "Выберите врача",
@@ -3997,17 +3997,17 @@
         errors: {
           noToken: "⚠️ Токен администратора не найден. Войдите снова.",
           unauthorized: "❌ Ошибка авторизации. Войдите снова.",
-          loadFailed: "❌ Не удалось загрузить список пациентов: {error}",
+          loadFailed: "❌ Не удалось загрузить список пользовательов: {error}",
           approveFailed: "❌ Ошибка одобрения: {error}",
-          patientLimitReached: "⚠️ Достигнут лимит активных пациентов. Обновите тариф, чтобы добавлять новых.",
-          patientLimitReachedTitle: "Лимит пациентов"
+          patientLimitReached: "⚠️ Достигнут лимит активных пользовательов. Обновите тариф, чтобы добавлять новых.",
+          patientLimitReachedTitle: "Лимит пользовательов"
         },
         limits: {
-          title: "Лимит активных пациентов",
-          message: "В вашем тарифе {current}/{limit} активных пациентов.",
-          upgradeMessage: "Обновите тариф, чтобы добавлять новых пациентов.",
+          title: "Лимит активных пользовательов",
+          message: "В вашем тарифе {current}/{limit} активных пользовательов.",
+          upgradeMessage: "Обновите тариф, чтобы добавлять новых пользовательов.",
           upgradeButton: "Обновить тариф",
-          continueButton: "Продолжить с текущими пациентами"
+          continueButton: "Продолжить с текущими пользовательами"
         }
       },
       referrals: {
@@ -4052,7 +4052,7 @@
         thInvitedCount: "Приглашено",
         thRegisteredCount: "Зарегистр.",
         thTreatedCount: "Лечение",
-        thInvitedPatients: "Приглашённые пациенты",
+        thInvitedPatients: "Приглашённые пользователи",
         loadingMain: "Загрузка…",
         sessionExpired: "Сессия истекла. Войдите снова.",
         errorLoad: "Ошибка: {message}",
@@ -4081,7 +4081,7 @@
       marketplaceProfile: {
         title: "Clinifly Admin – Профиль в каталоге",
         pageTitle: "Публичный профиль в каталоге",
-        subtitle: "Управляйте тем, как ваша клиника отображается в каталоге Clinifly для пациентов. Данные репутации вводятся клиникой — Google и Trustpilot вручную. Значки Verified, Featured и Sponsored назначает Clinifly.",
+        subtitle: "Управляйте тем, как ваша клиника отображается в каталоге Clinifly для пользовательов. Данные репутации вводятся клиникой — Google и Trustpilot вручную. Значки Verified, Featured и Sponsored назначает Clinifly.",
         loading: "Загрузка профиля…",
         loadFailed: "Не удалось загрузить",
         saving: "Сохранение…",
@@ -4090,7 +4090,7 @@
         saveBtn: "Сохранить профиль",
         reloadBtn: "Обновить",
         sectionCompletion: "Заполнение профиля",
-        sectionCompletionHint: "Полные профили помогают пациентам сравнивать и доверять клинике.",
+        sectionCompletionHint: "Полные профили помогают пользовательам сравнивать и доверять клинике.",
         completed: "Готово",
         missing: "Не хватает",
         nothingYet: "Пока ничего",
@@ -4105,7 +4105,7 @@
         sectionFacebookReviews: "Отзывы Facebook",
         sectionTrustpilotReviews: "Отзывы Trustpilot",
         facebookReviewsHelp: "Откройте страницу Facebook и скопируйте URL. Введите процент рекомендаций и их количество.",
-        reputationPreviewLabel: "Предпросмотр для пациентов",
+        reputationPreviewLabel: "Предпросмотр для пользовательов",
         reputationPreviewEmpty: "Введите оценки выше, чтобы увидеть предпросмотр.",
         sectionSocial: "Соцсети и сайт",
         sectionClinicInfo: "Информация о клинике",
@@ -4125,7 +4125,7 @@
           trustpilotRating: "Рейтинг Trustpilot (0–5)",
           trustpilotReviewCount: "Количество отзывов Trustpilot",
           yearsInOperation: "Лет работы",
-          intlPatients: "Иностранных пациентов в год",
+          intlPatients: "Иностранных пользовательов в год",
           website: "Веб-сайт",
           facebook: "Facebook",
           instagram: "Instagram",
@@ -4210,11 +4210,11 @@
       },
       helpCenter: {
         pageTitle: "Начало работы с Clinifly",
-        subtitle: "Пошаговые инструкции по настройке клиники, профиля, врачей, пациентов и ИИ. Без технического жаргона — для владельцев клиник.",
+        subtitle: "Пошаговые инструкции по настройке клиники, профиля, врачей, пользовательов и ИИ. Без технического жаргона — для владельцев клиник.",
         searchPlaceholder: "Поиск в справке…",
         searchNoResults: "Ничего не найдено. Попробуйте другие слова или просмотрите разделы.",
         checklistTitle: "Быстрый чеклист настройки",
-        checklistHint: "Следуйте этому порядку, чтобы быстрее начать принимать пациентов.",
+        checklistHint: "Следуйте этому порядку, чтобы быстрее начать принимать пользовательов.",
         topicsTitle: "Темы",
         showAll: "Показать все темы",
         supportText: "Всё ещё нужна помощь?",
@@ -4226,7 +4226,7 @@
         openPage: "Открыть страницу",
         screenshotCaption: "Пример экрана — ваш интерфейс может немного отличаться.",
         dashboardBannerTitle: "Начало работы с Clinifly",
-        dashboardBannerDesc: "Руководства по профилю клиники, врачам, пациентам, ИИ и другому — для владельцев клиник.",
+        dashboardBannerDesc: "Руководства по профилю клиники, врачам, пользовательам, ИИ и другому — для владельцев клиник.",
         dashboardBannerBtn: "Справочный центр →",
         settingsBanner: "Нужна помощь с настройкой, ИИ или рефералами? Откройте Справочный центр.",
         openLink: "Справочный центр →",
@@ -4241,7 +4241,7 @@
           doctors: "Одобрение врачей",
           leadInbox: "Назначение во входящих",
           whatsapp: "Подключение WhatsApp",
-          invitePatients: "Ссылка приглашения пациентов",
+          invitePatients: "Ссылка приглашения пользовательов",
         },
         sections: {
           "create-clinic": { title: "Создайте клинику", subtitle: "Регистрация, одобрение и обновление данных" },
@@ -4268,7 +4268,7 @@
         usageMonthlyUploads: "Загрузки за месяц (UTC)",
         usageReferrals: "Реферальные приглашения (текущий UTC месяц)",
         usagePeriodNote: "Период учёта (UTC месяц): {period}",
-        usagePatients: "Пациенты в списке",
+        usagePatients: "Пользователи в списке",
         usageLoadFailed: "Не удалось загрузить использование.",
         usageFreshness: "Время снимка: {time}",
         currentPlan: "Текущий план: {plan}",
@@ -4279,7 +4279,7 @@
         countryLabel: "Страна",
         cityLabel: "Город",
         cityPlaceholder: "Antalya, Istanbul, London, Tbilisi...",
-        locationDiscoveryHelp: "Пациенты могут фильтровать клиники по стране и городу.",
+        locationDiscoveryHelp: "Пользователи могут фильтровать клиники по стране и городу.",
         selectCountry: "Выберите страну",
         countryRequiredAlert: "Выберите страну.",
         cityRequiredAlert: "Укажите город.",
@@ -4291,9 +4291,9 @@
         chairCountLabel: "Количество кресел",
         chairCountHelp: "Сколько кресел показывать в календаре записей (напр.: 1, 2, 3).",
         address: "Адрес клиники",
-        addressHelp: "Отображается на экране пациента для плана Pro",
+        addressHelp: "Отображается на экране пользовательа для плана Pro",
         googleMapLink: "Ссылка Google Maps",
-        googleMapLinkHelp: "Отображается на экране пациента для плана Pro",
+        googleMapLinkHelp: "Отображается на экране пользовательа для плана Pro",
         primaryColor: "Основной цвет (Hex)",
         secondaryColor: "Дополнительный цвет (Hex)",
         welcomeMessage: "Приветственное сообщение",
@@ -4303,7 +4303,7 @@
         referralDiscountHelp: "Скидка для пригласившего и приглашённого",
         aiCommunication: {
           title: "ИИ-коммуникация",
-          desc: "Настройте скорость первого ответа в Messenger, Instagram и WhatsApp. Режим <strong>Мгновенно</strong> приветствует пациентов за секунды. Режим <strong>Ждать человека</strong> включает ИИ, если команда не ответит в указанное время.",
+          desc: "Настройте скорость первого ответа в Messenger, Instagram и WhatsApp. Режим <strong>Мгновенно</strong> приветствует пользовательов за секунды. Режим <strong>Ждать человека</strong> включает ИИ, если команда не ответит в указанное время.",
           instant: "Мгновенные ответы ИИ (~1–5 сек в Messenger/WhatsApp)",
           waitHuman: "Сначала ждать ответа команды",
           humanOnly: "Только человек (без автоответа ИИ)",
@@ -4340,7 +4340,7 @@
         },
         communicationChannels: {
           title: "Каналы связи",
-          desc: "Подключите внешние каналы, чтобы сообщения пациентов появлялись во входящих ИИ-координатора с бейджами источника (WhatsApp, Messenger, Instagram, Web).",
+          desc: "Подключите внешние каналы, чтобы сообщения пользовательов появлялись во входящих ИИ-координатора с бейджами источника (WhatsApp, Messenger, Instagram, Web).",
           whatsapp: "WhatsApp →",
           messenger: "Messenger →",
         },
@@ -4358,16 +4358,16 @@
         referralMaxTotal: "Максимальная общая скидка (%)",
         referralMaxTotalPlaceholder: "10",
         referralMaxTotalHelp: "Максимальная скидка, которую может получить пригласивший.",
-        temporaryPatientLimit: "🔧 Временный лимит пациентов",
+        temporaryPatientLimit: "🔧 Временный лимит пользовательов",
         temporaryPatientLimitHelp: "Добавьте временный лимит для процессов продаж. Добавляется поверх обычного лимита плана.",
         temporaryLimit: "Временный лимит",
-        temporaryLimitPlaceholder: "Доп. кол-во пациентов (напр.: 5)",
+        temporaryLimitPlaceholder: "Доп. кол-во пользовательов (напр.: 5)",
         saveTemporaryLimit: "Сохранить временный лимит",
         removeTemporaryLimit: "Удалить временный лимит",
-        temporaryLimitActive: "Текущий временный лимит: +{count} пациентов",
+        temporaryLimitActive: "Текущий временный лимит: +{count} пользовательов",
         referralPreviewLabel: "💡 Предпросмотр:",
         referralPreviewNone: "❌ Скидка применяться не будет",
-        referralPreviewLow: "✅ <strong>Скидка {discount}%</strong> будет применена как пригласившему, так и приглашённому.<br><span style=\"color:#10b981\">💡 Отличная отправная точка для привлечения новых пациентов!</span>",
+        referralPreviewLow: "✅ <strong>Скидка {discount}%</strong> будет применена как пригласившему, так и приглашённому.<br><span style=\"color:#10b981\">💡 Отличная отправная точка для привлечения новых пользовательов!</span>",
         referralPreviewMid: "🎉 <strong>Скидка {discount}%</strong> для обеих сторон.<br><span style=\"color:#f59e0b\">⚠️ Больше скидка — привлекательнее рефералы!</span>",
         referralPreviewHigh: "🚀 <strong>Скидка {discount}%</strong> — Максимальный уровень!<br><span style=\"color:#ef4444\">⚠️ Очень щедро — проверьте прибыльность!</span>",
         save: "💾 Сохранить настройки",
@@ -4397,7 +4397,7 @@
         recommendedDuration: "~{minutes} мин",
         minutes: "мин",
         opsProfileCardTitle: "Обучение ИИ клиники",
-        opsProfileCardDesc: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пациентам.",
+        opsProfileCardDesc: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пользовательам.",
         opsProfileCardPricing: "Цены и варианты брендов — в <strong>прайс-листе лечения</strong> ниже.",
         opsProfileOpen: "Центр обучения ИИ →",
       },
@@ -4405,10 +4405,10 @@
       opsProfile: {
         pageTitle: "Обучение ИИ клиники — Clinifly Admin",
         title: "Обучение ИИ клиники",
-        lead: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пациентам.",
+        lead: "Настройте, как ИИ представляет клинику, какие знания использует и как отвечает пользовательам.",
         policyLayerTitle: "Правила ИИ для всей клиники (максимально допустимые)",
-        policyLayerBody: "Определите, что ИИ может делать в клинике — категории, ограничения безопасности, языки и эскалация. Это верхний предел; координаторы и врачи выбирают активный режим для каждого пациента в Центре координации или в приложении врача.",
-        liveControlNote: "Режим «Выкл / Помощь / Активен» для каждого пациента здесь не настраивается — используйте живую ИИ-координацию в каждом обращении.",
+        policyLayerBody: "Определите, что ИИ может делать в клинике — категории, ограничения безопасности, языки и эскалация. Это верхний предел; координаторы и врачи выбирают активный режим для каждого пользовательа в Центре координации или в приложении врача.",
+        liveControlNote: "Режим «Выкл / Помощь / Активен» для каждого пользовательа здесь не настраивается — используйте живую ИИ-координацию в каждом обращении.",
         backSettings: "← Настройки аккаунта",
         counts: "Отели: {hotels} · Протоколы workflow: {protocols}",
         loading: "Загрузка…",
@@ -4463,7 +4463,7 @@
             dental_tourism: "Стоматологический туризм",
             implant_focused: "Фокус на имплантах",
             cosmetic_dentistry: "Эстетическая стоматология",
-            international_patients: "Международные пациенты",
+            international_patients: "Международные пользователи",
             consultation_focused: "Фокус на консультации",
           },
           intensity: {
@@ -4486,7 +4486,7 @@
             book_consultation: "Записать на консультацию",
             start_whatsapp: "Начать диалог в WhatsApp",
             schedule_visit: "Запланировать визит в клинику",
-            collect_patient_info: "Собрать данные пациента",
+            collect_user_info: "Собрать данные пользовательа",
             explain_treatment_process: "Объяснить процесс лечения",
           },
         },
@@ -4514,7 +4514,7 @@
           post_op_guidance: "Послеоперационные рекомендации"
         },
         handoff: {
-          angryPatient: "Злой пациент",
+          angryUser: "Злой пользователь",
           refundRequest: "Запрос возврата",
           severePain: "Сильная боль",
           legalLanguage: "Юридические формулировки",
@@ -4555,7 +4555,7 @@
         },
         sectionHelp: {
           aiProfile: {
-            intro: "Многоязычная оркестрация ИИ — включите языки и добавьте необязательные локализованные тексты для пациентов. Операционные знания (бренды, цены, workflow) остаются в одном источнике; ИИ локализует при ответе.",
+            intro: "Многоязычная оркестрация ИИ — включите языки и добавьте необязательные локализованные тексты для пользовательов. Операционные знания (бренды, цены, workflow) остаются в одном источнике; ИИ локализует при ответе.",
             aiUsageSummary: "Маршрутизация языка, локализованные приветствия/подписи и руководство по локализации для координатора."
           },
           conversionCoordinator: {
@@ -4591,7 +4591,7 @@
             aiUsageSummary: "Автоматические триггеры эскалации в разговоре."
           },
           internalNotes: {
-            intro: "Позиционирование и стратегия клиники. ИИ согласуется с брендом — не показывается пациенту дословно.",
+            intro: "Позиционирование и стратегия клиники. ИИ согласуется с брендом — не показывается пользовательу дословно.",
             aiUsageSummary: "Контекст промпта для тона, приоритетов и акцентов."
           }
         },
@@ -4605,14 +4605,14 @@
           supportedLanguages: {
             label: "Многоязычная поддержка ИИ",
             helper: "Включите языки для оркестрации ИИ. Операционные данные в одном месте — ИИ локализует бренды, цены и логистику при ответе.",
-            aiUsage: "Определение языка пациента, язык ответа и подсказки маршрутизации персонала.",
+            aiUsage: "Определение языка пользовательа, язык ответа и подсказки маршрутизации персонала.",
             example: "Основной английский; для dental tourism турецкий, русский, грузинский."
           },
           displayNameLocalized: {
             label: "Имя ассистента (локализовано)",
             helper: "Необязательные отображаемые имена по языкам. Пусто — ИИ переведёт с английского.",
-            aiUsage: "Приветствия и подписи на языке пациента.",
-            example: "en: DentX Care Team · ru: DentX Поддержка пациентов"
+            aiUsage: "Приветствия и подписи на языке пользовательа.",
+            example: "en: DentX Care Team · ru: DentX Поддержка пользовательов"
           },
           welcomeMessageLocalized: {
             label: "Приветственное сообщение (локализовано)",
@@ -4622,19 +4622,19 @@
           },
           toneStyle: {
             label: "Тон / стиль",
-            helper: "Общий стиль общения с пациентами.",
+            helper: "Общий стиль общения с пользовательами.",
             aiUsage: "Задаёт теплоту, формальность и уровень люкса в ответах.",
             example: "Тёплый + профессиональный для международного dental tourism."
           },
           signatureStyle: {
             label: "Стиль подписи",
             helper: "Как подписываются сообщения в конце.",
-            aiUsage: "Добавляется к сообщениям ИИ для пациента."
+            aiUsage: "Добавляется к сообщениям ИИ для пользовательа."
           },
           profileTags: {
             label: "Теги профиля",
             helper: "Короткие теги атмосферы клиники (люкс, быстрый ответ и т.д.).",
-            aiUsage: "Внутренние подсказки тона — не показываются пациенту напрямую.",
+            aiUsage: "Внутренние подсказки тона — не показываются пользовательу напрямую.",
             placeholder: "люкс, дружелюбный, премиум, быстрый_ответ",
             example: "премиум, дружелюбный, быстрый_ответ"
           },
@@ -4677,7 +4677,7 @@
           forbidden_claims: {
             label: "Запрещённые маркетинговые заявления",
             helper: "Преувеличения и сравнения, которых следует избегать.",
-            aiUsage: "Безопасные для бренда сообщения пациентам.",
+            aiUsage: "Безопасные для бренда сообщения пользовательам.",
           },
           forbidden_urgency: {
             label: "Запрещённое давление срочности",
@@ -4701,7 +4701,7 @@
           freeformNotes: { label: "Доп. внутренние заметки", helper: "Что ещё должен знать персонал.", aiUsage: "Доп. контекст оркестрации." },
           protocol_postOpNotes: {
             label: "Post-op заметки координации",
-            helper: "Как клиника обычно сопровождает пациентов после лечения.",
+            helper: "Как клиника обычно сопровождает пользовательов после лечения.",
             aiUsage: "Post-op ответы — не замена совета врача.",
             placeholder: "После имплантации 48 ч избегать твёрдой пищи.",
             example: "Мягкая диета 48 ч, лёд в первый день, контроль перед вылетом."
@@ -4761,12 +4761,12 @@
       },
 
       treatment: {
-        patientName: "Имя пациента (выбор)",
-        selectPatient: "— Выберите пациента —",
-        patientHelp: "Автоматически подставляется при открытии из списка пациентов. Смена пациента перезагружает данные.",
-        noPatientSelected: "Пациент не выбран.",
+        patientName: "Имя пользовательа (выбор)",
+        selectPatient: "— Выберите пользовательа —",
+        patientHelp: "Автоматически подставляется при открытии из списка пользовательов. Смена пользовательа перезагружает данные.",
+        noPatientSelected: "Пользователь не выбран.",
         loadingTreatments: "Загрузка планов лечения...",
-        noTreatments: "План лечения для этого пациента не найден.",
+        noTreatments: "План лечения для этого пользовательа не найден.",
         addTreatment: "Добавить лечение",
         saveTreatment: "Сохранить лечение",
         treatmentSaved: "✅ Лечение сохранено!",
@@ -4818,12 +4818,12 @@
         thDateTime: "Дата/время",
         thType: "Тип",
         thTitle: "Заголовок",
-        patientToothDiagnoses: "Диагнозы по зубам пациента",
+        patientToothDiagnoses: "Диагнозы по зубам пользовательа",
         badgeToothDoctor: "Зуб № + диагноз врача",
         noDiagnosisSummary: "Записей диагнозов нет.",
         emptyStateTitle: "Записей лечения пока нет",
         emptyStateSub: "Данные появятся после загрузки.",
-        selectPatientAbove: "Выберите пациента выше.",
+        selectPatientAbove: "Выберите пользовательа выше.",
         loadingTreatmentsMsg: "Загрузка лечения...",
         loadFailed: "Не удалось загрузить: {error}",
         noRecordsYet: "Записей нет. Выберите зуб и добавьте процедуру.",
@@ -4881,10 +4881,10 @@
         weekdays: ["вс", "пн", "вт", "ср", "чт", "пт", "сб"]
       },
       files: {
-        pageTitle: "Admin – Файлы пациента",
-        title: "📁 Файлы пациента",
-        selectPatient: "Пациент:",
-        selectPlaceholder: "Выберите пациента...",
+        pageTitle: "Admin – Файлы пользовательа",
+        title: "📁 Файлы пользовательа",
+        selectPatient: "Пользователь:",
+        selectPlaceholder: "Выберите пользовательа...",
         filterAll: "Все",
         filterPhoto: "📸 Фото",
         filterXray: "🦷 Рентген",
@@ -4892,7 +4892,7 @@
         filterChat: "💬 Чат",
         upload: "Загрузить",
         empty: "Файлы не найдены.",
-        selectToView: "Выберите пациента для просмотра файлов.",
+        selectToView: "Выберите пользовательа для просмотра файлов.",
         badgeImage: "Фото",
         badgeXray: "Рентген",
         badgePdf: "PDF",
@@ -4950,10 +4950,10 @@
         documentTitle: "Чат - Clinifly Admin",
         pageHeading: "💬 Clinifly Admin – Чат",
         title: "Сообщения",
-        patientsHeading: "Пациенты",
+        patientsHeading: "Пользователи",
         loading: "Загрузка...",
-        selectPatient: "Выберите пациента",
-        noPatients: "Пациентов пока нет",
+        selectPatient: "Выберите пользовательа",
+        noPatients: "Пользовательов пока нет",
         unnamed: "Без имени",
         placeholder: "Введите сообщение...",
         send: "Отправить",
@@ -4974,10 +4974,10 @@
         errAuth: "❌ Ошибка авторизации. Войдите снова.",
         errAuthShort: "❌ Ошибка авторизации",
         errUnknown: "Неизвестная ошибка",
-        errLoadList: "❌ Не удалось загрузить пациентов: {message}",
+        errLoadList: "❌ Не удалось загрузить пользовательов: {message}",
         errLoadMessages: "Сообщения не загружены",
         errLoadMessagesFull: "❌ Сообщения не загружены: {message}",
-        errSelectFirst: "❌ Сначала выберите пациента",
+        errSelectFirst: "❌ Сначала выберите пользовательа",
         errNoTokenSend: "❌ Нет токена администратора",
         errSend: "Не удалось отправить сообщение",
         errSendFull: "❌ Не удалось отправить: {message}",
@@ -4990,7 +4990,7 @@
         errPhotoSize: "❌ Фото меньше 10 МБ",
         errZipSize: "❌ ZIP меньше 50 МБ",
         errDocSize: "❌ Документ меньше 20 МБ",
-        errSelectPatient: "❌ Сначала выберите пациента",
+        errSelectPatient: "❌ Сначала выберите пользовательа",
         before: "До",
         after: "После",
         doctorReview: "👨‍⚕️ Проверка врача",
@@ -5008,7 +5008,7 @@
         refreshList: "Обновить список",
         statusLoading: "Загрузка…",
         statusUnassigned: "{count} записей",
-        thPatient: "Пациент",
+        thPatient: "Пользователь",
         thContact: "Контакт",
         thPreview: "Последнее сообщение",
         thAssign: "Назначить врача",
@@ -5062,7 +5062,7 @@
         tabAssigned: "Назначенные",
         thChannel: "Канал",
         thAssignedAt: "Назначено",
-        searchPlaceholder: "Поиск пациента, телефона, сообщения…",
+        searchPlaceholder: "Поиск пользовательа, телефона, сообщения…",
         channelMessenger: "Messenger",
         channelWhatsapp: "WhatsApp",
         channelWeb: "Web",
@@ -5087,11 +5087,11 @@
       },
       adminPages: {
         travelH1: "✈️ Clinifly Admin — მოგზაურობა",
-        travelGlobalWarning: "⚠️ ყურადღება: ნაწილი ველების შეავსებს პაციენტი. შეამოწმეთ მინიშნებები ქვემოთ.",
+        travelGlobalWarning: "⚠️ ყურადღება: ნაწილი ველების შეავსებს მომხმარებელიი. შეამოწმეთ მინიშნებები ქვემოთ.",
         travelWordHotel: "სასტუმრო",
         travelWordFlights: "ფრენა",
         travelListSeparator: " და ",
-        travelDynamicWarning: "⚠️ ყურადღება: {list} შეავსებს პაციენტი. ამ ველების რედაქტირება არ შეგიძლიათ. პაციენტი შეიყვანს მობილურ აპში.",
+        travelDynamicWarning: "⚠️ ყურადღება: {list} შეავსებს მომხმარებელიი. ამ ველების რედაქტირება არ შეგიძლიათ. მომხმარებელიი შეიყვანს მობილურ აპში.",
         healthH1: "🩺 Clinifly Admin — ჯანმრთელობა",
         doctorApplicationsH1: "ექიმის განაცხადები",
         doctorAppsStatPending: "მოლოდინში",
@@ -5101,19 +5101,19 @@
         doctorAppsLoading: "ექიმების ჩატვირთვა...",
         doctorAppsEmptyTitle: "ექიმები ჯერ არ არის",
         doctorAppsEmptyDesc: "განაცხადი ჯერ არ შექმნილა.",
-        activePatientsH1: "👨‍⚕️ აქტიური პაციენტები",
+        activePatientsH1: "👨‍⚕️ აქტიური მომხმარებლები",
         activePatientsStatActive: "აქტიური",
         activePatientsStatPending: "მოლოდინში",
-        activePatientsStatTotal: "პაციენტები სულ",
+        activePatientsStatTotal: "მომხმარებლები სულ",
         activePatientsStatClinic: "კლინიკები",
         activePatientsSearchPlaceholder: "ძებნა სახელით, ელფოსტით ან ტელეფონით...",
         activePatientsAllClinics: "ყველა კლინიკა",
         activePatientsRefresh: "🔄 განახლება",
         activePatientsLoading: "🔄 იტვირთება...",
-        activePatientsEmpty: "აქტიური პაციენტი ჯერ არ არის",
+        activePatientsEmpty: "აქტიური მომხმარებელიი ჯერ არ არის",
         treatmentCreateH1: "🏥 მკურნალობის შექმნა",
         treatmentCreateSubtitle: "შექმენით ახალი ჯგუფი და მიანიჭეთ ექიმები",
-        patientDetailH1: "პაციენტის დეტალები",
+        patientDetailH1: "მომხმარებლის დეტალები",
         patientDetailBack: "უკან",
         legacyNavClinics: "კლინიკები"
       },
@@ -5130,13 +5130,13 @@
           metricTitleMonthlyPatients: "ყოველთვიული რეგისტრაციის რაოდენობა",
           metricTitleMonthlyProcedures: "ყოველთვიული პროცედურების რაოდენობა",
           chartLabelMonthlyRegistered: "ყოველთვიული რეგისტრაცია",
-          activePatients: "აქტიური პაციენტები",
+          activePatients: "აქტიური მომხმარებლები",
           procedures: "პროცედურები",
           noData: "მონაცემი არ არის",
           trendNote: "ტრენდი გაუმჯობესდება მეტი მონაცემის დაგროვებისას",
           vsPreviousMonth: "წინა თვესთან შედარებით",
           noPreviousData: "წინა მონაცემი არ არის",
-          summaryActivePatients: "{count} აქტიური პაციენტი • {month}",
+          summaryActivePatients: "{count} აქტიური მომხმარებელიი • {month}",
           summaryMonthlyRegistered: "{count} რეგისტრაცია • {month}",
           summaryProcedures: "{count} პროცედურა • {month}"
         },
@@ -5174,7 +5174,7 @@
         monthlyUploads: "თვიური ატვირთვები",
         referralInvites: "რეფერალური მოწვევები",
         totalReferrers: "რეფერერების სულ",
-        patientRoster: "პაციენტები (სიის ლიმიტი)",
+        patientRoster: "მომხმარებლები (სიის ლიმიტი)",
         usagePeriodNote: "ყოველთვიური გამოყენების პერიოდი (UTC): {period}",
         usageFreshness: "მონაცემები აქტუალურია: {time}",
         upgrade: "გაუმჯობესება",
@@ -5214,39 +5214,39 @@
       },
       pricing: {
         title: "Clinifly ტარიფები",
-        subtitle: "მოქნილი გეგმები აქტიური პაციენტების რაოდენობაზე",
-        info: "გადაიხადეთ მხოლოდ აქტიური პაციენტების რაოდენობის მიხედვით.",
+        subtitle: "მოქნილი გეგმები აქტიური მომხმარებლების რაოდენობაზე",
+        info: "გადაიხადეთ მხოლოდ აქტიური მომხმარებლების რაოდენობის მიხედვით.",
         periodMonthly: "/თვე",
         free: {
           name: "Free",
-          patients: "5 პაციენტი",
-          description: "სცადეთ Clinifly რეალურ პაციენტებთან.",
+          patients: "5 მომხმარებელიი",
+          description: "სცადეთ Clinifly რეალურ მომხმარებელიებთან.",
           cta: "დაწყება"
         },
         basic: {
           name: "Pro",
           badge: "პოპულარული",
-          patients: "15 პაციენტი",
+          patients: "15 მომხმარებელიი",
           description: "ძლიერი პაკეტი მზარდი კლინიკებისთვის.",
           cta: "გეგმის გაუმჯობესება"
         },
         pro: {
           name: "Premium",
-          patients: "ულიმიტო პაციენტი",
+          patients: "ულიმიტო მომხმარებელიი",
           description: "პრემიუმ მხარდაჭერა მსხვილი კლინიკებისთვის.",
           cta: "გეგმის გაუმჯობესება",
           contactCta: "დაგვიკავშირდით"
         },
         features: {
           allCore: "ყველა ძირითადი ფუნქცია",
-          patientCommunication: "პაციენტთან კომუნიკაცია",
+          patientCommunication: "მომხმარებელითან კომუნიკაცია",
           fileSharing: "ფაილების გაზიარება",
           referral: "რეფერალის სისტემა",
           branding: "Clinifly ბრენდინგი",
           customBranding: "მორგებული ბრენდინგი",
           analytics: "ანალიტიკა",
           support: "ელფოსტის მხარდაჭერა",
-          unlimitedPatients: "ულიმიტო პაციენტები",
+          unlimitedPatients: "ულიმიტო მომხმარებლები",
           advancedReferral: "გაფართოებული რეფერალი (დონეები, კამპანიები)",
           prioritySupport: "პრიორიტეტული მხარდაჭერა",
           onboarding: "ონბორდინგ მხარდაჭერა"
@@ -5256,7 +5256,7 @@
           free: "Free",
           basic: "Pro",
           pro: "Premium",
-          patients: "აქტიური პაციენტები",
+          patients: "აქტიური მომხმარებლები",
           unlimited: "ულიმიტო",
           coreFeatures: "ძირითადი ფუნქციები",
           branding: "Clinifly ბრენდინგი",
@@ -5272,12 +5272,12 @@
         faq: {
           title: "ხშირად დასმული კითხვები",
           q1: {
-            question: "როგორ ითვლება აქტიური პაციენტების რაოდენობა?",
-            answer: "ითვლება მხოლოდ APPROVED (აქტიური) პაციენტები. Pending, rejected ან cancelled არ შედის ლიმიტში."
+            question: "როგორ ითვლება აქტიური მომხმარებლების რაოდენობა?",
+            answer: "ითვლება მხოლოდ APPROVED (აქტიური) მომხმარებლები. Pending, rejected ან cancelled არ შედის ლიმიტში."
           },
           q2: {
             question: "რა ხდება ლიმიტის ამოწურვისას?",
-            answer: "არსებულ პაციენტებთან მუშაობას გააგრძელებთ. იზღუდება მხოლოდ ახალი პაციენტების დამტკიცება."
+            answer: "არსებულ მომხმარებელიებთან მუშაობას გააგრძელებთ. იზღუდება მხოლოდ ახალი მომხმარებლების დამტკიცება."
           },
           q3: {
             question: "შემიძლია გეგმის შეცვლა?",
@@ -5369,10 +5369,10 @@
         clinicCode: "კლინიკის კოდი",
         clinicCodeRequired: "*",
         clinicCodeWhat: "რა არის კლინიკის კოდი?",
-        clinicCodeHelp: "კლინიკის კოდი — თქვენი კლინიკის მოკლე, უნიკალური სიმბოლოა, როგორც აბრევიატურა ან ნიშანი. რეგისტრაციისას თქვენ ირჩევთ; პაციენტები აპლიკაციაში ამ კოდს შეიყვანენ თქვენთან დასაკავშირებლად.",
+        clinicCodeHelp: "კლინიკის კოდი — თქვენი კლინიკის მოკლე, უნიკალური სიმბოლოა, როგორც აბრევიატურა ან ნიშანი. რეგისტრაციისას თქვენ ირჩევთ; მომხმარებლები აპლიკაციაში ამ კოდს შეიყვანენ თქვენთან დასაკავშირებლად.",
         clinicCodeTip1: "3–12 სიმბოლო; მხოლოდ დიდი ასოები და ციფრები (მაგ. CEM, ELKO, MOON)",
         clinicCodeTip2: "აირჩიეთ კლინიკის სახელიდან ან ისეთი სიმბოლო, რომელიც ადვილად დაგიმახსოვრდებათ",
-        clinicCodeTip3: "ეს არ არის თქვენი პაროლი — შეგიძლიათ პაციენტებთან გაუზიაროთ",
+        clinicCodeTip3: "ეს არ არის თქვენი პაროლი — შეგიძლიათ მომხმარებელიებთან გაუზიაროთ",
         clinicCodePlaceholder: "მაგ. CEM, ELKO, MOON",
         clinicCodeHint: "მაგალითები: CEM, ELKO, SMILE",
         invitationCode: "მოწვევის კოდი",
@@ -5421,7 +5421,7 @@
         clinicInformation: "კლინიკის ინფორმაცია",
         adminToken: "ადმინის ტოკენი",
         copyToken: "📋 ტოკენის კოპირება",
-        goToPatients: "პაციენტების სიაზე",
+        goToPatients: "მომხმარებლების სიაზე",
         goToDashboard: "პანელზე გადასვლა",
         termsText: "წავიკითხე, გავიგე და ვეთანხმები Clinifly ციფრული პლატფორმის მომსახურების ხელშეკრულებას. ვაცნობიერებ, რომ უფასო პაკეტის ფარგლებში მომსახურება უფასოა, უფასო პაკეტის გარეთ — ფასიანი, და მომსახურების მოცულობა და ღირებულება ცალკე განისაზღვრება.",
         connectingRetry: "⏳ უკავშირდება… ხელახლა {seconds} წმ-ში",
@@ -5442,20 +5442,20 @@
         }
       },
       patients: {
-        title: "👥 Clinifly Admin – პაციენტები",
-        search: "პაციენტის ძებნა...",
+        title: "👥 Clinifly Admin – მომხმარებლები",
+        search: "მომხმარებლის ძებნა...",
         filter: "ფილტრი",
-        registeredPatients: "რეგისტრირებული პაციენტები",
+        registeredPatients: "რეგისტრირებული მომხმარებლები",
         searchPlaceholder: "ძებნა: სახელი / ტელეფონი / patientId / clinicCode",
         filterAll: "ყველა",
         clearFilters: "გასუფთავება",
         refresh: "განახლება",
         loading: "იტვირთება...",
         noResults: "შედეგი არ არის",
-        selectedPatient: "არჩეული პაციენტი: {name}",
-        patientId: "Patient ID: {id}",
+        selectedPatient: "არჩეული მომხმარებელიი: {name}",
+        patientId: "User ID: {id}",
         copyId: "ID-ის კოპირება",
-        copyIdSuccess: "✅ Patient ID დაკოპირდა",
+        copyIdSuccess: "✅ Kullanıcı ID დაკოპირდა",
         clear: "გასუფთავება",
         travel: "მოგზაურობა",
         treatment: "მკურნალება",
@@ -5464,9 +5464,9 @@
         files: "📁 ფაილები",
         approve: "დადასტურება",
         approveConfirm: "გსურთ პაციენტის დადასტურება? ({patientId})",
-        approveSuccess: "✅ პაციენტი დადასტურებულია",
-        addPatient: "➕ პაციენტის დამატება",
-        addPatientTitle: "ახალი პაციენტი",
+        approveSuccess: "✅ მომხმარებელიი დადასტურებულია",
+        addPatient: "➕ მომხმარებლის დამატება",
+        addPatientTitle: "ახალი მომხმარებელიი",
         firstName: "სახელი *",
         lastName: "გვარი *",
         email: "ელფოსტა",
@@ -5475,8 +5475,8 @@
         notes: "შენიშვნები",
         cancel: "გაუქმება",
         add: "დამატება",
-        addSuccess: "✅ პაციენტი წარმატებით დაემატა",
-        addError: "❌ პაციენტის დამატება ვერ მოხერხდა",
+        addSuccess: "✅ მომხმარებელიი წარმატებით დაემატა",
+        addError: "❌ მომხმარებლის დამატება ვერ მოხერხდა",
         assignDoctorLabel: "ექიმის მინიჭება:",
         assignButton: "მინიჭება",
         selectDoctorPlaceholder: "აირჩიეთ ექიმი",
@@ -5488,17 +5488,17 @@
         errors: {
           noToken: "⚠️ ადმინის ტოკენი ვერ მოიძებნა. ჯერ შედით სისტემაში.",
           unauthorized: "❌ ავტორიზაციის შეცდომა. ხელახლა შედით.",
-          loadFailed: "❌ პაციენტების სიის ჩატვირთვა ვერ მოხერხდა: {error}",
+          loadFailed: "❌ მომხმარებლების სიის ჩატვირთვა ვერ მოხერხდა: {error}",
           approveFailed: "❌ დადასტურების შეცდომა: {error}",
-          patientLimitReached: "⚠️ აქტიური პაციენტების ლიმიტი ამოიწურა. ახლის დასამატებლად განაახლეთ გეგმა.",
-          patientLimitReachedTitle: "პაციენტების ლიმიტი"
+          patientLimitReached: "⚠️ აქტიური მომხმარებლების ლიმიტი ამოიწურა. ახლის დასამატებლად განაახლეთ გეგმა.",
+          patientLimitReachedTitle: "მომხმარებლების ლიმიტი"
         },
         limits: {
-          title: "აქტიური პაციენტების ლიმიტი",
-          message: "თქვენს გეგმაში {current}/{limit} აქტიური პაციენტია.",
-          upgradeMessage: "ახალი პაციენტების დასამატებლად განაახლეთ გეგმა.",
+          title: "აქტიური მომხმარებლების ლიმიტი",
+          message: "თქვენს გეგმაში {current}/{limit} აქტიური მომხმარებელიია.",
+          upgradeMessage: "ახალი მომხმარებლების დასამატებლად განაახლეთ გეგმა.",
           upgradeButton: "გეგმის განახლება",
-          continueButton: "არსებული პაციენტებით გაგრძელება"
+          continueButton: "არსებული მომხმარებლებით გაგრძელება"
         }
       },
       referrals: {
@@ -5543,7 +5543,7 @@
         thInvitedCount: "მოწვეული",
         thRegisteredCount: "რეგისტრ.",
         thTreatedCount: "მკურნალობა",
-        thInvitedPatients: "მოწვეული პაციენტები",
+        thInvitedPatients: "მოწვეული მომხმარებლები",
         loadingMain: "იტვირთება…",
         sessionExpired: "სესია ამოიწურა. ხელახლა შედით.",
         errorLoad: "შეცდომა: {message}",
@@ -5572,7 +5572,7 @@
       marketplaceProfile: {
         title: "Clinifly Admin – კატალოგის პროფილი",
         pageTitle: "საჯარო კატალოგის პროფილი",
-        subtitle: "მართეთ, როგორ ჩანს თქვენი კლინიკა Clinifly-ის პაციენტთა კატალოგში. რეპუტაციის მონაცემებს კლინიკა ივსებს — Google და Trustpilot ხელით. დადასტურებული, გამორჩეული და სპონსორის ბეჯებს Clinifly ანიჭებს.",
+        subtitle: "მართეთ, როგორ ჩანს თქვენი კლინიკა Clinifly-ის მომხმარებელითა კატალოგში. რეპუტაციის მონაცემებს კლინიკა ივსებს — Google და Trustpilot ხელით. დადასტურებული, გამორჩეული და სპონსორის ბეჯებს Clinifly ანიჭებს.",
         loading: "პროფილი იტვირთება…",
         loadFailed: "ჩატვირთვა ვერ მოხერხდა",
         saving: "ინახება…",
@@ -5581,7 +5581,7 @@
         saveBtn: "პროფილის შენახვა",
         reloadBtn: "განახლება",
         sectionCompletion: "პროფილის შევსება",
-        sectionCompletionHint: "სრული პროფილები ეხმარება პაციენტებს შედარებასა და ნდობაში.",
+        sectionCompletionHint: "სრული პროფილები ეხმარება მომხმარებელიებს შედარებასა და ნდობაში.",
         completed: "შევსებული",
         missing: "აკლია",
         nothingYet: "ჯერ არაფერი",
@@ -5596,7 +5596,7 @@
         sectionFacebookReviews: "Facebook მიმოხილვები",
         sectionTrustpilotReviews: "Trustpilot მიმოხილვები",
         facebookReviewsHelp: "გახსენით Facebook გვერდი და დააკოპირეთ URL. შეიყვანეთ რეკომენდაციის პროცენტი და რაოდენობა.",
-        reputationPreviewLabel: "პაციენტისთვის გამოსაჩენი პრევიუ",
+        reputationPreviewLabel: "მომხმარებლისთვის გამოსაჩენი პრევიუ",
         reputationPreviewEmpty: "შეიყვანეთ ქულები ზემოთ, რომ ნახოთ პრევიუ.",
         sectionSocial: "სოციალური და ვებ",
         sectionClinicInfo: "კლინიკის ინფორმაცია",
@@ -5616,7 +5616,7 @@
           trustpilotRating: "Trustpilot რეიტინგი (0–5)",
           trustpilotReviewCount: "Trustpilot მიმოხილვების რაოდენობა",
           yearsInOperation: "საქმიანობის წლები",
-          intlPatients: "საერთაშორისო პაციენტები / წელი",
+          intlPatients: "საერთაშორისო მომხმარებლები / წელი",
           website: "ვებსაიტი",
           facebook: "Facebook",
           instagram: "Instagram",
@@ -5701,11 +5701,11 @@
       },
       helpCenter: {
         pageTitle: "Clinifly-ით დაწყება",
-        subtitle: "ნაბიჯ-ნაბიჯ სახელმძღვანელოები კლინიკის მორგების, პროფილის, ექიმების, პაციენტებისა და AI-ისთვის. ტექნიკური ჟარგონის გარეშე.",
+        subtitle: "ნაბიჯ-ნაბიჯ სახელმძღვანელოები კლინიკის მორგების, პროფილის, ექიმების, მომხმარებლებისა და AI-ისთვის. ტექნიკური ჟარგონის გარეშე.",
         searchPlaceholder: "დახმარების ძებნა…",
         searchNoResults: "მასალა ვერ მოიძებნა. სცადეთ სხვა სიტყვები ან გადახედეთ განყოფილებებს.",
         checklistTitle: "სწრაფი მორგების სია",
-        checklistHint: "ამ თანმიმდევრობით დაიწყეთ პაციენტების მიღება.",
+        checklistHint: "ამ თანმიმდევრობით დაიწყეთ მომხმარებლების მიღება.",
         topicsTitle: "თემები",
         showAll: "ყველა თემის ჩვენება",
         supportText: "კიდევ გჭირდებათ დახმარება?",
@@ -5717,7 +5717,7 @@
         openPage: "გვერდის გახსნა",
         screenshotCaption: "მაგალითის ეკრანი — თქვენი პანელი შეიძლება განსხვავდებოდეს.",
         dashboardBannerTitle: "Clinifly-ით დაწყება",
-        dashboardBannerDesc: "სახელმძღვანელოები პროფილის, ექიმების, პაციენტებისა და AI-ისთვის — კლინიკის მფლობელებისთვის.",
+        dashboardBannerDesc: "სახელმძღვანელოები პროფილის, ექიმების, მომხმარებლებისა და AI-ისთვის — კლინიკის მფლობელებისთვის.",
         dashboardBannerBtn: "დახმარების ცენტრი →",
         settingsBanner: "გჭირდებათ დახმარება მორგებაში, AI-ში ან რეფერალებში? გახსენით დახმარების ცენტრი.",
         openLink: "დახმარების ცენტრი →",
@@ -5732,7 +5732,7 @@
           doctors: "ექიმის დადასტურება",
           leadInbox: "ლიდის მიბმა",
           whatsapp: "WhatsApp დაკავშირება",
-          invitePatients: "პაციენტის მოწვევის ბმული",
+          invitePatients: "მომხმარებლის მოწვევის ბმული",
         },
         sections: {
           "create-clinic": { title: "შექმენით კლინიკა", subtitle: "რეგისტრაცია, დადასტურება და განახლება" },
@@ -5758,7 +5758,7 @@
         usageActiveTreatments: "აქტიური მკურნალობები",
         usageMonthlyUploads: "თვიური ატვირთვები (UTC თვე)",
         usageReferrals: "რეფერალური მოწვევები (ეს UTC თვე)",
-        usagePatients: "რეგისტრირებული პაციენტები (ლიმიტი)",
+        usagePatients: "რეგისტრირებული მომხმარებლები (ლიმიტი)",
         usagePeriodNote: "გამოყენების პერიოდი (UTC თვე): {period}",
         usageLoadFailed: "გამოყენების მონაცემების ჩატვირთვა ვერ მოხერხდა.",
         usageFreshness: "ინფორმაციის დრო: {time}",
@@ -5770,7 +5770,7 @@
         countryLabel: "ქვეში",
         cityLabel: "ქალაქი",
         cityPlaceholder: "Antalya, Istanbul, London, Tbilisi...",
-        locationDiscoveryHelp: "პაციენტებს შეუძლიათ კლინიკების ფილტრაცია ქვეყნით და ქალაქით.",
+        locationDiscoveryHelp: "მომხმარებელიებს შეუძლიათ კლინიკების ფილტრაცია ქვეყნით და ქალაქით.",
         selectCountry: "აირჩიეთ ქვეში",
         countryRequiredAlert: "აირჩიეთ ქვეში.",
         cityRequiredAlert: "ქალაქი სავალდებულოა.",
@@ -5782,9 +5782,9 @@
         chairCountLabel: "სკამების რაოდენობა",
         chairCountHelp: "კალენდარში საჩვენებელი სკამების რაოდენობა (მაგ.: 1, 2, 3).",
         address: "კლინიკის მისამართი",
-        addressHelp: "ნაჩვენებია პაციენტის ეკრანზე Pro გეგმისთვის",
+        addressHelp: "ნაჩვენებია მომხმარებლის ეკრანზე Pro გეგმისთვის",
         googleMapLink: "Google Maps ბმული",
-        googleMapLinkHelp: "ნაჩვენებია პაციენტის ეკრანზე Pro გეგმისთვის",
+        googleMapLinkHelp: "ნაჩვენებია მომხმარებლის ეკრანზე Pro გეგმისთვის",
         primaryColor: "ძირითადი ფერი (Hex)",
         secondaryColor: "მეორადი ფერი (Hex)",
         welcomeMessage: "მისასალმებელი შეტყობინება",
@@ -5794,7 +5794,7 @@
         referralDiscountHelp: "ფასდაკლება მიეწოდება ორივეს: მოწვეულსა და მოპატიჟებულს",
         aiCommunication: {
           title: "AI კომუნიკაცია",
-          desc: "დააყენეთ პირველი პასუხის სიჩქარე Messenger-ში, Instagram-ში და WhatsApp-ში. <strong>მყისიერი</strong> რეჟიმი პაციენტებს წამებში ხვდება. <strong>ადამიანის მოლოდინი</strong> რეჟიმში AI ჩაერთვება, თუ გუნდი ქვემოთ მითითებულ დროში არ პასუხობს.",
+          desc: "დააყენეთ პირველი პასუხის სიჩქარე Messenger-ში, Instagram-ში და WhatsApp-ში. <strong>მყისიერი</strong> რეჟიმი მომხმარებელიებს წამებში ხვდება. <strong>ადამიანის მოლოდინი</strong> რეჟიმში AI ჩაერთვება, თუ გუნდი ქვემოთ მითითებულ დროში არ პასუხობს.",
           instant: "მყისიერი AI პასუხები (სწრაფ შეტყობინებების გაერთიანება Messenger/WhatsApp-ზე)",
           waitHuman: "ადამიანის მოლოდინი AI-მდე",
           humanOnly: "მხოლოდ ადამიანი (AI ავტომატური პასუხი არა)",
@@ -5838,7 +5838,7 @@
         },
         communicationChannels: {
           title: "კომუნიკაციის არხები",
-          desc: "დაუკავშირდით გარე არხებს, რათა პაციენტის შეტყობინებები AI კოორდინატორის ფოსტაში გამოჩნდეს წყაროს ბეიჯებით (WhatsApp, Messenger, Instagram, Web).",
+          desc: "დაუკავშირდით გარე არხებს, რათა მომხმარებლის შეტყობინებები AI კოორდინატორის ფოსტაში გამოჩნდეს წყაროს ბეიჯებით (WhatsApp, Messenger, Instagram, Web).",
           whatsapp: "WhatsApp →",
           messenger: "Messenger →",
         },
@@ -5856,16 +5856,16 @@
         referralMaxTotal: "მაქსიმალური საერთო ფასდაკლება (%)",
         referralMaxTotalPlaceholder: "10",
         referralMaxTotalHelp: "მოწვეულის მიერ მიღებული მაქსიმალური ფასდაკლება.",
-        temporaryPatientLimit: "🔧 დროებითი პაციენტის ლიმიტი",
+        temporaryPatientLimit: "🔧 დროებითი მომხმარებლის ლიმიტი",
         temporaryPatientLimitHelp: "დაამატეთ დროებითი ლიმიტი გაყიდვების პროცესისთვის.",
         temporaryLimit: "დროებითი ლიმიტი",
-        temporaryLimitPlaceholder: "დამატებითი პაციენტები (მაგ.: 5)",
+        temporaryLimitPlaceholder: "დამატებითი მომხმარებლები (მაგ.: 5)",
         saveTemporaryLimit: "დროებითი ლიმიტის შენახვა",
         removeTemporaryLimit: "დროებითი ლიმიტის წაშლა",
-        temporaryLimitActive: "მიმდინარე დროებითი ლიმიტი: +{count} პაციენტი",
+        temporaryLimitActive: "მიმდინარე დროებითი ლიმიტი: +{count} მომხმარებელიი",
         referralPreviewLabel: "💡 გადახედვა:",
         referralPreviewNone: "❌ ფასდაკლება არ გამოიყენება",
-        referralPreviewLow: "✅ <strong>{discount}% ფასდაკლება</strong> გამოიყენება როგორც მოწვეულისთვის, ასევე მოპატიჟებულისთვის.<br><span style=\"color:#10b981\">💡 შესანიშნავი დასაწყისი ახალი პაციენტების მოსაზიდად!</span>",
+        referralPreviewLow: "✅ <strong>{discount}% ფასდაკლება</strong> გამოიყენება როგორც მოწვეულისთვის, ასევე მოპატიჟებულისთვის.<br><span style=\"color:#10b981\">💡 შესანიშნავი დასაწყისი ახალი მომხმარებლების მოსაზიდად!</span>",
         referralPreviewMid: "🎉 <strong>{discount}% ფასდაკლება</strong> ორივე მხარისთვის.<br><span style=\"color:#f59e0b\">⚠️ მეტი ფასდაკლება — უფრო მიმზიდველი მოწვევები!</span>",
         referralPreviewHigh: "🚀 <strong>{discount}% ფასდაკლება</strong> — მაქსიმალური დონე!<br><span style=\"color:#ef4444\">⚠️ ძალიან სულგრძელი — შეამოწმეთ მომგებიანობა!</span>",
         save: "💾 პარამეტრების შენახვა",
@@ -5895,7 +5895,7 @@
         recommendedDuration: "~{minutes} წთ",
         minutes: "წთ",
         opsProfileCardTitle: "კლინიკის AI სწავლება",
-        opsProfileCardDesc: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს პაციენტებს.",
+        opsProfileCardDesc: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს მომხმარებელიებს.",
         opsProfileCardPricing: "ფასები და ბრენდის ვარიანტები — ქვემოთ <strong>ფასების სიაში</strong>.",
         opsProfileOpen: "AI სწავლების ცენტრი →",
       },
@@ -5903,10 +5903,10 @@
       opsProfile: {
         pageTitle: "კლინიკის AI სწავლება — Clinifly Admin",
         title: "კლინიკის AI სწავლება",
-        lead: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს პაციენტებს.",
+        lead: "დააყენეთ, როგორ წარმოადგენს AI კლინიკას, რა ცოდნას იყენებს და როგორ პასუხობს მომხმარებელიებს.",
         policyLayerTitle: "კლინიკის მასშტაბის AI წესები (დაშვებული ზღვარი)",
-        policyLayerBody: "განსაზღვრეთ, რას შეუძლია AI თქვენს კლინიკაში — კატეგორიები, უსაფრთხოების ლიმიტები, ენები და ესკალაცია. ეს ზღვარია; კოორდინატორები და ექიმები თითოეული პაციენტისთვის აქტიურ რეჟიმს ირჩევენ კოორდინაციის ცენტრში ან ექიმის აპში.",
-        liveControlNote: "პაციენტზე გამორთული / დამხმარე / აქტიური აქ არ ირჩევა — გამოიყენეთ ცოცხალი AI კოორდინაცია თითოეულ მოთხოვნაში.",
+        policyLayerBody: "განსაზღვრეთ, რას შეუძლია AI თქვენს კლინიკაში — კატეგორიები, უსაფრთხოების ლიმიტები, ენები და ესკალაცია. ეს ზღვარია; კოორდინატორები და ექიმები თითოეული მომხმარებლისთვის აქტიურ რეჟიმს ირჩევენ კოორდინაციის ცენტრში ან ექიმის აპში.",
+        liveControlNote: "მომხმარებელიზე გამორთული / დამხმარე / აქტიური აქ არ ირჩევა — გამოიყენეთ ცოცხალი AI კოორდინაცია თითოეულ მოთხოვნაში.",
         backSettings: "← ანგარიშის პარამეტრები",
         counts: "სასტუმროები: {hotels} · workflow პროტოკოლები: {protocols}",
         loading: "იტვირთება…",
@@ -5961,7 +5961,7 @@
             dental_tourism: "სტომატოლოგიური ტურიზმი",
             implant_focused: "იმპლანტზე ფოკუსი",
             cosmetic_dentistry: "ესთეტიკური სტომატოლოგია",
-            international_patients: "საერთაშორისო პაციენტები",
+            international_patients: "საერთაშორისო მომხმარებლები",
             consultation_focused: "კონსულტაციაზე ფოკუსი",
           },
           intensity: {
@@ -5984,7 +5984,7 @@
             book_consultation: "კონსულტაციის დაჯავშნა",
             start_whatsapp: "WhatsApp საუბრის დაწყება",
             schedule_visit: "კლინიკაში ვიზიტის დაგეგმვა",
-            collect_patient_info: "პაციენტის ინფორმაციის შეგროვება",
+            collect_user_info: "მომხმარებლის ინფორმაციის შეგროვება",
             explain_treatment_process: "მკურნალობის პროცესის ახსნა",
           },
         },
@@ -6012,7 +6012,7 @@
           post_op_guidance: "ოპერაციის შემდგომი მითითებები"
         },
         handoff: {
-          angryPatient: "გაბრიტებული პაციენტი",
+          angryUser: "გაბრიტებული მომხმარებელიი",
           refundRequest: "დაბრუნების მოთხოვნა",
           severePain: "მძიმე ტკივილი",
           legalLanguage: "იურიდიული ენა",
@@ -6053,7 +6053,7 @@
         },
         sectionHelp: {
           aiProfile: {
-            intro: "მრავალენოვანი AI ორკესტრაცია — ჩართეთ ენები და დაამატეთ არასავალდებულო ლოკალიზებული ტექსტი პაციენტისთვის. ოპერაციული ცოდნა (ბრენდები, ფასები, workflow) რჩება ერთ წყაროში; AI ლოკალიზაციას პასუხის დროს აკეთებს.",
+            intro: "მრავალენოვანი AI ორკესტრაცია — ჩართეთ ენები და დაამატეთ არასავალდებულო ლოკალიზებული ტექსტი მომხმარებლისთვის. ოპერაციული ცოდნა (ბრენდები, ფასები, workflow) რჩება ერთ წყაროში; AI ლოკალიზაციას პასუხის დროს აკეთებს.",
             aiUsageSummary: "ენის მიმართვა, ლოკალიზებული მისალმება/ხელმოწერები და კოორდინატორის prompt-ების ლოკალიზაციის სახელმძღვანელო."
           },
           conversionCoordinator: {
@@ -6089,7 +6089,7 @@
             aiUsageSummary: "ავტომატური ესკალაციის ტრიგერები საუბარში."
           },
           internalNotes: {
-            intro: "კლინიკის პოზიციონირება და სტრატეგია. AI ემთხვევა თქვენს ბრენდს — პაციენტისთვის არ ჩანს ზუსტად.",
+            intro: "კლინიკის პოზიციონირება და სტრატეგია. AI ემთხვევა თქვენს ბრენდს — მომხმარებლისთვის არ ჩანს ზუსტად.",
             aiUsageSummary: "prompt-ის კონტექსტი ტონის, პრიორიტეტებისა და აქცენტებისთვის."
           }
         },
@@ -6103,14 +6103,14 @@
           supportedLanguages: {
             label: "მრავალენოვანი AI მხარდაჭერა",
             helper: "ჩართეთ ენები AI ორკესტრაციისთვის. ოპერაციული მონაცემები რჩება ერთ ადგილას — AI ლოკალიზაციას აკეთებს ბრენდებზე, ფასებსა და ლოჯისტიკაზე პასუხის დროს.",
-            aiUsage: "პაციენტის ენის ამოცნობა, პასუხის ენა და პერსონალზე მიმართვის მინიშნებები.",
+            aiUsage: "მომხმარებლის ენის ამოცნობა, პასუხის ენა და პერსონალზე მიმართვის მინიშნებები.",
             example: "ძირითადი ინგლისური; dental tourism-ისთვის ქართული, თურქული, რუსული."
           },
           displayNameLocalized: {
             label: "ასისტენტის სახელი (ლოკალიზებული)",
             helper: "არასავალდებულო ასისტენტის სახელები ენების მიხედვით. ცარიელი დატოვეთ — AI ინგლისურიდან თარგმნის.",
-            aiUsage: "მისალმება და ხელმოწერა პაციენტის ენაზე.",
-            example: "en: DentX Care Team · ka: DentX პაციენტთა მხარდაჭერა"
+            aiUsage: "მისალმება და ხელმოწერა მომხმარებლის ენაზე.",
+            example: "en: DentX Care Team · ka: DentX მომხმარებელითა მხარდაჭერა"
           },
           welcomeMessageLocalized: {
             label: "მისალმების შეტყობინება (ლოკალიზებული)",
@@ -6120,19 +6120,19 @@
           },
           toneStyle: {
             label: "ტონი / სტილი",
-            helper: "ზოგადი კომუნიკაციის სტილი პაციენტთან საუბარში.",
+            helper: "ზოგადი კომუნიკაციის სტილი მომხმარებელითან საუბარში.",
             aiUsage: "ანგარიშს უწევს სიმჭვირვალეს, ფორმალობასა და ლუქსის დონეს პასუხებში.",
             example: "საერთაშორისო dental tourism-ისთვის თბილი + პროფესიონალური."
           },
           signatureStyle: {
             label: "ხელმოწერის სტილი",
             helper: "როგორ ხელმოეწერება შეტყობინებები ბოლოში.",
-            aiUsage: "ემატება AI-ის მიერ შექმნილ პაციენტის შეტყობინებებს."
+            aiUsage: "ემატება AI-ის მიერ შექმნილ მომხმარებლის შეტყობინებებს."
           },
           profileTags: {
             label: "პროფილის ტეგები",
             helper: "მოკლე ტეგები კლინიკის ატმოსფეროზე (ლუქსი, სწრაფი პასუხი და ა.შ.).",
-            aiUsage: "შიდა ტონის მინიშნებები — პაციენტისთვის პირდაპირ არ ჩანს.",
+            aiUsage: "შიდა ტონის მინიშნებები — მომხმარებლისთვის პირდაპირ არ ჩანს.",
             placeholder: "ლუქსი, მეგობრული, პრემიუმ, სწრაფი_პასუხი",
             example: "პრემიუმ, მეგობრული, სწრაფი_პასუხი"
           },
@@ -6175,7 +6175,7 @@
           forbidden_claims: {
             label: "აკრძალული მარკეტინგული განცხადებები",
             helper: "გადაჭარბებული ან შედარებითი განცხადებები, რომლებიც უნდა ავიცილოთ.",
-            aiUsage: "ბრენდისთვის უსაფრთხო პაციენტის შეტყობინებები.",
+            aiUsage: "ბრენდისთვის უსაფრთხო მომხმარებლის შეტყობინებები.",
           },
           forbidden_urgency: {
             label: "აკრძალული სასწრაფო ზეწოლა",
@@ -6212,7 +6212,7 @@
           },
           sedationAvailability: {
             label: "სედაცია ხელმისაწვდომია",
-            helper: "სედაცია შეუსაბამო პაციენტებისთვის.",
+            helper: "სედაცია შეუსაბამო მომხმარებლებისთვის.",
             aiUsage: "კომფორტისა და შფოთვის შესახებ კითხვები."
           },
           weekdayHours: {
@@ -6224,12 +6224,12 @@
           timezone: {
             label: "კლინიკის დროის სარტყელი",
             helper: "IANA timezone ჩაწერისა და SLA გამოთვლისთვის.",
-            aiUsage: "საერთაშორისო პაციენტებისთვის დროისა და პასუხის ფანჯრის კონვერტაცია.",
+            aiUsage: "საერთაშორისო მომხმარებლებისთვის დროისა და პასუხის ფანჯრის კონვერტაცია.",
             placeholder: "Europe/Istanbul"
           },
           averageResponseSlaMinutes: {
             label: "პასუხის SLA (წუთები)",
-            helper: "პერსონალის სამიზნე პასუხის დრო. AI fallback-ისთვის — პაციენტისთვის არ ჩანს.",
+            helper: "პერსონალის სამიზნე პასუხის დრო. AI fallback-ისთვის — მომხმარებლისთვის არ ჩანს.",
             aiUsage: "SLA ავტომატიზაცია და კოორდინატორზე ესკალაცია.",
             placeholder: "120"
           },
@@ -6243,7 +6243,7 @@
             label: "ტრანსპორტის შენიშვნები",
             helper: "აეროპორტიდან შეხვედრა, VIP ტრანსფერი, შატლის დეტალები.",
             aiUsage: "მოგზაურობისა და ჩამოსვლის კოორდინაცია.",
-            example: "უფასო აეროპორტის შეხვედრა ორშ–შაბ მკურნალობის პაციენტებისთვის."
+            example: "უფასო აეროპორტის შეხვედრა ორშ–შაბ მკურნალობის მომხმარებლებისთვის."
           },
           refundPolicy: {
             label: "დაბრუნების პოლიტიკა",
@@ -6260,7 +6260,7 @@
             label: "პოზიციონირების პუნქტები",
             helper: "როგორ გსურთ კლინიკის პოზიციონირება. ერთი პუნქტი ხაზზე.",
             aiUsage: "აყალიბებს AI-ის აქცენტს — პირდაპირ არ იკორება.",
-            example: "ბუნებრივ ესთეტიკაზე ვფოკუსირდებით\nუმეტესი საერთაშორისო პაციენტი რჩება 5–7 დღე"
+            example: "ბუნებრივ ესთეტიკაზე ვფოკუსირდებით\nუმეტესი საერთაშორისო მომხმარებელიი რჩება 5–7 დღე"
           },
           freeformNotes: {
             label: "დამატებითი შიდა შენიშვნები",
@@ -6269,7 +6269,7 @@
           },
           protocol_postOpNotes: {
             label: "ოპერაციის შემდგომი კოორდინაციის შენიშვნები",
-            helper: "აღწერეთ, როგორ ხელმძღვანელობთ პაციენტებს მკურნალობის შემდეგ. AI შეუძლია გამოიყენოს აღდგენის, follow-up-ის, შეშუპების, კვებისა და კონტროლის კითხვებზე.",
+            helper: "აღწერეთ, როგორ ხელმძღვანელობთ მომხმარებელიებს მკურნალობის შემდეგ. AI შეუძლია გამოიყენოს აღდგენის, follow-up-ის, შეშუპების, კვებისა და კონტროლის კითხვებზე.",
             aiUsage: "ოპერაციის შემდგომი კოორდინაციის პასუხები — არ ცვლის ექიმის რჩევას.",
             placeholder: "იმპლანტის ოპერაციის შემდეგ 48 საათი მკაცრი საკვებისგან თავი შევიკავოთ.",
             example: "რბილი დიეტა 48 სთ, ყინვა პირველ დღეს, კონტროლი ფრეხამდე, WhatsApp დღე 3."
@@ -6329,12 +6329,12 @@
       },
 
       treatment: {
-        patientName: "პაციენტის სახელი (არჩევა)",
-        selectPatient: "— აირჩიეთ პაციენტი —",
-        patientHelp: "ავტომატურად ივსება პაციენტების სიიდან. პაციენტის შეცვლა ხელახლა ტვირთავს მონაცემებს.",
-        noPatientSelected: "პაციენტი არ არის არჩეული.",
+        patientName: "მომხმარებლის სახელი (არჩევა)",
+        selectPatient: "— აირჩიეთ მომხმარებელიი —",
+        patientHelp: "ავტომატურად ივსება მომხმარებლების სიიდან. მომხმარებლის შეცვლა ხელახლა ტვირთავს მონაცემებს.",
+        noPatientSelected: "მომხმარებელიი არ არის არჩეული.",
         loadingTreatments: "მკურნალობის გეგმის ჩატვირთვა...",
-        noTreatments: "ამ პაციენტისთვის გეგმა ვერ მოიძებნა.",
+        noTreatments: "ამ მომხმარებლისთვის გეგმა ვერ მოიძებნა.",
         addTreatment: "მკურნალობის დამატება",
         saveTreatment: "შენახვა",
         treatmentSaved: "✅ შენახულია!",
@@ -6386,12 +6386,12 @@
         thDateTime: "თარიღი/დრო",
         thType: "ტიპი",
         thTitle: "სათაური",
-        patientToothDiagnoses: "პაციენტის კბილის დიაგნოზები",
+        patientToothDiagnoses: "მომხმარებლის კბილის დიაგნოზები",
         badgeToothDoctor: "კბილი № + ექიმის დიაგნოზი",
         noDiagnosisSummary: "დიაგნოზის ჩანაწერი არ არის.",
         emptyStateTitle: "ჩანაწერი ჯერ არ არის",
         emptyStateSub: "მონაცემები გამოჩნდება ჩატვირთვის შემდეგ.",
-        selectPatientAbove: "ზემოთ აირჩიეთ პაციენტი.",
+        selectPatientAbove: "ზემოთ აირჩიეთ მომხმარებელიი.",
         loadingTreatmentsMsg: "იტვირთება...",
         loadFailed: "ჩატვირთვა ვერ მოხერხდა: {error}",
         noRecordsYet: "ჩანაწერი არ არის. აირჩიეთ კბილი და დაამატეთ პროცედურა.",
@@ -6449,10 +6449,10 @@
         weekdays: ["კვ", "ორ", "სამ", "ოთხ", "ხუთ", "პარ", "შაბ"]
       },
       files: {
-        pageTitle: "Admin – პაციენტის ფაილები",
-        title: "📁 პაციენტის ფაილები",
-        selectPatient: "პაციენტი:",
-        selectPlaceholder: "პაციენტი აირჩიეთ...",
+        pageTitle: "Admin – მომხმარებლის ფაილები",
+        title: "📁 მომხმარებლის ფაილები",
+        selectPatient: "მომხმარებელიი:",
+        selectPlaceholder: "მომხმარებელიი აირჩიეთ...",
         filterAll: "ყველა",
         filterPhoto: "📸 ფოტო",
         filterXray: "🦷 რენტგენი",
@@ -6460,7 +6460,7 @@
         filterChat: "💬 ჩათი",
         upload: "ატვირთვა",
         empty: "ფაილები ვერ მოიძებნა.",
-        selectToView: "ფაილების სანახავად პაციენტი აირჩიეთ.",
+        selectToView: "ფაილების სანახავად მომხმარებელიი აირჩიეთ.",
         badgeImage: "ფოტო",
         badgeXray: "რენტგენი",
         badgePdf: "PDF",
@@ -6518,10 +6518,10 @@
         documentTitle: "ჩატი - Clinifly Admin",
         pageHeading: "💬 Clinifly Admin – ჩატი",
         title: "შეტყობინებები",
-        patientsHeading: "პაციენტები",
+        patientsHeading: "მომხმარებლები",
         loading: "იტვირთება...",
-        selectPatient: "აირჩიეთ პაციენტი",
-        noPatients: "პაციენტები ჯერ არ არის",
+        selectPatient: "აირჩიეთ მომხმარებელიი",
+        noPatients: "მომხმარებლები ჯერ არ არის",
         unnamed: "უსახელო",
         placeholder: "შეიყვანეთ შეტყობინება...",
         send: "გაგზავნა",
@@ -6542,10 +6542,10 @@
         errAuth: "❌ ავტორიზაცია ვერ მოხერხდა. ხელახლა შედით.",
         errAuthShort: "❌ ავტორიზაცია ვერ მოხერხდა",
         errUnknown: "უცნობი შეცდომა",
-        errLoadList: "❌ პაციენტების ჩატვირთვა ვერ მოხერხდა: {message}",
+        errLoadList: "❌ მომხმარებლების ჩატვირთვა ვერ მოხერხდა: {message}",
         errLoadMessages: "შეტყობინებების ჩატვირთვა ვერ მოხერხდა",
         errLoadMessagesFull: "❌ შეტყობინებების ჩატვირთვა ვერ მოხერხდა: {message}",
-        errSelectFirst: "❌ ჯერ აირჩიეთ პაციენტი",
+        errSelectFirst: "❌ ჯერ აირჩიეთ მომხმარებელიი",
         errNoTokenSend: "❌ ადმინ ტოკენი არ არის",
         errSend: "შეტყობინების გაგზავნა ვერ მოხერხდა",
         errSendFull: "❌ გაგზავნა ვერ მოხერხდა: {message}",
@@ -6558,7 +6558,7 @@
         errPhotoSize: "❌ ფოტო 10 მბ-ზე ნაკლები",
         errZipSize: "❌ ZIP 50 მბ-ზე ნაკლები",
         errDocSize: "❌ დოკუმენტი 20 მბ-ზე ნაკლები",
-        errSelectPatient: "❌ ჯერ აირჩიეთ პაციენტი",
+        errSelectPatient: "❌ ჯერ აირჩიეთ მომხმარებელიი",
         before: "უწინ",
         after: "შემდეგ",
         doctorReview: "👨‍⚕️ ექიმის მიმოხილვა",
@@ -6576,7 +6576,7 @@
         refreshList: "სიის განახლება",
         statusLoading: "იტვირთება…",
         statusUnassigned: "{count} ჩანაწერი",
-        thPatient: "პაციენტი",
+        thPatient: "მომხმარებელიი",
         thContact: "კონტაქტი",
         thPreview: "ბოლო შეტყობინება",
         thAssign: "ექიმის მიბმა",
@@ -6630,7 +6630,7 @@
         tabAssigned: "დანიშნული",
         thChannel: "არხი",
         thAssignedAt: "დანიშნული",
-        searchPlaceholder: "პაციენტის, ტელეფონის, შეტყობინების ძებნა…",
+        searchPlaceholder: "მომხმარებლის, ტელეფონის, შეტყობინების ძებნა…",
         channelMessenger: "Messenger",
         channelWhatsapp: "WhatsApp",
         channelWeb: "Web",

@@ -544,6 +544,24 @@
         ],
         linkLabel: "Referrals-ის გახსნა",
       },
+      "faq-patients-reach": {
+        title: "პაციენტები როგორ მიმართავენ ჩემს კლინიკას?",
+        what: "Clinifly-ზე პაციენტები ხედავენ თქვენს კლინიკას კატალოგში, იხილავენ პროფილს და პირდაპირ გიგზავნით შეტყობინებას.",
+        why: "თქვენი ვებ-გვერდი, სოციალური ქსელები, Google შეფასებები და სერვისები ერთ ადგილას ჩანს — უცხოელი პაციენტები აღმოაჩენენ და ენდობიან თქვენს კლინიკას.",
+        how: [
+          "პაციენტები Clinifly აპის კატალოგში პოულობენ თქვენს კლინიკას და ხსნიან Directory Profile-ს.",
+          "ვებ-გვერდი, სოციალური ბმულები, Google შეფასებები, სპეციალობები და ფოტოები ერთ პროფილზე ჩანს.",
+          "პაციენტები აპიდან (და დაკავშირებული WhatsApp ან Messenger არხებიდან) უგზავნიან ფოტოებს, სვამენ კითხვებს და იწყებენ საუბარს.",
+          "შეტყობინებები ეცემა თქვენს ადმინ პანელში (Lead inbox და Messages).",
+          "დამტკიცებული ექიმები Clinifly მობილური აპიდან პასუხობენ საკუთარი ტელეფონიდან.",
+          "მომავალში Clinifly-ის AI ასისტენტი პირველ კითხვებს ავტომატურად უპასუხებს და სწორად მიმართავს პაციენტებს."
+        ],
+        tips: [
+          "შეავსეთ Directory Profile და ჩართეთ Publish to public directory.",
+          "გაუზიარეთ Invite Patients ბმული WhatsApp-ზე, Instagram-ზე და რეცეფციაზე."
+        ],
+        linkLabel: "Directory Profile-ის გახსნა",
+      },
       "faq-clinic-code": {
         title: "რა არის Clinic Code?",
         what: "Clinic Code არის მოკლე სიტყვა, რომელსაც კლინიკა რეგისტრაციისას ირჩევს (მაგ. კლინიკის სახელი ან აბრევიატურა).",
@@ -1152,6 +1170,24 @@
           "Davet eden hastalara teşekkür edin — bu daha fazla daveti teşvik eder."
         ],
         linkLabel: "Referrals'ı aç",
+      },
+      "faq-patients-reach": {
+        title: "Hastalar kliniğime nasıl ulaşacak?",
+        what: "Clinifly'da hastalar kliniğinizi katalogda görebilir, profilinizi inceleyebilir ve size doğrudan mesaj gönderebilir.",
+        why: "Kliniğinizin web sitesi, sosyal medya hesapları, Google değerlendirmeleri ve hizmetleri tek bir yerde görüntülenir — yurtdışındaki hastalar sizi keşfeder ve güven duyar.",
+        how: [
+          "Hastalar Clinifly uygulamasındaki klinik kataloğunda sizi bulur ve Directory Profile'ınızı inceler.",
+          "Web siteniz, sosyal bağlantılarınız, Google yorumları, uzmanlık alanlarınız ve fotoğraflarınız profilde bir arada görünür.",
+          "Hastalar uygulama üzerinden (ve bağlı WhatsApp veya Messenger kanallarından) fotoğraf gönderebilir, soru sorabilir ve doğrudan iletişime geçebilir.",
+          "Mesajlar kliniğinizin paneline düşer (Lead inbox ve Messages).",
+          "Yetki verdiğiniz doktorlar Clinifly mobil uygulaması üzerinden kendi telefonlarından yanıt verebilir.",
+          "Yakın gelecekte Clinifly'ın yapay zeka asistanı ilk soruları otomatik yanıtlayarak hastaları doğru şekilde yönlendirecektir."
+        ],
+        tips: [
+          "Directory Profile'ı tamamlayın ve Publish to public directory seçeneğini açın.",
+          "Invite Patients bağlantısını WhatsApp, Instagram ve resepsiyonda paylaşın."
+        ],
+        linkLabel: "Directory Profile'ı aç",
       },
       "faq-clinic-code": {
         title: "Clinic Code nedir?",
