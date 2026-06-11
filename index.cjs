@@ -45032,6 +45032,9 @@ registerSuperAdminClinicDashboardRoutes(app, {
   planToMaxPatients,
 });
 
+const { registerSuperAdminPlatformStatsRoutes } = require("./lib/superAdminPlatformStats");
+registerSuperAdminPlatformStatsRoutes(app, { superAdminGuard, supabase });
+
 registerSuperAdminImpersonationRoutes(app, {
   superAdminGuard,
   requireAdminAuth,

@@ -21,6 +21,8 @@
     .nav-link.secondary{font-size:13px;}
 
     /* STATS */
+    .stats-section{margin-bottom:24px;}
+    .stats-section-title{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:0 0 12px;}
     .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:24px;}
     .stat-card{background:var(--card);border:0.5px solid rgba(55,65,81,.5);border-radius:12px;padding:18px;text-align:center;}
     .stat-value{font-size:30px;font-weight:800;color:#e6eaf2;margin-bottom:6px;}
@@ -138,13 +140,30 @@
 
   <div id="alert-container"></div>
 
-  <!-- STATS -->
-  <div class="stats-grid">
-    <div class="stat-card"><div class="stat-value" id="statTotal">—</div><div class="stat-label">Total Clinics</div></div>
-    <div class="stat-card"><div class="stat-value" id="statActive">—</div><div class="stat-label">Active</div></div>
-    <div class="stat-card"><div class="stat-value" id="statSuspended">—</div><div class="stat-label">Suspended</div></div>
-    <div class="stat-card"><div class="stat-value" id="statContacted">—</div><div class="stat-label">Son 7g İletişim</div></div>
-    <div class="stat-card"><div class="stat-value" id="statNoContact">—</div><div class="stat-label">Hiç İletişim Yok</div></div>
+  <!-- PLATFORM GROWTH -->
+  <div class="stats-section">
+    <h2 class="stats-section-title">📈 Platform Growth</h2>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-value" id="platTotalUsers">—</div><div class="stat-label">👤 Total Users</div></div>
+      <div class="stat-card"><div class="stat-value" id="platTotalDoctors">—</div><div class="stat-label">🩺 Total Doctors</div></div>
+      <div class="stat-card"><div class="stat-value" id="platTotalClinics">—</div><div class="stat-label">🏥 Total Clinics</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewUsersToday">—</div><div class="stat-label">👤 New Users Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewDoctorsToday">—</div><div class="stat-label">🩺 New Doctors Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewUsersWeek">—</div><div class="stat-label">👤 New Users (7d)</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewDoctorsWeek">—</div><div class="stat-label">🩺 New Doctors (7d)</div></div>
+    </div>
+  </div>
+
+  <!-- CLINIC CRM STATS -->
+  <div class="stats-section">
+    <h2 class="stats-section-title">🏥 Clinic CRM</h2>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-value" id="statTotal">—</div><div class="stat-label">Total Clinics</div></div>
+      <div class="stat-card"><div class="stat-value" id="statActive">—</div><div class="stat-label">Active</div></div>
+      <div class="stat-card"><div class="stat-value" id="statSuspended">—</div><div class="stat-label">Suspended</div></div>
+      <div class="stat-card"><div class="stat-value" id="statContacted">—</div><div class="stat-label">Son 7g İletişim</div></div>
+      <div class="stat-card"><div class="stat-value" id="statNoContact">—</div><div class="stat-label">Hiç İletişim Yok</div></div>
+    </div>
   </div>
 
   <!-- TABLE -->
@@ -295,6 +314,38 @@ function crmBadge(s){
 function cleanPhone(p){
   if(!p) return "";
   return String(p).replace(/\s+/g,"").replace(/^00/,"+");
+}
+
+/* ─── Platform stats ─────────────────── */
+function setPlatformStat(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value == null ? "—" : String(value);
+}
+
+async function loadPlatformStats() {
+  if (!checkAuth()) return;
+  try {
+    const res = await fetch(`${API}/api/super-admin/platform-stats`, {
+      headers: authH({ Accept: "application/json" }),
+    });
+    if (res.status === 401) { logout(); return; }
+    const json = await res.json();
+    if (!json.ok || !json.stats) throw new Error(json.message || "Platform stats failed");
+    const s = json.stats;
+    setPlatformStat("platTotalUsers", s.totalUsers);
+    setPlatformStat("platTotalDoctors", s.totalDoctors);
+    setPlatformStat("platTotalClinics", s.totalClinics);
+    setPlatformStat("platNewUsersToday", s.newUsersToday);
+    setPlatformStat("platNewDoctorsToday", s.newDoctorsToday);
+    setPlatformStat("platNewUsersWeek", s.newUsersThisWeek);
+    setPlatformStat("platNewDoctorsWeek", s.newDoctorsThisWeek);
+  } catch (e) {
+    [
+      "platTotalUsers", "platTotalDoctors", "platTotalClinics",
+      "platNewUsersToday", "platNewDoctorsToday", "platNewUsersWeek", "platNewDoctorsWeek",
+    ].forEach((id) => setPlatformStat(id, "!"));
+    console.error("[platform-stats]", e);
+  }
 }
 
 /* ─── Load clinics ──────────────────── */
@@ -726,7 +777,10 @@ async function loginAsClinic(clinicId){
 }
 
 /* ─── Init ──────────────────────────── */
-if(checkAuth()) loadClinics();
+if (checkAuth()) {
+  loadPlatformStats();
+  loadClinics();
+}
 </script>
 <script src="/super-admin-impersonate.js?v=202606141"></script>
 </body>
