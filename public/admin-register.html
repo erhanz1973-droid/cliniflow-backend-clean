@@ -506,6 +506,12 @@
       }
     }
 
+    function trackMetaClinicRegistration() {
+      if (window.CliniflowMetaPixel && typeof window.CliniflowMetaPixel.trackClinicRegistration === 'function') {
+        window.CliniflowMetaPixel.trackClinicRegistration();
+      }
+    }
+
     document.getElementById('register-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       
@@ -616,6 +622,7 @@
         if (data.token) {
           trackMetaLead();
           trackMetaCompleteRegistration();
+          trackMetaClinicRegistration();
           persistAdminRegistrationSession({
             token: data.token,
             clinicCode: data.clinicCode || clinicCode,
@@ -787,6 +794,7 @@
         
         // Success - save session (both token keys + user) and redirect
         trackMetaCompleteRegistration();
+        trackMetaClinicRegistration();
         persistAdminRegistrationSession({
           token: data.token,
           clinicCode: data.clinic?.clinic_code || clinicCode,

@@ -140,17 +140,38 @@
 
   <div id="alert-container"></div>
 
-  <!-- PLATFORM GROWTH -->
+  <!-- PLATFORM GROWTH (registered accounts only) -->
   <div class="stats-section">
     <h2 class="stats-section-title">📈 Platform Growth</h2>
+    <p style="color:var(--muted);font-size:13px;margin:-8px 0 14px 0;">Registered app accounts in Supabase — Messenger ad leads are counted separately below.</p>
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-value" id="platTotalUsers">—</div><div class="stat-label">👤 Total Users</div></div>
-      <div class="stat-card"><div class="stat-value" id="platTotalDoctors">—</div><div class="stat-label">🩺 Total Doctors</div></div>
-      <div class="stat-card"><div class="stat-value" id="platTotalClinics">—</div><div class="stat-label">🏥 Total Clinics</div></div>
-      <div class="stat-card"><div class="stat-value" id="platNewUsersToday">—</div><div class="stat-label">👤 New Users Today</div></div>
-      <div class="stat-card"><div class="stat-value" id="platNewDoctorsToday">—</div><div class="stat-label">🩺 New Doctors Today</div></div>
-      <div class="stat-card"><div class="stat-value" id="platNewUsersWeek">—</div><div class="stat-label">👤 New Users (7d)</div></div>
-      <div class="stat-card"><div class="stat-value" id="platNewDoctorsWeek">—</div><div class="stat-label">🩺 New Doctors (7d)</div></div>
+      <div class="stat-card"><div class="stat-value" id="platTotalUsers">—</div><div class="stat-label">👤 Registered Users (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="platTotalDoctors">—</div><div class="stat-label">🩺 Registered Doctors (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="platTotalClinics">—</div><div class="stat-label">🏥 Registered Clinics (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewUsersToday">—</div><div class="stat-label">👤 Registered Users Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewDoctorsToday">—</div><div class="stat-label">🩺 Registered Doctors Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewClinicsToday">—</div><div class="stat-label">🏥 Registered Clinics Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewUsersWeek">—</div><div class="stat-label">👤 Registered Users (7d)</div></div>
+      <div class="stat-card"><div class="stat-value" id="platNewDoctorsWeek">—</div><div class="stat-label">🩺 Registered Doctors (7d)</div></div>
+    </div>
+  </div>
+
+  <!-- AD CONVERSION FUNNEL -->
+  <div class="stats-section">
+    <h2 class="stats-section-title">🎯 Ad Conversion Funnel</h2>
+    <p style="color:var(--muted);font-size:13px;margin:-8px 0 14px 0;">Ad Clicks → Messenger Leads → App Downloads (Meta) → Registrations → Photo Uploads → Clinic Contacts</p>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-value" id="funnelMessengerToday">—</div><div class="stat-label">💬 Messenger Leads Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="funnelAppDownloads">—</div><div class="stat-label">📲 App Downloads (Meta)</div></div>
+      <div class="stat-card"><div class="stat-value" id="funnelRegToday">—</div><div class="stat-label">👤 User Registrations Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="funnelPhotoToday">—</div><div class="stat-label">📸 Photo Upload Users Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="funnelContactToday">—</div><div class="stat-label">🏥 Clinic Contact Users Today</div></div>
+      <div class="stat-card"><div class="stat-value" id="convMessengerTotal">—</div><div class="stat-label">💬 Messenger Leads (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="convUserReg">—</div><div class="stat-label">👤 User Registrations (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="convDoctorReg">—</div><div class="stat-label">🩺 Doctor Registrations (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="convClinicReg">—</div><div class="stat-label">🏥 Clinic Registrations (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="convPhotoUpload">—</div><div class="stat-label">📸 Photo Upload Users (total)</div></div>
+      <div class="stat-card"><div class="stat-value" id="convClinicContact">—</div><div class="stat-label">🏥 Clinic Contact Users (total)</div></div>
     </div>
   </div>
 
@@ -332,17 +353,39 @@ async function loadPlatformStats() {
     const json = await res.json();
     if (!json.ok || !json.stats) throw new Error(json.message || "Platform stats failed");
     const s = json.stats;
-    setPlatformStat("platTotalUsers", s.totalUsers);
-    setPlatformStat("platTotalDoctors", s.totalDoctors);
-    setPlatformStat("platTotalClinics", s.totalClinics);
-    setPlatformStat("platNewUsersToday", s.newUsersToday);
-    setPlatformStat("platNewDoctorsToday", s.newDoctorsToday);
-    setPlatformStat("platNewUsersWeek", s.newUsersThisWeek);
-    setPlatformStat("platNewDoctorsWeek", s.newDoctorsThisWeek);
+    setPlatformStat("platTotalUsers", s.totalRegisteredUsers ?? s.totalUsers);
+    setPlatformStat("platTotalDoctors", s.totalRegisteredDoctors ?? s.totalDoctors);
+    setPlatformStat("platTotalClinics", s.totalRegisteredClinics ?? s.totalClinics);
+    setPlatformStat("platNewUsersToday", s.registeredUsersToday ?? s.newUsersToday);
+    setPlatformStat("platNewDoctorsToday", s.registeredDoctorsToday ?? s.newDoctorsToday);
+    setPlatformStat("platNewClinicsToday", s.registeredClinicsToday ?? s.newClinicRegistrationsToday);
+    setPlatformStat("platNewUsersWeek", s.registeredUsersThisWeek ?? s.newUsersThisWeek);
+    setPlatformStat("platNewDoctorsWeek", s.registeredDoctorsThisWeek ?? s.newDoctorsThisWeek);
+    const c = json.conversions || {};
+    const f = json.funnel || {};
+    setPlatformStat("funnelMessengerToday", c.newMessengerLeadsToday ?? f.messengerLeadsToday);
+    setPlatformStat(
+      "funnelAppDownloads",
+      f.appDownloads == null ? "Meta" : f.appDownloads,
+    );
+    setPlatformStat("funnelRegToday", c.newUserRegistrationsToday ?? f.userRegistrationsToday);
+    setPlatformStat("funnelPhotoToday", c.newPhotoUploadUsersToday ?? f.photoUploadUsersToday);
+    setPlatformStat("funnelContactToday", c.newClinicContactUsersToday ?? f.clinicContactUsersToday);
+    setPlatformStat("convMessengerTotal", c.messengerLeads ?? f.messengerLeads);
+    setPlatformStat("convUserReg", c.userRegistrations);
+    setPlatformStat("convDoctorReg", c.doctorRegistrations);
+    setPlatformStat("convClinicReg", c.clinicRegistrations);
+    setPlatformStat("convPhotoUpload", c.photoUploads);
+    setPlatformStat("convClinicContact", c.clinicContacts);
   } catch (e) {
     [
       "platTotalUsers", "platTotalDoctors", "platTotalClinics",
-      "platNewUsersToday", "platNewDoctorsToday", "platNewUsersWeek", "platNewDoctorsWeek",
+      "platNewUsersToday", "platNewDoctorsToday", "platNewClinicsToday",
+      "platNewUsersWeek", "platNewDoctorsWeek",
+      "funnelMessengerToday", "funnelAppDownloads", "funnelRegToday",
+      "funnelPhotoToday", "funnelContactToday",
+      "convMessengerTotal", "convUserReg", "convDoctorReg", "convClinicReg",
+      "convPhotoUpload", "convClinicContact",
     ].forEach((id) => setPlatformStat(id, "!"));
     console.error("[platform-stats]", e);
   }

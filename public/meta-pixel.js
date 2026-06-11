@@ -109,6 +109,18 @@
     trackCompleteRegistration: function () {
       return trackStandard("CompleteRegistration", "registrationSent");
     },
+    trackClinicRegistration: function () {
+      return trackStandard("ClinicRegistration", "clinicRegistrationSent");
+    },
+    trackDoctorRegistration: function () {
+      return trackStandard("DoctorRegistration", "doctorRegistrationSent");
+    },
+    trackPhotoUpload: function () {
+      return trackStandard("PhotoUpload", "photoUploadSent");
+    },
+    trackContactClinic: function () {
+      return trackStandard("ContactClinic", "contactClinicSent");
+    },
     trackPageView: function () {
       sendPageView();
       return pageViewSent;
