@@ -58,6 +58,7 @@ console.log("🔥 ROOT INDEX.CJS RUNNING");
 const express = require("express");
 const sharp = require("sharp");
 const { computeMouthCropFromImageBuffer } = require("./lib/mouthRoiMediaPipeFaceMesh.cjs");
+const dualSmileAnalysis = require("./lib/dualSmileAnalysis.cjs");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
@@ -5424,6 +5425,14 @@ function getInMemoryDentalAnalysisResponse(patientId, imageUrl) {
   return row.payload;
 }
 
+function isDualSmileV2Payload(payload) {
+  if (!payload || typeof payload !== "object" || payload._fallback === true) return false;
+  if (payload.scoreModel === "smile_v2" || payload.analysisMode === "smile_dual") return true;
+  const d = Number(payload.dentalSmileScore);
+  const f = Number(payload.facialHarmonyScore);
+  return Number.isFinite(d) && Number.isFinite(f);
+}
+
 function setInMemoryDentalAnalysisResponse(patientId, imageUrl, payload) {
   const key = dentalAnalysisCacheKey(patientId, imageUrl);
   dentalAnalysisResponseCache.set(key, { at: Date.now(), payload });
@@ -5469,10 +5478,20 @@ function buildDentalAnalyzeResponseFromAiResult(ai, lang, imageUrl) {
     summary: ai.summary || "",
     recommendation: ai.recommendation || "",
     smileScore,
+    dentalSmileScore:
+      ai.dentalSmileScore != null && Number.isFinite(Number(ai.dentalSmileScore))
+        ? Number(ai.dentalSmileScore)
+        : null,
+    facialHarmonyScore:
+      ai.facialHarmonyScore != null && Number.isFinite(Number(ai.facialHarmonyScore))
+        ? Number(ai.facialHarmonyScore)
+        : null,
     potentialScore,
     strengths: Array.isArray(ai.strengths) ? ai.strengths : [],
     improvementAreas: Array.isArray(ai.improvementAreas) ? ai.improvementAreas : [],
     recommendations: Array.isArray(ai.recommendations) ? ai.recommendations : [],
+    categoryScores:
+      ai.categoryScores && typeof ai.categoryScores === "object" ? ai.categoryScores : null,
     translated: !!ai.translated,
     allTranslations: ai.allTranslations || null,
     patientFriendly: ai.patientFriendly || null,
@@ -29770,6 +29789,16 @@ const PHOTO_TYPE_CONTEXT_EN = {
     label: "General mouth view",
     focus: "Balance focus on caries, missing teeth, alignment, and gum status.",
   },
+  smile: {
+    label: "Smiling face photo",
+    focus:
+      "Evaluate smile aesthetics, symmetry, smile line, and facial-smile harmony. Front teeth should be visible but close-up clinical detail is not required.",
+  },
+  closeup_teeth: {
+    label: "Close-up teeth photo",
+    focus:
+      "Evaluate tooth brightness, alignment visibility, gum visibility, cleaning appearance, and cosmetic tooth details.",
+  },
 };
 
 /**
@@ -30847,10 +30876,16 @@ function buildDentalAiProcessReturn(
     summary: parsed.summary,
     recommendation: parsed.recommendation,
     smileScore: parsed.smileScore ?? null,
+    dentalSmileScore: parsed.dentalSmileScore ?? null,
+    facialHarmonyScore: parsed.facialHarmonyScore ?? null,
     potentialScore: parsed.potentialScore ?? null,
     strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
     improvementAreas: Array.isArray(parsed.improvementAreas) ? parsed.improvementAreas : [],
     recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
+    categoryScores:
+      parsed.categoryScores && typeof parsed.categoryScores === "object"
+        ? parsed.categoryScores
+        : null,
     missingTeethLikely: parsed.missingTeethLikely ?? null,
     dentalConditionParsed: parsed.dentalConditionParsed ?? null,
     analysis: formatDentalAnalysisBundleToText(curB),
@@ -30952,6 +30987,85 @@ async function processDentalAI(imageDataUrl, photoType = "general", { apiKey, ti
     lang: k,
     langsReturned: allTr && typeof allTr === "object" ? Object.keys(allTr) : [],
   });
+  return buildDentalAiProcessReturn(result, a, {
+    q: q0,
+    fromCache: false,
+    translated: tFlag,
+    allTranslations: allTr,
+    langKey: k,
+  });
+}
+
+/** Two-photo smile analysis (smiling face + teeth close-up). No fallback scores on failure. */
+async function processDualSmileAI(
+  smileImageDataUrl,
+  teethImageDataUrl,
+  { apiKey, timeoutMs = 45000, langKey = "tr" } = {},
+) {
+  const k = normalizeAiDentalLang(langKey);
+  const cacheKey = dualSmileAnalysis.hashDualSmileCacheKey(smileImageDataUrl, teethImageDataUrl);
+  const enEntry = dentalAiVisionEnCacheGet(cacheKey);
+  if (enEntry) {
+    const qCached = enEntry?.q;
+    const enResult =
+      qCached && qCached.ok && enEntry.parsed
+        ? JSON.parse(JSON.stringify(enEntry.parsed))
+        : null;
+    if (enResult) {
+      const {
+        out: result,
+        translated: tFlag,
+        allTranslations: allTr,
+      } = await resolveLocalizedDentalOutput(enResult, k, {
+        apiKey,
+        timeoutMs: Math.min(timeoutMs, 25_000),
+      });
+      return buildDentalAiProcessReturn(
+        result,
+        { usage: null, model: "gpt-4o+cache" },
+        { q: qCached, fromCache: true, translated: tFlag, allTranslations: allTr, langKey: k },
+      );
+    }
+  }
+
+  const { system, user } = dualSmileAnalysis.generateDualSmileAnalysisPrompt();
+  const a = await dualSmileAnalysis.callOpenAIVisionDual(
+    system,
+    user,
+    smileImageDataUrl,
+    teethImageDataUrl,
+    {
+      apiKey,
+      timeoutMs,
+      parseMissingTeethVisionFlag,
+      parseDentalConditionFields,
+    },
+  );
+  const q0 = dualSmileAnalysis.validateDualSmileAIQuality(a.parsed);
+  if (!q0.ok) {
+    return {
+      _failed: true,
+      _retakeTarget: q0.retakeTarget || "both",
+      _qualityScore: q0.score,
+      _qualityReasons: q0.reasons || [],
+    };
+  }
+
+  if (DENTAL_AI_VISION_EN_CACHE_MAX > 0) {
+    dentalAiCacheSet(cacheKey, {
+      parsed: JSON.parse(JSON.stringify(a.parsed)),
+      q: q0,
+    });
+  }
+
+  const { out: result, translated: tFlag, allTranslations: allTr } = await resolveLocalizedDentalOutput(
+    a.parsed,
+    k,
+    {
+      apiKey,
+      timeoutMs: Math.min(timeoutMs, 25_000),
+    },
+  );
   return buildDentalAiProcessReturn(result, a, {
     q: q0,
     fromCache: false,
@@ -36168,6 +36282,17 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     }
     if (!imageUrl) return res.status(400).json({ ok: false, error: 'imageUrl_required' });
 
+    const teethImageUrlRaw = String(
+      req.body?.teethImageUrl || req.body?.teeth_image_url || "",
+    ).trim();
+    const teethImageUrl = teethImageUrlRaw || null;
+    const teethStoragePathHint =
+      req.body?.teethStoragePath || req.body?.teeth_storage_path || null;
+    const teethContentHash = normalizeContentHash(
+      req.body?.teethContentHash || req.body?.teeth_content_hash,
+    );
+    const useDualSmileAnalysis = Boolean(teethImageUrl);
+
     const { data: patient, error } = await supabase
       .from("patients")
       .select("language")
@@ -36237,8 +36362,16 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     if (!forceReanalyze) {
       const memCached = getInMemoryDentalAnalysisResponse(patientId, imageUrl);
       if (memCached) {
-        logAI("info", "analyze_cache_hit_memory", { patientId, imageUrl: String(imageUrl).slice(0, 96) });
-        return res.json(memCached);
+        const cacheOk = useDualSmileAnalysis ? isDualSmileV2Payload(memCached) : !memCached._fallback;
+        if (cacheOk) {
+          logAI("info", "analyze_cache_hit_memory", { patientId, imageUrl: String(imageUrl).slice(0, 96) });
+          return res.json(memCached);
+        }
+        logAI("info", "analyze_cache_skip_stale_memory", {
+          patientId,
+          dual: useDualSmileAnalysis,
+          fallback: !!memCached._fallback,
+        });
       }
       if (requestContentHash) {
         const hashCached = await findStoredDentalAnalysisByContentHash(
@@ -36248,16 +36381,26 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
           imageUrl,
         );
         if (hashCached) {
-          setInMemoryDentalAnalysisResponse(patientId, imageUrl, hashCached);
-          logAI("info", "analyze_cache_hit_hash", { patientId, contentHash: requestContentHash.slice(0, 12) });
-          return res.json(hashCached);
+          const cacheOk = useDualSmileAnalysis ? isDualSmileV2Payload(hashCached) : !hashCached._fallback;
+          if (cacheOk) {
+            setInMemoryDentalAnalysisResponse(patientId, imageUrl, hashCached);
+            logAI("info", "analyze_cache_hit_hash", { patientId, contentHash: requestContentHash.slice(0, 12) });
+            return res.json(hashCached);
+          }
+          logAI("info", "analyze_cache_skip_stale_hash", {
+            patientId,
+            dual: useDualSmileAnalysis,
+            contentHash: requestContentHash.slice(0, 12),
+          });
         }
       }
-      const storedCached = await findStoredDentalAnalysisForImage(patientId, imageUrl, lang);
-      if (storedCached) {
-        setInMemoryDentalAnalysisResponse(patientId, imageUrl, storedCached);
-        logAI("info", "analyze_cache_hit_db", { patientId, imageUrl: String(imageUrl).slice(0, 96) });
-        return res.json(storedCached);
+      if (!useDualSmileAnalysis) {
+        const storedCached = await findStoredDentalAnalysisForImage(patientId, imageUrl, lang);
+        if (storedCached && !storedCached._fallback) {
+          setInMemoryDentalAnalysisResponse(patientId, imageUrl, storedCached);
+          logAI("info", "analyze_cache_hit_db", { patientId, imageUrl: String(imageUrl).slice(0, 96) });
+          return res.json(storedCached);
+        }
       }
     }
 
@@ -36365,14 +36508,80 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     const imageDataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
     imageBuffer = null; // allow GC to reclaim the raw bytes
 
+    // ── Load teeth photo for dual smile analysis ────────────────────────
+    let teethImageDataUrl = null;
+    let teethRemoteUrl = teethImageUrl;
+    if (useDualSmileAnalysis) {
+      let teethBuffer;
+      let teethMime = 'image/jpeg';
+      const teethIsRemote =
+        teethImageUrl.startsWith('http://') || teethImageUrl.startsWith('https://');
+      try {
+        const teethLoaded = await loadAiAnalyzeImageBuffer({
+          imageUrl: teethIsRemote ? teethImageUrl : null,
+          storagePath: teethStoragePathHint,
+          patientId,
+          log: (level, event, meta) => logAI(level, event, meta),
+          timeoutMs: 15_000,
+        });
+        teethBuffer = teethLoaded.buffer;
+        teethMime = teethLoaded.mimeType || 'image/jpeg';
+      } catch (loadErr) {
+        const code = loadErr?.code || 'image_fetch_failed';
+        if (code === 'image_fetch_timeout') {
+          return res.status(504).json({
+            ok: false,
+            error: 'teeth_image_fetch_timeout',
+            retakeTarget: 'teeth',
+            message: 'Teeth photo download timed out. Please try again.',
+            retryable: true,
+          });
+        }
+        return res.status(502).json({
+          ok: false,
+          error: 'teeth_image_fetch_failed',
+          retakeTarget: 'teeth',
+          message: 'Teeth photo could not be processed. Please retake the close-up teeth photo.',
+          retryable: true,
+        });
+      }
+      if (teethBuffer.length > IMAGE_MAX_SIZE_BYTES) {
+        return res.status(413).json({
+          ok: false,
+          error: 'teeth_image_too_large',
+          retakeTarget: 'teeth',
+          message: `Teeth photo too large. Max allowed size is ${IMAGE_MAX_SIZE_MB}MB.`,
+        });
+      }
+      if (!isValidImageBuffer(teethBuffer)) {
+        return res.status(400).json({
+          ok: false,
+          error: 'teeth_invalid_image_format',
+          retakeTarget: 'teeth',
+          message: 'Teeth photo is not a valid image. Please retake the close-up teeth photo.',
+        });
+      }
+      teethImageDataUrl = `data:${teethMime};base64,${teethBuffer.toString('base64')}`;
+      teethBuffer = null;
+      if (teethIsRemote) teethRemoteUrl = teethImageUrl;
+    }
+
     // ── OpenAI Vision — structured dental analysis ────────────────────
     let aiAnalysis;
     try {
-      aiAnalysis = await processDentalAI(imageDataUrl, photoType, {
-        apiKey:    OPENAI_KEY,
-        timeoutMs: AI_TIMEOUT_MS,
-        langKey: lang,
-      });
+      if (useDualSmileAnalysis && teethImageDataUrl) {
+        aiAnalysis = await processDualSmileAI(imageDataUrl, teethImageDataUrl, {
+          apiKey: OPENAI_KEY,
+          timeoutMs: Math.max(AI_TIMEOUT_MS, 45000),
+          langKey: lang,
+        });
+      } else {
+        aiAnalysis = await processDentalAI(imageDataUrl, photoType, {
+          apiKey: OPENAI_KEY,
+          timeoutMs: AI_TIMEOUT_MS,
+          langKey: lang,
+        });
+      }
     } catch (openaiErr) {
       logAI('error', 'openai_error', {
         patientId,
@@ -36384,16 +36593,40 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       return res.status(502).json({ ok: false, error: 'openai_error', message: openaiErr.message || 'OpenAI request failed' });
     }
 
+    if (aiAnalysis._failed) {
+      const retake = aiAnalysis._retakeTarget || 'both';
+      logAI('warn', 'dual_smile_photo_unusable', {
+        patientId,
+        retakeTarget: retake,
+        reasons: aiAnalysis._qualityReasons,
+      });
+      return res.status(422).json({
+        ok: false,
+        error: 'photo_unusable',
+        retakeTarget: retake,
+        message:
+          retake === 'smile'
+            ? 'Your smile photo could not be analyzed. Please retake a natural smiling photo with visible front teeth.'
+            : retake === 'teeth'
+              ? 'Your teeth photo could not be analyzed. Please retake a close-up photo with teeth clearly visible.'
+              : 'Photos could not be analyzed. Please retake both photos following the guidance.',
+        qualityReasons: aiAnalysis._qualityReasons || [],
+      });
+    }
+
     const {
       insights,
       confidence,
       summary,
       recommendation,
       smileScore,
+      dentalSmileScore,
+      facialHarmonyScore,
       potentialScore,
       strengths,
       improvementAreas,
       recommendations: smileRecommendations,
+      categoryScores,
       missingTeethLikely,
       dentalConditionParsed,
       analysis: analysisText,
@@ -36507,7 +36740,12 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
           summary,
           recommendation,
           smileScore: smileScore ?? null,
+          dentalSmileScore: dentalSmileScore ?? null,
+          facialHarmonyScore: facialHarmonyScore ?? null,
           potentialScore: potentialScore ?? null,
+          ...(categoryScores && typeof categoryScores === "object"
+            ? { categoryScores }
+            : {}),
           strengths: Array.isArray(strengths) ? strengths : [],
           improvementAreas: Array.isArray(improvementAreas) ? improvementAreas : [],
           recommendations: Array.isArray(smileRecommendations) ? smileRecommendations : [],
@@ -36560,10 +36798,16 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       summary,
       recommendation,
       smileScore: smileScore ?? null,
+      dentalSmileScore: dentalSmileScore ?? null,
+      facialHarmonyScore: facialHarmonyScore ?? null,
       potentialScore: potentialScore ?? null,
       strengths: Array.isArray(strengths) ? strengths : [],
       improvementAreas: Array.isArray(improvementAreas) ? improvementAreas : [],
       recommendations: Array.isArray(smileRecommendations) ? smileRecommendations : [],
+      categoryScores: categoryScores && typeof categoryScores === "object" ? categoryScores : null,
+      analysisMode: useDualSmileAnalysis ? "smile_dual" : null,
+      scoreModel: useDualSmileAnalysis ? "smile_v2" : null,
+      teethImageUrl: useDualSmileAnalysis ? teethRemoteUrl : null,
       translated: Boolean(_translated),
       allTranslations: _allTranslations || null,
       ...(patientFriendly ? { patientFriendly } : {}),
