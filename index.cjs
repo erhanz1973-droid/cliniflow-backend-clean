@@ -24417,7 +24417,12 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
         if (!prow || !prow.id) {
           warnInvalidPatientData(prow || {}, "getPatientById returned null or missing id");
         } else if (prow.clinic_id == null || String(prow.clinic_id).trim() === "") {
-          warnInvalidPatientData(prow, "missing clinic_id — resolving via thread/fallback");
+          const expectedUnlinked =
+            Boolean(prow.archived_at) ||
+            (prow.is_lead === true && !prow.clinic_id);
+          if (!expectedUnlinked) {
+            warnInvalidPatientData(prow, "missing clinic_id — resolving via thread/fallback");
+          }
         }
         let clinicForThread = prow && prow.clinic_id != null ? String(prow.clinic_id) : null;
         const internalPid = prow?.id ? String(prow.id).trim() : String(patientId).trim();
@@ -24426,6 +24431,14 @@ app.get("/api/patient/:patientId/treatments", requirePatientTreatmentsAuth, asyn
           if (thr?.clinicId) clinicForThread = String(thr.clinicId).trim();
         }
         clinicForTreatments = clinicForThread;
+        if (!clinicForTreatments && prow?.id) {
+          return res.json({
+            ...defaultData,
+            ok: true,
+            teeth: [],
+            clinicLinked: false,
+          });
+        }
       }
       if (!clinicForTreatments) {
         return res.status(404).json({ ok: false, error: "patient_not_found", message: "clinic_id required" });
