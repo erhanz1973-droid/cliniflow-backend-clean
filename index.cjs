@@ -204,6 +204,102 @@ async function aiCostRecord(userId) {
   }
 }
 
+/** Smile Score Facebook share reward — one bonus analysis credit per patient account. */
+async function readSmileShareRewardRow(patientDbId) {
+  const pid = String(patientDbId || "").trim();
+  if (!pid || !isSupabaseEnabled()) return null;
+  try {
+    const { data, error } = await supabase
+      .from("patients")
+      .select("bonus_smile_analyses,smile_facebook_share_reward_at")
+      .eq("id", pid)
+      .maybeSingle();
+    if (error) {
+      console.warn("[smileShareReward] read:", error.message || error);
+      return null;
+    }
+    return data || null;
+  } catch (e) {
+    console.warn("[smileShareReward] read exception:", e?.message || e);
+    return null;
+  }
+}
+
+async function claimSmileFacebookShareReward(patientDbId) {
+  const pid = String(patientDbId || "").trim();
+  if (!pid || !isSupabaseEnabled()) {
+    return { ok: false, error: "supabase_disabled" };
+  }
+  const existing = await readSmileShareRewardRow(pid);
+  if (existing?.smile_facebook_share_reward_at) {
+    return {
+      ok: true,
+      alreadyClaimed: true,
+      bonusAnalyses: Number(existing.bonus_smile_analyses) || 0,
+    };
+  }
+  const nowIso = new Date().toISOString();
+  const nextBonus = (Number(existing?.bonus_smile_analyses) || 0) + 1;
+  try {
+    const { data, error } = await supabase
+      .from("patients")
+      .update({
+        smile_facebook_share_reward_at: nowIso,
+        bonus_smile_analyses: nextBonus,
+        updated_at: nowIso,
+      })
+      .eq("id", pid)
+      .is("smile_facebook_share_reward_at", null)
+      .select("bonus_smile_analyses,smile_facebook_share_reward_at")
+      .maybeSingle();
+    if (error) {
+      console.warn("[smileShareReward] claim:", error.message || error);
+      return { ok: false, error: "claim_failed", message: error.message || String(error) };
+    }
+    if (!data) {
+      const again = await readSmileShareRewardRow(pid);
+      if (again?.smile_facebook_share_reward_at) {
+        return {
+          ok: true,
+          alreadyClaimed: true,
+          bonusAnalyses: Number(again.bonus_smile_analyses) || 0,
+        };
+      }
+      return { ok: false, error: "claim_failed" };
+    }
+    return { ok: true, bonusAnalyses: Number(data.bonus_smile_analyses) || nextBonus };
+  } catch (e) {
+    return { ok: false, error: "claim_failed", message: e?.message || String(e) };
+  }
+}
+
+/** Consume one bonus smile analysis credit (when AI cost limit would block). */
+async function tryConsumeBonusSmileAnalysis(patientDbId) {
+  const pid = String(patientDbId || "").trim();
+  if (!pid || !isSupabaseEnabled()) return false;
+  try {
+    const row = await readSmileShareRewardRow(pid);
+    const n = Number(row?.bonus_smile_analyses) || 0;
+    if (n <= 0) return false;
+    const { data, error } = await supabase
+      .from("patients")
+      .update({
+        bonus_smile_analyses: n - 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", pid)
+      .gte("bonus_smile_analyses", 1)
+      .select("bonus_smile_analyses")
+      .maybeSingle();
+    if (error || !data) return false;
+    console.log("[smileShareReward] consumed bonus credit", { patientId: pid, remaining: data.bonus_smile_analyses });
+    return true;
+  } catch (e) {
+    console.warn("[smileShareReward] consume:", e?.message || e);
+    return false;
+  }
+}
+
 // ─── Image Magic-Bytes Validator ─────────────────────────────────────────────
 /** Returns true only if the buffer starts with a known image signature. */
 function isValidImageBuffer(buf) {
@@ -5354,6 +5450,12 @@ function parseMessageAttachmentsForAi(row) {
 function buildDentalAnalyzeResponseFromAiResult(ai, lang, imageUrl) {
   if (!ai || typeof ai !== "object") return null;
   const insights = Array.isArray(ai.insights) ? ai.insights : [];
+  const smileScore =
+    ai.smileScore != null && Number.isFinite(Number(ai.smileScore)) ? Number(ai.smileScore) : null;
+  const potentialScore =
+    ai.potentialScore != null && Number.isFinite(Number(ai.potentialScore))
+      ? Number(ai.potentialScore)
+      : null;
   return {
     ok: true,
     reused: true,
@@ -5366,6 +5468,11 @@ function buildDentalAnalyzeResponseFromAiResult(ai, lang, imageUrl) {
     confidence: ai.confidence || "medium",
     summary: ai.summary || "",
     recommendation: ai.recommendation || "",
+    smileScore,
+    potentialScore,
+    strengths: Array.isArray(ai.strengths) ? ai.strengths : [],
+    improvementAreas: Array.isArray(ai.improvementAreas) ? ai.improvementAreas : [],
+    recommendations: Array.isArray(ai.recommendations) ? ai.recommendations : [],
     translated: !!ai.translated,
     allTranslations: ai.allTranslations || null,
     patientFriendly: ai.patientFriendly || null,
@@ -14075,6 +14182,54 @@ app.get("/api/patient/me", requireToken, async (req, res) => {
     });
   } catch (e) {
 
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// GET /api/patient/me/smile-share-reward — Facebook share reward status (once per account)
+app.get("/api/patient/me/smile-share-reward", requireToken, canonicalPatientUuid, async (req, res) => {
+  try {
+    const patientId = String(req.patientUuid || "").trim();
+    if (!patientId) return res.status(401).json({ ok: false, error: "invalid_patient" });
+    const row = await readSmileShareRewardRow(patientId);
+    const rewardClaimed = Boolean(row?.smile_facebook_share_reward_at);
+    const bonusAnalyses = Number(row?.bonus_smile_analyses) || 0;
+    return res.json({
+      ok: true,
+      rewardClaimed,
+      bonusAnalyses,
+      canClaimReward: !rewardClaimed,
+    });
+  } catch (e) {
+    console.error("[GET smile-share-reward]", e?.message || e);
+    return res.status(500).json({ ok: false, error: "internal_error" });
+  }
+});
+
+// POST /api/patient/me/smile-share-reward/claim — grant +1 bonus analysis (Facebook v1, once)
+app.post("/api/patient/me/smile-share-reward/claim", requireToken, canonicalPatientUuid, async (req, res) => {
+  try {
+    const patientId = String(req.patientUuid || "").trim();
+    if (!patientId) return res.status(401).json({ ok: false, error: "invalid_patient" });
+    const channel = String(req.body?.channel || "facebook").trim().toLowerCase();
+    if (channel !== "facebook") {
+      return res.status(400).json({
+        ok: false,
+        error: "unsupported_channel",
+        message: "Only facebook share rewards are supported in this version.",
+      });
+    }
+    const result = await claimSmileFacebookShareReward(patientId);
+    if (!result.ok) {
+      return res.status(result.error === "claim_failed" ? 500 : 400).json(result);
+    }
+    return res.json({
+      ok: true,
+      bonusAnalyses: result.bonusAnalyses,
+      alreadyClaimed: Boolean(result.alreadyClaimed),
+    });
+  } catch (e) {
+    console.error("[POST smile-share-reward/claim]", e?.message || e);
     return res.status(500).json({ ok: false, error: "internal_error" });
   }
 });
@@ -29307,7 +29462,69 @@ const DENTAL_AI_FALLBACK_I18N = {
 function getDentalAiFallback(langKey) {
   const k = normalizeAiDentalLang(langKey);
   const row = DENTAL_AI_FALLBACK_I18N[k] || DENTAL_AI_FALLBACK_I18N.tr;
-  return { ...row, confidence: "low" };
+  return {
+    ...row,
+    confidence: "low",
+    smileScore: 5.0,
+    potentialScore: 6.0,
+    strengths: [],
+    improvementAreas: [row.insights?.[0] || row.summary || ""].filter(Boolean),
+    recommendations: [row.recommendation || ""].filter(Boolean),
+  };
+}
+
+/** Clamp and normalize Smile Score fields from vision JSON; derive legacy insights/summary. */
+function normalizeSmileScoreFromParsed(raw) {
+  const clampScore = (n, fallback) => {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return fallback;
+    return Math.round(Math.min(10, Math.max(0, x)) * 10) / 10;
+  };
+  let smileScore = clampScore(raw?.smileScore, 6.5);
+  let potentialScore = clampScore(raw?.potentialScore, clampScore(smileScore + 1.0, 7.5));
+  if (potentialScore < smileScore) potentialScore = clampScore(smileScore + 0.5, smileScore + 0.5);
+
+  const strengths = (Array.isArray(raw?.strengths) ? raw.strengths : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const improvementAreas = (Array.isArray(raw?.improvementAreas) ? raw.improvementAreas : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const recommendations = (Array.isArray(raw?.recommendations) ? raw.recommendations : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  const insights = (Array.isArray(raw?.insights) ? raw.insights : [])
+    .map((s) => String(s || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!insights.length) {
+    if (strengths[0]) insights.push(strengths[0]);
+    if (improvementAreas[0]) insights.push(improvementAreas[0]);
+    if (strengths[1]) insights.push(strengths[1]);
+    else if (improvementAreas[1]) insights.push(improvementAreas[1]);
+  }
+
+  let summary = String(raw?.summary || "").trim();
+  if (!summary) {
+    summary = `Overall smile score ${smileScore}/10 based on visible aesthetics.`;
+  }
+  let recommendation = String(raw?.recommendation || "").trim();
+  if (!recommendation && recommendations[0]) recommendation = recommendations[0];
+
+  return {
+    smileScore,
+    potentialScore,
+    strengths,
+    improvementAreas,
+    recommendations,
+    insights: insights.slice(0, 3),
+    summary,
+    recommendation,
+  };
 }
 
 /**
@@ -29451,8 +29668,16 @@ function validateDentalAIQuality(parsed) {
     ? insightScores.reduce((a, b) => a + b, 0) / insights.length
     : 0;
 
-  if (insights.length === 0) {
+  const strengths = Array.isArray(parsed.strengths) ? parsed.strengths : [];
+  const improvementAreas = Array.isArray(parsed.improvementAreas) ? parsed.improvementAreas : [];
+  const smileScoreNum = Number(parsed.smileScore);
+  const hasSmileScore =
+    Number.isFinite(smileScoreNum) && strengths.length >= 1 && improvementAreas.length >= 1;
+
+  if (insights.length === 0 && !hasSmileScore) {
     reasons.push('no_insights');
+  } else if (insights.length === 0 && hasSmileScore) {
+    /* insights derived from strengths/improvementAreas */
   } else {
     // Require at least 2 insights that are NOT refusal/vague phrases.
     // A quality disclaimer ("Görüntü kalitesi sınırlı...") does NOT count
@@ -29555,44 +29780,46 @@ function generateDentalAnalysisPrompt(photoType = "general") {
   const ctx = PHOTO_TYPE_CONTEXT_EN[photoType] || PHOTO_TYPE_CONTEXT_EN.general;
 
   return {
-    system: `You are a dental assistant AI. Analyze ONLY the teeth visible in the image. Ignore background, lips, and face.
+    system: `You are a smile aesthetics assistant. Evaluate ONLY the visible smile and teeth in the image.
 
 IMPORTANT:
-Respond in English only.
-All of insights, summary, and recommendation in the JSON must be written in English.
+Respond in English only. All human-readable strings in the JSON must be in English.
 
-If teeth are not clearly visible, return a JSON object with the same fields below, with insights/summary/recommendation in English, explaining that the view is not suitable and asking for a clearer photo of the teeth.
+This is an AESTHETIC evaluation only — NOT a medical diagnosis. Do NOT evaluate diseases, cavities as diagnoses, or medical conditions. Focus on smile aesthetics: symmetry, proportions, alignment appearance, whiteness, and visual appeal.
 
-Otherwise describe exactly three things — one per insight:
-1. Tooth color — stains, yellowing, discoloration
-2. Alignment — crowding, spacing, crooked teeth
-3. Visible issues — decay, chips, calculus buildup, gum recession
+If teeth are not clearly visible, return the same JSON shape with low confidence, a low smileScore (3.0–5.0), and text asking for a clearer smile photo.
 
 STRICT RULES:
-- Analyze ONLY teeth. Never comment on face, skin, or background.
-- Be concise and medical-focused. One sentence per insight.
-- Use appropriate cautious phrasing in English (e.g. may appear, could suggest).
-- NEVER diagnose. NEVER guarantee treatment outcomes.
-- Also set missingTeethLikely: "yes" if a tooth appears missing or there is a clear empty socket/gap where a tooth should be; "no" if all teeth appear present; "unclear" if you cannot judge from this image.
-- Classify the dentalCondition: "missing_tooth" (empty socket / tooth absent), "misalignment" (crowding, overlapping, crooked teeth), "diastema" (small symmetric natural gap between front teeth, midline spacing), or "none" if none of these apply. Use "unclear" only if you cannot classify.
+- Analyze ONLY teeth and smile appearance. Never comment on face, skin, or background.
+- smileScore and potentialScore are numbers from 0.0 to 10.0 (one decimal).
+- potentialScore should realistically reflect achievable aesthetic improvement (usually 0.5–2.0 higher than smileScore).
+- strengths: 2–3 positive aesthetic observations.
+- improvementAreas: 2–3 gentle aesthetic opportunities (use "may improve", "could potentially be improved", "may be visible" — never state the patient needs treatment).
+- recommendations: 2–4 cosmetic/aesthetic OPTIONS only (e.g. Professional Cleaning, Teeth Whitening, Orthodontic Consultation, Veneer Consultation). Use consultation or "may improve" language.
+- LANGUAGE RULES for recommendations — NEVER say the patient needs or should get treatment:
+  BAD: "You need orthodontics." / "You should get veneers."
+  GOOD: "Orthodontic consultation may improve alignment." / "Teeth whitening may improve smile brightness." / "Professional cleaning may improve appearance."
+- NEVER diagnose diseases. NEVER guarantee treatment outcomes. NEVER prescribe treatment.
+- Also set missingTeethLikely: "yes" if a tooth appears missing or there is a clear empty socket/gap; "no" if all teeth appear present; "unclear" if you cannot judge.
+- Classify dentalCondition for routing only: "missing_tooth", "misalignment", "diastema", "none", or "unclear".
 - Return ONLY valid JSON — no markdown, no extra text.`,
 
     user: `Photo type: ${ctx.label}. Focus: ${ctx.focus}
 
-Use English only for every human-readable string in the JSON.
-
-Examine the teeth in this image and return ONLY this JSON. Every text field must be in English:
+Examine the smile in this image and return ONLY this JSON (English strings):
 {
-  "insights": ["English observation 1 (color)", "English observation 2 (alignment)", "English observation 3 (visible issues)"],
+  "smileScore": 7.4,
+  "strengths": ["Natural smile line", "Good tooth proportions", "Healthy overall appearance"],
+  "improvementAreas": ["Tooth brightness could potentially be improved", "Minor alignment irregularities are visible", "Professional cleaning may improve appearance"],
+  "potentialScore": 8.5,
+  "recommendations": ["Professional Cleaning", "Teeth Whitening", "Orthodontic Consultation"],
   "confidence": "low" | "medium" | "high",
-  "summary": "1-sentence overall dental assessment in English",
-  "recommendation": "1 concrete next step for the patient in English",
+  "summary": "1-sentence overall smile aesthetic assessment",
+  "recommendation": "1 primary suggested next step",
   "missingTeethLikely": "yes" | "no" | "unclear",
   "dentalCondition": "missing_tooth" | "misalignment" | "diastema" | "none" | "unclear",
   "dentalConditionConfidence": "low" | "medium" | "high"
 }
-
-Classify this dental condition: missing tooth, misalignment, or natural front gap (diastema). Set dentalConditionConfidence to match how sure you are.
 
 confidence guide: "low" = blurry or teeth barely visible | "medium" = partially visible | "high" = clear, well-lit photo`,
   };
@@ -29735,7 +29962,7 @@ async function callOpenAIVision(
           ],
         },
       ],
-      max_tokens: 800,
+      max_tokens: 1200,
       response_format: { type: 'json_object' },
     }),
     signal: AbortSignal.timeout(timeoutMs),
@@ -29756,13 +29983,10 @@ async function callOpenAIVision(
   let raw = {};
   try { raw = JSON.parse(content); } catch { /* fall through */ }
 
+  const smileFields = normalizeSmileScoreFromParsed(raw);
   const parsed = {
-    insights:       Array.isArray(raw.insights)
-                      ? raw.insights.map(s => String(s).trim()).filter(Boolean).slice(0, 3)
-                      : [],
+    ...smileFields,
     confidence:     raw.confidence,
-    summary:        String(raw.summary        || '').trim(),
-    recommendation: String(raw.recommendation || '').trim(),
     missingTeethLikely: parseMissingTeethVisionFlag(raw),
     dentalConditionParsed: parseDentalConditionFields(raw),
   };
@@ -30125,6 +30349,15 @@ async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25
     insights: ins.map((s) => String(s || "").trim()).filter(Boolean),
     summary: String(result?.summary || "").trim(),
     recommendation: String(result?.recommendation || "").trim(),
+    strengths: (Array.isArray(result?.strengths) ? result.strengths : [])
+      .map((s) => String(s || "").trim())
+      .filter(Boolean),
+    improvementAreas: (Array.isArray(result?.improvementAreas) ? result.improvementAreas : [])
+      .map((s) => String(s || "").trim())
+      .filter(Boolean),
+    recommendations: (Array.isArray(result?.recommendations) ? result.recommendations : [])
+      .map((s) => String(s || "").trim())
+      .filter(Boolean),
   });
   const systemLines = [
     `Translate the following dental analysis JSON into ${lang}.`,
@@ -30132,7 +30365,7 @@ async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25
     "Do NOT change meaning.",
     "Use natural, professional medical terminology.",
     "Do NOT add, remove, or rename fields.",
-    'Only translate the string values in "insights", "summary", and "recommendation". Return ONLY valid JSON. No explanation or markdown.',
+    'Only translate string values in "insights", "summary", "recommendation", "strengths", "improvementAreas", and "recommendations". Return ONLY valid JSON. No explanation or markdown.',
   ];
   if (k === "ka") {
     systemLines.push(
@@ -30154,6 +30387,15 @@ async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25
     if (!outInsights.length) {
       return null;
     }
+    const outStrengths = Array.isArray(raw.strengths)
+      ? raw.strengths.map((s) => String(s).trim()).filter(Boolean).slice(0, 5)
+      : null;
+    const outImprovement = Array.isArray(raw.improvementAreas)
+      ? raw.improvementAreas.map((s) => String(s).trim()).filter(Boolean).slice(0, 5)
+      : null;
+    const outRecommendations = Array.isArray(raw.recommendations)
+      ? raw.recommendations.map((s) => String(s).trim()).filter(Boolean).slice(0, 6)
+      : null;
     return {
       ...result,
       insights: outInsights,
@@ -30163,6 +30405,13 @@ async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25
       recommendation: String(
         raw.recommendation != null ? raw.recommendation : result?.recommendation || ""
       ).trim(),
+      strengths: outStrengths && outStrengths.length ? outStrengths : result?.strengths || [],
+      improvementAreas:
+        outImprovement && outImprovement.length ? outImprovement : result?.improvementAreas || [],
+      recommendations:
+        outRecommendations && outRecommendations.length
+          ? outRecommendations
+          : result?.recommendations || [],
     };
   };
 
@@ -30185,7 +30434,7 @@ async function translateDentalAnalysis(result, langKey, { apiKey, timeoutMs = 25
             content: userRem ? `${userJson}\n\n${userRem}` : userJson,
           },
         ],
-        max_tokens: 800,
+        max_tokens: 1200,
         response_format: { type: "json_object" },
       }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -30229,6 +30478,11 @@ function pickEnDataForMulti(en) {
     insights: en && Array.isArray(en.insights) ? en.insights : [],
     summary: String(en?.summary || ""),
     recommendation: String(en?.recommendation || ""),
+    smileScore: en?.smileScore != null ? Number(en.smileScore) : null,
+    potentialScore: en?.potentialScore != null ? Number(en.potentialScore) : null,
+    strengths: en && Array.isArray(en.strengths) ? en.strengths : [],
+    improvementAreas: en && Array.isArray(en.improvementAreas) ? en.improvementAreas : [],
+    recommendations: en && Array.isArray(en.recommendations) ? en.recommendations : [],
   };
 }
 
@@ -30236,6 +30490,11 @@ const MULTI_BLOCK_EXPECTED_KEYS = [
   "insights",
   "summary",
   "recommendation",
+  "smileScore",
+  "potentialScore",
+  "strengths",
+  "improvementAreas",
+  "recommendations",
   "confidence",
   "missingTeethLikely",
   "dentalConditionParsed",
@@ -30289,6 +30548,15 @@ function mergeMultiBlockIntoEn(en, loc) {
   const ins = Array.isArray(ins0)
     ? ins0.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 3)
     : null;
+  const strengths = Array.isArray(loc.strengths)
+    ? loc.strengths.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 5)
+    : null;
+  const improvementAreas = Array.isArray(loc.improvementAreas)
+    ? loc.improvementAreas.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 5)
+    : null;
+  const recommendations = Array.isArray(loc.recommendations)
+    ? loc.recommendations.map((s) => String(s || "").trim()).filter(Boolean).slice(0, 6)
+    : null;
   return {
     ...en,
     insights: ins && ins.length ? ins : en.insights,
@@ -30300,6 +30568,11 @@ function mergeMultiBlockIntoEn(en, loc) {
       typeof loc.recommendation === "string" && String(loc.recommendation).trim()
         ? String(loc.recommendation).trim()
         : en.recommendation,
+    strengths: strengths && strengths.length ? strengths : en.strengths,
+    improvementAreas:
+      improvementAreas && improvementAreas.length ? improvementAreas : en.improvementAreas,
+    recommendations:
+      recommendations && recommendations.length ? recommendations : en.recommendations,
   };
 }
 
@@ -30319,6 +30592,9 @@ async function buildPerLangWithPartialFallbacks(enResult, rawMulti, { apiKey, ti
         insights: Array.isArray(nb.insights) ? nb.insights : [],
         summary: nb.summary == null ? "" : String(nb.summary),
         recommendation: nb.recommendation == null ? "" : String(nb.recommendation),
+        strengths: Array.isArray(nb.strengths) ? nb.strengths : [],
+        improvementAreas: Array.isArray(nb.improvementAreas) ? nb.improvementAreas : [],
+        recommendations: Array.isArray(nb.recommendations) ? nb.recommendations : [],
       };
       const merged = mergeMultiBlockIntoEn(enResult, loc);
       if (isValidMergedForLang(merged, L)) {
@@ -30395,7 +30671,8 @@ ${
 {
 ${(targetLangs || [])
   .map(
-    (c) => `  "${c}": { "insights": ["..."], "summary": "...", "recommendation": "..." }`
+    (c) =>
+      `  "${c}": { "insights": ["..."], "summary": "...", "recommendation": "...", "strengths": ["..."], "improvementAreas": ["..."], "recommendations": ["..."] }`
   )
   .join(",\n")}
 
@@ -30569,6 +30846,11 @@ function buildDentalAiProcessReturn(
     confidence: parsed.confidence,
     summary: parsed.summary,
     recommendation: parsed.recommendation,
+    smileScore: parsed.smileScore ?? null,
+    potentialScore: parsed.potentialScore ?? null,
+    strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
+    improvementAreas: Array.isArray(parsed.improvementAreas) ? parsed.improvementAreas : [],
+    recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
     missingTeethLikely: parsed.missingTeethLikely ?? null,
     dentalConditionParsed: parsed.dentalConditionParsed ?? null,
     analysis: formatDentalAnalysisBundleToText(curB),
@@ -35921,6 +36203,7 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     }
 
     const bypassAiLimit = shouldBypassAiCostLimit(req);
+    let usedBonusSmileCredit = false;
     if (bypassAiLimit) {
       logAI('info', 'ai_cost_limit_bypassed', {
         patientId,
@@ -35932,14 +36215,18 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
     if (!bypassAiLimit) {
       const { limited, totalCost } = await aiCostCheck(patientId);
       if (limited) {
-        logAI('warn', 'ai_cost_limit_reached', { patientId, totalCost, limit: AI_COST_LIMIT_PER_USER });
-        return res.status(403).json({
-          ok: false,
-          error: 'ai_limit_reached',
-          message: 'AI kullanım limitine ulaştınız',
-          totalCost,
-          limit: AI_COST_LIMIT_PER_USER,
-        });
+        usedBonusSmileCredit = await tryConsumeBonusSmileAnalysis(patientId);
+        if (!usedBonusSmileCredit) {
+          logAI('warn', 'ai_cost_limit_reached', { patientId, totalCost, limit: AI_COST_LIMIT_PER_USER });
+          return res.status(403).json({
+            ok: false,
+            error: 'ai_limit_reached',
+            message: 'AI kullanım limitine ulaştınız',
+            totalCost,
+            limit: AI_COST_LIMIT_PER_USER,
+          });
+        }
+        logAI('info', 'ai_analyze_bonus_credit_used', { patientId, totalCost, limit: AI_COST_LIMIT_PER_USER });
       }
     }
 
@@ -36102,6 +36389,11 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       confidence,
       summary,
       recommendation,
+      smileScore,
+      potentialScore,
+      strengths,
+      improvementAreas,
+      recommendations: smileRecommendations,
       missingTeethLikely,
       dentalConditionParsed,
       analysis: analysisText,
@@ -36214,6 +36506,11 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
           confidence,
           summary,
           recommendation,
+          smileScore: smileScore ?? null,
+          potentialScore: potentialScore ?? null,
+          strengths: Array.isArray(strengths) ? strengths : [],
+          improvementAreas: Array.isArray(improvementAreas) ? improvementAreas : [],
+          recommendations: Array.isArray(smileRecommendations) ? smileRecommendations : [],
           analysis: analysisText,
           analysis_en: analysisEn,
           language: responseLanguage,
@@ -36247,8 +36544,8 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       totalElapsedMs: Date.now() - _t0,
     });
 
-    // ── Record cost only after a successful AI response (skip when dev bypass) ──
-    if (!bypassAiLimit) {
+    // ── Record cost only after a successful AI response (skip when dev bypass or bonus credit) ──
+    if (!bypassAiLimit && !usedBonusSmileCredit) {
       await aiCostRecord(patientId);
     }
 
@@ -36262,6 +36559,11 @@ app.post('/api/chat/ai-analyze', requireToken, canonicalPatientUuid, aiRateLimit
       confidence,
       summary,
       recommendation,
+      smileScore: smileScore ?? null,
+      potentialScore: potentialScore ?? null,
+      strengths: Array.isArray(strengths) ? strengths : [],
+      improvementAreas: Array.isArray(improvementAreas) ? improvementAreas : [],
+      recommendations: Array.isArray(smileRecommendations) ? smileRecommendations : [],
       translated: Boolean(_translated),
       allTranslations: _allTranslations || null,
       ...(patientFriendly ? { patientFriendly } : {}),
