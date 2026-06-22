@@ -530,6 +530,42 @@ body.al-ready {
 }
 
 /* ================================================================
+   LIGHT WORKSPACE — Coordination Center (admin-ai-leads.html)
+   ================================================================ */
+body.al-ready .al-main:has(.ai-wrap) {
+  background: var(--page-bg);
+  color: var(--text);
+}
+
+body.al-ready .al-main:has(.ai-wrap) h1,
+body.al-ready .al-main:has(.ai-wrap) h2,
+body.al-ready .al-main:has(.ai-wrap) h3:not(.patient-name),
+body.al-ready .al-main:has(.ai-wrap) h4,
+body.al-ready .al-main:has(.ai-wrap) summary {
+  color: var(--text);
+}
+
+body.al-ready .al-main:has(.ai-wrap) label {
+  color: var(--text-2);
+}
+
+body.al-ready .al-main:has(.ai-wrap) input,
+body.al-ready .al-main:has(.ai-wrap) select,
+body.al-ready .al-main:has(.ai-wrap) textarea {
+  background: var(--card) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+body.al-ready .al-main:has(.ai-wrap) .err {
+  color: var(--red) !important;
+}
+
+body.al-ready .al-main:has(.ai-wrap) .ok {
+  color: var(--green) !important;
+}
+
+/* ================================================================
    DARK MAIN — legacy light component CSS inside admin shell
    ================================================================ */
 body.al-ready .al-main {
@@ -672,24 +708,24 @@ body.al-ready .al-main .ok {
 }
 
 /* Beat leftover inline light panels on settings / channel pages */
-body.al-ready .al-main [style*="background:#faf5ff"],
-body.al-ready .al-main [style*="background:#f8fafc"],
-body.al-ready .al-main [style*="background:linear-gradient(135deg,#f0fdfa"],
-body.al-ready .al-main [style*="background:linear-gradient(135deg,#eff6ff"] {
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="background:#faf5ff"],
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="background:#f8fafc"],
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="background:linear-gradient(135deg,#f0fdfa"],
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="background:linear-gradient(135deg,#eff6ff"] {
   background: rgba(30, 41, 59, 0.65) !important;
 }
 
-body.al-ready .al-main [style*="color:#1d4ed8"],
-body.al-ready .al-main [style*="color:#1e3a5f"] {
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="color:#1d4ed8"],
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="color:#1e3a5f"] {
   color: #93c5fd !important;
 }
 
-body.al-ready .al-main [style*="color:#6b7280"] {
+body.al-ready .al-main:not(:has(.ai-wrap)) [style*="color:#6b7280"] {
   color: #94a3b8 !important;
 }
 
-body.al-ready .al-main select[style*="background:#fff"],
-body.al-ready .al-main input[style*="background:#fff"] {
+body.al-ready .al-main:not(:has(.ai-wrap)) select[style*="background:#fff"],
+body.al-ready .al-main:not(:has(.ai-wrap)) input[style*="background:#fff"] {
   background: #111827 !important;
   color: #e6eaf2 !important;
 }

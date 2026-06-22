@@ -1052,7 +1052,10 @@
         }
 
         const data = await response.json();
-        allDoctors = (data.doctors || []).filter(d => d.status === 'ACTIVE');
+        allDoctors = (data.doctors || []).filter((d) => {
+          const st = String(d.status || "").toUpperCase();
+          return st === "APPROVED" || st === "ACTIVE";
+        });
         displayDoctors();
       } catch (error) {
         console.error('Load doctors error:', error);
@@ -1079,7 +1082,10 @@
         }
 
         const data = await response.json();
-        const activeDoctors = (data.doctors || []).filter(d => d.status === 'ACTIVE');
+        const activeDoctors = (data.doctors || []).filter((d) => {
+          const st = String(d.status || "").toUpperCase();
+          return st === "APPROVED" || st === "ACTIVE";
+        });
         displayAssignDoctors(activeDoctors);
       } catch (error) {
         console.error('Load assign doctors error:', error);

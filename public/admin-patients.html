@@ -1726,6 +1726,15 @@
     // Auto-refresh badges every 30 seconds
     setInterval(loadAllBadges, 30000);
 
+    function isDoctorAssignableForPatient(doctor) {
+      const st = String(doctor?.status || "").trim().toUpperCase();
+      if (st !== "APPROVED" && st !== "ACTIVE") return false;
+      if (Object.prototype.hasOwnProperty.call(doctor || {}, "is_active") && doctor.is_active === false) {
+        return false;
+      }
+      return true;
+    }
+
     // Load doctors for assignment dropdown
     async function loadDoctors() {
       const token = getAdminToken();
@@ -1744,11 +1753,12 @@
 
         const data = await res.json();
 
-        if (Array.isArray(data.items)) return data.items;
-        if (Array.isArray(data.doctors)) return data.doctors;
-        if (Array.isArray(data)) return data;
+        let list = [];
+        if (Array.isArray(data.items)) list = data.items;
+        else if (Array.isArray(data.doctors)) list = data.doctors;
+        else if (Array.isArray(data)) list = data;
 
-        return [];
+        return list.filter(isDoctorAssignableForPatient);
       } catch (e) {
         console.error("Doctor load error:", e);
         return [];

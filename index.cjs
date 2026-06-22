@@ -17014,18 +17014,20 @@ app.get("/api/admin/doctors", requireAdminAuth, async (req, res) => {
       return res.status(500).json({ ok: false, error: "fetch_failed", details: lastError?.message || null });
     }
 
-    const normalized = (data || []).map((d) => {
-      const display = normalizeDoctorRowDisplayName(d) || "Doctor";
-      return {
-        id: d.id,
-        doctor_id: d.doctor_id || d.id || null,
-        name: display,
-        phone: d.phone,
-        email: d.email,
-        status: d.status,
-        createdAt: d.created_at,
-      };
-    });
+    const normalized = (data || [])
+      .filter((d) => doctorRowEligibleForInboundAssignment(d, clinicId))
+      .map((d) => {
+        const display = normalizeDoctorRowDisplayName(d) || "Doctor";
+        return {
+          id: d.id,
+          doctor_id: d.doctor_id || d.id || null,
+          name: display,
+          phone: d.phone,
+          email: d.email,
+          status: d.status,
+          createdAt: d.created_at,
+        };
+      });
 
     // `doctors` + `data` — admin HTML pages expect these; `items` kept for older clients
     res.json({ ok: true, doctors: normalized, data: normalized, items: normalized });
@@ -21009,6 +21011,19 @@ app.put('/api/admin/patients/assign-doctor', requireAdminAuth, async (req, res) 
     }
     if (!canonicalDoctorUuid || !DOCTOR_FK_UUID_RE.test(canonicalDoctorUuid)) {
       return res.status(400).json({ ok: false, error: 'doctor_not_found', message: 'Çözümlenen doktor UUID bulunamadı.' });
+    }
+
+    const { row: assignDocRow, error: assignDocErr } = await loadDoctorRowForInboundAssignment(canonicalDoctorUuid);
+    if (assignDocErr || !assignDocRow?.id) {
+      return res.status(404).json({ ok: false, error: 'doctor_not_found' });
+    }
+    if (!doctorRowEligibleForInboundAssignment(assignDocRow, clinicId)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'doctor_not_eligible_for_assignment',
+        message:
+          'Doctor must be approved for this clinic. Rejected or pending doctors cannot be assigned.',
+      });
     }
 
     // ── 2. Update patients.primary_doctor_id ──────────────────────────────────
@@ -35418,6 +35433,16 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       console.warn("[AI UPLOAD] clinic_id lookup:", clErr?.message || clErr);
     }
 
+    const rawPhotoType = String(
+      req.body?.photoType || req.body?.photo_type || req.body?.file_subtype || "",
+    ).trim();
+    const AI_UPLOAD_SUBTYPE_MAP = {
+      smile: "front_smile",
+      closeup_teeth: "closeup_teeth",
+      front_smile: "front_smile",
+    };
+    const fileSubtype = AI_UPLOAD_SUBTYPE_MAP[rawPhotoType] || rawPhotoType || null;
+
     const pfInsert = {
       patient_id: patientId,
       clinic_id: clinicIdForFile,
@@ -35430,12 +35455,18 @@ app.post('/api/chat/ai-upload', requireToken, canonicalPatientUuid, chatUpload.s
       from_role: "patient",
       source: contentHash ? `ai_upload:hash:${contentHash}` : "ai_upload",
       ...(contentHash ? { content_hash: contentHash } : {}),
+      ...(fileSubtype ? { file_subtype: fileSubtype } : {}),
     };
     let pfIns = await supabase.from("patient_files").insert(pfInsert).select("id").maybeSingle();
     if (pfIns.error && isMissingColumnError(pfIns.error, "image_url")) {
       const noImg = { ...pfInsert };
       delete noImg.image_url;
       pfIns = await supabase.from("patient_files").insert(noImg).select("id").maybeSingle();
+    }
+    if (pfIns.error && isMissingColumnError(pfIns.error, "file_subtype")) {
+      const noSubtype = { ...pfInsert };
+      delete noSubtype.file_subtype;
+      pfIns = await supabase.from("patient_files").insert(noSubtype).select("id").maybeSingle();
     }
     if (pfIns.error) {
       console.error("[AI UPLOAD] patient_files insert failed:", {
@@ -49805,15 +49836,17 @@ app.get("/api/admin/doctor-profile-completeness", requireAdminAuth, async (req, 
 });
 
 /** Match /api/admin/approve-doctor: UI may send UUID (id) or legacy doctor_id string. */
-async function updateDoctorRowByAdminId(doctorId, patch) {
+async function updateDoctorRowByAdminId(doctorId, patch, clinicId) {
   const raw = String(doctorId || "").trim();
   if (!raw) {
     return { data: null, error: { message: "doctorId_required" } };
   }
-  let r = await supabase.from("doctors").update(patch).eq("id", raw).select().maybeSingle();
+  const cid = String(clinicId || "").trim();
+  const withClinic = (q) => (UUID_RE.test(cid) ? q.eq("clinic_id", cid) : q);
+  let r = await withClinic(supabase.from("doctors").update(patch).eq("id", raw)).select().maybeSingle();
   if (r.error) return r;
   if (r.data) return r;
-  r = await supabase.from("doctors").update(patch).eq("doctor_id", raw).select().maybeSingle();
+  r = await withClinic(supabase.from("doctors").update(patch).eq("doctor_id", raw)).select().maybeSingle();
   return r;
 }
 
@@ -49837,12 +49870,12 @@ app.post("/admin/approve-doctor-v2", requireAdminAuth, async (req, res) => {
       approved_at: new Date().toISOString(),
     };
 
-    let { data, error } = await updateDoctorRowByAdminId(doctorId, withApprovedAt);
+    let { data, error } = await updateDoctorRowByAdminId(doctorId, withApprovedAt, req.clinicId);
     if (
       error &&
       /42703|PGRST204|approved_at|column|schema/i.test(String(error.message || error.details || ""))
     ) {
-      ({ data, error } = await updateDoctorRowByAdminId(doctorId, minimalPatch));
+      ({ data, error } = await updateDoctorRowByAdminId(doctorId, minimalPatch, req.clinicId));
     }
 
     if (error) {
@@ -49877,7 +49910,7 @@ app.post("/admin/reject-doctor-v2", requireAdminAuth, async (req, res) => {
       updated_at: new Date().toISOString(),
     };
 
-    const { data, error } = await updateDoctorRowByAdminId(doctorId, patch);
+    const { data, error } = await updateDoctorRowByAdminId(doctorId, patch, req.clinicId);
 
     if (error) {
       console.error("[REJECT V2] Supabase error:", error);
